@@ -1,0 +1,54 @@
+appId: io.marimo.backcast
+productName: Backcast
+copyright: Copyright © 2026 Marimo
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - dist/**
+  - electron/**
+  - server/**
+  - package.json
+  - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
+  - "!.editorconfig"
+  - "!**/._*"
+  - "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}"
+  - "!**/{__pycache__,thumbs.db,.flowconfig,.idea,.vs,.nyc_output}"
+  - "!**/{appveyor.yml,.travis.yml,circle.yml}"
+  - "!**/{npm-debug.log,yarn.lock,.yarn-integrity,.yarn-metadata.json}"
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  icon: public/logo.png
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+  icon: public/logo.png
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+linux:
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  icon: public/logo.png
+  category: Development
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+

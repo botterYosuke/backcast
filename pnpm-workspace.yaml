@@ -1,0 +1,5 @@
+packages:
+  - "."
+  - "packages/*"
+  # server/ は必要に応じて追加（現在はNode.js依存なし）
+

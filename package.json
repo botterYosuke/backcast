@@ -7,12 +7,19 @@
     "*.css",
     "*.css.ts"
   ],
+  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "cross-env vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "lint": "biome check --write ."
+    "lint": "biome check --write .",
+    "electron": "electron .",
+    "electron:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron:build": "pnpm build && electron-builder",
+    "electron:build:win": "pnpm build && electron-builder --win",
+    "electron:build:mac": "pnpm build && electron-builder --mac",
+    "electron:build:linux": "pnpm build && electron-builder --linux"
   },
   "dependencies": {
     "@ai-sdk/react": "^2.0.104",
@@ -202,6 +209,8 @@
     "babel-plugin-react-compiler": "19.1.0-rc.3",
     "blob-polyfill": "^7.0.20220408",
     "cross-env": "^7.0.3",
+    "electron": "^39.2.7",
+    "electron-builder": "^26.0.12",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react": "^7.34.3",

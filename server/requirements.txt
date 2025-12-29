@@ -1,0 +1,5 @@
+# Python dependencies for backcast server
+# This will be used to install marimo and other required packages
+
+marimo>=0.8.0
+

@@ -301,22 +301,25 @@ async function initElectronRuntime(
 
     // Try to get server URL immediately
     let serverURL = await electronAPI.getServerURL();
+    Logger.debug("⚡ Initial server URL check:", serverURL);
     
     // If not available, wait for server to be ready
     if (!serverURL) {
-      Logger.debug("Server URL not available, waiting for server to start...");
+      Logger.debug("⚡ Server URL not available, waiting for server to start...");
       serverURL = await waitForServer();
     }
 
     if (serverURL) {
       // Update runtime config with server URL
+      // This will trigger runtimeManagerAtom to recompute and create a new RuntimeManager
+      Logger.info("⚡ Setting runtime config with server URL:", serverURL);
       store.set(runtimeConfigAtom, {
         url: serverURL,
         serverToken,
       });
-      Logger.debug("⚡ Runtime config updated with Electron server URL", serverURL);
+      Logger.info("⚡ Runtime config updated with Electron server URL:", serverURL);
     } else {
-      Logger.error("Failed to get server URL from Electron after retries");
+      Logger.error("⚡ Failed to get server URL from Electron after retries");
       // Don't throw here, let the app continue with default config
       // The RuntimeManager will attempt to connect and handle connection errors appropriately
     }
@@ -413,16 +416,19 @@ function initStore(options: unknown) {
       serverToken: parsedOptions.data.serverToken,
     });
   } else if (isElectron) {
-    // In Electron, set a temporary default (will be updated by initElectronRuntime)
+    // In Electron, initialize runtime config asynchronously
+    // Start initialization immediately to get server URL as soon as possible
     Logger.debug("⚡ Electron environment detected, initializing runtime config...");
+    // Set temporary default to allow RuntimeManager initialization
+    // initElectronRuntime will update it with the actual server URL once available
     store.set(runtimeConfigAtom, {
       ...DEFAULT_RUNTIME_CONFIG,
       serverToken: parsedOptions.data.serverToken,
     });
-    // Start async initialization (don't await, let it run in background)
-    initElectronRuntime(parsedOptions.data.serverToken).catch((error) => {
-      Logger.error("Failed to initialize Electron runtime", error);
-    });
+    // Start async initialization immediately (don't await)
+    // This will update runtimeConfigAtom once the server is ready, which will
+    // trigger runtimeManagerAtom to recompute and create a new RuntimeManager instance
+    void initElectronRuntime(parsedOptions.data.serverToken);
   } else {
     store.set(runtimeConfigAtom, {
       ...DEFAULT_RUNTIME_CONFIG,

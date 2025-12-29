@@ -243,6 +243,106 @@ const mountOptionsSchema = z.object({
     .transform((val) => val ?? []),
 });
 
+/**
+ * Initialize Electron runtime configuration (server URL)
+ */
+async function initElectronRuntime(
+  serverToken?: string,
+): Promise<void> {
+  // Check if running in Electron
+  const isElectron =
+    typeof window !== "undefined" &&
+    typeof window.electronAPI !== "undefined";
+
+  if (!isElectron) {
+    // Not in Electron, nothing to do
+    return;
+  }
+
+  const electronAPI = window.electronAPI;
+  if (!electronAPI) {
+    Logger.warn("Electron API not available");
+    return;
+  }
+
+  try {
+    // Maximum retry attempts
+    const maxRetries = 10;
+    const retryDelay = 500; // 500ms between retries
+
+    // Function to wait for server to be ready
+    const waitForServer = async (): Promise<string | null> => {
+      for (let retries = 0; retries < maxRetries; retries++) {
+        const status = await electronAPI.getServerStatus();
+        
+        if (status.status === "running" && status.url) {
+          Logger.debug("⚡ Server is running at", status.url);
+          return status.url;
+        }
+
+        if (status.status === "error") {
+          Logger.warn(`Server status error (attempt ${retries + 1}/${maxRetries}), retrying...`);
+        } else {
+          // Server is starting or stopped, wait a bit and retry
+          Logger.debug(
+            `Server status: ${status.status} (attempt ${retries + 1}/${maxRetries}), waiting for server to be ready...`,
+          );
+        }
+
+        // Wait before retry (don't wait after the last attempt)
+        if (retries < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
+      }
+
+      Logger.error("Server did not become ready within timeout");
+      return null;
+    };
+
+    // Try to get server URL immediately
+    let serverURL = await electronAPI.getServerURL();
+    
+    // If not available, wait for server to be ready
+    if (!serverURL) {
+      Logger.debug("Server URL not available, waiting for server to start...");
+      serverURL = await waitForServer();
+    }
+
+    if (serverURL) {
+      // Update runtime config with server URL
+      store.set(runtimeConfigAtom, {
+        url: serverURL,
+        serverToken,
+      });
+      Logger.debug("⚡ Runtime config updated with Electron server URL", serverURL);
+    } else {
+      Logger.error("Failed to get server URL from Electron after retries");
+      // Don't throw here, let the app continue with default config
+      // The RuntimeManager will attempt to connect and handle connection errors appropriately
+    }
+
+    // Listen for server status changes
+    const cleanup = electronAPI.onServerStatusChange((status) => {
+      if (status.status === "running" && status.url) {
+        Logger.debug("⚡ Server status changed, updating runtime config", status.url);
+        store.set(runtimeConfigAtom, {
+          url: status.url,
+          serverToken,
+        });
+      } else if (status.status === "error") {
+        Logger.warn("Server status changed to error");
+      }
+    });
+
+    // Store cleanup function (could be used when unmounting, but not critical)
+    // For now, we'll let it run until the app closes
+  } catch (error) {
+    Logger.error("Failed to initialize Electron runtime", error);
+    // Don't throw, let the app continue with default config
+    // The user might see connection errors, but the app won't crash
+  }
+}
+
 function initStore(options: unknown) {
   const parsedOptions = mountOptionsSchema.safeParse(options);
   if (!parsedOptions.success) {
@@ -299,6 +399,11 @@ function initStore(options: unknown) {
   store.set(userConfigAtom, parseUserConfig(parsedOptions.data.config));
   store.set(appConfigAtom, parseAppConfig(parsedOptions.data.appConfig));
 
+  // Check if running in Electron
+  const isElectron =
+    typeof window !== "undefined" &&
+    typeof window.electronAPI !== "undefined";
+
   // Runtime config
   if (parsedOptions.data.runtimeConfig.length > 0) {
     const firstRuntimeConfig = parsedOptions.data.runtimeConfig[0];
@@ -306,6 +411,17 @@ function initStore(options: unknown) {
     store.set(runtimeConfigAtom, {
       ...firstRuntimeConfig,
       serverToken: parsedOptions.data.serverToken,
+    });
+  } else if (isElectron) {
+    // In Electron, set a temporary default (will be updated by initElectronRuntime)
+    Logger.debug("⚡ Electron environment detected, initializing runtime config...");
+    store.set(runtimeConfigAtom, {
+      ...DEFAULT_RUNTIME_CONFIG,
+      serverToken: parsedOptions.data.serverToken,
+    });
+    // Start async initialization (don't await, let it run in background)
+    initElectronRuntime(parsedOptions.data.serverToken).catch((error) => {
+      Logger.error("Failed to initialize Electron runtime", error);
     });
   } else {
     store.set(runtimeConfigAtom, {

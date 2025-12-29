@@ -14,8 +14,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --write .",
-    "electron": "electron .",
-    "electron:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && electron .\"",
+    "electron": "npx electron .",
+    "electron:dev": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && npx electron .\"",
     "electron:build": "pnpm build && electron-builder",
     "electron:build:win": "pnpm build && electron-builder --win",
     "electron:build:mac": "pnpm build && electron-builder --mac",
@@ -208,6 +208,7 @@
     "@vitejs/plugin-react": "^5.1.2",
     "babel-plugin-react-compiler": "19.1.0-rc.3",
     "blob-polyfill": "^7.0.20220408",
+    "concurrently": "^9.2.1",
     "cross-env": "^7.0.3",
     "electron": "^39.2.7",
     "electron-builder": "^26.0.12",
@@ -236,6 +237,7 @@
     "vite": "npm:rolldown-vite@7.3.0",
     "vite-plugin-top-level-await": "^1.6.0",
     "vite-plugin-wasm": "^3.5.0",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wait-on": "^9.0.3"
   }
 }

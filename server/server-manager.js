@@ -266,7 +266,6 @@ export class ServerManager {
       // Handle process exit
       this.serverProcess.on("exit", (code, signal) => {
         logInfo(`Server process exited with code ${code}, signal ${signal}`);
-        const processRef = this.serverProcess;
         this.serverProcess = null;
 
         // Only handle crash if not stopping gracefully

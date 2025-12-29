@@ -72,34 +72,62 @@ backcast/
 ### フェーズ2: Pythonサーバー管理機能の実装（2-3日）
 
 #### 2.1 Pythonランタイムの準備
-- [ ] Python Embeddable Package の取得方法を調査
-- [ ] Pythonランタイムの配置場所を決定（`server/python-runtime/`）
-- [ ] Python環境の初期化処理を実装
+- [x] ✅ Python Embeddable Package の取得方法を調査
+  - Windows: https://www.python.org/downloads/windows/ からEmbeddable Packageを取得
+  - 配置場所: `server/python-runtime/`（Phase 4で実装予定）
+- [x] ✅ Pythonランタイムの配置場所を決定（`server/python-runtime/`）
+- [x] ✅ Python環境の初期化処理を実装
+  - システムPythonまたはEmbeddable Packageを自動検出
+  - `findPythonExecutable()`でPython実行ファイルを検出
 
 #### 2.2 サーバー起動管理の実装
-- [ ] Pythonサーバープロセスの起動機能
-  - 動的ポート割り当て
-  - プロセス管理（spawn）
-  - 標準出力/エラーのキャプチャ
-- [ ] サーバーのヘルスチェック機能
-  - `/healthz` エンドポイントへの定期アクセス
-  - 起動待機処理
-- [ ] サーバーの終了処理
-  - 正常終了シグナル送信
-  - 強制終了処理（タイムアウト時）
+- [x] ✅ Pythonサーバープロセスの起動機能
+  - 動的ポート割り当て（2718-2728の範囲、`findAvailablePort()`）
+  - プロセス管理（`child_process.spawn`）
+  - 標準出力/エラーのキャプチャ（`addLog()`でログ管理）
+- [x] ✅ サーバーのヘルスチェック機能
+  - `/healthz` エンドポイントへの定期アクセス（`checkHealth()`）
+  - 起動待機処理（最大30秒、1秒間隔でポーリング）
+- [x] ✅ サーバーの終了処理
+  - 正常終了シグナル送信（SIGTERM）
+  - 強制終了処理（タイムアウト5秒後にSIGKILL）
 
 #### 2.3 エラーハンドリング
-- [ ] サーバー起動失敗時の処理
-- [ ] サーバークラッシュ時の自動再起動
-- [ ] ログ出力機能（ファイル出力）
+- [x] ✅ サーバー起動失敗時の処理
+  - エラーログ出力、ステータス更新
+- [x] ✅ サーバークラッシュ時の自動再起動
+  - 最大3回の再試行、指数バックオフ（1秒、2秒、4秒、最大10秒）
+- [x] ✅ ログ出力機能
+  - 標準出力/エラーのキャプチャ（`addLog()`）
+  - ログ履歴の保持（最大1000件）
+  - `electron/utils/logger.js`を使用したファイル出力
 
 #### 2.4 プロセス間通信（IPC）の実装
-- [ ] Main Process → Renderer Process への通信
-  - サーバーURLの通知
-  - サーバーステータスの通知
-- [ ] Renderer Process → Main Process への通信
-  - サーバー再起動リクエスト
-  - ログ取得リクエスト
+- [x] ✅ Main Process → Renderer Process への通信
+  - サーバーURLの通知（`server:get-url` IPCハンドラー）
+  - サーバーステータスの通知（`server:get-status` IPCハンドラー、`server:status-changed`イベント）
+- [x] ✅ Renderer Process → Main Process への通信
+  - サーバー再起動リクエスト（`server:restart` IPCハンドラー）
+  - ログ取得リクエスト（`server:get-logs` IPCハンドラー）
+
+**進捗状況**: 完了
+**知見・Tips**:
+- Node.js 18+の組み込み`fetch`を使用してヘルスチェックを実装
+- ポート検出は`net.createServer()`を使用してポートの使用状況を確認
+- プロセス終了時は`SIGTERM`で正常終了を試み、タイムアウト後に`SIGKILL`で強制終了（Windowsでは`kill()`を直接使用）
+- 自動再起動は指数バックオフで実装し、最大3回まで再試行
+- ログ管理は配列で保持し、最大1000件まで保持（メモリ効率を考慮）
+- ステータス変更時はコールバック関数でRenderer Processに通知
+- `marimo edit --headless`コマンドを使用（ノートブックファイル不要でサーバー起動可能）
+- ヘルスチェックは`AbortController`を使用してタイムアウト処理（互換性向上）
+- プロセス終了時の競合状態対策として`isStopping`フラグを実装
+
+**コードレビュー対応（2025-12-29）**:
+- ✅ marimoコマンドを`run`→`edit`に変更、`--headless`オプション追加（ノートブックファイル不要）
+- ✅ ヘルスチェックのタイムアウト処理を`AbortSignal.timeout()`→`AbortController`に変更（互換性向上）
+- ✅ プロセス終了時の競合状態を`isStopping`フラグで解決（正常終了時に`handleServerCrash()`を呼ばない）
+- ✅ Windowsでのシグナル処理を改善（`process.platform`をチェックして適切なシグナルを送信）
+- ✅ preload.jsのイベントリスナー削除を改善（`removeAllListeners`→`removeListener`で特定リスナーのみ削除）
 
 ---
 
@@ -299,13 +327,41 @@ backcast/
 - `server-manager.js`はPhase 2で実装するため、現時点ではスタブ実装
 - `concurrently`と`wait-on`のインストールは既存ワークスペース依存関係の問題で保留
 
+### 2025-12-29: フェーズ2完了
+
+**完了項目**:
+- ✅ `ServerManager`クラスの完全実装
+  - Python実行ファイルの自動検出（システムPythonまたはEmbeddable Package）
+  - 動的ポート割り当て（2718-2728の範囲）
+  - marimoサーバーの起動・停止機能
+  - ヘルスチェック機能（`/healthz`エンドポイント）
+  - ログ管理機能（標準出力/エラーのキャプチャ）
+  - エラーハンドリングと自動再起動（最大3回、指数バックオフ）
+- ✅ IPCハンドラーの実装
+  - `server:get-url`: サーバーURLを返す
+  - `server:get-status`: サーバーステータスを返す
+  - `server:restart`: サーバー再起動リクエスト
+  - `server:get-logs`: サーバーログ取得
+  - `server:status-changed`: ステータス変更イベントの送信
+
+**設計変更**:
+- Python Embeddable Packageの同梱はPhase 4で実装予定（現時点ではシステムPythonを使用）
+- marimoのインストール確認は実装済み（Phase 4で自動インストール機能を追加予定）
+
+**コードレビュー後の修正（2025-12-29）**:
+- ✅ marimoコマンドを`marimo run`から`marimo edit`に変更（ノートブックファイル不要）
+- ✅ ヘルスチェックのタイムアウト処理を`AbortSignal.timeout()`から`AbortController`に変更（互換性向上）
+- ✅ プロセス終了時の競合状態を修正（`isStopping`フラグを追加して正常終了時は`handleServerCrash()`を呼ばない）
+- ✅ Windowsでのシグナル処理を改善（`process.platform`をチェックして適切なシグナルを送信）
+- ✅ preload.jsのイベントリスナー削除を改善（`removeAllListeners`から`removeListener`に変更して特定のリスナーのみ削除）
+
 **次のステップ**:
-- Phase 2: Pythonサーバー管理機能の実装を開始
+- Phase 3: フロントエンド統合を開始
 
 ## 次のアクション
 
-1. **即座に開始**: フェーズ2（Pythonサーバー管理機能の実装）
-2. **並行作業**: フェーズ2とフェーズ3（サーバー管理とフロントエンド統合）
+1. **即座に開始**: フェーズ3（フロントエンド統合）
+2. **並行作業**: フェーズ3とフェーズ4（フロントエンド統合とPython環境セットアップ）
 3. **段階的実装**: 各フェーズを完了してから次へ進む
 
 ---

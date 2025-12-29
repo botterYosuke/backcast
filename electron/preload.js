@@ -31,10 +31,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
    * Listen to server status changes
    */
   onServerStatusChange: (callback) => {
-    ipcRenderer.on("server:status-changed", (_event, status) => callback(status));
-    // Return cleanup function
+    // Create a wrapper function to maintain reference for removal
+    const listener = (_event, status) => callback(status);
+    ipcRenderer.on("server:status-changed", listener);
+    // Return cleanup function that removes only this specific listener
     return () => {
-      ipcRenderer.removeAllListeners("server:status-changed");
+      ipcRenderer.removeListener("server:status-changed", listener);
     };
   },
 

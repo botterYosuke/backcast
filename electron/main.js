@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initLogger, logInfo, logError, logWarn } from "./utils/logger.js";
 import { getAppRoot } from "./utils/paths.js";
+import { ServerManager } from "../server/server-manager.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -55,13 +56,25 @@ function createWindow() {
 }
 
 /**
- * Initialize server manager (will be implemented in Phase 2)
+ * Initialize server manager
  */
 async function initServerManager() {
   logInfo("Initializing server manager...");
-  // TODO: Implement server manager in Phase 2
-  // serverManager = new ServerManager();
-  // await serverManager.start();
+  try {
+    serverManager = new ServerManager();
+
+    // Register status change callback to notify renderer
+    serverManager.onStatusChange((status) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("server:status-changed", status);
+      }
+    });
+
+    // Start the server
+    await serverManager.start();
+  } catch (error) {
+    logError("Failed to initialize server manager", error);
+  }
 }
 
 /**
@@ -70,7 +83,11 @@ async function initServerManager() {
 async function cleanup() {
   logInfo("Cleaning up...");
   if (serverManager) {
-    // await serverManager.stop();
+    try {
+      await serverManager.stop();
+    } catch (error) {
+      logError("Error stopping server during cleanup", error);
+    }
   }
 }
 
@@ -99,24 +116,41 @@ app.on("before-quit", async () => {
 
 // IPC handlers
 ipcMain.handle("server:get-url", async () => {
-  // TODO: Implement in Phase 2
-  return "http://localhost:2718";
+  if (!serverManager) {
+    return null;
+  }
+  const status = serverManager.getStatus();
+  return status.url;
 });
 
 ipcMain.handle("server:get-status", async () => {
-  // TODO: Implement in Phase 2
-  return { status: "stopped", url: null };
+  if (!serverManager) {
+    return { status: "stopped", url: null };
+  }
+  return serverManager.getStatus();
 });
 
 ipcMain.handle("server:restart", async () => {
-  // TODO: Implement in Phase 2
-  logWarn("Server restart requested (not implemented yet)");
-  return { success: false, message: "Not implemented yet" };
+  if (!serverManager) {
+    return { success: false, message: "Server manager not initialized" };
+  }
+
+  try {
+    logInfo("Server restart requested");
+    await serverManager.stop();
+    await serverManager.start();
+    return { success: true, message: "Server restarted successfully" };
+  } catch (error) {
+    logError("Failed to restart server", error);
+    return { success: false, message: error.message };
+  }
 });
 
 ipcMain.handle("server:get-logs", async () => {
-  // TODO: Implement in Phase 2
-  return [];
+  if (!serverManager) {
+    return [];
+  }
+  return serverManager.getLogs();
 });
 
 // Error handling

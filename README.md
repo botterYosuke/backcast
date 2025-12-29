@@ -1,93 +1,62 @@
-# Backcast - Python実行環境
+# Backcast
 
-ブラウザ上でPythonコードを入力・実行・表示できるmarimoベースのカスタムフロントエンドアプリケーションです。
+A web application built with React, TypeScript, and Tailwind CSS, based on marimo's frontend architecture.
 
-## 機能
+## Getting Started
 
-- ✅ React 19 + TypeScript
-- ✅ Vite ビルドシステム
-- ✅ **Pyodideによるブラウザ上でのPython実行**
-- ✅ **CodeMirrorによるシンタックスハイライト付きコードエディタ**
-- ✅ **リアルタイム出力表示**
-- ✅ エラーハンドリング
-- ✅ モダンなUIデザイン
-- ✅ レスポンシブデザイン
+### Prerequisites
 
-## セットアップ
+- Node.js 20+
+- pnpm 9+
 
-### 依存関係のインストール
+### Installation
 
-```powershell
-npm install
-```
-
-または
-
-```powershell
+```bash
 pnpm install
 ```
 
-## 開発
+### Development
 
-開発サーバーを起動:
-
-```powershell
-npm run dev
+```bash
+pnpm dev
 ```
 
-ブラウザで `http://localhost:3000` にアクセスしてください。
+The application will be available at `http://localhost:3000`.
 
-## ビルド
+### Build
 
-本番用ビルド:
-
-```powershell
-npm run build
+```bash
+pnpm build
 ```
 
-ビルド成果物は `dist/` ディレクトリに出力されます。
+### Preview
 
-## プレビュー
-
-ビルド後のプレビュー:
-
-```powershell
-npm run preview
+```bash
+pnpm preview
 ```
 
-## 使用方法
+## Project Structure
 
-1. 開発サーバーを起動後、ブラウザで `http://localhost:3000` にアクセス
-2. エディタにPythonコードを入力
-3. 「▶ 実行」ボタンをクリックしてコードを実行
-4. 出力エリアに結果が表示されます
-
-### サポートされている機能
-
-- 基本的なPython構文
-- 標準ライブラリ（sys, math, json等）
-- NumPy、Pandas等のPyodide対応パッケージ（要インストール）
-
-### パッケージのインストール
-
-Pyodideで追加パッケージを使用する場合、コード内で`micropip`を使用してインストールできます:
-
-```python
-import micropip
-await micropip.install("package-name")
+```
+backcast/
+├── src/
+│   ├── App.tsx          # Main application component
+│   ├── main.tsx         # Application entry point
+│   └── index.css        # Global styles
+├── index.html           # HTML template
+├── package.json         # Dependencies and scripts
+├── vite.config.mts      # Vite configuration
+├── tsconfig.json        # TypeScript configuration
+├── tailwind.config.cjs  # Tailwind CSS configuration
+└── postcss.config.cjs   # PostCSS configuration
 ```
 
-## 次のステップ
+## Technologies
 
-このアプリを拡張して、以下の機能を追加できます:
-
-- 複数ファイルの管理
-- コードの保存/読み込み機能
-- marimoバックエンドAPIとの連携
-- データ可視化機能の追加
-- より高度なエディタ機能（補完、リント等）
-
-## ライセンス
-
-MIT
+- **React 19** - UI library
+- **TypeScript** - Type safety
+- **Vite** - Build tool
+- **Tailwind CSS** - Styling
+- **Radix UI** - UI components
+- **Jotai** - State management
 

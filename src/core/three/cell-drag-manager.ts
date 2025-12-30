@@ -37,9 +37,6 @@ export class CellDragManager {
    * CSS2DServiceへの参照を設定します
    */
   setCSS2DService(service: CellCSS2DService): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cell-drag-manager.ts:39',message:'setCSS2DService called',data:{hasService:!!service},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     this.css2DService = service;
   }
 
@@ -52,9 +49,6 @@ export class CellDragManager {
     currentPosition: THREE.Vector3,
     scale: number = 1.0,
   ): void {
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cell-drag-manager.ts:46',message:'startDrag called',data:{cellId,scale,hasCss2DService:!!this.css2DService},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-    // #endregion
     event.preventDefault();
     event.stopPropagation();
 
@@ -94,19 +88,9 @@ export class CellDragManager {
       const deltaY = event.clientY - this.dragStartY;
 
       // スケールを動的に取得（カメラ移動時のスケール変更に対応）
-      // #region agent log
-      const hasService = !!this.css2DService;
-      // #endregion
       if (this.css2DService) {
         const newScale = this.css2DService.getCurrentScale();
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cell-drag-manager.ts:92',message:'scale updated in onMouseMove',data:{oldScale:this.currentScale,newScale,hasService},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
         this.currentScale = newScale;
-      } else {
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cell-drag-manager.ts:92',message:'css2DService is undefined in onMouseMove',data:{hasService},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-        // #endregion
       }
 
       // スケールを考慮した位置計算
@@ -115,19 +99,19 @@ export class CellDragManager {
       const adjustedDeltaY = this.currentScale > 0 ? deltaY / this.currentScale : deltaY;
 
       // 新しい位置を計算
+      // カメラのupベクトルが(0, 0, -1)なので、Z軸負方向が上方向
+      // マウスを下に動かす（deltaY > 0）→ Z軸を正方向に移動（z + adjustedDeltaY）
+      // マウスを上に動かす（deltaY < 0）→ Z軸を負方向に移動（z + adjustedDeltaY、負の値なので減る）
       const newPosition = new THREE.Vector3(
         this.cellStartPosition.x + adjustedDeltaX,
         this.cellStartPosition.y,
-        this.cellStartPosition.z - adjustedDeltaY, // Y軸は逆（画面の上方向がZ軸の負方向）
+        this.cellStartPosition.z + adjustedDeltaY,
       );
 
       this.pendingPosition = newPosition;
 
       // 位置を更新（コールバック経由）
       if (this.onPositionUpdate && this.activeCellId) {
-        // #region agent log
-        fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cell-drag-manager.ts:110',message:'position update callback called',data:{cellId:this.activeCellId,position:{x:newPosition.x,y:newPosition.y,z:newPosition.z},scale:this.currentScale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
         this.onPositionUpdate(this.activeCellId, newPosition);
       }
 

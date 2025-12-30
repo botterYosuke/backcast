@@ -50,6 +50,12 @@ def main():
         # Create file router
         file_router = AppFileRouter.infer(str(notebook_file))
         
+        # Configure CORS for development mode
+        # In development, allow requests from the frontend (localhost:3000)
+        allow_origins = None
+        if development_mode:
+            allow_origins = ("http://localhost:3000",)
+        
         # Start the server
         start(
             file_router=file_router,
@@ -66,7 +72,7 @@ def main():
             cli_args={},  # Empty CLI args dict
             argv=[],
             base_url="",
-            allow_origins=None,
+            allow_origins=allow_origins,
             redirect_console_to_browser=True,
             ttl_seconds=None,
             remote_url=None,

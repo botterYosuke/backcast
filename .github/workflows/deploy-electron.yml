@@ -49,7 +49,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install
 
       - name: Build Electron app
         run: pnpm build

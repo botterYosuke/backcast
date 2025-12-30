@@ -110,6 +110,20 @@ const llmInfoJsonPlugin = (): Plugin => {
         return `\0llm-info-json:providers.json`;
       }
       
+      // Handle relative paths from package exports (e.g., ./data/generated/models.json)
+      if (id === "./data/generated/models.json" || id === "data/generated/models.json") {
+        // Check if importer is from llm-info package
+        if (importer?.includes("llm-info")) {
+          return `\0llm-info-json:models.json`;
+        }
+      }
+      if (id === "./data/generated/providers.json" || id === "data/generated/providers.json") {
+        // Check if importer is from llm-info package
+        if (importer?.includes("llm-info")) {
+          return `\0llm-info-json:providers.json`;
+        }
+      }
+      
       // Handle absolute file paths
       const normalizedId = path.normalize(id);
       const normalizedModelsPath = path.normalize(modelsJsonPath);
@@ -233,10 +247,14 @@ const llmInfoJsonPlugin = (): Plugin => {
         // First check if this is one of our target files by path matching
         const isModelsJson = id.includes("llm-info/data/generated/models.json") || 
                             id.includes("llm-info\\data\\generated\\models.json") ||
-                            id.endsWith("models.json") && id.includes("llm-info");
+                            (id.endsWith("models.json") && id.includes("llm-info")) ||
+                            id === "./data/generated/models.json" ||
+                            id === "data/generated/models.json";
         const isProvidersJson = id.includes("llm-info/data/generated/providers.json") || 
                                 id.includes("llm-info\\data\\generated\\providers.json") ||
-                                id.endsWith("providers.json") && id.includes("llm-info");
+                                (id.endsWith("providers.json") && id.includes("llm-info")) ||
+                                id === "./data/generated/providers.json" ||
+                                id === "data/generated/providers.json";
         
         // If it's not one of our target files, return null immediately
         if (!isModelsJson && !isProvidersJson) {
@@ -250,9 +268,17 @@ const llmInfoJsonPlugin = (): Plugin => {
         if (existsSync(id)) {
           resolvedPath = path.resolve(id);
         } else if (id.startsWith(".") || id.startsWith("/") || /^[A-Z]:/.test(id)) {
-          const attempted = path.resolve(__dirname, id);
+          // Try resolving relative to package directory
+          const packageDir = path.resolve(__dirname, "./packages/llm-info");
+          const attempted = path.resolve(packageDir, id);
           if (existsSync(attempted)) {
             resolvedPath = path.resolve(attempted);
+          } else {
+            // Try resolving relative to project root
+            const attemptedRoot = path.resolve(__dirname, id);
+            if (existsSync(attemptedRoot)) {
+              resolvedPath = path.resolve(attemptedRoot);
+            }
           }
         }
         
@@ -269,6 +295,9 @@ const llmInfoJsonPlugin = (): Plugin => {
               return null;
             }
             const jsonContent = readFileSync(modelsJsonPath, "utf-8").trim();
+            if (!jsonContent) {
+              throw new Error(`[llm-info-json-plugin] models.json is empty. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`);
+            }
             try {
               JSON.parse(jsonContent);
             } catch (error) {
@@ -285,6 +314,9 @@ const llmInfoJsonPlugin = (): Plugin => {
               return null;
             }
             const jsonContent = readFileSync(providersJsonPath, "utf-8").trim();
+            if (!jsonContent) {
+              throw new Error(`[llm-info-json-plugin] providers.json is empty. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`);
+            }
             try {
               JSON.parse(jsonContent);
             } catch (error) {

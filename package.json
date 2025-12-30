@@ -10,11 +10,11 @@
   "main": "electron/main.js",
   "scripts": {
     "vite": "vite",
-    "server": "cd server && set ENV=development && python run.py",
-    "dev": "concurrently \"pnpm server\" \"pnpm vite\"",
+    "server": "cross-env ENV=development python -u server/run.py",
+    "dev": "concurrently --names \"server,vite\" --prefix-colors \"blue,green\" --kill-others-on-fail false \"pnpm run server\" \"pnpm vite\"",
     "start": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && npx electron .\"",
     "build:server": "cd server && python -m PyInstaller --clean backcast-server.spec",
-    "build:electron": "cross-env vite build && pnpm build:server && electron-builder",
+    "build": "cross-env vite build && pnpm build:server && electron-builder",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --write ."

@@ -15,6 +15,7 @@ import { ShutdownButton } from "@/components/editor/controls/shutdown-button";
 import { Button } from "@/components/editor/inputs/Inputs";
 import { FindReplace } from "@/components/find-replace/find-replace";
 import type { AppConfig } from "@/core/config/config-schema";
+import { viewStateAtom } from "@/core/mode";
 import { isConnectedAtom } from "@/core/network/connection";
 import { SaveComponent } from "@/core/saving/save-component";
 import {
@@ -34,6 +35,7 @@ import { renderShortcut } from "../../shortcuts/renderShortcut";
 import { Tooltip } from "../../ui/tooltip";
 import { useShouldShowInterrupt } from "../cell/useShouldShowInterrupt";
 import { HideInKioskMode } from "../kiosk-mode";
+import { EditViewModeSelect } from "../renderers/edit-view-mode-select";
 import { LayoutSelect } from "../renderers/layout-select";
 import { CommandPaletteButton } from "./command-palette-button";
 
@@ -61,6 +63,8 @@ export const Controls = ({
   const needsRun = useAtomValue(needsRunAtom);
   const { undoDeleteCell } = useCellActions();
   const closed = connectionState === WebSocketState.CLOSED;
+  const viewState = useAtomValue(viewStateAtom);
+  const isEditing = viewState.mode === "edit";
 
   let undoControl: JSX.Element | null = null;
   if (!closed && undoAvailable) {
@@ -90,6 +94,7 @@ export const Controls = ({
       {!closed && (
         <div className={topRightControls}>
           {presenting && <LayoutSelect />}
+          {isEditing && !presenting && <EditViewModeSelect />}
           <NotebookMenuDropdown
             disabled={disabled}
             tooltip={connectionTooltip}

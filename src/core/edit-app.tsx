@@ -37,7 +37,7 @@ import type { AppConfig, UserConfig } from "./config/config-schema";
 import { RuntimeState } from "./kernel/RuntimeState";
 import { getSessionId } from "./kernel/session";
 import { useTogglePresenting } from "./layout/useTogglePresenting";
-import { viewStateAtom } from "./mode";
+import { is3DModeAtom, viewStateAtom } from "./mode";
 import { useRequestClient } from "./network/requests";
 import { useFilename } from "./saving/filename";
 import { lastSavedNotebookAtom } from "./saving/state";
@@ -85,7 +85,8 @@ export const EditApp: React.FC<AppProps> = ({
   const threeDContainerRef = useRef<HTMLDivElement>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const css2DServiceRef = useRef<CellCSS2DService | null>(null);
-  const is3DMode = viewState.mode === "edit"; // Editモードの時のみ3D表示を有効化
+  const is3DModeFromAtom = useAtomValue(is3DModeAtom);
+  const is3DMode = is3DModeFromAtom && viewState.mode === "edit"; // Editモードの時のみatomの値に従って3D表示を制御
   const [is3DInitialized, setIs3DInitialized] = useState(false); // 3D初期化完了フラグ
 
   // Initialize RuntimeState event-listeners

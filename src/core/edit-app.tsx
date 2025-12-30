@@ -19,6 +19,11 @@ import {
 import { CellArray } from "../components/editor/renderers/cell-array";
 import { Cells3DRenderer } from "../components/editor/renderers/cells-3d-renderer";
 import { CellsRenderer } from "../components/editor/renderers/cells-renderer";
+import { PackageAlert } from "../components/editor/package-alert";
+import { StartupLogsAlert } from "../components/editor/alerts/startup-logs-alert";
+import { StdinBlockingAlert } from "../components/editor/stdin-blocking-alert";
+import { ConnectingAlert } from "../components/editor/alerts/connecting-alert";
+import { NotebookBanner } from "../components/editor/notebook-banner";
 import { useHotkey } from "../hooks/useHotkey";
 import {
   cellIdsAtom,
@@ -240,21 +245,32 @@ export const EditApp: React.FC<AppProps> = ({
 
         {/* 3D表示モード */}
         {is3DMode ? (
-          <div
-            ref={threeDContainerRef}
-            className="w-full h-full relative"
-            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
-          >
-            {is3DInitialized && hasCells && sceneManagerRef.current && css2DServiceRef.current ? (
-              <Cells3DRenderer
-                mode={viewState.mode}
-                userConfig={userConfig}
-                appConfig={appConfig}
-                sceneManager={sceneManagerRef.current}
-                css2DService={css2DServiceRef.current}
-              />
-            ) : null}
-          </div>
+          <>
+            {/* アラートとバナーは通常の2D表示として表示 */}
+            <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4">
+              <PackageAlert />
+              <StartupLogsAlert />
+              <StdinBlockingAlert />
+              <ConnectingAlert />
+              <NotebookBanner width={appConfig.width} />
+            </div>
+            {/* 3D表示コンテナ */}
+            <div
+              ref={threeDContainerRef}
+              className="w-full h-full relative"
+              style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 1 }}
+            >
+              {is3DInitialized && hasCells && sceneManagerRef.current && css2DServiceRef.current ? (
+                <Cells3DRenderer
+                  mode={viewState.mode}
+                  userConfig={userConfig}
+                  appConfig={appConfig}
+                  sceneManager={sceneManagerRef.current}
+                  css2DService={css2DServiceRef.current}
+                />
+              ) : null}
+            </div>
+          </>
         ) : (
           /* 通常表示モード */
           hasCells && (

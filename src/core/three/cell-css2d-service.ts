@@ -21,6 +21,9 @@ export class CellCSS2DService {
   private cellContainer?: HTMLDivElement;
   private isContainerVisible = true;
 
+  // セルごとのCSS2DObject管理
+  private cellCSS2DObjects = new Map<string, CSS2DObject>();
+
   // スケール計算用の設定
   private baseDistance: number | null = null; // 基準距離（起動時の距離で初期化）
   private readonly MIN_SCALE = 0.1; // 最小スケール
@@ -321,6 +324,14 @@ export class CellCSS2DService {
    * リソースをクリーンアップします
    */
   dispose(): void {
+    // すべてのセルCSS2DObjectを削除
+    this.cellCSS2DObjects.forEach((obj, cellId) => {
+      if (obj.parent) {
+        obj.parent.remove(obj);
+      }
+    });
+    this.cellCSS2DObjects.clear();
+
     // CSS2DObjectをシーンから削除
     if (this.css2DObject && this.css2DObject.parent) {
       this.css2DObject.parent.remove(this.css2DObject);
@@ -367,6 +378,66 @@ export class CellCSS2DService {
    */
   isInitialized(): boolean {
     return !!this.css2DRenderer;
+  }
+
+  /**
+   * セルごとのCSS2DObjectを追加します
+   */
+  addCellCSS2DObject(cellId: string, element: HTMLElement, position: THREE.Vector3): CSS2DObject | null {
+    if (!this.scene) {
+      console.warn("Scene is not set. Call attachCellContainerToScene() first.");
+      return null;
+    }
+
+    // 既存のオブジェクトを削除
+    this.removeCellCSS2DObject(cellId);
+
+    // CSS2DObjectを作成
+    const css2DObject = new CSS2DObject(element);
+    css2DObject.position.copy(position);
+    css2DObject.scale.set(1, 1, 1);
+
+    // シーンに追加
+    this.scene.add(css2DObject);
+    this.cellCSS2DObjects.set(cellId, css2DObject);
+
+    return css2DObject;
+  }
+
+  /**
+   * セルごとのCSS2DObjectを削除します
+   */
+  removeCellCSS2DObject(cellId: string): void {
+    const css2DObject = this.cellCSS2DObjects.get(cellId);
+    if (css2DObject && css2DObject.parent) {
+      css2DObject.parent.remove(css2DObject);
+    }
+    this.cellCSS2DObjects.delete(cellId);
+  }
+
+  /**
+   * セルごとのCSS2DObjectを取得します
+   */
+  getCellCSS2DObject(cellId: string): CSS2DObject | undefined {
+    return this.cellCSS2DObjects.get(cellId);
+  }
+
+  /**
+   * セル位置を更新します
+   */
+  updateCellPosition(cellId: string, position: THREE.Vector3): void {
+    const css2DObject = this.cellCSS2DObjects.get(cellId);
+    if (css2DObject) {
+      css2DObject.position.copy(position);
+      this.markNeedsRender();
+    }
+  }
+
+  /**
+   * すべてのセルCSS2DObjectを取得します
+   */
+  getAllCellCSS2DObjects(): Map<string, CSS2DObject> {
+    return this.cellCSS2DObjects;
   }
 }
 

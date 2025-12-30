@@ -1,12 +1,12 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
 import { createPortal } from "react-dom";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
 import * as THREE from "three";
-import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
-import { CellArray } from "./cell-array";
 import { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import { SceneManager } from "@/core/three/scene-manager";
+import { CellDragManager } from "@/core/three/cell-drag-manager";
+import { Cell3DWrapper } from "./cell-3d-wrapper";
 import {
   calculateGridPosition,
   calculateOptimalColumns,
@@ -16,6 +16,8 @@ import {
 import type { AppConfig, UserConfig } from "@/core/config/config-schema";
 import type { AppMode } from "@/core/mode";
 import { useCellIds } from "@/core/cells/cells";
+import { useTheme } from "@/theme/useTheme";
+import { SETUP_CELL_ID } from "@/core/cells/ids";
 
 interface Cells3DRendererProps {
   mode: AppMode;
@@ -29,9 +31,10 @@ interface Cells3DRendererProps {
  * Cells3DRenderer
  *
  * セルを3D空間に配置するコンポーネント
- * - セル要素をCSS2DObjectとして3D空間に配置
- * - グリッド配置アルゴリズム
+ * - 各セルを個別のCSS2DObjectとして3D空間に配置
+ * - グリッド配置アルゴリズム（初期配置のみ）
  * - セルの追加/削除時の位置更新
+ * - ドラッグ機能の統合
  */
 export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
   mode,
@@ -41,19 +44,68 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
   css2DService,
 }) => {
   const cellIds = useCellIds();
+  const { theme } = useTheme();
   const [cellContainer, setCellContainer] = useState<HTMLDivElement | null>(null);
-  const cellElementsRef = useRef<Map<string, HTMLElement>>(new Map());
-  const css2DObjectsRef = useRef<Map<string, CSS2DObject>>(new Map());
+  const cellWrapperElementsRef = useRef<Map<string, HTMLElement>>(new Map());
+  const dragManagerRef = useRef<CellDragManager | null>(null);
+  const cellPositionsRef = useRef<Map<string, THREE.Vector3>>(new Map());
 
-  // セルIDのリストを取得（フラット化）
-  const allCellIds = cellIds.inOrderIds;
+  // セルIDのリストを取得（フラット化、SETUP_CELL_IDを除外）
+  const allCellIds = useMemo(() => {
+    return cellIds.inOrderIds.filter((id) => id !== SETUP_CELL_ID);
+  }, [cellIds]);
 
-  // セルコンテナを取得
+  // CellDragManagerの初期化
   useEffect(() => {
-    const container = css2DService.getCellContainer();
-    if (container) {
-      setCellContainer(container);
+    const dragManager = new CellDragManager();
+    dragManager.setPositionUpdateCallback((cellId, position) => {
+      // 位置を更新（スケールはCellDragManager内で既に考慮されている）
+      css2DService.updateCellPosition(cellId, position);
+      // 位置を保存
+      cellPositionsRef.current.set(cellId, position);
+    });
+    dragManagerRef.current = dragManager;
+
+    return () => {
+      dragManager.dispose();
+    };
+  }, [css2DService]);
+
+  // セルコンテナを作成
+  useEffect(() => {
+    const container = document.createElement("div");
+    container.className = "cells-3d-container";
+    container.style.position = "absolute";
+    container.style.top = "0";
+    container.style.left = "0";
+    container.style.width = "0";
+    container.style.height = "0";
+    container.style.pointerEvents = "none";
+    container.style.zIndex = "100";
+
+    // 子要素のpointer-eventsを有効化
+    const style = document.createElement("style");
+    style.textContent = `
+      .cells-3d-container > * {
+        pointer-events: all;
+      }
+    `;
+    document.head.appendChild(style);
+
+    setCellContainer(container);
+
+    // CSS2DServiceにコンテナを設定（既存のメソッドを使用）
+    const existingContainer = css2DService.getCellContainer();
+    if (!existingContainer) {
+      // コンテナが存在しない場合は、CSS2DServiceの内部コンテナを使用
+      // ただし、個別のCSS2DObjectとして管理するため、ここでは直接使用しない
     }
+
+    return () => {
+      if (style.parentElement) {
+        style.parentElement.removeChild(style);
+      }
+    };
   }, [css2DService]);
 
   // セルを3D空間に配置
@@ -67,6 +119,14 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
       return;
     }
 
+    const dragManager = dragManagerRef.current;
+    if (!dragManager) {
+      return;
+    }
+
+    // シーンにコンテナを接続（既存のメソッドを使用）
+    css2DService.attachCellContainerToScene(scene, new THREE.Vector3(0, 0, 0));
+
     // グリッド配置の設定
     const cellCount = allCellIds.length;
     const columns = calculateOptimalColumns(cellCount);
@@ -75,42 +135,48 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
       columns,
     };
 
-    // 既存のCSS2DObjectを削除
-    css2DObjectsRef.current.forEach((obj) => {
-      if (obj.parent) {
-        obj.parent.remove(obj);
-      }
-    });
-    css2DObjectsRef.current.clear();
-
-    // 各セルのDOM要素を取得してCSS2DObjectとして配置
+    // 各セルのラッパー要素を取得してCSS2DObjectとして配置
     const updatePositions = () => {
       allCellIds.forEach((cellId, index) => {
-        // セル要素を検索
-        const element = cellContainer.querySelector(
-          `[data-cell-id="${cellId}"]`,
+        // ラッパー要素を検索
+        const wrapperElement = cellContainer.querySelector(
+          `[data-cell-wrapper-id="${cellId}"]`,
         ) as HTMLElement;
 
-        if (!element) {
-          return; // セル要素が見つからない場合はスキップ
+        if (!wrapperElement) {
+          return; // ラッパー要素が見つからない場合はスキップ
         }
 
-        // 既存のCSS2DObjectがある場合は削除
-        const existingObj = css2DObjectsRef.current.get(cellId);
-        if (existingObj && existingObj.parent) {
-          existingObj.parent.remove(existingObj);
+        // 既存の位置を取得、またはグリッド位置を計算
+        let position = cellPositionsRef.current.get(cellId);
+        if (!position) {
+          // 初期配置：グリッド位置を計算
+          position = calculateGridPosition(index, gridConfig);
+          cellPositionsRef.current.set(cellId, position);
         }
 
-        // グリッド位置を計算
-        const position = calculateGridPosition(index, gridConfig);
+        // CSS2DObjectを作成または更新
+        const existingObj = css2DService.getCellCSS2DObject(cellId);
+        if (existingObj) {
+          // 既存のオブジェクトの位置を更新（ドラッグで移動した場合）
+          existingObj.position.copy(position);
+        } else {
+          // 新しいCSS2DObjectを作成
+          css2DService.addCellCSS2DObject(cellId, wrapperElement, position);
+        }
 
-        // CSS2DObjectを作成
-        const css2DObject = new CSS2DObject(element);
-        css2DObject.position.copy(position);
+        cellWrapperElementsRef.current.set(cellId, wrapperElement);
+      });
 
-        // シーンに追加
-        scene.add(css2DObject);
-        css2DObjectsRef.current.set(cellId, css2DObject);
+      // 削除されたセルのCSS2DObjectを削除
+      const currentCellIds = new Set(allCellIds);
+      const allCellCSS2DObjects = css2DService.getAllCellCSS2DObjects();
+      allCellCSS2DObjects.forEach((_, cellId) => {
+        if (!currentCellIds.has(cellId)) {
+          css2DService.removeCellCSS2DObject(cellId);
+          cellPositionsRef.current.delete(cellId);
+          cellWrapperElementsRef.current.delete(cellId);
+        }
       });
 
       // レンダリングをマーク
@@ -135,22 +201,84 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
     // クリーンアップ
     return () => {
       observer.disconnect();
-      css2DObjectsRef.current.forEach((obj) => {
-        if (obj.parent) {
-          obj.parent.remove(obj);
-        }
+      // すべてのCSS2DObjectを削除
+      allCellIds.forEach((cellId) => {
+        css2DService.removeCellCSS2DObject(cellId);
       });
-      css2DObjectsRef.current.clear();
+      cellPositionsRef.current.clear();
+      cellWrapperElementsRef.current.clear();
     };
   }, [allCellIds, cellContainer, sceneManager, css2DService]);
+
+  // セルラッパー要素が準備できたときのコールバック
+  const handleCellElementReady = (cellId: string, element: HTMLElement) => {
+    // 要素が準備できたことを記録
+    cellWrapperElementsRef.current.set(cellId, element);
+
+    // 位置が設定されていない場合は、グリッド位置を計算
+    if (!cellPositionsRef.current.has(cellId)) {
+      const index = allCellIds.indexOf(cellId);
+      if (index >= 0) {
+        const cellCount = allCellIds.length;
+        const columns = calculateOptimalColumns(cellCount);
+        const gridConfig: GridLayoutConfig = {
+          ...DEFAULT_GRID_CONFIG,
+          columns,
+        };
+        const position = calculateGridPosition(index, gridConfig);
+        cellPositionsRef.current.set(cellId, position);
+
+        // CSS2DObjectを作成
+        const scene = sceneManager.getScene();
+        if (scene) {
+          css2DService.addCellCSS2DObject(cellId, element, position);
+          sceneManager.markNeedsRender();
+          css2DService.markNeedsRender();
+        }
+      }
+    }
+  };
 
   // セルをCSS2Dコンテナ内にレンダリング
   if (!cellContainer) {
     return null;
   }
 
+  const dragManager = dragManagerRef.current;
+  if (!dragManager) {
+    return null;
+  }
+
+  // セルの列情報を取得
+  const hasOnlyOneCell = cellIds.hasOnlyOneId();
+
   return createPortal(
-    <CellArray mode={mode} userConfig={userConfig} appConfig={appConfig} />,
+    <div className="cells-3d-container-inner">
+      {allCellIds.map((cellId) => {
+        const column = cellIds.findWithId(cellId);
+        const isCollapsed = column ? column.isCollapsed(cellId) : false;
+        const collapseCount = column ? column.getCount(cellId) : 0;
+
+        return (
+          <Cell3DWrapper
+            key={cellId}
+            cellId={cellId}
+            mode={mode}
+            userConfig={userConfig}
+            appConfig={appConfig}
+            theme={theme}
+            dragManager={dragManager}
+            css2DService={css2DService}
+            showPlaceholder={hasOnlyOneCell}
+            canDelete={!hasOnlyOneCell}
+            isCollapsed={isCollapsed}
+            collapseCount={collapseCount}
+            canMoveX={appConfig.width === "columns"}
+            onCellElementReady={handleCellElementReady}
+          />
+        );
+      })}
+    </div>,
     cellContainer,
   );
 };

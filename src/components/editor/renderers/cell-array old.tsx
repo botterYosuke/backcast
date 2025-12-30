@@ -54,7 +54,6 @@ interface CellArrayProps {
   mode: AppMode;
   userConfig: UserConfig;
   appConfig: AppConfig;
-  excludeAlertsAndButtons?: boolean; // 3Dモードの時はtrue
 }
 
 export const CellArray: React.FC<CellArrayProps> = (props) => {
@@ -78,7 +77,6 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
   mode,
   userConfig,
   appConfig,
-  excludeAlertsAndButtons = false,
 }) => {
   const actions = useCellActions();
   const { theme } = useTheme();
@@ -121,15 +119,11 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
       appConfig={appConfig}
       innerClassName="pr-4" // For the floating actions
     >
-      {!excludeAlertsAndButtons && (
-        <>
-          <PackageAlert />
-          <StartupLogsAlert />
-          <StdinBlockingAlert />
-          <ConnectingAlert />
-          <NotebookBanner width={appConfig.width} />
-        </>
-      )}
+      <PackageAlert />
+      <StartupLogsAlert />
+      <StdinBlockingAlert />
+      <ConnectingAlert />
+      <NotebookBanner width={appConfig.width} />
       <div
         className={cn(
           appConfig.width === "columns" &&
@@ -146,11 +140,10 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
             mode={mode}
             userConfig={userConfig}
             theme={theme}
-            excludeButtons={excludeAlertsAndButtons}
           />
         ))}
       </div>
-      {!excludeAlertsAndButtons && <FloatingOutline />}
+      <FloatingOutline />
     </VerticalLayoutWrapper>
   );
 };
@@ -166,7 +159,6 @@ const CellColumn: React.FC<{
   mode: AppMode;
   userConfig: UserConfig;
   theme: Theme;
-  excludeButtons?: boolean;
 }> = ({
   columnId,
   index,
@@ -175,7 +167,6 @@ const CellColumn: React.FC<{
   mode,
   userConfig,
   theme,
-  excludeButtons = false,
 }) => {
   const cellIds = useCellIds();
   const column = cellIds.get(columnId);
@@ -193,15 +184,13 @@ const CellColumn: React.FC<{
       width={appConfig.width}
       canDelete={columnsLength > 1}
       footer={
-        !excludeButtons ? (
-          <AddCellButtons
-            columnId={columnId}
-            className={cn(
-              appConfig.width === "columns" &&
-                "opacity-0 group-hover/column:opacity-100",
-            )}
-          />
-        ) : undefined
+        <AddCellButtons
+          columnId={columnId}
+          className={cn(
+            appConfig.width === "columns" &&
+              "opacity-0 group-hover/column:opacity-100",
+          )}
+        />
       }
     >
       <SortableContext

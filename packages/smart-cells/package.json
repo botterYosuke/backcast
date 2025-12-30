@@ -21,7 +21,7 @@
     "string-dedent": "^3.0.2"
   },
   "devDependencies": {
-    "@marimo-team/tsconfig": "workspace:*",
+    "@marimo-team/tsconfig": "file:../tsconfig",
     "@types/node": "^20.19.25",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

@@ -19,7 +19,7 @@
     "build": "echo 'No build step'"
   },
   "devDependencies": {
-    "@marimo-team/tsconfig": "workspace:*",
+    "@marimo-team/tsconfig": "file:../tsconfig",
     "yaml": "^2.8.1",
     "vitest": "^3.2.4",
     "zod": "^4.1.13"

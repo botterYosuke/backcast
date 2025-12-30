@@ -210,6 +210,7 @@
     "@typescript-eslint/eslint-plugin": "^7.15.0",
     "@typescript-eslint/parser": "^7.15.0",
     "@vitejs/plugin-react": "^5.1.2",
+    "adm-zip": "^0.5.16",
     "babel-plugin-react-compiler": "19.1.0-rc.3",
     "blob-polyfill": "^7.0.20220408",
     "concurrently": "^9.2.1",

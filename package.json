@@ -10,7 +10,7 @@
   "main": "electron/main.js",
   "scripts": {
     "setup-python": "node server/setup-python.js",
-    "clean-python": "rimraf python-env",
+    "clean-python": "rimraf server/python-runtime",
     "rebuild-python": "npm run clean-python && npm run setup-python",
 
     "dev": "vite",

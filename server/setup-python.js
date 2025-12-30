@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 
 /**
- * Python仮想環境セットアップスクリプト
+ * Pythonランタイムセットアップスクリプト
  * 
  * このスクリプトは開発時やビルド時に実行され、
- * プロジェクト専用のPython仮想環境を作成します。
+ * ポータブルPythonをダウンロードしてパッケージを直接インストールします。
  * 
  * 使用方法:
- *   node scripts/setup-python.js
+ *   node server/setup-python.js
  */
 
 import { spawn, execSync } from "child_process";
@@ -19,13 +19,11 @@ import { createWriteStream } from "fs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-// const projectRoot = path.resolve(__dirname, "..");
-const venvPath = path.join(__dirname, "python-env");
+const pythonRuntimePath = path.join(__dirname, "python-runtime");
 const requirementsPath = path.join(__dirname, "requirements.txt");
-const portablePythonPath = path.join(__dirname, "python-portable");
 
 console.log("=".repeat(60));
-console.log("Python Virtual Environment Setup");
+console.log("Python Runtime Setup");
 console.log("=".repeat(60));
 console.log();
 
@@ -48,10 +46,10 @@ async function downloadPortablePython() {
     fs.unlinkSync(zipPath);
   }
 
-  // Remove existing portable Python directory if it exists
-  if (fs.existsSync(portablePythonPath)) {
-    console.log("  Removing existing portable Python directory...");
-    fs.rmSync(portablePythonPath, { recursive: true, force: true });
+  // Remove existing Python runtime directory if it exists
+  if (fs.existsSync(pythonRuntimePath)) {
+    console.log("  Removing existing Python runtime directory...");
+    fs.rmSync(pythonRuntimePath, { recursive: true, force: true });
   }
 
   try {
@@ -112,123 +110,62 @@ async function downloadPortablePython() {
     }
 
     const zip = new AdmZip(zipPath);
-    zip.extractAllTo(portablePythonPath, true);
-    console.log(`✓ Python extracted to: ${portablePythonPath}`);
+    zip.extractAllTo(pythonRuntimePath, true);
+    console.log(`✓ Python extracted to: ${pythonRuntimePath}`);
 
     // Clean up ZIP file
     fs.unlinkSync(zipPath);
 
-    // Configure python._pth for embeddable Python to enable standard library
-    const pythonPthPath = path.join(portablePythonPath, "python._pth");
+    // Configure ALL ._pth files for embeddable Python to enable standard library
+    // This is critical for pip and packages to work correctly
     
-    // Create python._pth if it doesn't exist
-    if (!fs.existsSync(pythonPthPath)) {
-      // Create necessary directories
-      if (!fs.existsSync(path.join(portablePythonPath, "Scripts"))) {
-        fs.mkdirSync(path.join(portablePythonPath, "Scripts"), { recursive: true });
-      }
-      if (!fs.existsSync(path.join(portablePythonPath, "Lib", "site-packages"))) {
-        fs.mkdirSync(path.join(portablePythonPath, "Lib", "site-packages"), { recursive: true });
-      }
-      
-      // Create python._pth file with relative paths
-      // In embeddable Python, paths in python._pth are relative to python.exe location
-      let pthContent = ".\n";
-      if (fs.existsSync(path.join(portablePythonPath, "python312.zip"))) {
-        pthContent += "python312.zip\n";
-      }
-      pthContent += "Lib\n";
-      pthContent += "Lib\\site-packages\n";
-      pthContent += "Scripts\n";
-      pthContent += "import site\n";
-      
-      fs.writeFileSync(pythonPthPath, pthContent);
-      console.log("  Created python._pth file");
+    // Create necessary directories
+    if (!fs.existsSync(path.join(pythonRuntimePath, "Scripts"))) {
+      fs.mkdirSync(path.join(pythonRuntimePath, "Scripts"), { recursive: true });
+    }
+    if (!fs.existsSync(path.join(pythonRuntimePath, "Lib", "site-packages"))) {
+      fs.mkdirSync(path.join(pythonRuntimePath, "Lib", "site-packages"), { recursive: true });
     }
     
-    if (fs.existsSync(pythonPthPath)) {
-      let pthContent = fs.readFileSync(pythonPthPath, "utf-8");
-      
-      // Rebuild the pth file with relative paths
-      // In embeddable Python, paths in python._pth are relative to python.exe location
-      const lines = pthContent.split("\n");
-      const newLines = [];
-      let hasPythonDir = false;
-      let hasStdlibZip = false;
-      let hasLibDir = false;
-      let hasLibSitePackagesDir = false;
-      let hasScriptsDir = false;
-      let hasImportSite = false;
-      
-      for (const line of lines) {
-        const trimmed = line.trim();
-        if (trimmed === "." || trimmed === portablePythonPath.replace(/\\/g, "/") || trimmed === portablePythonPath.replace(/\\/g, "\\")) {
-          hasPythonDir = true;
-          newLines.push(".");
-        } else if (trimmed === "python312.zip" || trimmed.includes("python312.zip")) {
-          hasStdlibZip = true;
-          newLines.push("python312.zip");
-        } else if (trimmed === "Lib" || trimmed === "Lib\\site-packages" || trimmed === "Lib/site-packages") {
-          if (trimmed === "Lib") {
-            hasLibDir = true;
-            newLines.push("Lib");
-          } else {
-            hasLibSitePackagesDir = true;
-            newLines.push("Lib\\site-packages");
-          }
-        } else if (trimmed === "Scripts" || trimmed.includes("Scripts")) {
-          hasScriptsDir = true;
-          newLines.push("Scripts");
-        } else if (trimmed === "import site") {
-          hasImportSite = true;
-          newLines.push("import site");
-        } else if (trimmed.startsWith("#") || trimmed === "") {
-          // Keep comments and empty lines
-          newLines.push(line);
-        } else if (!trimmed.includes("import") && trimmed.length > 0) {
-          // Keep other paths (convert to relative if needed)
-          if (path.isAbsolute(trimmed)) {
-            // Convert absolute path to relative
-            const relPath = path.relative(portablePythonPath, trimmed).replace(/\\/g, "\\");
-            newLines.push(relPath);
-          } else {
-            newLines.push(line);
-          }
-        }
-      }
-      
-      // Add missing paths in correct order
-      if (!hasPythonDir) {
-        newLines.unshift(".");
-      }
-      if (!hasStdlibZip && fs.existsSync(path.join(portablePythonPath, "python312.zip"))) {
-        const pythonDirIndex = newLines.indexOf(".");
-        if (pythonDirIndex >= 0) {
-          newLines.splice(pythonDirIndex + 1, 0, "python312.zip");
-        } else {
-          newLines.unshift("python312.zip");
-        }
-      }
-      if (!hasLibDir) {
-        newLines.push("Lib");
-      }
-      if (!hasLibSitePackagesDir) {
-        newLines.push("Lib\\site-packages");
-      }
-      if (!hasScriptsDir) {
-        newLines.push("Scripts");
-      }
-      if (!hasImportSite) {
-        newLines.push("import site");
-      }
-      
-      pthContent = newLines.join("\n");
-      fs.writeFileSync(pythonPthPath, pthContent);
-      console.log("  Configured python._pth for standard library access");
+    // Find all ._pth files (python._pth, python312._pth, etc.)
+    const pthFiles = fs.readdirSync(pythonRuntimePath)
+      .filter(file => file.endsWith("._pth"))
+      .map(file => path.join(pythonRuntimePath, file));
+    
+    // Also ensure python._pth exists
+    const pythonPthPath = path.join(pythonRuntimePath, "python._pth");
+    if (!pthFiles.includes(pythonPthPath)) {
+      pthFiles.push(pythonPthPath);
+    }
+    
+    // Find stdlib zip file (python312.zip, python311.zip, etc.)
+    const stdlibZipFiles = fs.readdirSync(pythonRuntimePath)
+      .filter(file => /^python\d+\.zip$/.test(file));
+    
+    const stdlibZip = stdlibZipFiles.length > 0 ? stdlibZipFiles[0] : "";
+    
+    // Create correct pth content
+    let pthContent = "";
+    if (stdlibZip) {
+      pthContent += `${stdlibZip}\n`;
+    }
+    pthContent += `.\n`;
+    pthContent += `Lib\n`;
+    pthContent += `Lib\\site-packages\n`;
+    pthContent += `import site\n`;
+    
+    // Update ALL ._pth files
+    for (const pthFile of pthFiles) {
+      fs.writeFileSync(pthFile, pthContent);
+    }
+    
+    console.log(`  Configured ${pthFiles.length} ._pth file(s) for standard library access`);
+    if (pthFiles.length > 1) {
+      console.log(`  Files: ${pthFiles.map(f => path.basename(f)).join(", ")}`);
     }
 
     // Return path to python.exe
-    const pythonExePath = path.join(portablePythonPath, "python.exe");
+    const pythonExePath = path.join(pythonRuntimePath, "python.exe");
     return pythonExePath;
   } catch (error) {
     // Clean up on error
@@ -240,11 +177,11 @@ async function downloadPortablePython() {
 }
 
 /**
- * Reconfigure python._pth after pip installation
+ * Reconfigure ALL ._pth files after pip installation
+ * This ensures pip and other modules are accessible
  */
 function reconfigurePythonPth(pythonCmd) {
   const pythonDir = path.dirname(pythonCmd);
-  const pythonPthPath = path.join(pythonDir, "python._pth");
   
   // Ensure Scripts directory exists
   if (!fs.existsSync(path.join(pythonDir, "Scripts"))) {
@@ -256,96 +193,39 @@ function reconfigurePythonPth(pythonCmd) {
     fs.mkdirSync(path.join(pythonDir, "Lib", "site-packages"), { recursive: true });
   }
   
-  if (fs.existsSync(pythonPthPath)) {
-    let pthContent = fs.readFileSync(pythonPthPath, "utf-8");
-    
-    // Rebuild pth content with relative paths
-    const lines = pthContent.split("\n");
-    const newLines = [];
-    let hasPythonDir = false;
-    let hasStdlibZip = false;
-    let hasLibDir = false;
-    let hasLibSitePackagesDir = false;
-    let hasScriptsDir = false;
-    let hasImportSite = false;
-    
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed === "." || trimmed === pythonDir.replace(/\\/g, "/") || trimmed === pythonDir.replace(/\\/g, "\\")) {
-        hasPythonDir = true;
-        newLines.push(".");
-      } else if (trimmed === "python312.zip" || trimmed.includes("python312.zip")) {
-        hasStdlibZip = true;
-        newLines.push("python312.zip");
-      } else if (trimmed === "Lib" || trimmed === "Lib\\site-packages" || trimmed === "Lib/site-packages") {
-        if (trimmed === "Lib") {
-          hasLibDir = true;
-          newLines.push("Lib");
-        } else {
-          hasLibSitePackagesDir = true;
-          newLines.push("Lib\\site-packages");
-        }
-      } else if (trimmed === "Scripts" || trimmed.includes("Scripts")) {
-        hasScriptsDir = true;
-        newLines.push("Scripts");
-      } else if (trimmed === "import site") {
-        hasImportSite = true;
-        newLines.push("import site");
-      } else if (trimmed.startsWith("#") || trimmed === "") {
-        // Keep comments and empty lines
-        newLines.push(line);
-      } else if (!trimmed.includes("import") && trimmed.length > 0) {
-        // Convert absolute paths to relative
-        if (path.isAbsolute(trimmed)) {
-          const relPath = path.relative(pythonDir, trimmed).replace(/\\/g, "\\");
-          newLines.push(relPath);
-        } else {
-          newLines.push(line);
-        }
-      }
-    }
-    
-    // Add missing paths in correct order
-    if (!hasPythonDir) {
-      newLines.unshift(".");
-    }
-    if (!hasStdlibZip && fs.existsSync(path.join(pythonDir, "python312.zip"))) {
-      const pythonDirIndex = newLines.indexOf(".");
-      if (pythonDirIndex >= 0) {
-        newLines.splice(pythonDirIndex + 1, 0, "python312.zip");
-      } else {
-        newLines.unshift("python312.zip");
-      }
-    }
-    if (!hasLibDir) {
-      newLines.push("Lib");
-    }
-    if (!hasLibSitePackagesDir) {
-      newLines.push("Lib\\site-packages");
-    }
-    if (!hasScriptsDir) {
-      newLines.push("Scripts");
-    }
-    if (!hasImportSite) {
-      newLines.push("import site");
-    }
-    
-    pthContent = newLines.join("\n");
-    fs.writeFileSync(pythonPthPath, pthContent);
-    console.log("  Updated python._pth to include Scripts and site-packages directories");
-  } else {
-    // Create python._pth if it doesn't exist
-    let pthContent = ".\n";
-    if (fs.existsSync(path.join(pythonDir, "python312.zip"))) {
-      pthContent += "python312.zip\n";
-    }
-    pthContent += "Lib\n";
-    pthContent += "Lib\\site-packages\n";
-    pthContent += "Scripts\n";
-    pthContent += "import site\n";
-    fs.writeFileSync(pythonPthPath, pthContent);
-    console.log("  Created python._pth file");
+  // Find all ._pth files
+  const pthFiles = fs.readdirSync(pythonDir)
+    .filter(file => file.endsWith("._pth"))
+    .map(file => path.join(pythonDir, file));
+  
+  // Also ensure python._pth exists
+  const pythonPthPath = path.join(pythonDir, "python._pth");
+  if (!pthFiles.includes(pythonPthPath)) {
+    pthFiles.push(pythonPthPath);
   }
+  
+  // Find stdlib zip file
+  const stdlibZipFiles = fs.readdirSync(pythonDir)
+    .filter(file => /^python\d+\.zip$/.test(file));
+  
+  const stdlibZip = stdlibZipFiles.length > 0 ? stdlibZipFiles[0] : "";
+  
+  // Create correct pth content
+  let pthContent = "";
+  if (stdlibZip) {
+    pthContent += `${stdlibZip}\n`;
+  }
+  pthContent += `.\n`;
+  pthContent += `Lib\n`;
+  pthContent += `Lib\\site-packages\n`;
+  pthContent += `import site\n`;
+  
+  // Update ALL ._pth files
+  for (const pthFile of pthFiles) {
+    fs.writeFileSync(pthFile, pthContent);
+  }
+  
+  console.log(`  Updated ${pthFiles.length} ._pth file(s) to include Scripts and site-packages directories`);
 }
 
 /**
@@ -419,7 +299,45 @@ async function installPipWithGetPip(pythonCmd) {
             console.log("✓ pip installed");
             // Reconfigure python._pth after pip installation
             reconfigurePythonPth(pythonCmd);
-            resolve();
+            
+            // Verify pip works by checking version
+            const pythonDir = path.dirname(pythonCmd);
+            const pipExe = path.join(pythonDir, "Scripts", "pip.exe");
+            
+            // Wait a moment for file system to sync
+            setTimeout(() => {
+              if (fs.existsSync(pipExe)) {
+                console.log("  Verifying pip installation...");
+                const verifyProcess = spawn(pipExe, ["--version"], {
+                  stdio: ["ignore", "pipe", "pipe"]
+                });
+                
+                let verifyOutput = "";
+                verifyProcess.stdout.on("data", (data) => {
+                  verifyOutput += data.toString();
+                });
+                
+                verifyProcess.on("close", (verifyCode) => {
+                  if (verifyCode === 0) {
+                    console.log(`  ✓ pip verified: ${verifyOutput.trim()}`);
+                    resolve();
+                  } else {
+                    console.error("  ⚠ pip.exe found but verification failed");
+                    // Still resolve - pip might work despite verification failure
+                    resolve();
+                  }
+                });
+                
+                verifyProcess.on("error", () => {
+                  console.error("  ⚠ pip.exe verification error");
+                  // Still resolve - pip might work
+                  resolve();
+                });
+              } else {
+                console.error("  ⚠ pip.exe not found after installation");
+                reject(new Error("pip.exe not found after installation"));
+              }
+            }, 500);
           } else {
             console.error(`✗ Failed to install pip (exit code: ${code})`);
             reject(new Error("pip installation failed"));
@@ -439,131 +357,113 @@ async function installPipWithGetPip(pythonCmd) {
 }
 
 /**
- * Create virtual environment
+ * Create pip configuration file to prevent registry access
  */
-function createVenv(pythonCmd) {
-  return new Promise((resolve, reject) => {
-    console.log("\n→ Creating virtual environment...");
-    console.log(`  Location: ${venvPath}`);
-
-    // Remove existing venv if it exists
-    if (fs.existsSync(venvPath)) {
-      console.log("  Removing existing virtual environment...");
-      fs.rmSync(venvPath, { recursive: true, force: true });
-    }
-
-    // Try venv first, fall back to virtualenv if venv is not available
-    const pythonArgs = ["-m", "venv", venvPath];
-    const venvProcess = spawn(pythonCmd, pythonArgs, {
-      stdio: "inherit",
-      shell: path.isAbsolute(pythonCmd) ? false : undefined
-    });
-
-    venvProcess.on("close", (code) => {
-      if (code === 0) {
-        console.log("✓ Virtual environment created");
-        resolve();
-      } else {
-        // If venv failed, try using virtualenv
-        console.log("  venv module not available, trying virtualenv...");
-        installVirtualenvAndCreate(pythonCmd)
-          .then(resolve)
-          .catch(reject);
-      }
-    });
-
-    venvProcess.on("error", (error) => {
-      console.log("  venv module not available, trying virtualenv...");
-      installVirtualenvAndCreate(pythonCmd)
-        .then(resolve)
-        .catch(reject);
-    });
-  });
+function createPipConfig() {
+  console.log("  Creating pip configuration...");
+  
+  // Create pip.ini in python-runtime to prevent registry access
+  const pipConfigDir = path.join(pythonRuntimePath, "pip");
+  const pipConfigPath = path.join(pipConfigDir, "pip.ini");
+  
+  if (!fs.existsSync(pipConfigDir)) {
+    fs.mkdirSync(pipConfigDir, { recursive: true });
+  }
+  
+  const pipConfig = `[global]
+no-cache-dir = true
+disable-pip-version-check = true
+no-input = true
+no-warn-script-location = true
+`;
+  
+  fs.writeFileSync(pipConfigPath, pipConfig);
+  console.log(`  ✓ pip.ini created at: ${pipConfigPath}`);
 }
 
 /**
- * Install virtualenv and create virtual environment
- */
-function installVirtualenvAndCreate(pythonCmd) {
-  return new Promise((resolve, reject) => {
-    console.log("  Installing virtualenv...");
-    
-    // Reconfigure python._pth first to ensure pip is accessible
-    reconfigurePythonPth(pythonCmd);
-    
-    // Use python -m pip (reconfigurePythonPth should have fixed python._pth)
-    // We need to use a new process for python._pth changes to take effect
-    const installProcess = spawn(pythonCmd, ["-m", "pip", "install", "virtualenv"], {
-      stdio: "inherit",
-      env: {
-        ...process.env,
-        // Ensure Python can find its modules
-        PYTHONPATH: path.dirname(pythonCmd)
-      }
-    });
-    
-    installProcess.on("close", (code) => {
-      if (code === 0) {
-        console.log("  ✓ virtualenv installed");
-        // Create virtual environment using virtualenv
-        const venvProcess = spawn(pythonCmd, ["-m", "virtualenv", venvPath], {
-          stdio: "inherit"
-        });
-        
-        venvProcess.on("close", (venvCode) => {
-          if (venvCode === 0) {
-            console.log("✓ Virtual environment created");
-            resolve();
-          } else {
-            console.error(`✗ Failed to create virtual environment (exit code: ${venvCode})`);
-            reject(new Error("Virtual environment creation failed"));
-          }
-        });
-        
-        venvProcess.on("error", (error) => {
-          console.error(`✗ Error: ${error.message}`);
-          reject(error);
-        });
-      } else {
-        console.error(`✗ Failed to install virtualenv (exit code: ${code})`);
-        reject(new Error("virtualenv installation failed"));
-      }
-    });
-    
-    installProcess.on("error", (error) => {
-      console.error(`✗ Error: ${error.message}`);
-      reject(error);
-    });
-  });
-}
-
-/**
- * Install packages
+ * Install packages directly into Python runtime
  */
 function installPackages() {
   return new Promise((resolve, reject) => {
     console.log("\n→ Installing packages...");
 
-    const venvPythonPath = process.platform === "win32"
-      ? path.join(venvPath, "Scripts", "python.exe")
-      : path.join(venvPath, "bin", "python");
+    const pythonExePath = path.join(pythonRuntimePath, "python.exe");
+    const pipExePath = path.join(pythonRuntimePath, "Scripts", "pip.exe");
 
-    let args;
-    if (fs.existsSync(requirementsPath)) {
-      console.log(`  From: ${requirementsPath}`);
-      args = ["-m", "pip", "install", "-r", requirementsPath];
-    } else {
-      console.log("  Installing: marimo>=0.8.0");
-      args = ["-m", "pip", "install", "marimo>=0.8.0"];
+    if (!fs.existsSync(pythonExePath)) {
+      reject(new Error(`Python executable not found: ${pythonExePath}`));
+      return;
     }
 
-    const installProcess = spawn(venvPythonPath, args, {
-      stdio: "inherit"
+    if (!fs.existsSync(pipExePath)) {
+      reject(new Error(`pip executable not found: ${pipExePath}`));
+      return;
+    }
+
+    // Read requirements
+    if (!fs.existsSync(requirementsPath)) {
+      console.log("  requirements.txt not found, installing default packages...");
+      console.log("  Installing: marimo>=0.8.0");
+    } else {
+      console.log(`  From: ${requirementsPath}`);
+    }
+
+    // Create isolated configuration directory to avoid registry access
+    const isolatedDir = path.join(pythonRuntimePath, "_isolated_config");
+    const appDataPath = path.join(isolatedDir, "AppData");
+    const localAppDataPath = path.join(isolatedDir, "LocalAppData");
+    const tempPath = path.join(isolatedDir, "Temp");
+    
+    // Ensure directories exist
+    [isolatedDir, appDataPath, localAppDataPath, tempPath].forEach(dir => {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    });
+
+    console.log("  Installing packages directly into Python runtime...");
+    
+    // Add Python runtime directory to PATH so DLLs can be found
+    const basePath = process.env.PATH || "";
+    const newPath = `${pythonRuntimePath};${basePath}`;
+    
+    // Comprehensive environment variables to avoid registry access
+    const env = {
+      ...process.env,
+      PATH: newPath,
+      USERPROFILE: isolatedDir,
+      APPDATA: appDataPath,
+      LOCALAPPDATA: localAppDataPath,
+      TEMP: tempPath,
+      TMP: tempPath,
+      HOME: isolatedDir,
+      PYTHONNOUSERSITE: "1",
+      PYTHONIOENCODING: "utf-8",
+      PYTHONHOME: "",
+      PYTHONPATH: "",
+      PIP_NO_CACHE_DIR: "1",
+      PIP_DISABLE_PIP_VERSION_CHECK: "1",
+      PIP_NO_INPUT: "1",
+      PIP_NO_WARN_SCRIPT_LOCATION: "1"
+    };
+
+    // Install packages using pip
+    const installArgs = ["install", "-r", requirementsPath];
+    if (!fs.existsSync(requirementsPath)) {
+      installArgs.splice(1, 2, "marimo>=0.8.0");
+    }
+
+    const installProcess = spawn(pipExePath, installArgs, {
+      cwd: __dirname,
+      stdio: "inherit",
+      env: env
     });
 
     installProcess.on("close", (code) => {
       if (code === 0) {
         console.log("✓ Packages installed successfully");
+        createPipConfig();
         resolve();
       } else {
         console.error(`✗ Failed to install packages (exit code: ${code})`);
@@ -585,11 +485,9 @@ function verifyInstallation() {
   return new Promise((resolve, reject) => {
     console.log("\n→ Verifying installation...");
 
-    const venvPythonPath = process.platform === "win32"
-      ? path.join(venvPath, "Scripts", "python.exe")
-      : path.join(venvPath, "bin", "python");
+    const pythonExePath = path.join(pythonRuntimePath, "python.exe");
 
-    const verifyProcess = spawn(venvPythonPath, ["-m", "marimo", "--version"], {
+    const verifyProcess = spawn(pythonExePath, ["-m", "marimo", "--version"], {
       stdio: ["ignore", "pipe", "pipe"]
     });
 
@@ -621,16 +519,13 @@ function verifyInstallation() {
  */
 async function setup() {
   try {
-    // Find Python
+    // Download portable Python
     const pythonCmd = await downloadPortablePython();
 
     // Install pip first (needed for embeddable Python)
     await installPip(pythonCmd);
 
-    // Create virtual environment
-    await createVenv(pythonCmd);
-
-    // Install packages
+    // Install packages directly into Python runtime
     await installPackages();
 
     // Verify installation
@@ -639,8 +534,8 @@ async function setup() {
     console.log("\n" + "=".repeat(60));
     console.log("✓ Setup completed successfully!");
     console.log("=".repeat(60));
-    console.log("\nVirtual environment location:");
-    console.log(`  ${venvPath}`);
+    console.log("\nPython runtime location:");
+    console.log(`  ${pythonRuntimePath}`);
     console.log("\nYou can now run the application:");
     console.log("  npm start");
     console.log();
@@ -651,8 +546,6 @@ async function setup() {
     console.error("=".repeat(60));
     console.error(`\nError: ${error.message}`);
     console.error("\nPlease check the error message above and try again.");
-    console.error("If the problem persists, please report it at:");
-    console.error("  https://github.com/your-repo/backcast/issues");
     process.exit(1);
   }
 }

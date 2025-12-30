@@ -35,6 +35,3 @@ lerna-debug.log*
 *.tsbuildinfo
 node_modules/.tmp
 
-
-
-server/python-portable/

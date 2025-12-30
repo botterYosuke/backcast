@@ -40,3 +40,21 @@ export function getUserDataDir() {
   return app.getPath("userData");
 }
 
+/**
+ * Get the virtual environment directory path
+ */
+export function getVenvDir() {
+  return path.join(getServerDir(), "venv");
+}
+
+/**
+ * Get the Python executable path in the virtual environment
+ */
+export function getVenvPythonPath() {
+  const venvDir = getVenvDir();
+  if (process.platform === "win32") {
+    return path.join(venvDir, "Scripts", "python.exe");
+  }
+  return path.join(venvDir, "bin", "python3");
+}
+

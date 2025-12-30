@@ -1,10 +1,10 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
-import { spawn } from "child_process";
+import { spawn, execSync } from "child_process";
 import net from "node:net";
 import path from "node:path";
 import fs from "node:fs";
-import { getServerDir, getPythonRuntimeDir } from "../electron/utils/paths.js";
+import { getServerDir, getPythonRuntimeDir, getVenvDir, getVenvPythonPath } from "../electron/utils/paths.js";
 import { logInfo, logError, logWarn, logDebug } from "../electron/utils/logger.js";
 
 /**
@@ -54,6 +54,51 @@ export class ServerManager {
   }
 
   /**
+   * Find system Python executable (excluding embedded runtime)
+   * Used for creating virtual environments
+   */
+  async findSystemPython() {
+    // On Windows, try to find Python using 'where' command
+    if (process.platform === "win32") {
+      try {
+        const result = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        const pythonPath = result.trim().split("\n")[0]?.trim();
+        if (pythonPath && fs.existsSync(pythonPath)) {
+          logInfo(`Found system Python in PATH: ${pythonPath}`);
+          return pythonPath;
+        } else if (pythonPath) {
+          logWarn(`Python path found but file doesn't exist: ${pythonPath}`);
+        }
+      } catch (error) {
+        logWarn(`Failed to find Python using 'where' command: ${error.message}`);
+      }
+
+      // Also try 'python3' on Windows (some installations use python3.exe)
+      try {
+        const result = execSync("where python3", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        const pythonPath = result.trim().split("\n")[0]?.trim();
+        if (pythonPath && fs.existsSync(pythonPath)) {
+          logInfo(`Found system Python3 in PATH: ${pythonPath}`);
+          return pythonPath;
+        }
+      } catch {
+        logDebug("Failed to find Python3 using 'where' command");
+      }
+    }
+
+    // Fallback: try to verify python.exe exists by spawning it
+    const systemPython = process.platform === "win32" ? "python.exe" : "python3";
+    try {
+      // Try to run python --version to verify it exists
+      execSync(`${systemPython} --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      logInfo(`Using system Python: ${systemPython}`);
+      return systemPython;
+    } catch {
+      throw new Error(`System Python executable not found. Please install Python or ensure it's in your PATH. Tried: ${systemPython}`);
+    }
+  }
+
+  /**
    * Find Python executable
    */
   async findPythonExecutable() {
@@ -67,10 +112,44 @@ export class ServerManager {
       return embeddedPythonPath;
     }
 
-    // Fallback to system Python
+    // On Windows, try to find Python using 'where' command
+    if (process.platform === "win32") {
+      try {
+        const result = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        const pythonPath = result.trim().split("\n")[0]?.trim();
+        if (pythonPath && fs.existsSync(pythonPath)) {
+          logInfo(`Found Python in PATH: ${pythonPath}`);
+          return pythonPath;
+        } else if (pythonPath) {
+          logWarn(`Python path found but file doesn't exist: ${pythonPath}`);
+        }
+      } catch (error) {
+        logWarn(`Failed to find Python using 'where' command: ${error.message}`);
+      }
+
+      // Also try 'python3' on Windows (some installations use python3.exe)
+      try {
+        const result = execSync("where python3", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        const pythonPath = result.trim().split("\n")[0]?.trim();
+        if (pythonPath && fs.existsSync(pythonPath)) {
+          logInfo(`Found Python3 in PATH: ${pythonPath}`);
+          return pythonPath;
+        }
+      } catch {
+        logDebug("Failed to find Python3 using 'where' command");
+      }
+    }
+
+    // Fallback: try to verify python.exe exists by spawning it
     const systemPython = process.platform === "win32" ? "python.exe" : "python3";
-    logInfo(`Using system Python: ${systemPython}`);
-    return systemPython;
+    try {
+      // Try to run python --version to verify it exists
+      execSync(`${systemPython} --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      logInfo(`Using system Python: ${systemPython}`);
+      return systemPython;
+    } catch {
+      throw new Error(`Python executable not found. Please install Python or ensure it's in your PATH. Tried: ${systemPython}`);
+    }
   }
 
   /**
@@ -78,27 +157,63 @@ export class ServerManager {
    */
   async checkMarimoInstalled(pythonPath) {
     return new Promise((resolve) => {
+      let stderrOutput = "";
+      let isResolved = false;
       const checkProcess = spawn(pythonPath, ["-m", "marimo", "--version"], {
-        stdio: "pipe",
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true, // Use shell PATH on Windows
       });
 
-      // Ignore output, only check exit code
-      checkProcess.stdout.on("data", () => {});
-      checkProcess.stderr.on("data", () => {});
-
-      checkProcess.on("close", (code) => {
-        resolve(code === 0);
+      // Collect stdout (version info)
+      checkProcess.stdout.on("data", (data) => {
+        logDebug(`[marimo version check stdout] ${data.toString().trim()}`);
       });
 
-      checkProcess.on("error", () => {
-        resolve(false);
+      // Collect stderr (error messages)
+      checkProcess.stderr.on("data", (data) => {
+        const message = data.toString();
+        stderrOutput += message;
+        logDebug(`[marimo version check stderr] ${message.trim()}`);
       });
 
       // Timeout after 5 seconds
-      setTimeout(() => {
-        checkProcess.kill();
-        resolve(false);
+      const timeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          checkProcess.kill();
+          logWarn("marimo version check timed out");
+          resolve(false);
+        }
       }, 5000);
+
+      checkProcess.on("close", (code) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+
+        if (code === 0) {
+          logInfo("marimo is installed");
+          resolve(true);
+        } else {
+          logWarn(`marimo version check failed with code ${code}`);
+          if (stderrOutput) {
+            logDebug(`marimo version check stderr: ${stderrOutput.trim()}`);
+          }
+          resolve(false);
+        }
+      });
+
+      checkProcess.on("error", (error) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+        logError(`Failed to check marimo installation: ${error.message}`);
+        resolve(false);
+      });
     });
   }
 
@@ -214,8 +329,8 @@ export class ServerManager {
       // Check if marimo is installed
       const marimoInstalled = await this.checkMarimoInstalled(this.pythonPath);
       if (!marimoInstalled) {
-        logWarn("marimo is not installed. Attempting to start anyway...");
-        // In Phase 4, we'll handle installation automatically
+        logError("marimo is not installed. Please install it using: pip install marimo");
+        throw new Error("marimo is not installed. Please install it using: pip install marimo");
       }
 
       // Find available port
@@ -227,10 +342,18 @@ export class ServerManager {
       const serverUrl = `http://127.0.0.1:${this.port}`;
       this.serverURL = serverUrl;
 
+      // Create a temporary notebook file if it doesn't exist
+      const notebookPath = path.join(serverDir, "backcast.py");
+      if (!fs.existsSync(notebookPath)) {
+        logInfo(`Creating default notebook file: ${notebookPath}`);
+        fs.writeFileSync(notebookPath, "# Backcast Notebook\n\n", "utf-8");
+      }
+
       const args = [
         "-m",
         "marimo",
         "edit",
+        "backcast.py",
         "--port",
         String(this.port),
         "--host",
@@ -243,6 +366,7 @@ export class ServerManager {
       this.serverProcess = spawn(this.pythonPath, args, {
         cwd: serverDir,
         stdio: ["ignore", "pipe", "pipe"],
+        shell: true, // Use shell PATH on Windows to find python.exe
         env: {
           ...process.env,
           PYTHONUNBUFFERED: "1", // Ensure unbuffered output

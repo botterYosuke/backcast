@@ -85,7 +85,7 @@ export const EditApp: React.FC<AppProps> = ({
   const threeDContainerRef = useRef<HTMLDivElement>(null);
   const sceneManagerRef = useRef<SceneManager | null>(null);
   const css2DServiceRef = useRef<CellCSS2DService | null>(null);
-  const [is3DMode] = useState(true); // デフォルトで3D表示を有効化
+  const is3DMode = viewState.mode === "edit"; // Editモードの時のみ3D表示を有効化
   const [is3DInitialized, setIs3DInitialized] = useState(false); // 3D初期化完了フラグ
 
   // Initialize RuntimeState event-listeners

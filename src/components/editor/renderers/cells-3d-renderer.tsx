@@ -65,6 +65,7 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
       // 位置を保存
       cellPositionsRef.current.set(cellId, position);
     });
+    dragManager.setCSS2DService(css2DService);
     dragManagerRef.current = dragManager;
 
     return () => {

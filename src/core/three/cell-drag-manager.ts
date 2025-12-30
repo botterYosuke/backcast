@@ -21,6 +21,8 @@ export class CellDragManager {
   private rafId: number | null = null;
   private pendingPosition: THREE.Vector3 | null = null;
   private onPositionUpdate?: (cellId: string, position: THREE.Vector3) => void;
+  private css2DService?: CellCSS2DService;
+  private currentScale: number = 1.0;
 
   /**
    * 位置更新コールバックを設定します
@@ -29,6 +31,13 @@ export class CellDragManager {
     callback: (cellId: string, position: THREE.Vector3) => void,
   ): void {
     this.onPositionUpdate = callback;
+  }
+
+  /**
+   * CSS2DServiceへの参照を設定します
+   */
+  setCSS2DService(service: CellCSS2DService): void {
+    this.css2DService = service;
   }
 
   /**
@@ -57,8 +66,6 @@ export class CellDragManager {
     document.addEventListener("mouseup", this.onMouseUp);
   }
 
-  private currentScale: number = 1.0;
-
   /**
    * マウス移動時の処理
    */
@@ -79,6 +86,11 @@ export class CellDragManager {
 
       const deltaX = event.clientX - this.dragStartX;
       const deltaY = event.clientY - this.dragStartY;
+
+      // スケールを動的に取得（カメラ移動時のスケール変更に対応）
+      if (this.css2DService) {
+        this.currentScale = this.css2DService.getCurrentScale();
+      }
 
       // スケールを考慮した位置計算
       // 画面座標のdeltaを3D空間座標に変換するため、スケールで割る

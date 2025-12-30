@@ -1,6 +1,6 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Cell } from "@/components/editor/notebook-cell";
 import type { AppConfig, UserConfig } from "@/core/config/config-schema";
 import type { AppMode } from "@/core/mode";
@@ -10,6 +10,7 @@ import { CellDragManager } from "@/core/three/cell-drag-manager";
 import { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import * as THREE from "three";
 import { useCellData } from "@/core/cells/cells";
+import { cn } from "@/utils/cn";
 import "./cell-3d-wrapper.css";
 
 interface Cell3DWrapperProps {
@@ -54,6 +55,7 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const cellData = useCellData(cellId);
   const cellName = cellData?.name || cellId;
+  const [isDragging, setIsDragging] = useState(false);
 
   // タイトルバーのドラッグ開始処理
   const handleTitleBarMouseDown = (event: React.MouseEvent) => {
@@ -69,8 +71,25 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
       const currentPosition = css2DObject.position.clone();
       const scale = css2DService.getCurrentScale();
       dragManager.startDrag(event.nativeEvent, cellId, currentPosition, scale);
+      setIsDragging(true);
     }
   };
+
+  // ドラッグ終了を監視
+  useEffect(() => {
+    if (!isDragging) {
+      return;
+    }
+
+    const handleMouseUp = () => {
+      setIsDragging(false);
+    };
+
+    document.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isDragging]);
 
   // ラッパー要素が準備できたらコールバックを呼び出す
   useEffect(() => {
@@ -83,7 +102,10 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
   return (
     <div
       ref={wrapperRef}
-      className="cell-3d-wrapper floating-window"
+      className={cn(
+        "cell-3d-wrapper floating-window",
+        isDragging && "dragging"
+      )}
       data-cell-wrapper-id={cellId}
     >
       {/* タイトルバー */}

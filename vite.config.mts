@@ -46,6 +46,35 @@ const svgInlinePlugin = (): Plugin => {
   };
 };
 
+// Plugin to handle JSON imports from @marimo-team/llm-info
+const llmInfoJsonPlugin = (): Plugin => {
+  return {
+    name: "llm-info-json-plugin",
+    resolveId(id) {
+      if (id === "@marimo-team/llm-info/models.json") {
+        return `\0llm-info-json:models.json`;
+      }
+      if (id === "@marimo-team/llm-info/providers.json") {
+        return `\0llm-info-json:providers.json`;
+      }
+      return null;
+    },
+    load(id) {
+      if (id.startsWith("\0llm-info-json:")) {
+        const jsonFile = id.replace("\0llm-info-json:", "");
+        const fullPath = path.resolve(
+          __dirname,
+          "./packages/llm-info/data/generated",
+          jsonFile,
+        );
+        const jsonContent = readFileSync(fullPath, "utf-8");
+        return `export default ${jsonContent};`;
+      }
+      return null;
+    },
+  };
+};
+
 // https://vitejs.dev/config/
 export default defineConfig({
   // This allows for a dynamic <base> tag in index.html
@@ -95,6 +124,7 @@ export default defineConfig({
   },
   plugins: [
     svgInlinePlugin(),
+    llmInfoJsonPlugin(),
     react({
       babel: {
         presets: ["@babel/preset-typescript"],

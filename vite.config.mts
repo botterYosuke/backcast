@@ -7,7 +7,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 import wasm from "vite-plugin-wasm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, statSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -67,7 +67,40 @@ const llmInfoJsonPlugin = (): Plugin => {
           "./packages/llm-info/data/generated",
           jsonFile,
         );
-        const jsonContent = readFileSync(fullPath, "utf-8");
+        
+        // Check if file exists
+        if (!existsSync(fullPath)) {
+          throw new Error(
+            `JSON file not found: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+          );
+        }
+        
+        // Check if file is empty
+        const stats = statSync(fullPath);
+        if (stats.size === 0) {
+          throw new Error(
+            `JSON file is empty: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+          );
+        }
+        
+        const jsonContent = readFileSync(fullPath, "utf-8").trim();
+        
+        // Validate JSON content is not empty after trimming
+        if (!jsonContent) {
+          throw new Error(
+            `JSON file contains no valid content: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+          );
+        }
+        
+        // Validate JSON format
+        try {
+          JSON.parse(jsonContent);
+        } catch (error) {
+          throw new Error(
+            `Invalid JSON in file ${fullPath}: ${error instanceof Error ? error.message : String(error)}. Please run 'pnpm --filter @marimo-team/llm-info codegen' to regenerate.`,
+          );
+        }
+        
         return `export default ${jsonContent};`;
       }
       return null;

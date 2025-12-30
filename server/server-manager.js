@@ -54,47 +54,106 @@ export class ServerManager {
   }
 
   /**
-   * Find system Python executable (excluding embedded runtime)
+   * Find system Python executable from environment variables
    * Used for creating virtual environments
    */
   async findSystemPython() {
-    // On Windows, try to find Python using 'where' command
-    if (process.platform === "win32") {
-      try {
-        const result = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-        const pythonPath = result.trim().split("\n")[0]?.trim();
-        if (pythonPath && fs.existsSync(pythonPath)) {
-          logInfo(`Found system Python in PATH: ${pythonPath}`);
+    // 1. Check PYTHON environment variable (direct path to Python executable)
+    if (process.env.PYTHON) {
+      const pythonPath = process.env.PYTHON;
+      if (fs.existsSync(pythonPath)) {
+        try {
+          execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+          logInfo(`Found system Python from PYTHON environment variable: ${pythonPath}`);
           return pythonPath;
-        } else if (pythonPath) {
-          logWarn(`Python path found but file doesn't exist: ${pythonPath}`);
+        } catch {
+          logWarn(`Python from PYTHON environment variable is not executable: ${pythonPath}`);
         }
-      } catch (error) {
-        logWarn(`Failed to find Python using 'where' command: ${error.message}`);
-      }
-
-      // Also try 'python3' on Windows (some installations use python3.exe)
-      try {
-        const result = execSync("where python3", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-        const pythonPath = result.trim().split("\n")[0]?.trim();
-        if (pythonPath && fs.existsSync(pythonPath)) {
-          logInfo(`Found system Python3 in PATH: ${pythonPath}`);
-          return pythonPath;
-        }
-      } catch {
-        logDebug("Failed to find Python3 using 'where' command");
+      } else {
+        logWarn(`Python path from PYTHON environment variable does not exist: ${pythonPath}`);
       }
     }
 
-    // Fallback: try to verify python.exe exists by spawning it
+    // 2. Check PYTHON_HOME environment variable
+    if (process.env.PYTHON_HOME) {
+      const pythonHome = process.env.PYTHON_HOME;
+      const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
+      const pythonPath = path.join(pythonHome, pythonExe);
+      
+      if (fs.existsSync(pythonPath)) {
+        try {
+          execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+          logInfo(`Found system Python from PYTHON_HOME environment variable: ${pythonPath}`);
+          return pythonPath;
+        } catch {
+          logWarn(`Python from PYTHON_HOME environment variable is not executable: ${pythonPath}`);
+        }
+      } else {
+        logDebug(`Python executable not found at PYTHON_HOME: ${pythonPath}`);
+      }
+    }
+
+    // 3. Search PATH environment variable (excluding WindowsApps)
+    if (process.env.PATH) {
+      const pathDirs = process.env.PATH.split(path.delimiter);
+      const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
+      
+      for (const dir of pathDirs) {
+        // Skip WindowsApps directory (Microsoft Store redirect)
+        if (dir.includes("WindowsApps")) {
+          logDebug(`Skipping WindowsApps directory: ${dir}`);
+          continue;
+        }
+        
+        const pythonPath = path.join(dir, pythonExe);
+        if (fs.existsSync(pythonPath)) {
+          try {
+            execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+            logInfo(`Found system Python in PATH: ${pythonPath}`);
+            return pythonPath;
+          } catch {
+            logDebug(`Python found but not executable: ${pythonPath}`);
+            continue;
+          }
+        }
+      }
+    }
+
+    // 4. Fallback: try to verify python.exe exists by spawning it (but skip if it's WindowsApps)
     const systemPython = process.platform === "win32" ? "python.exe" : "python3";
     try {
       // Try to run python --version to verify it exists
       execSync(`${systemPython} --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      // Check if the resolved path contains WindowsApps
+      if (process.platform === "win32") {
+        try {
+          const whereResult = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+          const pythonPaths = whereResult.trim().split("\n").map(line => line.trim()).filter(line => line);
+          for (const pythonPath of pythonPaths) {
+            if (pythonPath.includes("WindowsApps")) {
+              logWarn("Windows Store Python redirect detected. Please set PYTHON or PYTHON_HOME environment variable.");
+              throw new Error(
+                `System Python executable not found. Windows Store redirect detected. ` +
+                `Please set PYTHON or PYTHON_HOME environment variable to point to your Python installation.`
+              );
+            }
+            if (fs.existsSync(pythonPath) && !pythonPath.includes("WindowsApps")) {
+              logInfo(`Using system Python: ${pythonPath}`);
+              return pythonPath;
+            }
+          }
+        } catch {
+          // If where command fails, continue with fallback
+        }
+      }
       logInfo(`Using system Python: ${systemPython}`);
       return systemPython;
     } catch {
-      throw new Error(`System Python executable not found. Please install Python or ensure it's in your PATH. Tried: ${systemPython}`);
+      throw new Error(
+        `System Python executable not found. Please set PYTHON or PYTHON_HOME environment variable, ` +
+        `or ensure Python is in your PATH. ` +
+        `Install Python from https://www.python.org/downloads/ if needed.`
+      );
     }
   }
 
@@ -102,7 +161,20 @@ export class ServerManager {
    * Find Python executable
    */
   async findPythonExecutable() {
-    // First, try to find Python in the embedded runtime
+    // First, try to find Python in the virtual environment
+    const venvPythonPath = getVenvPythonPath();
+    if (fs.existsSync(venvPythonPath)) {
+      // Verify the Python executable works
+      try {
+        execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        logInfo(`Found Python in virtual environment at: ${venvPythonPath}`);
+        return venvPythonPath;
+      } catch {
+        logWarn(`Virtual environment Python found but not executable: ${venvPythonPath}. Falling back...`);
+      }
+    }
+
+    // Second, try to find Python in the embedded runtime
     const pythonRuntimeDir = getPythonRuntimeDir();
     const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
     const embeddedPythonPath = path.join(pythonRuntimeDir, pythonExe);
@@ -149,6 +221,278 @@ export class ServerManager {
       return systemPython;
     } catch {
       throw new Error(`Python executable not found. Please install Python or ensure it's in your PATH. Tried: ${systemPython}`);
+    }
+  }
+
+  /**
+   * Create a virtual environment
+   */
+  async createVirtualEnvironment(systemPythonPath, venvPath) {
+    return new Promise((resolve, reject) => {
+      logInfo(`Creating virtual environment at: ${venvPath}`);
+      let stdoutOutput = "";
+      let stderrOutput = "";
+      let isResolved = false;
+
+      const createProcess = spawn(systemPythonPath, ["-m", "venv", venvPath], {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: "1",
+        },
+      });
+
+      createProcess.stdout.on("data", (data) => {
+        const message = data.toString();
+        stdoutOutput += message;
+        this.addLog("stdout", message);
+        logDebug(`[venv creation stdout] ${message.trim()}`);
+      });
+
+      createProcess.stderr.on("data", (data) => {
+        const message = data.toString();
+        stderrOutput += message;
+        this.addLog("stderr", message);
+        logDebug(`[venv creation stderr] ${message.trim()}`);
+      });
+
+      // Timeout after 60 seconds
+      const timeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          createProcess.kill();
+          logError("Virtual environment creation timed out");
+          reject(new Error("Virtual environment creation timed out after 60 seconds"));
+        }
+      }, 60000);
+
+      createProcess.on("close", (code) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+
+        if (code === 0) {
+          logInfo("Virtual environment created successfully");
+          resolve();
+        } else {
+          const errorMessage = `Virtual environment creation failed with code ${code}. ${stderrOutput.trim()}${stdoutOutput ? `\n${stdoutOutput.trim()}` : ""}`;
+          logError(errorMessage);
+          reject(new Error(errorMessage));
+        }
+      });
+
+      createProcess.on("error", (error) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+        logError(`Failed to create virtual environment: ${error.message}`);
+        reject(error);
+      });
+    });
+  }
+
+  /**
+   * Install dependencies in the virtual environment
+   */
+  async installDependencies(venvPythonPath) {
+    return new Promise((resolve, reject) => {
+      // Verify Python executable exists
+      if (!fs.existsSync(venvPythonPath)) {
+        const errorMessage = `Python executable not found: ${venvPythonPath}`;
+        logError(errorMessage);
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      // Verify Python executable is executable
+      try {
+        execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      } catch (error) {
+        const errorMessage = `Python executable is not executable: ${venvPythonPath}. ${error.message}`;
+        logError(errorMessage);
+        reject(new Error(errorMessage));
+        return;
+      }
+
+      const serverDir = getServerDir();
+      const requirementsPath = path.join(serverDir, "requirements.txt");
+
+      if (!fs.existsSync(requirementsPath)) {
+        logWarn(`requirements.txt not found at: ${requirementsPath}`);
+        resolve(); // Not an error, just skip installation
+        return;
+      }
+
+      logInfo(`Installing dependencies from: ${requirementsPath}`);
+      let stdoutOutput = "";
+      let stderrOutput = "";
+      let isResolved = false;
+
+      const installProcess = spawn(venvPythonPath, ["-m", "pip", "install", "-r", requirementsPath], {
+        cwd: serverDir,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true,
+        env: {
+          ...process.env,
+          PYTHONUNBUFFERED: "1",
+        },
+      });
+
+      installProcess.stdout.on("data", (data) => {
+        const message = data.toString();
+        stdoutOutput += message;
+        this.addLog("stdout", message);
+        logDebug(`[pip install stdout] ${message.trim()}`);
+      });
+
+      installProcess.stderr.on("data", (data) => {
+        const message = data.toString();
+        stderrOutput += message;
+        this.addLog("stderr", message);
+        logDebug(`[pip install stderr] ${message.trim()}`);
+      });
+
+      // Timeout after 300 seconds
+      const timeout = setTimeout(() => {
+        if (!isResolved) {
+          isResolved = true;
+          installProcess.kill();
+          logError("Dependency installation timed out");
+          reject(new Error("Dependency installation timed out after 300 seconds"));
+        }
+      }, 300000);
+
+      installProcess.on("close", (code) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+
+        if (code === 0) {
+          logInfo("Dependencies installed successfully");
+          resolve();
+        } else {
+          const errorMessage = `Dependency installation failed with code ${code}. ${stderrOutput.trim()}${stdoutOutput ? `\n${stdoutOutput.trim()}` : ""}`;
+          logError(errorMessage);
+          reject(new Error(errorMessage));
+        }
+      });
+
+      installProcess.on("error", (error) => {
+        if (isResolved) {
+          return;
+        }
+        isResolved = true;
+        clearTimeout(timeout);
+        logError(`Failed to install dependencies: ${error.message}`);
+        reject(error);
+      });
+    });
+  }
+
+  /**
+   * Wait for file to exist with retries
+   */
+  async waitForFile(filePath, maxRetries = 10, intervalMs = 500) {
+    for (let i = 0; i < maxRetries; i++) {
+      if (fs.existsSync(filePath)) {
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    return false;
+  }
+
+  /**
+   * Verify virtual environment and ensure it exists
+   * @returns {Promise<boolean>} Returns true if virtual environment was just created, false if it already existed
+   */
+  async ensureVirtualEnvironment() {
+    const venvDir = getVenvDir();
+    const venvPythonPath = getVenvPythonPath();
+    let wasCreated = false;
+
+    // Check if virtual environment directory exists
+    if (!fs.existsSync(venvDir)) {
+      logInfo("Virtual environment does not exist. Creating...");
+      const systemPythonPath = await this.findSystemPython();
+      await this.createVirtualEnvironment(systemPythonPath, venvDir);
+      wasCreated = true;
+      
+      // Wait for Python executable to be created
+      logDebug("Waiting for virtual environment Python executable to be created...");
+      const pythonExists = await this.waitForFile(venvPythonPath);
+      if (!pythonExists) {
+        throw new Error(`Virtual environment Python executable not found after creation: ${venvPythonPath}`);
+      }
+      
+      // Install dependencies after creating virtual environment
+      await this.installDependencies(venvPythonPath);
+      return wasCreated;
+    }
+
+    // Check if Python executable exists in virtual environment
+    if (!fs.existsSync(venvPythonPath)) {
+      logWarn("Virtual environment Python executable not found. Recreating virtual environment...");
+      // Remove corrupted virtual environment
+      try {
+        fs.rmSync(venvDir, { recursive: true, force: true });
+        logInfo("Removed corrupted virtual environment");
+      } catch (error) {
+        logError(`Failed to remove corrupted virtual environment: ${error.message}`);
+        throw new Error(`Failed to remove corrupted virtual environment: ${error.message}`);
+      }
+      // Recreate virtual environment
+      const systemPythonPath = await this.findSystemPython();
+      await this.createVirtualEnvironment(systemPythonPath, venvDir);
+      wasCreated = true;
+      
+      // Wait for Python executable to be created
+      logDebug("Waiting for virtual environment Python executable to be created...");
+      const pythonExists = await this.waitForFile(venvPythonPath);
+      if (!pythonExists) {
+        throw new Error(`Virtual environment Python executable not found after recreation: ${venvPythonPath}`);
+      }
+      
+      await this.installDependencies(venvPythonPath);
+      return wasCreated;
+    }
+
+    // Verify Python executable works
+    try {
+      execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+      logInfo("Virtual environment is valid");
+      return wasCreated;
+    } catch {
+      logWarn("Virtual environment Python executable is not working. Recreating...");
+      // Remove corrupted virtual environment
+      try {
+        fs.rmSync(venvDir, { recursive: true, force: true });
+        logInfo("Removed corrupted virtual environment");
+      } catch (rmError) {
+        logError(`Failed to remove corrupted virtual environment: ${rmError.message}`);
+        throw new Error(`Failed to remove corrupted virtual environment: ${rmError.message}`);
+      }
+      // Recreate virtual environment
+      const systemPythonPath = await this.findSystemPython();
+      await this.createVirtualEnvironment(systemPythonPath, venvDir);
+      wasCreated = true;
+      
+      // Wait for Python executable to be created
+      logDebug("Waiting for virtual environment Python executable to be created...");
+      const pythonExists = await this.waitForFile(venvPythonPath);
+      if (!pythonExists) {
+        throw new Error(`Virtual environment Python executable not found after recreation: ${venvPythonPath}`);
+      }
+      
+      await this.installDependencies(venvPythonPath);
+      return wasCreated;
     }
   }
 
@@ -320,8 +664,27 @@ export class ServerManager {
       this.setStatus("starting");
       logInfo("Starting Python server...");
 
-      // Find Python executable
-      this.pythonPath = await this.findPythonExecutable();
+      // Ensure virtual environment exists and is valid
+      // This will create the virtual environment if it doesn't exist (using findSystemPython)
+      // If it already exists, it will skip system Python search and use the existing venv
+      const venvWasCreated = await this.ensureVirtualEnvironment();
+
+      // Get Python executable from virtual environment
+      // After ensureVirtualEnvironment(), the venv should always exist and be valid
+      const venvPythonPath = getVenvPythonPath();
+      if (!fs.existsSync(venvPythonPath)) {
+        throw new Error(`Virtual environment Python executable not found: ${venvPythonPath}. This should not happen after ensureVirtualEnvironment().`);
+      }
+
+      // Verify it works
+      try {
+        execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        this.pythonPath = venvPythonPath;
+        logInfo(`Using Python from virtual environment: ${venvPythonPath}`);
+      } catch (error) {
+        throw new Error(`Virtual environment Python executable is not working: ${venvPythonPath}. ${error.message}`);
+      }
+
       if (!this.pythonPath) {
         throw new Error("Python executable not found");
       }
@@ -329,8 +692,21 @@ export class ServerManager {
       // Check if marimo is installed
       const marimoInstalled = await this.checkMarimoInstalled(this.pythonPath);
       if (!marimoInstalled) {
-        logError("marimo is not installed. Please install it using: pip install marimo");
-        throw new Error("marimo is not installed. Please install it using: pip install marimo");
+        // If virtual environment was just created, dependencies should already be installed
+        if (venvWasCreated) {
+          logWarn("marimo is not installed even after virtual environment creation. This may indicate an installation issue.");
+          throw new Error("marimo installation failed during virtual environment setup. Please check the logs.");
+        }
+        
+        logInfo("marimo is not installed. Installing dependencies...");
+        // Install dependencies (which includes marimo)
+        await this.installDependencies(this.pythonPath);
+        // Verify installation
+        const marimoInstalledAfter = await this.checkMarimoInstalled(this.pythonPath);
+        if (!marimoInstalledAfter) {
+          logError("marimo installation failed. Please check the logs.");
+          throw new Error("marimo installation failed. Please check the logs.");
+        }
       }
 
       // Find available port

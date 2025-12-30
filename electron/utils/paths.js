@@ -44,7 +44,7 @@ export function getUserDataDir() {
  * Get the virtual environment directory path
  */
 export function getVenvDir() {
-  return path.join(getServerDir(), "venv");
+  return path.join(getServerDir(), "python-env");
 }
 
 /**

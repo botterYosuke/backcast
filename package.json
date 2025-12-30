@@ -9,8 +9,9 @@
   ],
   "main": "electron/main.js",
   "scripts": {
-    "dev": "concurrently \"npm run server\" \"vite\"",
+    "vite": "vite",
     "server": "cd server && set ENV=development && python run.py",
+    "dev": "concurrently \"pnpm server\" \"pnpm vite\"",
     "start": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && npx electron .\"",
     "build:server": "cd server && python -m PyInstaller --clean backcast-server.spec",
     "build:electron": "cross-env vite build && pnpm build:server && electron-builder",
@@ -227,6 +228,7 @@
     "react": "^19.2.0",
     "react-compiler-runtime": "19.1.0-rc.3",
     "react-dom": "^19.2.0",
+    "rollup": "^4.50.1",
     "storybook": "^10.1.1",
     "stylelint": "^16.26.1",
     "stylelint-config-standard": "^36.0.1",

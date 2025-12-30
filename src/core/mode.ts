@@ -83,4 +83,4 @@ export const kioskModeAtom = atom<boolean>(false);
  * Atom for managing 3D mode state in Edit View.
  * When true, Edit View displays cells in 3D mode.
  */
-export const is3DModeAtom = atom<boolean>(false);
+export const is3DModeAtom = atom<boolean>(true);

@@ -60,11 +60,17 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
   useEffect(() => {
     const dragManager = new CellDragManager();
     dragManager.setPositionUpdateCallback((cellId, position) => {
+      // #region agent log
+      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cells-3d-renderer.tsx:62',message:'position update callback executed',data:{cellId,position:{x:position.x,y:position.y,z:position.z}},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
+      // #endregion
       // 位置を更新（スケールはCellDragManager内で既に考慮されている）
       css2DService.updateCellPosition(cellId, position);
       // 位置を保存
       cellPositionsRef.current.set(cellId, position);
     });
+    // #region agent log
+    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'cells-3d-renderer.tsx:68',message:'calling setCSS2DService',data:{hasCss2DService:!!css2DService},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     dragManager.setCSS2DService(css2DService);
     dragManagerRef.current = dragManager;
 

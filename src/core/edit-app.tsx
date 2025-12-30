@@ -248,7 +248,7 @@ export const EditApp: React.FC<AppProps> = ({
         {is3DMode ? (
           <>
             {/* アラートとバナーは通常の2D表示として表示 */}
-            <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4">
+            <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4 relative z-50">
               <PackageAlert />
               <StartupLogsAlert />
               <StdinBlockingAlert />

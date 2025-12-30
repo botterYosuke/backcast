@@ -138,4 +138,3 @@ const adjustedDeltaY = scale > 0 ? deltaY / scale : deltaY;
 ## 実装順序
 
 1. `CellDragManager`サービスの作成
-2. `CellCSS2DService`にセルごとのCSS2DObject管理を追加

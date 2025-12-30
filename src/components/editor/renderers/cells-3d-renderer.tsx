@@ -18,6 +18,7 @@ import type { AppMode } from "@/core/mode";
 import { useCellIds } from "@/core/cells/cells";
 import { useTheme } from "@/theme/useTheme";
 import { SETUP_CELL_ID } from "@/core/cells/ids";
+import { SortableCellsProvider } from "@/components/sort/SortableCellsProvider";
 
 interface Cells3DRendererProps {
   mode: AppMode;
@@ -73,6 +74,14 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
 
   // セルコンテナを作成
   useEffect(() => {
+    // CSS2DServiceの既存コンテナを使用
+    const existingContainer = css2DService.getCellContainer();
+    if (existingContainer) {
+      setCellContainer(existingContainer);
+      return;
+    }
+
+    // コンテナが存在しない場合は新規作成
     const container = document.createElement("div");
     container.className = "cells-3d-container";
     container.style.position = "absolute";
@@ -93,13 +102,6 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
     document.head.appendChild(style);
 
     setCellContainer(container);
-
-    // CSS2DServiceにコンテナを設定（既存のメソッドを使用）
-    const existingContainer = css2DService.getCellContainer();
-    if (!existingContainer) {
-      // コンテナが存在しない場合は、CSS2DServiceの内部コンテナを使用
-      // ただし、個別のCSS2DObjectとして管理するため、ここでは直接使用しない
-    }
 
     return () => {
       if (style.parentElement) {
@@ -253,32 +255,34 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
   const hasOnlyOneCell = cellIds.hasOnlyOneId();
 
   return createPortal(
-    <div className="cells-3d-container-inner">
-      {allCellIds.map((cellId) => {
-        const column = cellIds.findWithId(cellId);
-        const isCollapsed = column ? column.isCollapsed(cellId) : false;
-        const collapseCount = column ? column.getCount(cellId) : 0;
+    <SortableCellsProvider multiColumn={appConfig.width === "columns"}>
+      <div className="cells-3d-container-inner">
+        {allCellIds.map((cellId) => {
+          const column = cellIds.findWithId(cellId);
+          const isCollapsed = column ? column.isCollapsed(cellId) : false;
+          const collapseCount = column ? column.getCount(cellId) : 0;
 
-        return (
-          <Cell3DWrapper
-            key={cellId}
-            cellId={cellId}
-            mode={mode}
-            userConfig={userConfig}
-            appConfig={appConfig}
-            theme={theme}
-            dragManager={dragManager}
-            css2DService={css2DService}
-            showPlaceholder={hasOnlyOneCell}
-            canDelete={!hasOnlyOneCell}
-            isCollapsed={isCollapsed}
-            collapseCount={collapseCount}
-            canMoveX={appConfig.width === "columns"}
-            onCellElementReady={handleCellElementReady}
-          />
-        );
-      })}
-    </div>,
+          return (
+            <Cell3DWrapper
+              key={cellId}
+              cellId={cellId}
+              mode={mode}
+              userConfig={userConfig}
+              appConfig={appConfig}
+              theme={theme}
+              dragManager={dragManager}
+              css2DService={css2DService}
+              showPlaceholder={hasOnlyOneCell}
+              canDelete={!hasOnlyOneCell}
+              isCollapsed={isCollapsed}
+              collapseCount={collapseCount}
+              canMoveX={appConfig.width === "columns"}
+              onCellElementReady={handleCellElementReady}
+            />
+          );
+        })}
+      </div>
+    </SortableCellsProvider>,
     cellContainer,
   );
 };

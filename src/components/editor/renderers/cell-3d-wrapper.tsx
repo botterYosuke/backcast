@@ -72,16 +72,11 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
     }
   };
 
-  // セル要素が準備できたらコールバックを呼び出す
+  // ラッパー要素が準備できたらコールバックを呼び出す
   useEffect(() => {
     if (wrapperRef.current && onCellElementReady) {
-      // セル要素を検索
-      const cellElement = wrapperRef.current.querySelector(
-        `[data-cell-id="${cellId}"]`,
-      ) as HTMLElement;
-      if (cellElement) {
-        onCellElementReady(cellId, cellElement);
-      }
+      // wrapperElement全体を渡す（cell-3d-wrapper要素）
+      onCellElementReady(cellId, wrapperRef.current);
     }
   }, [cellId, onCellElementReady]);
 
@@ -117,6 +112,7 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
           isCollapsed={isCollapsed}
           collapseCount={collapseCount}
           canMoveX={canMoveX}
+          disableSortable={true}
         />
       </div>
     </div>

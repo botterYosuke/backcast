@@ -14,6 +14,7 @@ import {
   type KeyboardEvent,
   memo,
   useCallback,
+  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,
@@ -261,6 +262,10 @@ export interface CellProps {
    * The number of cells in the column.
    */
   collapseCount: number;
+  /**
+   * If true, SortableCell wrapper is disabled (for 3D mode).
+   */
+  disableSortable?: boolean;
 }
 
 const CellComponent = (props: CellProps) => {
@@ -370,6 +375,7 @@ const EditableCellComponent = ({
   isCollapsed,
   collapseCount,
   canMoveX,
+  disableSortable = false,
   editorView,
   setEditorView,
 }: CellProps & {
@@ -569,30 +575,21 @@ const EditableCellComponent = ({
 
   const isToplevel = cellRuntime.serialization?.toLowerCase() === "valid";
 
-  return (
-    <TooltipProvider>
-      <CellActionsContextMenu cellId={cellId} getEditorView={getEditorView}>
-        <SortableCell
-          tabIndex={-1}
-          ref={cellRef}
-          data-status={cellRuntime.status}
-          onBlur={closeCompletionHandler}
-          onKeyDown={resumeCompletionHandler}
-          cellId={cellId}
-          canMoveX={canMoveX}
-          title={renderCellTitle()}
-        >
-          <div
-            tabIndex={-1}
-            {...navigationProps}
-            className={cn(
-              className,
-              navigationProps.className,
-              "focus:ring-1 focus:ring-(--slate-7) focus:ring-offset-2",
-            )}
-            ref={cellContainerRef}
-            {...cellDomProps(cellId, cellData.name)}
-          >
+  const cellContent = (
+    <div
+      tabIndex={-1}
+      {...navigationProps}
+      className={cn(
+        className,
+        navigationProps.className,
+        "focus:ring-1 focus:ring-(--slate-7) focus:ring-offset-2",
+        !disableSortable && "outline-hidden rounded-lg",
+      )}
+      ref={(el) => {
+        cellContainerRef.current = el;
+      }}
+      {...cellDomProps(cellId, cellData.name)}
+    >
             <CellLeftSideActions cellId={cellId} actions={actions} />
             {cellOutput === "above" && (outputArea || emptyMarkdownPlaceholder)}
             <div
@@ -753,15 +750,52 @@ const EditableCellComponent = ({
             />
             <PendingDeleteConfirmation cellId={cellId} />
           </div>
-          <StagedAICellFooter cellId={cellId} />
-          {isCollapsed && (
-            <CollapsedCellBanner
-              onClick={() => actions.expandCell({ cellId })}
-              count={collapseCount}
-              cellId={cellId}
-            />
-          )}
-        </SortableCell>
+      );
+
+  return (
+    <TooltipProvider>
+      <CellActionsContextMenu cellId={cellId} getEditorView={getEditorView}>
+        {disableSortable ? (
+          <div
+            tabIndex={-1}
+            ref={cellRef}
+            data-status={cellRuntime.status}
+            onBlur={closeCompletionHandler}
+            onKeyDown={resumeCompletionHandler}
+            title={renderCellTitle()}
+          >
+            {cellContent}
+            <StagedAICellFooter cellId={cellId} />
+            {isCollapsed && (
+              <CollapsedCellBanner
+                onClick={() => actions.expandCell({ cellId })}
+                count={collapseCount}
+                cellId={cellId}
+              />
+            )}
+          </div>
+        ) : (
+          <SortableCell
+            tabIndex={-1}
+            ref={cellRef}
+            data-status={cellRuntime.status}
+            onBlur={closeCompletionHandler}
+            onKeyDown={resumeCompletionHandler}
+            cellId={cellId}
+            canMoveX={canMoveX}
+            title={renderCellTitle()}
+          >
+            {cellContent}
+            <StagedAICellFooter cellId={cellId} />
+            {isCollapsed && (
+              <CollapsedCellBanner
+                onClick={() => actions.expandCell({ cellId })}
+                count={collapseCount}
+                cellId={cellId}
+              />
+            )}
+          </SortableCell>
+        )}
       </CellActionsContextMenu>
     </TooltipProvider>
   );

@@ -104,9 +104,6 @@ export class RuntimeManager {
 
     searchParams.set(KnownQueryParams.sessionId, sessionId);
     const wsURL = this.formatWsURL("/ws", searchParams);
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'runtime.ts:getWsURL',message:'getWsURL called',data:{wsURL:wsURL.toString(),configUrl:this.config.url,sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-    // #endregion
     return wsURL;
   }
 
@@ -168,14 +165,8 @@ export class RuntimeManager {
     }
 
     const healthURL = this.healthURL().toString();
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'runtime.ts:isHealthy',message:'isHealthy called',data:{healthURL,configUrl:this.config.url},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-    // #endregion
     try {
       const response = await fetch(healthURL);
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'runtime.ts:isHealthy',message:'health check response',data:{ok:response.ok,status:response.status,redirected:response.redirected,responseUrl:response.url},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
       // If there is a redirect, update the URL in the config
       if (response.redirected) {
         // strip /health from the URL
@@ -189,9 +180,6 @@ export class RuntimeManager {
       }
       return success;
     } catch (error) {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'runtime.ts:isHealthy',message:'health check failed',data:{error:error instanceof Error?error.message:String(error)},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
-      // #endregion
       return false;
     }
   }

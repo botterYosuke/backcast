@@ -48,13 +48,26 @@ const svgInlinePlugin = (): Plugin => {
 
 // Plugin to handle JSON imports from @marimo-team/llm-info
 const llmInfoJsonPlugin = (): Plugin => {
+  const generatedDir = path.resolve(__dirname, "./packages/llm-info/data/generated");
+  const modelsJsonPath = path.resolve(generatedDir, "models.json");
+  const providersJsonPath = path.resolve(generatedDir, "providers.json");
+  
   return {
     name: "llm-info-json-plugin",
+    enforce: "pre", // Run before builtin plugins
     resolveId(id) {
+      // Handle package exports
       if (id === "@marimo-team/llm-info/models.json") {
         return `\0llm-info-json:models.json`;
       }
       if (id === "@marimo-team/llm-info/providers.json") {
+        return `\0llm-info-json:providers.json`;
+      }
+      // Handle direct file path imports (from package.json exports)
+      if (id === modelsJsonPath || id.endsWith("/packages/llm-info/data/generated/models.json")) {
+        return `\0llm-info-json:models.json`;
+      }
+      if (id === providersJsonPath || id.endsWith("/packages/llm-info/data/generated/providers.json")) {
         return `\0llm-info-json:providers.json`;
       }
       return null;
@@ -70,35 +83,36 @@ const llmInfoJsonPlugin = (): Plugin => {
         
         // Check if file exists
         if (!existsSync(fullPath)) {
-          throw new Error(
-            `JSON file not found: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
-          );
+          const error = `JSON file not found: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`;
+          console.error(`[llm-info-json-plugin] ${error}`);
+          throw new Error(error);
         }
         
         // Check if file is empty
         const stats = statSync(fullPath);
         if (stats.size === 0) {
-          throw new Error(
-            `JSON file is empty: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
-          );
+          const error = `JSON file is empty: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`;
+          console.error(`[llm-info-json-plugin] ${error}`);
+          throw new Error(error);
         }
         
         const jsonContent = readFileSync(fullPath, "utf-8").trim();
         
         // Validate JSON content is not empty after trimming
         if (!jsonContent) {
-          throw new Error(
-            `JSON file contains no valid content: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
-          );
+          const error = `JSON file contains no valid content: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`;
+          console.error(`[llm-info-json-plugin] ${error}`);
+          throw new Error(error);
         }
         
         // Validate JSON format
         try {
           JSON.parse(jsonContent);
         } catch (error) {
-          throw new Error(
-            `Invalid JSON in file ${fullPath}: ${error instanceof Error ? error.message : String(error)}. Please run 'pnpm --filter @marimo-team/llm-info codegen' to regenerate.`,
-          );
+          const errorMsg = `Invalid JSON in file ${fullPath}: ${error instanceof Error ? error.message : String(error)}. Please run 'pnpm --filter @marimo-team/llm-info codegen' to regenerate.`;
+          console.error(`[llm-info-json-plugin] ${errorMsg}`);
+          console.error(`[llm-info-json-plugin] File content preview (first 200 chars): ${jsonContent.substring(0, 200)}`);
+          throw new Error(errorMsg);
         }
         
         return `export default ${jsonContent};`;

@@ -54,6 +54,28 @@ jobs:
       - name: Generate LLM info JSON files
         run: pnpm --filter @marimo-team/llm-info codegen
 
+      - name: Verify generated JSON files
+        shell: bash
+        run: |
+          echo "=== Checking generated JSON files ==="
+          ls -lah packages/llm-info/data/generated/ || echo "Directory does not exist"
+          if [ -f packages/llm-info/data/generated/models.json ]; then
+            echo "models.json exists"
+            echo "Size: $(wc -c < packages/llm-info/data/generated/models.json) bytes"
+            echo "First 100 chars: $(head -c 100 packages/llm-info/data/generated/models.json)"
+          else
+            echo "ERROR: models.json does not exist"
+            exit 1
+          fi
+          if [ -f packages/llm-info/data/generated/providers.json ]; then
+            echo "providers.json exists"
+            echo "Size: $(wc -c < packages/llm-info/data/generated/providers.json) bytes"
+            echo "First 100 chars: $(head -c 100 packages/llm-info/data/generated/providers.json)"
+          else
+            echo "ERROR: providers.json does not exist"
+            exit 1
+          fi
+
       - name: Build Electron app
         run: pnpm build
 

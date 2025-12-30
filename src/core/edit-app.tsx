@@ -46,6 +46,11 @@ import { useJotaiEffect } from "./state/jotai";
 import { CellCSS2DService } from "./three/cell-css2d-service";
 import { SceneManager } from "./three/scene-manager";
 import { useMarimoKernelConnection } from "./websocket/useMarimoKernelConnection";
+import { flattenTopLevelNotebookCells, useNotebook } from "./cells/cells";
+import { useLayoutState, useLayoutActions } from "./layout/layout";
+import { GridLayoutPlugin } from "../components/editor/renderers/grid-layout/plugin";
+import { GridLayoutRenderer } from "../components/editor/renderers/grid-layout/grid-layout";
+import type { GridLayout } from "../components/editor/renderers/grid-layout/types";
 
 interface AppProps {
   /**
@@ -82,6 +87,17 @@ export const EditApp: React.FC<AppProps> = ({
   const isEditing = viewState.mode === "edit";
   const isPresenting = viewState.mode === "present";
   const isRunning = useAtomValue(notebookIsRunningAtom);
+
+  // Gridレイアウト用の状態管理（3Dモードの時のみ使用）
+  const notebook = useNotebook();
+  const layoutState = useLayoutState();
+  const { setLayoutData } = useLayoutActions();
+  const cells = flattenTopLevelNotebookCells(notebook);
+  
+  // GridLayoutRenderer用のsetLayoutラッパー
+  const setGridLayout = (layout: GridLayout) => {
+    setLayoutData({ layoutView: "grid", data: layout });
+  };
 
   // 3D表示用の状態管理
   const threeDContainerRef = useRef<HTMLDivElement>(null);
@@ -239,7 +255,7 @@ export const EditApp: React.FC<AppProps> = ({
             "sticky left-0",
           )}
         >
-          {isEditing && (
+          {isEditing && !is3DMode && (
             <div className="flex items-center justify-center container">
               <FilenameForm filename={filename} />
             </div>
@@ -279,6 +295,26 @@ export const EditApp: React.FC<AppProps> = ({
                 />
               ) : null}
             </div>
+            {/* Gridレイアウトでセルの出力を表示（3D空間の上にオーバーレイ） */}
+            {hasCells && (
+              <div
+                className="absolute inset-0 pointer-events-none"
+                style={{ zIndex: 10 }}
+              >
+                <div className="pointer-events-auto w-full h-full">
+                  <GridLayoutRenderer
+                    appConfig={appConfig}
+                    mode={viewState.mode}
+                    cells={cells}
+                    layout={
+                      (layoutState.layoutData.grid as GridLayout) ||
+                      GridLayoutPlugin.getInitialLayout(cells)
+                    }
+                    setLayout={setGridLayout}
+                  />
+                </div>
+              </div>
+            )}
           </>
         ) : (
           /* 通常表示モード */

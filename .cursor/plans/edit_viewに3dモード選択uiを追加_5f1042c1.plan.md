@@ -1,9 +1,3 @@
----
-name: ""
-overview: ""
-todos: []
----
-
 #Edit Viewに3Dモード選択UIを追加
 
 ## 概要
@@ -62,6 +56,8 @@ src/
       renderers/
         edit-view-mode-select.tsx (新規作成)
         layout-select.tsx (参考)
+
+
 
 
 

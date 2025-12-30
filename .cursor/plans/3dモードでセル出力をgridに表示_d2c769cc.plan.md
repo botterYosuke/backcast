@@ -1,33 +1,3 @@
----
-name: 3Dモードでセル出力をGridに表示
-overview: Edit View & 3Dモードの時に、セルの出力をApp ViewのGridレイアウトで3D空間の上にオーバーレイとして表示する機能を実装します。セルのコード部分は3D空間に表示し、出力部分のみをGridレイアウトで表示します。
-todos:
-  - id: import-dependencies
-    content: edit-app.tsxに必要なインポートを追加（useNotebook, flattenTopLevelNotebookCells, useLayoutState, useLayoutActions, GridLayoutPlugin, GridLayoutRenderer）
-    status: pending
-  - id: add-grid-overlay
-    content: 3Dモードの時にGridLayoutRendererをオーバーレイとして表示する実装を追加
-    status: pending
-    dependencies:
-      - import-dependencies
-  - id: adjust-styling
-    content: Gridレイアウトを3D空間の上にオーバーレイとして表示するためのスタイリングを追加（z-index、背景の透明度など）
-    status: pending
-    dependencies:
-      - add-grid-overlay
-  - id: modify-gridcell
-    content: GridCellコンポーネントを修正して、3Dモードの時はallowExpand={true}にして、通常のセル出力と同じ機能（展開ボタン、フルスクリーンボタン、コピーボタンなど）を提供するようにする
-    status: pending
-    dependencies:
-      - add-grid-overlay
-  - id: test-integration
-    content: 3DモードでGridレイアウトが正しく表示され、コピーボタンや展開ボタンなどの機能が全て動作することを確認
-    status: pending
-    dependencies:
-      - adjust-styling
-      - modify-gridcell
----
-
 #3Dモードでセル出力をGridに表示
 
 ## 概要
@@ -99,5 +69,3 @@ EditApp (3D Mode)
 
 - Gridレイアウトの初期配置は、GridLayoutPluginの`getInitialLayout`を使用
 - レイアウトデータは`useLayoutState`で管理され、`useLayoutActions`で更新
-- 3DモードとGridレイアウトの両方が表示されるため、パフォーマンスに注意
-- オーバーレイ表示のため、ユーザーがGridと3D空間の両方を操作できるようにする

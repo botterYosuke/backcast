@@ -51,6 +51,9 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Generate LLM info JSON files
+        run: pnpm --filter @marimo-team/llm-info codegen
+
       - name: Build Electron app
         run: pnpm build
 

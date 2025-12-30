@@ -16,7 +16,7 @@ import {
   useRunAllCells,
   useRunStaleCells,
 } from "../components/editor/cell/useRunCells";
-import { CellArray } from "../components/editor/renderers/cell-array";
+import { AddCellButtons, CellArray } from "../components/editor/renderers/cell-array";
 import { Cells3DRenderer } from "../components/editor/renderers/cells-3d-renderer";
 import { CellsRenderer } from "../components/editor/renderers/cells-renderer";
 import { PackageAlert } from "../components/editor/package-alert";
@@ -27,6 +27,7 @@ import { NotebookBanner } from "../components/editor/notebook-banner";
 import { useHotkey } from "../hooks/useHotkey";
 import {
   cellIdsAtom,
+  columnIdsAtom,
   hasCellsAtom,
   notebookIsRunningAtom,
   numColumnsAtom,
@@ -73,6 +74,7 @@ export const EditApp: React.FC<AppProps> = ({
   const viewState = useAtomValue(viewStateAtom);
   const numColumns = useAtomValue(numColumnsAtom);
   const hasCells = useAtomValue(hasCellsAtom);
+  const columnIds = useAtomValue(columnIdsAtom);
   const filename = useFilename();
   const setLastSavedNotebook = useSetAtom(lastSavedNotebookAtom);
   const { sendComponentValues, sendInterrupt } = useRequestClient();
@@ -255,6 +257,12 @@ export const EditApp: React.FC<AppProps> = ({
               <ConnectingAlert />
               <NotebookBanner width={appConfig.width} />
             </div>
+            {/* AddCellButtonsを3Dモードでも表示 */}
+            {columnIds[0] && (
+              <div className="relative z-50 flex justify-center">
+                <AddCellButtons columnId={columnIds[0]} />
+              </div>
+            )}
             {/* 3D表示コンテナ */}
             <div
               ref={threeDContainerRef}

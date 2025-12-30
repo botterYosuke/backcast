@@ -251,7 +251,7 @@ const CellColumn: React.FC<{
   );
 };
 
-const AddCellButtons: React.FC<{
+export const AddCellButtons: React.FC<{
   columnId: CellColumnId;
   className?: string;
 }> = ({ columnId, className }) => {

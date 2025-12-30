@@ -158,7 +158,8 @@ const llmInfoJsonPlugin = (): Plugin => {
       }
       
       // Last resort: check if the resolved path matches our files
-      if (id.endsWith(".json")) {
+      // Only check if the ID contains our target paths to avoid processing other JSON files
+      if (id.endsWith(".json") && (id.includes("llm-info") || importer?.includes("llm-info"))) {
         let resolved: string;
         if (importer) {
           resolved = path.resolve(path.dirname(importer), id);
@@ -227,7 +228,21 @@ const llmInfoJsonPlugin = (): Plugin => {
       
       // Also handle actual file paths that might bypass resolveId
       // This is important because package.json exports may resolve to actual file paths
+      // Only process files that are actually our target JSON files
       if (id && typeof id === "string" && id.endsWith(".json")) {
+        // First check if this is one of our target files by path matching
+        const isModelsJson = id.includes("llm-info/data/generated/models.json") || 
+                            id.includes("llm-info\\data\\generated\\models.json") ||
+                            id.endsWith("models.json") && id.includes("llm-info");
+        const isProvidersJson = id.includes("llm-info/data/generated/providers.json") || 
+                                id.includes("llm-info\\data\\generated\\providers.json") ||
+                                id.endsWith("providers.json") && id.includes("llm-info");
+        
+        // If it's not one of our target files, return null immediately
+        if (!isModelsJson && !isProvidersJson) {
+          return null;
+        }
+        
         // Normalize paths for comparison
         let resolvedPath: string | null = null;
         

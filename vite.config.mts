@@ -55,24 +55,91 @@ const llmInfoJsonPlugin = (): Plugin => {
   return {
     name: "llm-info-json-plugin",
     enforce: "pre", // Run before builtin plugins
-    resolveId(id) {
+    buildStart() {
+      // Verify files exist at build start
+      if (!existsSync(modelsJsonPath)) {
+        throw new Error(
+          `[llm-info-json-plugin] models.json not found at ${modelsJsonPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+        );
+      }
+      if (!existsSync(providersJsonPath)) {
+        throw new Error(
+          `[llm-info-json-plugin] providers.json not found at ${providersJsonPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+        );
+      }
+      
+      // Verify files are not empty
+      const modelsStats = statSync(modelsJsonPath);
+      const providersStats = statSync(providersJsonPath);
+      if (modelsStats.size === 0) {
+        throw new Error(
+          `[llm-info-json-plugin] models.json is empty at ${modelsJsonPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+        );
+      }
+      if (providersStats.size === 0) {
+        throw new Error(
+          `[llm-info-json-plugin] providers.json is empty at ${providersJsonPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`,
+        );
+      }
+      
+      // Verify JSON validity
+      try {
+        const modelsContent = readFileSync(modelsJsonPath, "utf-8");
+        JSON.parse(modelsContent);
+      } catch (error) {
+        throw new Error(
+          `[llm-info-json-plugin] Invalid JSON in models.json: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      
+      try {
+        const providersContent = readFileSync(providersJsonPath, "utf-8");
+        JSON.parse(providersContent);
+      } catch (error) {
+        throw new Error(
+          `[llm-info-json-plugin] Invalid JSON in providers.json: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    },
+    resolveId(id, importer) {
       // Handle package exports
-      if (id === "@marimo-team/llm-info/models.json") {
+      if (id === "@marimo-team/llm-info/models.json" || id.endsWith("@marimo-team/llm-info/models.json")) {
         return `\0llm-info-json:models.json`;
       }
-      if (id === "@marimo-team/llm-info/providers.json") {
+      if (id === "@marimo-team/llm-info/providers.json" || id.endsWith("@marimo-team/llm-info/providers.json")) {
         return `\0llm-info-json:providers.json`;
       }
-      // Handle direct file path imports (from package.json exports)
-      if (id === modelsJsonPath || id.endsWith("/packages/llm-info/data/generated/models.json")) {
+      
+      // Handle absolute file paths
+      if (id === modelsJsonPath || id === path.normalize(modelsJsonPath)) {
         return `\0llm-info-json:models.json`;
       }
-      if (id === providersJsonPath || id.endsWith("/packages/llm-info/data/generated/providers.json")) {
+      if (id === providersJsonPath || id === path.normalize(providersJsonPath)) {
         return `\0llm-info-json:providers.json`;
       }
+      
+      // Handle relative paths that resolve to these files
+      if (id.includes("llm-info/data/generated/models.json")) {
+        const resolved = id.startsWith(".") || id.startsWith("/") 
+          ? path.resolve(importer ? path.dirname(importer) : __dirname, id)
+          : id;
+        if (resolved === modelsJsonPath || resolved.endsWith("/packages/llm-info/data/generated/models.json")) {
+          return `\0llm-info-json:models.json`;
+        }
+      }
+      if (id.includes("llm-info/data/generated/providers.json")) {
+        const resolved = id.startsWith(".") || id.startsWith("/")
+          ? path.resolve(importer ? path.dirname(importer) : __dirname, id)
+          : id;
+        if (resolved === providersJsonPath || resolved.endsWith("/packages/llm-info/data/generated/providers.json")) {
+          return `\0llm-info-json:providers.json`;
+        }
+      }
+      
       return null;
     },
     load(id) {
+      // Handle virtual IDs from resolveId
       if (id.startsWith("\0llm-info-json:")) {
         const jsonFile = id.replace("\0llm-info-json:", "");
         const fullPath = path.resolve(
@@ -117,6 +184,49 @@ const llmInfoJsonPlugin = (): Plugin => {
         
         return `export default ${jsonContent};`;
       }
+      
+      // Also handle actual file paths that might bypass resolveId
+      if (id === modelsJsonPath || id === providersJsonPath) {
+        const jsonFile = id === modelsJsonPath ? "models.json" : "providers.json";
+        const fullPath = id;
+        
+        // Check if file exists
+        if (!existsSync(fullPath)) {
+          const error = `JSON file not found: ${fullPath}. Please run 'pnpm --filter @marimo-team/llm-info codegen' first.`;
+          console.error(`[llm-info-json-plugin] ${error}`);
+          throw new Error(error);
+        }
+        
+        const jsonContent = readFileSync(fullPath, "utf-8").trim();
+        
+        // Validate JSON format
+        try {
+          JSON.parse(jsonContent);
+        } catch (error) {
+          const errorMsg = `Invalid JSON in file ${fullPath}: ${error instanceof Error ? error.message : String(error)}. Please run 'pnpm --filter @marimo-team/llm-info codegen' to regenerate.`;
+          console.error(`[llm-info-json-plugin] ${errorMsg}`);
+          throw new Error(errorMsg);
+        }
+        
+        return `export default ${jsonContent};`;
+      }
+      
+      // Handle relative paths that might resolve to these files
+      if (id.includes("packages/llm-info/data/generated/models.json")) {
+        const fullPath = path.resolve(__dirname, id);
+        if (existsSync(fullPath)) {
+          const jsonContent = readFileSync(fullPath, "utf-8").trim();
+          return `export default ${jsonContent};`;
+        }
+      }
+      if (id.includes("packages/llm-info/data/generated/providers.json")) {
+        const fullPath = path.resolve(__dirname, id);
+        if (existsSync(fullPath)) {
+          const jsonContent = readFileSync(fullPath, "utf-8").trim();
+          return `export default ${jsonContent};`;
+        }
+      }
+      
       return null;
     },
   };

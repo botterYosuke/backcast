@@ -12,8 +12,8 @@
     "dev": "concurrently \"npm run server\" \"vite\"",
     "server": "cd server && set ENV=development && python run.py",
     "start": "concurrently \"pnpm dev\" \"wait-on http://localhost:3000 && npx electron .\"",
-    "electron:build": "pnpm build && electron-builder",
-    "build": "cross-env vite build",
+    "build:server": "cd server && python -m PyInstaller --clean backcast-server.spec",
+    "build:electron": "cross-env vite build && pnpm build:server && electron-builder",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "biome check --write ."

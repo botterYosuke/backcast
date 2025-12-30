@@ -61,7 +61,8 @@ function createWindow() {
 async function initServerManager() {
   logInfo("Initializing server manager...");
   try {
-    serverManager = new ServerManager();
+    const appRoot = getAppRoot();
+    serverManager = new ServerManager(appRoot);
 
     // Register status change callback to notify renderer
     serverManager.onStatusChange((status) => {

@@ -1,682 +1,241 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
-import { spawn, execSync } from "child_process";
-import net from "node:net";
+import { spawn, ChildProcess } from "child_process";
 import path from "node:path";
-import fs from "node:fs";
-import { getServerDir, getPythonRuntimeDir } from "../electron/utils/paths.js";
-import { logInfo, logError, logWarn, logDebug } from "../electron/utils/logger.js";
+import { fileURLToPath } from "node:url";
+import fs from "fs";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 /**
- * Server Manager for Python backend server
- * 
- * This module manages the lifecycle of the Python marimo server.
+ * ServerManager manages the Python backend server process
  */
 export class ServerManager {
-  constructor() {
+  constructor(appRoot) {
+    this.appRoot = appRoot;
     this.serverProcess = null;
-    this.serverURL = null;
-    this.status = "stopped"; // "stopped" | "starting" | "running" | "error"
-    this.port = null;
-    this.pythonPath = null;
-    this.logs = []; // Array of { timestamp, type: "stdout" | "stderr", message }
-    this.restartAttempts = 0;
-    this.maxRestartAttempts = 3;
-    this.statusChangeCallbacks = [];
-    this.isStopping = false; // Flag to prevent handleServerCrash on graceful stop
+    this.status = { status: "stopped", url: null };
+    this.statusCallbacks = [];
+    this.logs = [];
+    this.serverPort = 2718;
+    this.serverHost = "127.0.0.1";
   }
 
   /**
-   * Find available port in the range 2718-2728
+   * Get the path to the server executable
    */
-  async findAvailablePort(startPort = 2718, endPort = 2728) {
-    for (let port = startPort; port <= endPort; port++) {
-      const isAvailable = await this.checkPortAvailable(port);
-      if (isAvailable) {
-        return port;
-      }
-    }
-    throw new Error(`No available port found in range ${startPort}-${endPort}`);
-  }
-
-  /**
-   * Check if a port is available
-   */
-  checkPortAvailable(port) {
-    return new Promise((resolve) => {
-      const server = net.createServer();
-      server.listen(port, () => {
-        server.once("close", () => resolve(true));
-        server.close();
-      });
-      server.on("error", () => resolve(false));
-    });
-  }
-
-  /**
-   * Find Python executable
-   * Priority: python-runtime > PYTHON env var > system Python
-   */
-  async findPythonExecutable() {
-    // First, try to find Python in the embedded runtime (python-runtime/)
-    const pythonRuntimeDir = getPythonRuntimeDir();
-    const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
-    const pythonRuntimePath = path.join(pythonRuntimeDir, pythonExe);
-
-    if (fs.existsSync(pythonRuntimePath)) {
-      try {
-        execSync(`"${pythonRuntimePath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-        logInfo(`Found Python runtime at: ${pythonRuntimePath}`);
-        return pythonRuntimePath;
-      } catch {
-        logWarn(`Python runtime found but not executable: ${pythonRuntimePath}. Falling back...`);
-      }
-    }
-
-    // Second, check PYTHON environment variable
-    if (process.env.PYTHON) {
-      const pythonPath = process.env.PYTHON;
-      if (fs.existsSync(pythonPath)) {
-        try {
-          execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-          logInfo(`Found Python from PYTHON environment variable: ${pythonPath}`);
-          return pythonPath;
-        } catch {
-          logWarn(`Python from PYTHON environment variable is not executable: ${pythonPath}`);
-        }
-      }
-    }
-
-    // Third, try to find Python using system commands
+  getServerExecutablePath() {
+    // PyInstallerでビルドした実行可能ファイルのパス
     if (process.platform === "win32") {
-      try {
-        const result = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-        const pythonPath = result.trim().split("\n")[0]?.trim();
-        if (pythonPath && fs.existsSync(pythonPath)) {
-          logInfo(`Found Python in PATH: ${pythonPath}`);
-          return pythonPath;
-        }
-      } catch (error) {
-        logWarn(`Failed to find Python using 'where' command: ${error.message}`);
-      }
-
-      // Also try 'python3' on Windows
-      try {
-        const result = execSync("where python3", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-        const pythonPath = result.trim().split("\n")[0]?.trim();
-        if (pythonPath && fs.existsSync(pythonPath)) {
-          logInfo(`Found Python3 in PATH: ${pythonPath}`);
-          return pythonPath;
-        }
-      } catch {
-        logDebug("Failed to find Python3 using 'where' command");
-      }
+      return path.join(this.appRoot, "server", "dist", "backcast-server", "backcast-server.exe");
+    } else if (process.platform === "darwin") {
+      return path.join(this.appRoot, "server", "dist", "backcast-server", "backcast-server");
+    } else {
+      return path.join(this.appRoot, "server", "dist", "backcast-server", "backcast-server");
     }
+  }
 
-    // Fallback: try to verify python.exe exists by spawning it
-    const systemPython = process.platform === "win32" ? "python.exe" : "python3";
+  /**
+   * Get the server script path (development only)
+   */
+  getServerScriptPath() {
+    return path.join(__dirname, "run.py");
+  }
+
+  /**
+   * Get the server URL
+   */
+  getServerUrl() {
+    return `http://${this.serverHost}:${this.serverPort}`;
+  }
+
+  /**
+   * Check if we're in packaged mode
+   */
+  isPackaged() {
+    // Check if PyInstaller executable exists
     try {
-      execSync(`${systemPython} --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-      logInfo(`Using system Python: ${systemPython}`);
-      return systemPython;
+      const exePath = this.getServerExecutablePath();
+      return fs.existsSync(exePath);
     } catch {
-      throw new Error(
-        `Python executable not found. Please run 'npm run setup-python' to install Python runtime, ` +
-        `or set PYTHON environment variable, or ensure Python is in your PATH.`
-      );
+      return false;
     }
   }
 
-
   /**
-   * Install dependencies in the virtual environment
+   * Start the server
    */
-  async installDependencies(venvPythonPath) {
-    return new Promise((resolve, reject) => {
-      // Verify Python executable exists
-      if (!fs.existsSync(venvPythonPath)) {
-        const errorMessage = `Python executable not found: ${venvPythonPath}`;
-        logError(errorMessage);
-        reject(new Error(errorMessage));
-        return;
-      }
-
-      // Verify Python executable is executable
-      try {
-        execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-      } catch (error) {
-        const errorMessage = `Python executable is not executable: ${venvPythonPath}. ${error.message}`;
-        logError(errorMessage);
-        reject(new Error(errorMessage));
-        return;
-      }
-
-      const serverDir = getServerDir();
-      const requirementsPath = path.join(serverDir, "requirements.txt");
-
-      if (!fs.existsSync(requirementsPath)) {
-        logWarn(`requirements.txt not found at: ${requirementsPath}`);
-        resolve(); // Not an error, just skip installation
-        return;
-      }
-
-      logInfo(`Installing dependencies from: ${requirementsPath}`);
-      let stdoutOutput = "";
-      let stderrOutput = "";
-      let isResolved = false;
-
-      const installProcess = spawn(venvPythonPath, ["-m", "pip", "install", "-r", requirementsPath], {
-        cwd: serverDir,
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: true,
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: "1",
-        },
-      });
-
-      installProcess.stdout.on("data", (data) => {
-        const message = data.toString();
-        stdoutOutput += message;
-        this.addLog("stdout", message);
-        logDebug(`[pip install stdout] ${message.trim()}`);
-      });
-
-      installProcess.stderr.on("data", (data) => {
-        const message = data.toString();
-        stderrOutput += message;
-        this.addLog("stderr", message);
-        logDebug(`[pip install stderr] ${message.trim()}`);
-      });
-
-      // Timeout after 300 seconds
-      const timeout = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          installProcess.kill();
-          logError("Dependency installation timed out");
-          reject(new Error("Dependency installation timed out after 300 seconds"));
-        }
-      }, 300000);
-
-      installProcess.on("close", (code) => {
-        if (isResolved) {
-          return;
-        }
-        isResolved = true;
-        clearTimeout(timeout);
-
-        if (code === 0) {
-          logInfo("Dependencies installed successfully");
-          resolve();
-        } else {
-          const errorMessage = `Dependency installation failed with code ${code}. ${stderrOutput.trim()}${stdoutOutput ? `\n${stdoutOutput.trim()}` : ""}`;
-          logError(errorMessage);
-          reject(new Error(errorMessage));
-        }
-      });
-
-      installProcess.on("error", (error) => {
-        if (isResolved) {
-          return;
-        }
-        isResolved = true;
-        clearTimeout(timeout);
-        logError(`Failed to install dependencies: ${error.message}`);
-        reject(error);
-      });
-    });
-  }
-
-  /**
-   * Wait for file to exist with retries
-   */
-  async waitForFile(filePath, maxRetries = 10, intervalMs = 500) {
-    for (let i = 0; i < maxRetries; i++) {
-      if (fs.existsSync(filePath)) {
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    }
-    return false;
-  }
-
-  /**
-   * Verify Python runtime exists and is valid
-   */
-  async ensurePythonRuntime() {
-    const pythonRuntimeDir = getPythonRuntimeDir();
-    const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
-    const pythonRuntimePath = path.join(pythonRuntimeDir, pythonExe);
-
-    if (!fs.existsSync(pythonRuntimePath)) {
-      throw new Error(
-        `Python runtime not found at: ${pythonRuntimePath}\n` +
-        `Please run 'npm run setup-python' to install Python runtime.`
-      );
+  async start() {
+    if (this.serverProcess) {
+      console.warn("Server is already running");
+      return;
     }
 
-    // Verify Python executable works
+    const isPackaged = this.isPackaged();
+    let command;
+    let args = [];
+    let cwd;
+
+    if (isPackaged) {
+      // Production: PyInstallerでビルドした実行可能ファイルを実行
+      command = this.getServerExecutablePath();
+      args = [];
+      cwd = path.dirname(command);
+    } else {
+      // Development: Pythonスクリプトを実行
+      command = "python";
+      args = [this.getServerScriptPath()];
+      cwd = __dirname;
+    }
+
+    // Set environment variables
+    const env = {
+      ...process.env,
+      ENV: isPackaged ? "production" : "development",
+      PORT: String(this.serverPort),
+      HOST: this.serverHost,
+    };
+
+    this.log(`Starting server: ${command} ${args.join(" ")}`);
+
     try {
-      execSync(`"${pythonRuntimePath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-      logInfo("Python runtime is valid");
-      return pythonRuntimePath;
-    } catch (error) {
-      throw new Error(
-        `Python runtime is not working: ${pythonRuntimePath}\n` +
-        `Error: ${error.message}\n` +
-        `Please run 'npm run setup-python' to reinstall Python runtime.`
-      );
-    }
-  }
-
-  /**
-   * Check if marimo is installed
-   */
-  async checkMarimoInstalled(pythonPath) {
-    return new Promise((resolve) => {
-      let stderrOutput = "";
-      let isResolved = false;
-      const checkProcess = spawn(pythonPath, ["-m", "marimo", "--version"], {
+      this.serverProcess = spawn(command, args, {
+        env,
+        cwd,
         stdio: ["ignore", "pipe", "pipe"],
-        shell: true, // Use shell PATH on Windows
       });
 
-      // Collect stdout (version info)
-      checkProcess.stdout.on("data", (data) => {
-        logDebug(`[marimo version check stdout] ${data.toString().trim()}`);
-      });
-
-      // Collect stderr (error messages)
-      checkProcess.stderr.on("data", (data) => {
+      this.serverProcess.stdout?.on("data", (data) => {
         const message = data.toString();
-        stderrOutput += message;
-        logDebug(`[marimo version check stderr] ${message.trim()}`);
+        this.log(`[SERVER] ${message.trim()}`);
       });
 
-      // Timeout after 5 seconds
-      const timeout = setTimeout(() => {
-        if (!isResolved) {
-          isResolved = true;
-          checkProcess.kill();
-          logWarn("marimo version check timed out");
-          resolve(false);
-        }
-      }, 5000);
+      this.serverProcess.stderr?.on("data", (data) => {
+        const message = data.toString();
+        this.log(`[SERVER ERROR] ${message.trim()}`);
+      });
 
-      checkProcess.on("close", (code) => {
-        if (isResolved) {
-          return;
-        }
-        isResolved = true;
-        clearTimeout(timeout);
+      this.serverProcess.on("exit", (code, signal) => {
+        this.log(`Server process exited with code ${code} and signal ${signal}`);
+        this.serverProcess = null;
+        this.updateStatus({ status: "stopped", url: null });
+      });
 
-        if (code === 0) {
-          logInfo("marimo is installed");
-          resolve(true);
+      this.serverProcess.on("error", (error) => {
+        this.log(`Server process error: ${error.message}`);
+        this.serverProcess = null;
+        this.updateStatus({ status: "error", url: null });
+      });
+
+      // Wait a bit for server to start
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+
+      // Check if process is still running
+      if (this.serverProcess && !this.serverProcess.killed) {
+        this.updateStatus({ status: "running", url: this.getServerUrl() });
+      } else {
+        this.updateStatus({ status: "error", url: null });
+      }
+    } catch (error) {
+      this.log(`Failed to start server: ${error.message}`);
+      this.serverProcess = null;
+      this.updateStatus({ status: "error", url: null });
+      throw error;
+    }
+  }
+
+  /**
+   * Stop the server
+   */
+  async stop() {
+    if (!this.serverProcess) {
+      return;
+    }
+
+    this.log("Stopping server...");
+
+    return new Promise((resolve) => {
+      if (this.serverProcess) {
+        this.serverProcess.on("exit", () => {
+          this.serverProcess = null;
+          this.updateStatus({ status: "stopped", url: null });
+          resolve();
+        });
+
+        // Try graceful shutdown first
+        if (process.platform === "win32") {
+          // Windows: taskkillを使用
+          spawn("taskkill", ["/pid", this.serverProcess.pid.toString(), "/F", "/T"]);
         } else {
-          logWarn(`marimo version check failed with code ${code}`);
-          if (stderrOutput) {
-            logDebug(`marimo version check stderr: ${stderrOutput.trim()}`);
+          // Unix系: SIGTERMを送信
+          this.serverProcess.kill("SIGTERM");
+        }
+
+        // Force kill after timeout
+        setTimeout(() => {
+          if (this.serverProcess) {
+            if (process.platform === "win32") {
+              spawn("taskkill", ["/pid", this.serverProcess.pid.toString(), "/F", "/T"]);
+            } else {
+              this.serverProcess.kill("SIGKILL");
+            }
+            this.serverProcess = null;
+            this.updateStatus({ status: "stopped", url: null });
+            resolve();
           }
-          resolve(false);
-        }
-      });
-
-      checkProcess.on("error", (error) => {
-        if (isResolved) {
-          return;
-        }
-        isResolved = true;
-        clearTimeout(timeout);
-        logError(`Failed to check marimo installation: ${error.message}`);
-        resolve(false);
-      });
-    });
-  }
-
-  /**
-   * Perform health check on the server
-   */
-  async checkHealth(url, maxAttempts = 30, intervalMs = 1000) {
-    const healthUrl = `${url}/healthz`;
-    logDebug(`Checking health at: ${healthUrl}`);
-
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        // Use AbortController for better compatibility
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 2000);
-
-        let response;
-        try {
-          response = await fetch(healthUrl, {
-            method: "GET",
-            signal: controller.signal,
-          });
-        } finally {
-          clearTimeout(timeoutId);
-        }
-
-        if (response.ok) {
-          logInfo(`Server health check passed (attempt ${attempt + 1})`);
-          return true;
-        }
-      } catch (error) {
-        // Ignore errors and retry
-        logDebug(`Health check attempt ${attempt + 1} failed: ${error.message}`);
-      }
-
-      // Wait before next attempt
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
-    }
-
-    return false;
-  }
-
-  /**
-   * Add log entry
-   */
-  addLog(type, message) {
-    const timestamp = new Date().toISOString();
-    this.logs.push({ timestamp, type, message });
-    // Keep only last 1000 log entries
-    if (this.logs.length > 1000) {
-      this.logs.shift();
-    }
-  }
-
-  /**
-   * Update status and notify callbacks
-   */
-  setStatus(newStatus) {
-    if (this.status !== newStatus) {
-      const oldStatus = this.status;
-      this.status = newStatus;
-      logInfo(`Server status changed: ${oldStatus} -> ${newStatus}`);
-      this.notifyStatusChange();
-    }
-  }
-
-  /**
-   * Notify status change callbacks
-   */
-  notifyStatusChange() {
-    const status = this.getStatus();
-    this.statusChangeCallbacks.forEach((callback) => {
-      try {
-        callback(status);
-      } catch (error) {
-        logError("Error in status change callback", error);
+        }, 5000);
+      } else {
+        resolve();
       }
     });
+  }
+
+  /**
+   * Get current status
+   */
+  getStatus() {
+    return { ...this.status };
   }
 
   /**
    * Register status change callback
    */
   onStatusChange(callback) {
-    this.statusChangeCallbacks.push(callback);
-    return () => {
-      const index = this.statusChangeCallbacks.indexOf(callback);
-      if (index > -1) {
-        this.statusChangeCallbacks.splice(index, 1);
-      }
-    };
+    this.statusCallbacks.push(callback);
   }
 
   /**
-   * Start the Python server
+   * Update status and notify callbacks
    */
-  async start() {
-    if (this.status === "starting" || this.status === "running") {
-      logWarn("Server is already starting or running");
-      return;
-    }
-
-    try {
-      this.setStatus("starting");
-      logInfo("Starting Python server...");
-
-      // Find Python executable (prioritizes python-runtime)
-      this.pythonPath = await this.findPythonExecutable();
-      if (!this.pythonPath) {
-        throw new Error("Python executable not found");
+  updateStatus(status) {
+    this.status = status;
+    this.statusCallbacks.forEach((callback) => {
+      try {
+        callback(this.status);
+      } catch (error) {
+        console.error("Error in status callback:", error);
       }
-
-      // Verify Python runtime if using embedded runtime
-      const pythonRuntimeDir = getPythonRuntimeDir();
-      if (this.pythonPath.startsWith(pythonRuntimeDir)) {
-        await this.ensurePythonRuntime();
-      }
-
-      logInfo(`Using Python: ${this.pythonPath}`);
-
-      // Check if marimo is installed
-      const marimoInstalled = await this.checkMarimoInstalled(this.pythonPath);
-      if (!marimoInstalled) {
-        logWarn("marimo is not installed. Please run 'npm run setup-python' to install dependencies.");
-        throw new Error(
-          "marimo is not installed. Please run 'npm run setup-python' to install Python runtime and dependencies."
-        );
-      }
-
-      // Find available port
-      this.port = await this.findAvailablePort();
-      logInfo(`Using port: ${this.port}`);
-
-      // Start the server process
-      const serverDir = getServerDir();
-      const serverUrl = `http://127.0.0.1:${this.port}`;
-      this.serverURL = serverUrl;
-
-      // Create a temporary notebook file if it doesn't exist
-      const notebookPath = path.join(serverDir, "backcast.py");
-      if (!fs.existsSync(notebookPath)) {
-        logInfo(`Creating default notebook file: ${notebookPath}`);
-        fs.writeFileSync(notebookPath, "# Backcast Notebook\n\n", "utf-8");
-      }
-
-      const args = [
-        "-m",
-        "marimo",
-        "edit",
-        "backcast.py",
-        "--port",
-        String(this.port),
-        "--host",
-        "127.0.0.1",
-        "--headless", // Don't launch a browser
-      ];
-
-      logDebug(`Starting Python process: ${this.pythonPath} ${args.join(" ")}`);
-
-      // Add Python runtime directory to PATH so DLLs can be found
-      const pythonRuntimeDir = getPythonRuntimeDir();
-      const basePath = process.env.PATH || "";
-      const newPath = this.pythonPath.startsWith(pythonRuntimeDir)
-        ? `${pythonRuntimeDir};${basePath}`
-        : basePath;
-
-      this.serverProcess = spawn(this.pythonPath, args, {
-        cwd: serverDir,
-        stdio: ["ignore", "pipe", "pipe"],
-        shell: true, // Use shell PATH on Windows to find python.exe
-        env: {
-          ...process.env,
-          PATH: newPath,
-          PYTHONUNBUFFERED: "1", // Ensure unbuffered output
-        },
-      });
-
-      // Capture stdout
-      this.serverProcess.stdout.on("data", (data) => {
-        const message = data.toString();
-        this.addLog("stdout", message);
-        logDebug(`[Server stdout] ${message.trim()}`);
-      });
-
-      // Capture stderr
-      this.serverProcess.stderr.on("data", (data) => {
-        const message = data.toString();
-        this.addLog("stderr", message);
-        logWarn(`[Server stderr] ${message.trim()}`);
-      });
-
-      // Handle process exit
-      this.serverProcess.on("exit", (code, signal) => {
-        logInfo(`Server process exited with code ${code}, signal ${signal}`);
-        this.serverProcess = null;
-
-        // Only handle crash if not stopping gracefully
-        if (!this.isStopping && (this.status === "running" || this.status === "starting")) {
-          // Unexpected exit
-          this.setStatus("error");
-          this.handleServerCrash();
-        } else if (this.isStopping) {
-          // Graceful shutdown completed
-          this.isStopping = false;
-        }
-      });
-
-      // Handle process errors
-      this.serverProcess.on("error", (error) => {
-        logError("Failed to start server process", error);
-        this.setStatus("error");
-        this.serverProcess = null;
-      });
-
-      // Wait for server to be ready
-      logInfo("Waiting for server to be ready...");
-      const isHealthy = await this.checkHealth(serverUrl);
-
-      if (isHealthy) {
-        this.setStatus("running");
-        this.restartAttempts = 0; // Reset restart attempts on successful start
-        logInfo(`Server started successfully at ${serverUrl}`);
-      } else {
-        throw new Error("Server health check failed");
-      }
-    } catch (error) {
-      logError("Failed to start server", error);
-      this.setStatus("error");
-      this.serverProcess = null;
-      this.serverURL = null;
-      this.port = null;
-
-      // Attempt automatic restart if within retry limit
-      if (this.restartAttempts < this.maxRestartAttempts) {
-        await this.handleServerCrash();
-      } else {
-        throw error;
-      }
-    }
-  }
-
-  /**
-   * Handle server crash with automatic restart
-   */
-  async handleServerCrash() {
-    if (this.restartAttempts >= this.maxRestartAttempts) {
-      logError(
-        `Max restart attempts (${this.maxRestartAttempts}) reached. Stopping automatic restart.`
-      );
-      return;
-    }
-
-    this.restartAttempts++;
-    const backoffMs = Math.min(1000 * Math.pow(2, this.restartAttempts - 1), 10000); // Exponential backoff, max 10s
-    logWarn(
-      `Server crashed. Attempting restart ${this.restartAttempts}/${this.maxRestartAttempts} after ${backoffMs}ms...`
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, backoffMs));
-
-    try {
-      await this.start();
-    } catch (error) {
-      logError("Automatic restart failed", error);
-    }
-  }
-
-  /**
-   * Stop the Python server
-   */
-  async stop() {
-    if (this.status === "stopped") {
-      logWarn("Server is already stopped");
-      return;
-    }
-
-    logInfo("Stopping Python server...");
-    this.isStopping = true; // Set flag to prevent handleServerCrash
-    this.setStatus("stopped");
-
-    if (!this.serverProcess) {
-      logWarn("Server process not found");
-      this.isStopping = false;
-      return;
-    }
-
-    return new Promise((resolve) => {
-      const childProcess = this.serverProcess;
-      this.serverProcess = null;
-
-      // Try graceful shutdown first
-      // Windows doesn't support SIGTERM, use kill() without signal
-      if (process.platform === "win32") {
-        // On Windows, kill() without signal sends SIGTERM equivalent
-        childProcess.kill();
-      } else {
-        childProcess.kill("SIGTERM");
-      }
-
-      // Force kill after timeout
-      const timeout = setTimeout(() => {
-        logWarn("Server did not terminate gracefully, forcing kill...");
-        if (process.platform === "win32") {
-          // On Windows, kill() without signal is the only option
-          childProcess.kill();
-        } else {
-          childProcess.kill("SIGKILL");
-        }
-        this.isStopping = false;
-        resolve();
-      }, 5000);
-
-      childProcess.on("exit", () => {
-        clearTimeout(timeout);
-        logInfo("Server stopped successfully");
-        this.serverURL = null;
-        this.port = null;
-        this.isStopping = false;
-        resolve();
-      });
     });
   }
 
   /**
-   * Get server status
-   */
-  getStatus() {
-    return {
-      status: this.status,
-      url: this.serverURL,
-    };
-  }
-
-  /**
-   * Get server logs
+   * Get logs
    */
   getLogs() {
-    return this.logs;
+    return [...this.logs];
   }
 
   /**
-   * Clear server logs
+   * Add log entry
    */
-  clearLogs() {
-    this.logs = [];
+  log(message) {
+    const timestamp = new Date().toISOString();
+    this.logs.push({ timestamp, message });
+    // Keep only last 1000 logs
+    if (this.logs.length > 1000) {
+      this.logs.shift();
+    }
+    console.log(`[ServerManager] ${message}`);
   }
 }
-

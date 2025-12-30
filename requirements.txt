@@ -11,4 +11,7 @@ pandas>=2.0.0
 matplotlib>=3.7.0
 plotly>=5.14.0
 
+# Build tools
+pyinstaller>=6.0.0
+
 # Add your project-specific dependencies here

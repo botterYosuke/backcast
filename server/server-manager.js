@@ -56,6 +56,7 @@ export class ServerManager {
   /**
    * Find system Python executable from environment variables
    * Used for creating virtual environments
+   * If system Python is not found, checks for existing virtual environment
    */
   async findSystemPython() {
     // 1. Check PYTHON environment variable (direct path to Python executable)
@@ -74,87 +75,25 @@ export class ServerManager {
       }
     }
 
-    // 2. Check PYTHON_HOME environment variable
-    if (process.env.PYTHON_HOME) {
-      const pythonHome = process.env.PYTHON_HOME;
-      const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
-      const pythonPath = path.join(pythonHome, pythonExe);
-      
-      if (fs.existsSync(pythonPath)) {
-        try {
-          execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-          logInfo(`Found system Python from PYTHON_HOME environment variable: ${pythonPath}`);
-          return pythonPath;
-        } catch {
-          logWarn(`Python from PYTHON_HOME environment variable is not executable: ${pythonPath}`);
-        }
-      } else {
-        logDebug(`Python executable not found at PYTHON_HOME: ${pythonPath}`);
+    // 2. Check for existing virtual environment (server/python-env/)
+    logInfo("PYTHON environment variable not set. Checking for existing virtual environment...");
+    const venvPythonPath = getVenvPythonPath();
+    if (fs.existsSync(venvPythonPath)) {
+      try {
+        execSync(`"${venvPythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
+        logInfo(`Found Python in existing virtual environment: ${venvPythonPath}`);
+        logWarn("Using existing virtual environment Python. Note: This Python cannot create new virtual environments.");
+        return venvPythonPath;
+      } catch {
+        logWarn(`Virtual environment Python found but not executable: ${venvPythonPath}`);
       }
     }
 
-    // 3. Search PATH environment variable (excluding WindowsApps)
-    if (process.env.PATH) {
-      const pathDirs = process.env.PATH.split(path.delimiter);
-      const pythonExe = process.platform === "win32" ? "python.exe" : "python3";
-      
-      for (const dir of pathDirs) {
-        // Skip WindowsApps directory (Microsoft Store redirect)
-        if (dir.includes("WindowsApps")) {
-          logDebug(`Skipping WindowsApps directory: ${dir}`);
-          continue;
-        }
-        
-        const pythonPath = path.join(dir, pythonExe);
-        if (fs.existsSync(pythonPath)) {
-          try {
-            execSync(`"${pythonPath}" --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-            logInfo(`Found system Python in PATH: ${pythonPath}`);
-            return pythonPath;
-          } catch {
-            logDebug(`Python found but not executable: ${pythonPath}`);
-            continue;
-          }
-        }
-      }
-    }
-
-    // 4. Fallback: try to verify python.exe exists by spawning it (but skip if it's WindowsApps)
-    const systemPython = process.platform === "win32" ? "python.exe" : "python3";
-    try {
-      // Try to run python --version to verify it exists
-      execSync(`${systemPython} --version`, { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-      // Check if the resolved path contains WindowsApps
-      if (process.platform === "win32") {
-        try {
-          const whereResult = execSync("where python", { encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] });
-          const pythonPaths = whereResult.trim().split("\n").map(line => line.trim()).filter(line => line);
-          for (const pythonPath of pythonPaths) {
-            if (pythonPath.includes("WindowsApps")) {
-              logWarn("Windows Store Python redirect detected. Please set PYTHON or PYTHON_HOME environment variable.");
-              throw new Error(
-                `System Python executable not found. Windows Store redirect detected. ` +
-                `Please set PYTHON or PYTHON_HOME environment variable to point to your Python installation.`
-              );
-            }
-            if (fs.existsSync(pythonPath) && !pythonPath.includes("WindowsApps")) {
-              logInfo(`Using system Python: ${pythonPath}`);
-              return pythonPath;
-            }
-          }
-        } catch {
-          // If where command fails, continue with fallback
-        }
-      }
-      logInfo(`Using system Python: ${systemPython}`);
-      return systemPython;
-    } catch {
-      throw new Error(
-        `System Python executable not found. Please set PYTHON or PYTHON_HOME environment variable, ` +
-        `or ensure Python is in your PATH. ` +
-        `Install Python from https://www.python.org/downloads/ if needed.`
-      );
-    }
+    // 3. No Python found
+    throw new Error(
+      `System Python executable not found. Please set PYTHON environment variable to point to your Python installation, ` +
+      `or ensure the virtual environment exists at: ${getVenvDir()}`
+    );
   }
 
   /**

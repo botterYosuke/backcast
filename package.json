@@ -9,6 +9,10 @@
   ],
   "main": "electron/main.js",
   "scripts": {
+    "setup-python": "node server/setup-python.js",
+    "clean-python": "rimraf python-env",
+    "rebuild-python": "npm run clean-python && npm run setup-python",
+
     "dev": "vite",
     "build": "cross-env vite build",
     "preview": "vite preview",

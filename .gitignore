@@ -35,8 +35,5 @@ lerna-debug.log*
 *.tsbuildinfo
 node_modules/.tmp
 
-# Python virtual environment
-server/python-env/
-*.pyc
-__pycache__/
+
 

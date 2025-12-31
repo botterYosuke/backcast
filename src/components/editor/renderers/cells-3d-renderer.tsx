@@ -127,8 +127,8 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
       return;
     }
 
-    // シーンにコンテナを接続（既存のメソッドを使用）
-    css2DService.attachCellContainerToScene(scene);
+    // シーンを設定
+    css2DService.setScene(scene);
 
     // グリッド配置の設定
     const cellCount = allCellIds.length;
@@ -155,7 +155,11 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
         if (!position) {
           // 初期配置：グリッド位置を計算
           position = calculateGridPosition(index, gridConfig);
+          position.y = 200; // Y座標を200に設定
           cellPositionsRef.current.set(cellId, position);
+        } else {
+          // 既存の位置のY座標を200に設定
+          position.y = 200;
         }
 
         // CSS2DObjectを作成または更新
@@ -229,6 +233,7 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
           columns,
         };
         const position = calculateGridPosition(index, gridConfig);
+        position.y = 200; // Y座標を200に設定
         cellPositionsRef.current.set(cellId, position);
 
         // CSS2DObjectを作成

@@ -4,7 +4,6 @@ import { usePrevious } from "@dnd-kit/utilities";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { useAtomValue, useSetAtom } from "jotai";
 import { useEffect, useRef, useState } from "react";
-import * as THREE from "three";
 import { Controls } from "@/components/editor/controls/Controls";
 import { AppHeader } from "@/components/editor/header/app-header";
 import { FilenameForm } from "@/components/editor/header/filename-form";
@@ -139,10 +138,10 @@ export const EditApp: React.FC<AppProps> = ({
     const height = container.clientHeight || window.innerHeight;
     css2DService.initializeRenderer(container, width, height);
 
-    // セルコンテナを3D空間に配置
+    // シーンを設定
     const scene = sceneManager.getScene();
     if (scene) {
-      css2DService.attachCellContainerToScene(scene, new THREE.Vector3(0, 0, 0));
+      css2DService.setScene(scene);
     }
 
     // CSS2Dレンダリングのコールバックを設定

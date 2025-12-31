@@ -8,13 +8,12 @@ import * as THREE from "three";
  *
  * CSS2DRendererの初期化と管理を担当
  * - CSS2DRendererの初期化
- * - セルコンテナの作成と3D空間への配置
- * - カメラ距離に基づくスケール調整
+ * - セルコンテナDOM要素の作成と管理
+ * - 個別セルのCSS2DObject管理
  * - レンダリングループの管理
  */
 export class CellCSS2DService {
   private css2DRenderer?: CSS2DRenderer;
-  private css2DObject?: CSS2DObject;
   private hostElement?: HTMLElement;
   private scene?: THREE.Scene;
   private camera?: THREE.PerspectiveCamera;
@@ -23,11 +22,6 @@ export class CellCSS2DService {
 
   // セルごとのCSS2DObject管理
   private cellCSS2DObjects = new Map<string, CSS2DObject>();
-
-  // スケール計算用の設定
-  private baseDistance: number | null = null; // 基準距離（起動時の距離で初期化）
-  private readonly MIN_SCALE = 0.1; // 最小スケール
-  private readonly MAX_SCALE = 5.0; // 最大スケール
 
   // レンダリング最適化用
   private needsRender = false;
@@ -106,96 +100,10 @@ export class CellCSS2DService {
   }
 
   /**
-   * セルコンテナを3D空間に配置します
+   * シーンを設定します
    */
-  attachCellContainerToScene(
-    scene: THREE.Scene,
-    position: THREE.Vector3 = new THREE.Vector3(0, 200, 0),
-  ): CSS2DObject | null {
-    if (!this.cellContainer) {
-      console.warn(
-        "Cell container is not created. Call initializeRenderer() first.",
-      );
-      return null;
-    }
-
-    // 既存のオブジェクトを削除
-    if (this.css2DObject && this.css2DObject.parent) {
-      this.css2DObject.parent.remove(this.css2DObject);
-    }
-
+  setScene(scene: THREE.Scene): void {
     this.scene = scene;
-
-    // CSS2DObjectを作成
-    this.css2DObject = new CSS2DObject(this.cellContainer);
-    this.css2DObject.position.copy(position);
-    this.css2DObject.scale.set(1, 1, 1);
-
-    // シーンに追加
-    scene.add(this.css2DObject);
-
-    return this.css2DObject;
-  }
-
-  /**
-   * カメラからの距離に基づいてスケール値を計算します
-   */
-  private calculateScale(distance: number): number {
-    if (distance <= 0) {
-      return this.MAX_SCALE;
-    }
-
-    // 基準距離が設定されていない場合は、現在の距離を基準距離として使用
-    if (this.baseDistance === null) {
-      if (this.camera) {
-        // カメラの高さ位置を基準距離として使用
-        this.baseDistance = Math.abs(this.camera.position.y);
-      } else {
-        this.baseDistance = 1200;
-      }
-    }
-
-    // スケール = 基準距離 / 現在の距離
-    // 起動時（基準距離 = 現在の距離）の場合はスケール1になる
-    const scale = this.baseDistance / distance;
-
-    // スケールを MIN_SCALE ~ MAX_SCALE の範囲にクランプ
-    return Math.max(this.MIN_SCALE, Math.min(this.MAX_SCALE, scale));
-  }
-
-  /**
-   * セルコンテナのスケールを更新します
-   */
-  private updateContainerScale(camera: THREE.PerspectiveCamera): void {
-    if (!this.cellContainer || !this.css2DObject) {
-      return;
-    }
-
-    // カメラとCSS2Dオブジェクトの3D空間での位置を取得
-    const cameraPosition = camera.position;
-    const objectPosition = new THREE.Vector3();
-    this.css2DObject.getWorldPosition(objectPosition);
-
-    // 距離を計算（y方向のみ）
-    const distance = Math.abs(cameraPosition.y - objectPosition.y);
-
-    // スケールを計算
-    const scale = this.calculateScale(distance);
-
-    // CSS2DRendererが設定した既存のtransformを取得
-    const existingTransform = this.cellContainer.style.transform || "";
-
-    // 既存のtransformからscale()を削除（既に存在する場合）
-    let cleanedTransform = existingTransform.replace(/\s*scale\([^)]*\)/gi, "");
-
-    // 既存のtransformにscale()を追加
-    const newTransform = cleanedTransform.trim()
-      ? `${cleanedTransform.trim()} scale(${scale})`
-      : `scale(${scale})`;
-
-    // DOM要素のtransformスタイルを更新
-    this.cellContainer.style.transform = newTransform;
-    this.cellContainer.style.transformOrigin = "center center";
   }
 
   /**
@@ -222,12 +130,8 @@ export class CellCSS2DService {
       return; // スキップ
     }
 
-    // CSS2DRendererのrender()を先に実行
-    // これがtransformを設定する
+    // CSS2DRendererのrender()を実行
     this.css2DRenderer.render(scene, camera);
-
-    // CSS2DRendererのrender()の後にscaleを適用
-    this.updateContainerScale(camera);
 
     this.lastCameraPosition.copy(camera.position);
     this.needsRender = false;
@@ -260,13 +164,6 @@ export class CellCSS2DService {
   }
 
   /**
-   * CSS2DObjectを取得します
-   */
-  getCSS2DObject(): CSS2DObject | undefined {
-    return this.css2DObject;
-  }
-
-  /**
    * CSS2DRendererを取得します
    */
   getRenderer(): CSS2DRenderer | undefined {
@@ -275,22 +172,9 @@ export class CellCSS2DService {
 
   /**
    * 現在のスケール値を取得します
+   * 注意: 個別セルにはスケール調整が適用されないため、常に1.0を返します
    */
   getCurrentScale(): number {
-    if (!this.cellContainer) {
-      return 1.0;
-    }
-
-    // transformスタイルからscale値を抽出
-    const transform = this.cellContainer.style.transform || "";
-    const scaleMatch = transform.match(/scale\(([^)]+)\)/);
-
-    if (scaleMatch && scaleMatch[1]) {
-      const scaleValue = parseFloat(scaleMatch[1].trim());
-      return isNaN(scaleValue) ? 1.0 : scaleValue;
-    }
-
-    // scaleが見つからない場合は1.0を返す
     return 1.0;
   }
 
@@ -332,12 +216,6 @@ export class CellCSS2DService {
     });
     this.cellCSS2DObjects.clear();
 
-    // CSS2DObjectをシーンから削除
-    if (this.css2DObject && this.css2DObject.parent) {
-      this.css2DObject.parent.remove(this.css2DObject);
-    }
-    this.css2DObject = undefined;
-
     // セルコンテナを削除
     if (this.cellContainer) {
       // コンテナ内の子要素をすべて削除
@@ -364,9 +242,6 @@ export class CellCSS2DService {
     this.scene = undefined;
     this.camera = undefined;
 
-    // 基準距離をリセット
-    this.baseDistance = null;
-
     // レンダリング状態をリセット
     this.needsRender = false;
     this.isInteracting = false;
@@ -385,7 +260,7 @@ export class CellCSS2DService {
    */
   addCellCSS2DObject(cellId: string, element: HTMLElement, position: THREE.Vector3): CSS2DObject | null {
     if (!this.scene) {
-      console.warn("Scene is not set. Call attachCellContainerToScene() first.");
+      console.warn("Scene is not set. Call setScene() first.");
       return null;
     }
 

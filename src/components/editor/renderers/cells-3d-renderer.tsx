@@ -1,8 +1,9 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
 import { createPortal } from "react-dom";
-import { useEffect, useRef, useState, useMemo } from "react";
+import { useEffect, useRef, useState, useMemo, useCallback } from "react";
 import * as THREE from "three";
+import { useAtomValue, useSetAtom } from "jotai";
 import type { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import type { SceneManager } from "@/core/three/scene-manager";
 import { CellDragManager } from "@/core/three/cell-drag-manager";
@@ -19,6 +20,10 @@ import { useCellIds } from "@/core/cells/cells";
 import { useTheme } from "@/theme/useTheme";
 import { SETUP_CELL_ID, type CellId } from "@/core/cells/ids";
 import { SortableCellsProvider } from "@/components/sort/SortableCellsProvider";
+import {
+  cell3DPositionsAtom,
+  type Cell3DPosition,
+} from "@/core/three/cell-3d-positions";
 
 interface Cells3DRendererProps {
   mode: AppMode;
@@ -51,6 +56,14 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
   const cellWrapperElementsRef = useRef<Map<string, HTMLElement>>(new Map());
   const dragManagerRef = useRef<CellDragManager | null>(null);
   const cellPositionsRef = useRef<Map<string, THREE.Vector3>>(new Map());
+  const cell3DPositions = useAtomValue(cell3DPositionsAtom);
+  const cell3DPositionsRef = useRef(cell3DPositions);
+  const setCell3DPositions = useSetAtom(cell3DPositionsAtom);
+
+  // atomが更新されたらrefも更新
+  useEffect(() => {
+    cell3DPositionsRef.current = cell3DPositions;
+  }, [cell3DPositions]);
 
   // セルIDのリストを取得（フラット化、SETUP_CELL_IDを除外）
   const allCellIds = useMemo(() => {
@@ -63,6 +76,17 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
     dragManager.setPositionUpdateCallback((cellId, position) => {
       // 位置を保存
       cellPositionsRef.current.set(cellId, position);
+
+      // atomにも保存
+      setCell3DPositions((prev) => {
+        const next = new Map(prev);
+        next.set(cellId as CellId, {
+          x: position.x,
+          y: position.y,
+          z: position.z,
+        });
+        return next;
+      });
 
       // セル要素のCSSスタイルを更新
       const wrapperElement = cellWrapperElementsRef.current.get(cellId);
@@ -89,7 +113,7 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
     return () => {
       dragManager.dispose();
     };
-  }, [css2DService, sceneManager]);
+  }, [css2DService, sceneManager, setCell3DPositions]);
 
   // セルコンテナを取得
   useEffect(() => {
@@ -163,15 +187,27 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
           return; // ラッパー要素が見つからない場合はスキップ
         }
 
-        // 既存の位置を取得、またはグリッド位置を計算
+        // 既存の位置を取得、またはatomから復元、またはグリッド位置を計算
         let position = cellPositionsRef.current.get(cellId);
         if (!position) {
-          // 初期配置：グリッド位置を計算
-          position = calculateGridPosition(index, gridConfig);
-          position.y = 200; // Y座標を200に設定
-          cellPositionsRef.current.set(cellId, position);
+          // atomから位置情報を復元を試みる（最新値を参照）
+          const savedPosition = cell3DPositionsRef.current.get(cellId);
+          if (savedPosition) {
+            // atomに位置があれば、THREE.Vector3に変換して使用
+            position = new THREE.Vector3(
+              savedPosition.x,
+              savedPosition.y,
+              savedPosition.z,
+            );
+            cellPositionsRef.current.set(cellId, position);
+          } else {
+            // 初期配置：グリッド位置を計算
+            position = calculateGridPosition(index, gridConfig);
+            position.y = 200; // Y座標を200に設定
+            cellPositionsRef.current.set(cellId, position);
+          }
         } else {
-          // 既存の位置のY座標を200に設定
+          // 既存の位置のY座標を200に設定（atomから復元した場合は変更しない）
           position.y = 200;
         }
 
@@ -191,12 +227,24 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
 
       // 削除されたセルの位置情報をクリーンアップ
       const currentCellIds = new Set(allCellIds);
+      const deletedCellIds: CellId[] = [];
       cellPositionsRef.current.forEach((_, cellId) => {
         if (!currentCellIds.has(cellId as CellId)) {
           cellPositionsRef.current.delete(cellId);
           cellWrapperElementsRef.current.delete(cellId);
+          deletedCellIds.push(cellId as CellId);
         }
       });
+      // atomからも削除
+      if (deletedCellIds.length > 0) {
+        setCell3DPositions((prev) => {
+          const next = new Map(prev);
+          deletedCellIds.forEach((cellId) => {
+            next.delete(cellId);
+          });
+          return next;
+        });
+      }
 
       // レンダリングをマーク
       sceneManager.markNeedsRender();
@@ -223,26 +271,45 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
       cellPositionsRef.current.clear();
       cellWrapperElementsRef.current.clear();
     };
-  }, [allCellIds, cellContainer, sceneManager, css2DService]);
+  }, [allCellIds, cellContainer, sceneManager, css2DService, setCell3DPositions]);
 
   // セルラッパー要素が準備できたときのコールバック
-  const handleCellElementReady = (cellId: CellId, element: HTMLElement) => {
-    // 要素が準備できたことを記録
-    cellWrapperElementsRef.current.set(cellId, element);
+  const handleCellElementReady = useCallback(
+    (cellId: CellId, element: HTMLElement) => {
+      // 要素が準備できたことを記録
+      cellWrapperElementsRef.current.set(cellId, element);
 
-    // 位置が設定されていない場合は、グリッド位置を計算
-    if (!cellPositionsRef.current.has(cellId)) {
-      const index = allCellIds.indexOf(cellId);
-      if (index >= 0) {
-        const cellCount = allCellIds.length;
-        const columns = calculateOptimalColumns(cellCount);
-        const gridConfig: GridLayoutConfig = {
-          ...DEFAULT_GRID_CONFIG,
-          columns,
-        };
-        const position = calculateGridPosition(index, gridConfig);
-        position.y = 200; // Y座標を200に設定
-        cellPositionsRef.current.set(cellId, position);
+      // 位置が設定されていない場合は、atomから復元を試みる、またはグリッド位置を計算
+      if (!cellPositionsRef.current.has(cellId)) {
+        // atomから位置情報を復元を試みる
+        const savedPosition = cell3DPositions.get(cellId);
+        let position: THREE.Vector3;
+
+        if (savedPosition) {
+          // atomに位置があれば、THREE.Vector3に変換して使用
+          position = new THREE.Vector3(
+            savedPosition.x,
+            savedPosition.y,
+            savedPosition.z,
+          );
+          cellPositionsRef.current.set(cellId, position);
+        } else {
+          // 初期配置：グリッド位置を計算
+          const index = allCellIds.indexOf(cellId);
+          if (index >= 0) {
+            const cellCount = allCellIds.length;
+            const columns = calculateOptimalColumns(cellCount);
+            const gridConfig: GridLayoutConfig = {
+              ...DEFAULT_GRID_CONFIG,
+              columns,
+            };
+            position = calculateGridPosition(index, gridConfig);
+            position.y = 200; // Y座標を200に設定
+            cellPositionsRef.current.set(cellId, position);
+          } else {
+            return;
+          }
+        }
 
         // コンテナ位置を基準に相対位置を計算
         const containerPosition =
@@ -260,8 +327,9 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
         sceneManager.markNeedsRender();
         css2DService.markNeedsRender();
       }
-    }
-  };
+    },
+    [cell3DPositions, allCellIds, css2DService, sceneManager],
+  );
 
   // セルをCSS2Dコンテナ内にレンダリング
   if (!cellContainer) {

@@ -3,6 +3,7 @@
 import { usePrevious } from "@dnd-kit/utilities";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { useAtomValue, useSetAtom } from "jotai";
+import * as THREE from "three";
 import { useEffect, useRef, useState } from "react";
 import { Controls } from "@/components/editor/controls/Controls";
 import { AppHeader } from "@/components/editor/header/app-header";
@@ -38,6 +39,10 @@ import { RuntimeState } from "./kernel/RuntimeState";
 import { getSessionId } from "./kernel/session";
 import { useTogglePresenting } from "./layout/useTogglePresenting";
 import { is3DModeAtom, viewStateAtom } from "./mode";
+import {
+  cell3DViewAtom,
+  type Cell3DViewState,
+} from "./three/cell-3d-view";
 import { useRequestClient } from "./network/requests";
 import { useFilename } from "./saving/filename";
 import { lastSavedNotebookAtom } from "./saving/state";
@@ -105,6 +110,8 @@ export const EditApp: React.FC<AppProps> = ({
   const is3DModeFromAtom = useAtomValue(is3DModeAtom);
   const is3DMode = is3DModeFromAtom && viewState.mode === "edit"; // Editモードの時のみatomの値に従って3D表示を制御
   const [is3DInitialized, setIs3DInitialized] = useState(false); // 3D初期化完了フラグ
+  const cell3DView = useAtomValue(cell3DViewAtom);
+  const setCell3DView = useSetAtom(cell3DViewAtom);
 
   // Initialize RuntimeState event-listeners
   useEffect(() => {
@@ -153,6 +160,31 @@ export const EditApp: React.FC<AppProps> = ({
     css2DServiceRef.current = css2DService;
     setIs3DInitialized(true);
 
+    // OrbitControlsのendイベントで視点情報を保存
+    const controls = sceneManager.getControls();
+    let handleEnd: (() => void) | undefined;
+    if (controls) {
+      handleEnd = () => {
+        const camera = sceneManager.getCamera();
+        if (camera && controls) {
+          setCell3DView({
+            position: {
+              x: camera.position.x,
+              y: camera.position.y,
+              z: camera.position.z,
+            },
+            target: {
+              x: controls.target.x,
+              y: controls.target.y,
+              z: controls.target.z,
+            },
+          });
+        }
+      };
+
+      controls.addEventListener("end", handleEnd);
+    }
+
     // リサイズハンドラー
     const handleResize = () => {
       if (container && sceneManager && css2DService) {
@@ -170,13 +202,40 @@ export const EditApp: React.FC<AppProps> = ({
 
     return () => {
       window.removeEventListener("resize", handleResize);
+      // OrbitControlsのendイベントリスナーを削除
+      if (controls && handleEnd) {
+        controls.removeEventListener("end", handleEnd);
+      }
       sceneManager.dispose();
       css2DService.dispose();
       sceneManagerRef.current = null;
       css2DServiceRef.current = null;
       setIs3DInitialized(false);
     };
-  }, [is3DMode]);
+  }, [is3DMode, setCell3DView]);
+
+  // 視点情報の復元
+  useEffect(() => {
+    if (!is3DInitialized || !sceneManagerRef.current) {
+      return;
+    }
+
+    const savedView = cell3DView;
+    if (savedView) {
+      sceneManagerRef.current.setCameraView(
+        new THREE.Vector3(
+          savedView.position.x,
+          savedView.position.y,
+          savedView.position.z,
+        ),
+        new THREE.Vector3(
+          savedView.target.x,
+          savedView.target.y,
+          savedView.target.z,
+        ),
+      );
+    }
+  }, [is3DInitialized, cell3DView]);
 
   const { connection } = useMarimoKernelConnection({
     autoInstantiate: userConfig.runtime.auto_instantiate,

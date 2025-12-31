@@ -137,4 +137,3 @@ graph TD
 以下の動作を確認：
 
 1. `CellCSS2DService.getGridContainer()`が正しくコンテナを返すか
-2. `CellCSS2DService.attachGridContainerToScene()`が正しくシーンに追加するか

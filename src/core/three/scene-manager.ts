@@ -172,6 +172,23 @@ export class SceneManager {
   }
 
   /**
+   * カメラの視点を設定します
+   * 
+   * @param position カメラの位置
+   * @param target OrbitControlsのtarget（カメラが向いている方向）
+   */
+  setCameraView(position: THREE.Vector3, target: THREE.Vector3): void {
+    if (!this.camera || !this.controls) {
+      return;
+    }
+
+    this.camera.position.copy(position);
+    this.controls.target.copy(target);
+    this.controls.update();
+    this.markNeedsRender();
+  }
+
+  /**
    * レンダリングが必要であることをマークします
    */
   markNeedsRender(): void {

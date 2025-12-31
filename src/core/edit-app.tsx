@@ -49,8 +49,8 @@ import { useMarimoKernelConnection } from "./websocket/useMarimoKernelConnection
 import { flattenTopLevelNotebookCells, useNotebook } from "./cells/cells";
 import { useLayoutState, useLayoutActions } from "./layout/layout";
 import { GridLayoutPlugin } from "../components/editor/renderers/grid-layout/plugin";
-import { GridLayoutRenderer } from "../components/editor/renderers/grid-layout/grid-layout";
 import type { GridLayout } from "../components/editor/renderers/grid-layout/types";
+import { Grid3DRenderer } from "../components/editor/renderers/grid-3d-renderer";
 
 interface AppProps {
   /**
@@ -286,35 +286,30 @@ export const EditApp: React.FC<AppProps> = ({
               style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", zIndex: 1 }}
             >
               {is3DInitialized && hasCells && sceneManagerRef.current && css2DServiceRef.current ? (
-                <Cells3DRenderer
-                  mode={viewState.mode}
-                  userConfig={userConfig}
-                  appConfig={appConfig}
-                  sceneManager={sceneManagerRef.current}
-                  css2DService={css2DServiceRef.current}
-                />
-              ) : null}
-            </div>
-            {/* Gridレイアウトでセルの出力を表示（3D空間の上にオーバーレイ） */}
-            {hasCells && (
-              <div
-                className="absolute inset-0 pointer-events-none"
-                style={{ zIndex: 10 }}
-              >
-                <div className="pointer-events-auto w-full h-full">
-                  <GridLayoutRenderer
-                    appConfig={appConfig}
+                <>
+                  <Cells3DRenderer
                     mode={viewState.mode}
-                    cells={cells}
+                    userConfig={userConfig}
+                    appConfig={appConfig}
+                    sceneManager={sceneManagerRef.current}
+                    css2DService={css2DServiceRef.current}
+                  />
+                  <Grid3DRenderer
+                    mode={viewState.mode}
+                    userConfig={userConfig}
+                    appConfig={appConfig}
+                    sceneManager={sceneManagerRef.current}
+                    css2DService={css2DServiceRef.current}
                     layout={
                       (layoutState.layoutData.grid as GridLayout) ||
                       GridLayoutPlugin.getInitialLayout(cells)
                     }
                     setLayout={setGridLayout}
+                    cells={cells}
                   />
-                </div>
-              </div>
-            )}
+                </>
+              ) : null}
+            </div>
           </>
         ) : (
           /* 通常表示モード */

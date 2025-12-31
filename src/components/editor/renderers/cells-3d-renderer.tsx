@@ -128,7 +128,7 @@ export const Cells3DRenderer: React.FC<Cells3DRendererProps> = ({
     }
 
     // シーンにコンテナを接続（既存のメソッドを使用）
-    css2DService.attachCellContainerToScene(scene, new THREE.Vector3(0, 0, 0));
+    css2DService.attachCellContainerToScene(scene);
 
     // グリッド配置の設定
     const cellCount = allCellIds.length;

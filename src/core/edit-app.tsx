@@ -112,6 +112,7 @@ export const EditApp: React.FC<AppProps> = ({
   const [is3DInitialized, setIs3DInitialized] = useState(false); // 3D初期化完了フラグ
   const cell3DView = useAtomValue(cell3DViewAtom);
   const setCell3DView = useSetAtom(cell3DViewAtom);
+  const hasRestoredViewRef = useRef(false); // 視点復元済みフラグ
 
   // Initialize RuntimeState event-listeners
   useEffect(() => {
@@ -164,8 +165,9 @@ export const EditApp: React.FC<AppProps> = ({
     const controls = sceneManager.getControls();
     let handleEnd: (() => void) | undefined;
     if (controls) {
+      const camera = sceneManager.getCamera();
       handleEnd = () => {
-        const camera = sceneManager.getCamera();
+        // sceneManagerとcontrolsは既に初期化されていることが保証されている
         if (camera && controls) {
           setCell3DView({
             position: {
@@ -203,20 +205,24 @@ export const EditApp: React.FC<AppProps> = ({
     return () => {
       window.removeEventListener("resize", handleResize);
       // OrbitControlsのendイベントリスナーを削除
-      if (controls && handleEnd) {
-        controls.removeEventListener("end", handleEnd);
+      if (handleEnd && sceneManager) {
+        const currentControls = sceneManager.getControls();
+        if (currentControls) {
+          currentControls.removeEventListener("end", handleEnd);
+        }
       }
       sceneManager.dispose();
       css2DService.dispose();
       sceneManagerRef.current = null;
       css2DServiceRef.current = null;
       setIs3DInitialized(false);
+      hasRestoredViewRef.current = false; // 復元フラグをリセット
     };
   }, [is3DMode, setCell3DView]);
 
-  // 視点情報の復元
+  // 視点情報の復元（初回のみ）
   useEffect(() => {
-    if (!is3DInitialized || !sceneManagerRef.current) {
+    if (!is3DInitialized || !sceneManagerRef.current || hasRestoredViewRef.current) {
       return;
     }
 
@@ -234,8 +240,16 @@ export const EditApp: React.FC<AppProps> = ({
           savedView.target.z,
         ),
       );
+      hasRestoredViewRef.current = true;
     }
   }, [is3DInitialized, cell3DView]);
+
+  // 3Dモードが切れたら復元フラグをリセット
+  useEffect(() => {
+    if (!is3DMode) {
+      hasRestoredViewRef.current = false;
+    }
+  }, [is3DMode]);
 
   const { connection } = useMarimoKernelConnection({
     autoInstantiate: userConfig.runtime.auto_instantiate,

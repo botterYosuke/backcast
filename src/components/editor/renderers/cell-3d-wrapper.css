@@ -1,7 +1,7 @@
 /* Cell 3D Wrapper Styles */
 
 .cell-3d-wrapper {
-  position: relative;
+  position: absolute;
   background: var(--background, #ffffff);
   border: 1px solid var(--border, #e0e0e0);
   border-radius: 6px;

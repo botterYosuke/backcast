@@ -66,10 +66,19 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
       return;
     }
 
-    // 現在のセル位置を取得
-    const css2DObject = css2DService.getCellCSS2DObject(cellId);
-    if (css2DObject) {
-      const currentPosition = css2DObject.position.clone();
+    // セル要素のCSSスタイルから現在位置を取得
+    const wrapperElement = wrapperRef.current;
+    if (wrapperElement) {
+      const left = parseFloat(wrapperElement.style.left) || 0;
+      const top = parseFloat(wrapperElement.style.top) || 0;
+      // CSS座標を3D座標に変換（コンテナ位置を基準に）
+      const containerPosition =
+        css2DService.getContainerPosition() || new THREE.Vector3(0, 200, 0);
+      const currentPosition = new THREE.Vector3(
+        containerPosition.x + left,
+        containerPosition.y,
+        containerPosition.z + top,
+      );
       const scale = css2DService.getCurrentScale();
       dragManager.startDrag(event.nativeEvent, cellId, currentPosition, scale);
       setIsDragging(true);

@@ -10,7 +10,7 @@
   display: flex;
   flex-direction: column;
   min-width: 300px;
-  min-height: 200px;
+  min-height: 70px;
 }
 
 .cell-3d-wrapper.dragging {
@@ -124,6 +124,11 @@
 /* outputを囲んでいる.relative要素とconsole出力の.relative.group要素も非表示 */
 .cell-3d-wrapper .marimo-cell > .relative:has(.output-area),
 .cell-3d-wrapper .marimo-cell > .relative.group {
+  display: none !important;
+}
+
+/* セル内のツールバー（.tray内のabsolute right-2 -top-4 z-10）を非表示 */
+.cell-3d-wrapper .window-content .tray > div.absolute.right-2.z-10 {
   display: none !important;
 }
 

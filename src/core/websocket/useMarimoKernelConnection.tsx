@@ -307,9 +307,6 @@ export function useMarimoKernelConnection(opts: {
      */
     url: () => {
       const wsURL = runtimeManager.getWsURL(sessionId).toString();
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useMarimoKernelConnection.tsx:url',message:'WebSocket URL requested',data:{wsURL,sessionId},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
-      // #endregion
       return wsURL;
     },
 
@@ -331,9 +328,6 @@ export function useMarimoKernelConnection(opts: {
      * Wait to connect, in case the remote kernel still starting up.
      */
     waitToConnect: async () => {
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useMarimoKernelConnection.tsx:waitToConnect',message:'waitToConnect called',data:{isStatic:isStaticNotebook(),isWasm:isWasm(),isSameOrigin:runtimeManager.isSameOrigin,httpURL:runtimeManager.httpURL.toString()},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
       if (isStaticNotebook()) {
         return;
       }
@@ -344,13 +338,7 @@ export function useMarimoKernelConnection(opts: {
       if (runtimeManager.isSameOrigin) {
         return;
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useMarimoKernelConnection.tsx:waitToConnect',message:'calling waitForHealthy',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
       await runtimeManager.waitForHealthy();
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useMarimoKernelConnection.tsx:waitToConnect',message:'waitForHealthy completed',data:{},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
-      // #endregion
     },
 
     /**
@@ -388,10 +376,6 @@ export function useMarimoKernelConnection(opts: {
       const isTimeout = (closeCode === 1000 || e.code === "close") && (
         timeoutReason === "timeout" || reasonString === "timeout"
       );
-      
-      // #region agent log
-      fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'useMarimoKernelConnection.tsx:onClose',message:'WebSocket closed',data:{code:e.code,reason:e.reason,closeCode,timeoutReason,reasonString,isTimeout},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'E'})}).catch(()=>{});
-      // #endregion
       
       if (isTimeout) {
         setConnection({

@@ -37,7 +37,7 @@ import {
 } from "../../../core/cells/cells";
 import { formatAll } from "../../../core/codemirror/format";
 import type { AppConfig, UserConfig } from "../../../core/config/config-schema";
-import { is3DModeAtom, type AppMode } from "../../../core/mode";
+import type { AppMode } from "../../../core/mode";
 import { useHotkey } from "../../../hooks/useHotkey";
 import { type Theme, useTheme } from "../../../theme/useTheme";
 import { AddCellWithAI } from "../ai/add-cell-with-ai";
@@ -54,7 +54,6 @@ interface CellArrayProps {
   mode: AppMode;
   userConfig: UserConfig;
   appConfig: AppConfig;
-  excludeAlertsAndButtons?: boolean; // 3Dモードの時はtrue
 }
 
 export const CellArray: React.FC<CellArrayProps> = (props) => {
@@ -78,7 +77,6 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
   mode,
   userConfig,
   appConfig,
-  excludeAlertsAndButtons = false,
 }) => {
   const actions = useCellActions();
   const { theme } = useTheme();
@@ -121,15 +119,11 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
       appConfig={appConfig}
       innerClassName="pr-4" // For the floating actions
     >
-      {!excludeAlertsAndButtons && (
-        <>
-          <PackageAlert />
-          <StartupLogsAlert />
-          <StdinBlockingAlert />
-          <ConnectingAlert />
-          <NotebookBanner width={appConfig.width} />
-        </>
-      )}
+      <PackageAlert />
+      <StartupLogsAlert />
+      <StdinBlockingAlert />
+      <ConnectingAlert />
+      <NotebookBanner width={appConfig.width} />
       <div
         className={cn(
           appConfig.width === "columns" &&
@@ -146,11 +140,10 @@ const CellArrayInternal: React.FC<CellArrayProps> = ({
             mode={mode}
             userConfig={userConfig}
             theme={theme}
-            excludeButtons={excludeAlertsAndButtons}
           />
         ))}
       </div>
-      {!excludeAlertsAndButtons && <FloatingOutline />}
+      <FloatingOutline />
     </VerticalLayoutWrapper>
   );
 };
@@ -166,7 +159,6 @@ const CellColumn: React.FC<{
   mode: AppMode;
   userConfig: UserConfig;
   theme: Theme;
-  excludeButtons?: boolean;
 }> = ({
   columnId,
   index,
@@ -175,7 +167,6 @@ const CellColumn: React.FC<{
   mode,
   userConfig,
   theme,
-  excludeButtons = false,
 }) => {
   const cellIds = useCellIds();
   const column = cellIds.get(columnId);
@@ -193,15 +184,13 @@ const CellColumn: React.FC<{
       width={appConfig.width}
       canDelete={columnsLength > 1}
       footer={
-        !excludeButtons ? (
-          <AddCellButtons
-            columnId={columnId}
-            className={cn(
-              appConfig.width === "columns" &&
-                "opacity-0 group-hover/column:opacity-100",
-            )}
-          />
-        ) : undefined
+        <AddCellButtons
+          columnId={columnId}
+          className={cn(
+            appConfig.width === "columns" &&
+              "opacity-0 group-hover/column:opacity-100",
+          )}
+        />
       }
     >
       <SortableContext
@@ -251,7 +240,7 @@ const CellColumn: React.FC<{
   );
 };
 
-export const AddCellButtons: React.FC<{
+const AddCellButtons: React.FC<{
   columnId: CellColumnId;
   className?: string;
 }> = ({ columnId, className }) => {
@@ -259,7 +248,6 @@ export const AddCellButtons: React.FC<{
   const [isAiButtonOpen, isAiButtonOpenActions] = useBoolean(false);
   const aiEnabled = useAtomValue(aiEnabledAtom);
   const isConnected = useAtomValue(isConnectedAtom);
-  const is3DMode = useAtomValue(is3DModeAtom);
 
   const buttonClass = cn(
     "mb-0 rounded-none sm:px-4 md:px-5 lg:px-8 tracking-wide no-wrap whitespace-nowrap",
@@ -348,7 +336,7 @@ export const AddCellButtons: React.FC<{
   };
 
   return (
-    <div className={cn("flex justify-center mt-4 pt-6 group gap-4 w-full print:hidden", is3DMode ? "pb-4" : "pb-32")}>
+    <div className="flex justify-center mt-4 pt-6 pb-32 group gap-4 w-full print:hidden">
       <div
         className={cn(
           "shadow-sm border border-border rounded transition-all duration-200 overflow-hidden divide-x divide-border flex",

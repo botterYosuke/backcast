@@ -10,9 +10,6 @@ function getBaseURI(): string {
   // The backend server runs on http://127.0.0.1:2718 by default (see server/run.py)
   if (import.meta.env.DEV) {
     const backendURL = import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:2718";
-    // #region agent log
-    fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'config.ts:getBaseURI',message:'getBaseURI called (dev mode)',data:{backendURL,envBackendURL:import.meta.env.VITE_BACKEND_URL},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-    // #endregion
     return backendURL;
   }
   
@@ -21,9 +18,6 @@ function getBaseURI(): string {
   url.search = "";
   url.hash = "";
   const baseURI = url.toString();
-  // #region agent log
-  fetch('http://127.0.0.1:7244/ingest/b3cb3916-18b2-4b82-87da-2ae197889a79',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'config.ts:getBaseURI',message:'getBaseURI called (production)',data:{baseURI,windowLocation:window.location.href},timestamp:Date.now(),sessionId:'debug-session',runId:'post-fix',hypothesisId:'A'})}).catch(()=>{});
-  // #endregion
   return baseURI;
 }
 

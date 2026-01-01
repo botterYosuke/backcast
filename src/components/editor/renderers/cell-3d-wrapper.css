@@ -91,6 +91,21 @@
   color: white;
 }
 
+/* タイトルバー内のToolbarItemのスタイル調整 */
+.titlebar-buttons button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.titlebar-buttons button > svg {
+  width: 14px;
+  height: 14px;
+}
+
 /* ウィンドウコンテンツ */
 .window-content {
   flex: 1;

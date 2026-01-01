@@ -9,7 +9,8 @@ import type { Theme } from "@/theme/useTheme";
 import { CellDragManager } from "@/core/three/cell-drag-manager";
 import { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import * as THREE from "three";
-import { useCellData } from "@/core/cells/cells";
+import { useCellData, useCellIds } from "@/core/cells/cells";
+import { displayCellName } from "@/core/cells/names";
 import { cn } from "@/utils/cn";
 import "./cell-3d-wrapper.css";
 
@@ -54,8 +55,9 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
 }) => {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const cellData = useCellData(cellId);
-  // セル名が "_" の場合はセルIDを表示
-  const cellName = (cellData?.name && cellData.name !== "_") ? cellData.name : cellId;
+  const cellIds = useCellIds();
+  const cellIndex = cellIds.inOrderIds.indexOf(cellId);
+  const cellName = displayCellName(cellData?.name ?? "_", cellIndex);
   const [isDragging, setIsDragging] = useState(false);
 
   // タイトルバーのドラッグ開始処理

@@ -99,6 +99,19 @@
   position: relative;
 }
 
+/* 3Dモードのフローティングウィンドウ内のoutputを非表示 */
+.cell-3d-wrapper .window-content [data-cell-role="output"],
+.cell-3d-wrapper .window-content .output-area,
+.cell-3d-wrapper .output-area {
+  display: none !important;
+}
+
+/* outputを囲んでいる.relative要素とconsole出力の.relative.group要素も非表示 */
+.cell-3d-wrapper .marimo-cell > .relative:has(.output-area),
+.cell-3d-wrapper .marimo-cell > .relative.group {
+  display: none !important;
+}
+
 /* セルコンテナのスタイル調整 */
 .cells-3d-container-inner {
   position: relative;

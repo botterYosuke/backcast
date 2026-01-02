@@ -37,6 +37,23 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
         />
       </div>
       <div className="flex flex-row items-center gap-2">
+        <Label htmlFor="rows">Rows</Label>
+        <NumberField
+          data-testid="grid-3d-rows-input"
+          id="rows"
+          value={config.rows}
+          className="w-[60px]"
+          placeholder="# of Rows"
+          minValue={1}
+          onChange={(valueAsNumber) => {
+            setConfig({
+              ...config,
+              rows: Number.isNaN(valueAsNumber) ? undefined : valueAsNumber,
+            });
+          }}
+        />
+      </div>
+      <div className="flex flex-row items-center gap-2">
         <Label htmlFor="rowHeight">Row Height (px)</Label>
         <NumberField
           data-testid="grid-3d-row-height-input"

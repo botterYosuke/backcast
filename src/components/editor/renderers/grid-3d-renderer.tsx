@@ -1,12 +1,13 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 
 import { createPortal } from "react-dom";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import * as THREE from "three";
 import { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import { SceneManager } from "@/core/three/scene-manager";
 import { Grid3DLayoutRenderer } from "./3d-layout/grid-3d-layout-renderer";
 import type { GridLayout } from "./grid-layout/types";
+import type { Grid3DConfig } from "./3d-layout/types";
 import type { AppConfig, UserConfig } from "@/core/config/config-schema";
 import type { AppMode } from "@/core/mode";
 import type { CellData, CellRuntimeState } from "@/core/cells/types";
@@ -20,6 +21,7 @@ interface Grid3DRendererProps {
   layout: GridLayout;
   setLayout: (layout: GridLayout) => void;
   cells: (CellRuntimeState & CellData)[];
+  grid3DConfig?: Grid3DConfig;
 }
 
 /**
@@ -38,6 +40,7 @@ export const Grid3DRenderer: React.FC<Grid3DRendererProps> = ({
   layout,
   setLayout,
   cells,
+  grid3DConfig,
 }) => {
   const [gridContainer, setGridContainer] = useState<HTMLDivElement | null>(null);
 
@@ -83,6 +86,7 @@ export const Grid3DRenderer: React.FC<Grid3DRendererProps> = ({
       cells={cells}
       layout={layout}
       setLayout={setLayout}
+      grid3DConfig={grid3DConfig}
     />,
     gridContainer,
   );

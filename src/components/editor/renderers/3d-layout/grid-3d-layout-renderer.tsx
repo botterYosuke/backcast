@@ -11,6 +11,7 @@ import { OutputArea } from "@/components/editor/Output";
 import type { CellRuntimeState } from "@/core/cells/types";
 import type { ICellRendererProps } from "../types";
 import type { GridLayout, GridLayoutCellSide } from "../grid-layout/types";
+import type { Grid3DConfig } from "./types";
 
 import "react-grid-layout/css/styles.css";
 import "../grid-layout/styles.css";
@@ -40,7 +41,9 @@ import { cn } from "@/utils/cn";
 import { Maps } from "@/utils/maps";
 import { Objects } from "@/utils/objects";
 
-type Props = ICellRendererProps<GridLayout>;
+type Props = ICellRendererProps<GridLayout> & {
+  grid3DConfig?: Grid3DConfig;
+};
 
 const ReactGridLayout = WidthProvider(Responsive);
 
@@ -60,6 +63,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   setLayout,
   cells,
   mode,
+  grid3DConfig,
 }) => {
   const isReading = mode === "read";
   const inGridIds = new Set(layout.cells.map((cell) => cell.i));
@@ -134,6 +138,12 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   if (layout.maxWidth) {
     styles.maxWidth = `${layout.maxWidth}px`;
   }
+  // Height styles (based on rows setting - fixed height, not maxHeight)
+  if (grid3DConfig?.rows !== undefined) {
+    const height = grid3DConfig.rows * layout.rowHeight;
+    styles.height = `${height}px`;
+    styles.overflowY = "hidden";
+  }
   // Editing background styles
   if (enableInteractions) {
     styles.backgroundImage =
@@ -149,6 +159,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       }}
       style={styles}
       cols={cols}
+      {...(grid3DConfig?.rows !== undefined && { maxRows: grid3DConfig.rows })}
       allowOverlap={false}
       className={cn(
         "w-full mx-auto bg-background flex-1 min-h-full",
@@ -165,12 +176,26 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       compactType={null}
       preventCollision={true}
       rowHeight={layout.rowHeight}
-      onLayoutChange={(cellLayouts) =>
+      onLayoutChange={(cellLayouts) => {
+        // Clamp cells to maxRows if rows is set
+        let adjustedCells = cellLayouts;
+        if (grid3DConfig?.rows !== undefined) {
+          adjustedCells = cellLayouts.map(cell => {
+            const maxY = grid3DConfig.rows! - 1;
+            const newY = Math.min(cell.y, maxY);
+            const newH = Math.min(cell.h, grid3DConfig.rows! - newY);
+            if (newY !== cell.y || newH !== cell.h) {
+              return { ...cell, y: newY, h: newH };
+            }
+            return cell;
+          });
+        }
+        
         setLayout({
           ...layout,
-          cells: cellLayouts,
-        })
-      }
+          cells: adjustedCells,
+        });
+      }}
       droppingItem={
         droppingItem
           ? {
@@ -264,7 +289,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
         <div className="flex flex-1 flex-col items-center">
           <div
             style={styles}
-            className="bg-background flex-1 border-t border-x rounded-t shadow-sm w-full overflow-hidden"
+            className="bg-background flex-1 border rounded shadow-sm w-full overflow-hidden"
           >
             {grid}
           </div>
@@ -302,7 +327,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
     grid = (
       <div
         style={styles}
-        className="bg-background border-t border-x rounded-t shadow-sm w-full mx-auto mt-4 h-[calc(100%-1rem)] overflow-hidden"
+        className="bg-background border rounded shadow-sm w-full mx-auto mt-4 h-[calc(100%-1rem)] overflow-hidden"
       >
         <div className="h-full overflow-auto">{grid}</div>
       </div>

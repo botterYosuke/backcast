@@ -4,7 +4,7 @@ import { usePrevious } from "@dnd-kit/utilities";
 import { TooltipProvider } from "@radix-ui/react-tooltip";
 import { useAtomValue, useSetAtom } from "jotai";
 import * as THREE from "three";
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { Controls } from "@/components/editor/controls/Controls";
 import { AppHeader } from "@/components/editor/header/app-header";
 import { FilenameForm } from "@/components/editor/header/filename-form";
@@ -414,6 +414,7 @@ export const EditApp: React.FC<AppProps> = ({
                     })()}
                     setLayout={setGridLayout}
                     cells={cells}
+                    grid3DConfig={grid3DConfig}
                   />
                 </>
               ) : null}

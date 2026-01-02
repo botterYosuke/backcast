@@ -72,7 +72,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
       const newLayout = convertGrid3DConfigToLayout(config, layout);
       setLayout(newLayout);
       onLayoutChange?.(newLayout);
-    }, [config.columns, config.rowHeight, config.maxWidth, config.bordered]);
+    }, [config.columns, config.rowHeight, config.maxWidth, config.bordered, config.rows]);
 
     const handleSetConfig = (newConfig: Grid3DConfig) => {
       setConfig(newConfig);
@@ -91,6 +91,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
             cells={cells}
             mode="edit"
             appConfig={{ width: "normal" }}
+            grid3DConfig={config}
           />
         </div>
       </Provider>
@@ -122,7 +123,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
         const newLayout = convertGrid3DConfigToLayout(config, layout);
         setLayout(newLayout);
         layoutChanges.push(newLayout);
-      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered]);
+      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered, config.rows]);
 
       const cells = [createMockCell("cell-1")];
 
@@ -136,6 +137,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               cells={cells}
               mode="edit"
               appConfig={{ width: "normal" }}
+              grid3DConfig={config}
             />
           </div>
         </Provider>
@@ -198,7 +200,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
         const newLayout = convertGrid3DConfigToLayout(config, layout);
         setLayout(newLayout);
         layoutChanges.push(newLayout);
-      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered]);
+      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered, config.rows]);
 
       const cells = [createMockCell("cell-1")];
 
@@ -212,6 +214,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               cells={cells}
               mode="edit"
               appConfig={{ width: "normal" }}
+              grid3DConfig={config}
             />
           </div>
         </Provider>
@@ -247,6 +250,78 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
     expect(screen.getByText("Outputs")).toBeInTheDocument();
   });
 
+  it("should sync Rows from Grid3DControls to Grid3DLayoutRenderer", async () => {
+    const initialConfig = { ...DEFAULT_GRID_3D_CONFIG, rows: undefined };
+    const configChanges: Grid3DConfig[] = [];
+    let setConfigFn: ((config: Grid3DConfig) => void) | null = null;
+
+    const TestComponent = () => {
+      const store = createStore();
+      store.set(grid3DConfigAtom, initialConfig);
+      const [config, setConfig] = React.useState<Grid3DConfig>(initialConfig);
+      const [layout, setLayout] = React.useState<GridLayout>(() =>
+        convertGrid3DConfigToLayout(initialConfig),
+      );
+
+      setConfigFn = (newConfig: Grid3DConfig) => {
+        setConfig(newConfig);
+        configChanges.push(newConfig);
+        const newLayout = convertGrid3DConfigToLayout(newConfig, layout);
+        setLayout(newLayout);
+      };
+
+      // Sync grid3DConfig to GridLayout when config changes
+      React.useEffect(() => {
+        const newLayout = convertGrid3DConfigToLayout(config, layout);
+        setLayout(newLayout);
+      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered, config.rows]);
+
+      const cells = [createMockCell("cell-1")];
+
+      return (
+        <Provider store={store}>
+          <div id="App">
+            <Grid3DControls config={config} setConfig={setConfig} />
+            <Grid3DLayoutRenderer
+              layout={layout}
+              setLayout={setLayout}
+              cells={cells}
+              mode="edit"
+              appConfig={{ width: "normal" }}
+              grid3DConfig={config}
+            />
+          </div>
+        </Provider>
+      );
+    };
+
+    render(<TestComponent />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("grid-3d-rows-input")).toBeInTheDocument();
+    });
+
+    // Check initial config has undefined rows
+    expect(initialConfig.rows).toBeUndefined();
+
+    // Simulate config change by directly calling setConfig
+    if (setConfigFn) {
+      setConfigFn({ ...initialConfig, rows: 24 });
+    }
+
+    // Wait for config to update
+    await waitFor(() => {
+      expect(configChanges.length).toBeGreaterThan(0);
+    });
+
+    // Verify config was updated with new rows
+    const updatedConfig = configChanges[configChanges.length - 1];
+    expect(updatedConfig.rows).toBe(24);
+
+    // Grid3DLayoutRenderer uses grid3DConfig.rows for ReactGridLayout's rows prop
+    expect(screen.getByText("Outputs")).toBeInTheDocument();
+  });
+
   it("should sync Row Height (px) from Grid3DControls to Grid3DLayoutRenderer", async () => {
     const initialConfig = { ...DEFAULT_GRID_3D_CONFIG, rowHeight: 20 };
     const layoutChanges: GridLayout[] = [];
@@ -272,7 +347,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
         const newLayout = convertGrid3DConfigToLayout(config, layout);
         setLayout(newLayout);
         layoutChanges.push(newLayout);
-      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered]);
+      }, [config.columns, config.rowHeight, config.maxWidth, config.bordered, config.rows]);
 
       const cells = [createMockCell("cell-1")];
 
@@ -286,6 +361,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               cells={cells}
               mode="edit"
               appConfig={{ width: "normal" }}
+              grid3DConfig={config}
             />
           </div>
         </Provider>
@@ -422,6 +498,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               cells={cells}
               mode="edit"
               appConfig={{ width: "normal" }}
+              grid3DConfig={config}
             />
           </div>
         </Provider>

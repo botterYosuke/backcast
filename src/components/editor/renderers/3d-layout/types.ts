@@ -8,6 +8,8 @@ export interface Grid3DConfig {
   // 既存の設定項目（GridLayoutから）
   /** 列数 */
   columns: number;
+  /** 行数 */
+  rows?: number;
   /** 行の高さ（px） */
   rowHeight: number;
   /** 最大幅（px） */
@@ -36,6 +38,7 @@ export interface Grid3DConfig {
 export const DEFAULT_GRID_3D_CONFIG: Grid3DConfig = {
   // 既存の設定項目のデフォルト値
   columns: 12,
+  rows: undefined,
   rowHeight: 20,
   maxWidth: undefined,
   bordered: false,

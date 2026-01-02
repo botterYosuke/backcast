@@ -1,0 +1,294 @@
+---
+alwaysApply: true
+---
+# Task Execution Rules
+
+> **このファイルの役割**: 1タスクをどう解釈し、どう進め、どこで止まるかをAIに厳密に定義する
+
+---
+
+## 1. Task Interpretation（タスクの解釈）
+
+### 1.1 タスクの定義
+
+- Each task must be treated as an **isolated, well-defined unit of work**.
+- タスクは独立した作業単位として扱い、他のタスクに依存しない範囲で完結させること
+- タスクの境界を明確にし、範囲外の作業を行わないこと
+
+### 1.2 実装開始前の必須確認事項
+
+実装を開始する前に、以下を**必ず明確にすること**：
+
+- **The task goal**: タスクの目的・ゴール
+- **The expected output**: 期待される出力・成果物
+- **The completion criteria**: 完了条件・成功基準
+- **Task scope boundaries**: タスクの範囲と境界（何を含み、何を含まないか）
+
+### 1.3 不明確な点への対応
+
+以下のいずれかが不明確な場合、**実装を開始せず、必ず停止して確認を求めること**：
+
+- タスクの目的が曖昧
+- 期待される出力が不明確
+- 完了条件が定義されていない
+- タスクの範囲が不明確（どこまで実装すべきか不明）
+
+**停止時の対応**：
+- 不明確な点を具体的に列挙する
+- ユーザーに確認を求める
+- 推測や憶測で実装を進めない
+
+### 1.4 禁止事項
+
+- **Never infer missing requirements**: 不足している要件を推測して実装しない
+- **Never assume task scope**: タスクの範囲を推測して拡張しない
+- **Never proceed with ambiguity**: 曖昧な点があっても進めない
+
+---
+
+## 2. Mandatory Context References（必須の文脈参照）
+
+### 2.1 実装前の必須ドキュメント確認
+
+タスクを実行する前に、**必ず以下のドキュメントを読み、内容を理解すること**：
+
+- `docs/project_specification.md`: プロジェクト仕様書（最高優先度）
+- `docs/quality_guidelines.md`: 品質ガイドライン（受入基準の定義）
+- タスク固有のマークダウンファイル（明示的に提供された場合）
+
+### 2.2 ドキュメントが存在しない場合
+
+- ドキュメントが存在しない場合、**実装を開始せず、ユーザーに確認を求めること**
+- ドキュメントの内容が不明確な場合、推測せずに確認を求めること
+
+### 2.3 ドキュメント間の矛盾
+
+ドキュメント間に矛盾がある場合、以下の優先順位に従う：
+
+1. **project_specification.md** が最高優先度
+2. **quality_guidelines.md** が受入基準を定義
+3. **タスク記述** はスコープの精緻化のみ
+
+---
+
+## 3. Execution Constraints（実行制約）
+
+### 3.1 変更範囲の制約
+
+- **Only modify files that are necessary to complete the task**: タスク完了に必要なファイルのみを変更する
+- **Do not refactor unrelated code**: 関連のないコードをリファクタリングしない
+- **Do not introduce new dependencies unless explicitly instructed**: 明示的に指示されない限り、新しい依存関係を導入しない
+- **Do not remove existing functionality unless the task explicitly requires it**: タスクが明示的に要求しない限り、既存機能を削除しない
+
+### 3.2 変更の追跡可能性
+
+- すべての変更は、タスク要件に直接トレース可能でなければならない
+- 変更の理由を説明できない場合は、その変更を行わないこと
+
+---
+
+## 4. Incremental Change Policy（増分変更ポリシー）
+
+### 4.1 変更の単位
+
+- **Make changes in small, logically grouped steps**: 小さく、論理的にグループ化されたステップで変更を行う
+- **Each change must be directly traceable to the task requirements**: 各変更はタスク要件に直接トレース可能でなければならない
+- **Avoid large, multi-purpose commits or edits**: 大規模な、複数目的のコミットや編集を避ける
+
+### 4.2 変更の検証
+
+- 各ステップの変更後、可能な限り動作確認を行う
+- 問題が発生した場合、そのステップで停止し、修正してから次に進む
+
+---
+
+## 5. Quality Enforcement（品質強制）
+
+### 5.1 品質基準
+
+すべてのタスク出力は、以下を満たさなければならない：
+
+- **Code follows existing project conventions and patterns**: コードは既存のプロジェクト規約とパターンに従う
+- **No linting errors or obvious code smells are introduced**: リンターエラーや明らかなコードスメルを導入しない
+- **Error handling is explicit and intentional**: エラーハンドリングは明示的かつ意図的である
+- **The implementation complies with docs/quality_guidelines.md**: 実装は品質ガイドラインに準拠する
+
+### 5.2 品質要件が満たせない場合
+
+品質要件を満たせない場合、**実装を停止し、以下を報告すること**：
+
+- **Stop and explain why**: 停止し、理由を説明する
+- **Identify the specific quality issue**: 具体的な品質問題を特定する
+- **Propose alternatives or request guidance**: 代替案を提案するか、ガイダンスを求める
+- **Do not proceed with low-quality code**: 低品質なコードで進めない
+
+---
+
+## 6. Verification Before Completion（完了前の検証）
+
+### 6.1 完了宣言前の必須確認
+
+タスクを完了と宣言する前に、**必ず以下を確認すること**：
+
+- **Verify that all task requirements are implemented**: すべてのタスク要件が実装されていることを確認
+- **Confirm that no unrelated files were modified**: 関連のないファイルが変更されていないことを確認
+- **State any assumptions made explicitly**: 行った仮定を明示的に述べる
+- **Identify any known limitations or follow-up work**: 既知の制限事項やフォローアップ作業を特定
+
+### 6.2 検証失敗時の対応
+
+検証で問題が発見された場合：
+
+- **Do not declare completion**: 完了を宣言しない
+- **Fix the issues**: 問題を修正する
+- **Re-verify**: 再検証を行う
+- **Repeat until all checks pass**: すべてのチェックがパスするまで繰り返す
+
+---
+
+## 7. Post-Implementation Verification（実装後の検証）
+
+### 7.1 検証の必須性
+
+**MANDATORY**: タスクを実装した後、**必ず動作をテストで検証すること**。
+
+- **Do not assume correctness without verification**: 検証なしに正しさを仮定しない
+- **Verification must cover the specific changes made in the task**: 検証はタスクで行った具体的な変更をカバーしなければならない
+
+### 7.2 検証要件
+
+検証は変更に適切で、以下を含む場合がある：
+
+- **Existing automated test execution**: 既存の自動テストを実行してリグレッションがないことを確認
+- **New or updated tests**: 該当する場合（特に新機能）、新しいテストを作成または既存テストを更新
+- **Manual verification steps**: 自動化が利用できない場合、手動検証を実行
+
+### 7.3 Backcast/Marimoプロジェクト向け検証方法
+
+このアプリケーションのインタラクティブな性質を考慮し、検証には以下を含めること：
+
+- **Cell execution**: Pythonセルが正しく実行され、期待される出力を生成することを確認
+- **State transitions**: アプリケーション状態（Gridモード、3Dモード、編集モード）の遷移が正しく動作することを確認
+- **UI rendering**: UIコンポーネントが正しくレンダリングされ、ユーザー操作に応答することを確認
+- **Mode switching**: Gridモードと3Dモードの切り替えがシームレスに動作することを確認
+- **Backend integration**: フロントエンドとバックエンドの通信（WebSocket、API呼び出し）が正しく動作することを確認
+
+### 7.4 テストが実行できない場合
+
+テストが実行できない場合、**必ず以下を報告すること**：
+
+- **Explicitly state why execution was not possible**: 実行が不可能だった理由を明示的に述べる（例：依存関係の不足、サーバーが起動していない、環境の問題）
+- **Describe the verification method used instead**: 代わりに使用した検証方法を説明する（例：手動テスト、コードレビュー、静的解析）
+- **Identify remaining risks**: 残存リスクを特定し、追加の検証が必要な内容を明示する
+
+### 7.5 完了条件
+
+**検証が実行され、報告されるまで、タスクを完了と宣言してはならない。**
+
+完了レポート（Section 8）には以下を含めること：
+- 実行した検証の内容
+- テスト結果（合格/不合格）または検証結果
+- 検証中に発見された問題
+- 残存リスクや制限事項
+
+### 7.6 検証失敗時の対応
+
+検証で問題が発見された場合：
+
+- **Do not declare completion**: 完了を宣言しない
+- **Fix the issues**: 問題を修正する
+- **Re-verify**: 再検証を行う
+- **If issues cannot be fixed immediately**: 問題を即座に修正できない場合、以下を報告する：
+  - 問題の詳細
+  - 修正に必要な追加情報やリソース
+  - 暫定的な回避策（存在する場合）
+  - ユーザーへの確認事項
+
+---
+
+## 8. Completion Protocol（完了プロトコル）
+
+### 8.1 完了宣言の条件
+
+タスクを完了と宣言するには、以下が**すべて満たされている必要がある**：
+
+- Section 6（完了前の検証）のすべてのステップが満たされている
+- Section 7（実装後の検証）が実行され、報告されている
+- すべての品質要件（Section 5）が満たされている
+- タスクのすべての要件（Section 1.2）が実装されている
+
+### 8.2 完了レポートの必須内容
+
+タスクを完了する際、**必ず以下をプレーンテキストで出力すること**：
+
+- **Summary of changes**: 実装した内容の要約
+- **Files modified**: 変更したファイルのリスト
+- **How the task requirements were satisfied**: 要件から実装へのマッピング
+- **Post-implementation verification results**: 実装後の検証結果
+  - 実行した検証の内容（実行したテスト、手動チェックなど）
+  - テスト結果または検証結果
+  - 検証中に発見された問題
+- **Any open questions or risks**: 既知の制限事項、フォローアップ作業、またはリスク
+
+### 8.3 完了を宣言できない場合
+
+以下のいずれかに該当する場合、**完了を宣言してはならない**：
+
+- 検証が実行されていない、または失敗している
+- 品質要件が満たされていない
+- タスク要件が完全に実装されていない
+- 不明確な点が残っている
+
+この場合、**現状を報告し、完了に必要な追加作業や確認事項を明示すること**。
+
+---
+
+## 9. Prohibited Behaviors（禁止行為）
+
+### 9.1 推測の禁止
+
+以下を推測して実装してはならない：
+
+- **Guess undocumented APIs, functions, or file paths**: 文書化されていないAPI、関数、またはファイルパスを推測しない
+- **Infer missing requirements**: 不足している要件を推測しない
+- **Assume task scope**: タスクの範囲を推測しない
+
+### 9.2 実装の透明性
+
+- **Generate placeholder implementations without disclosure**: プレースホルダー実装を開示せずに生成しない
+- **Silently skip requirements**: 要件を黙ってスキップしない
+- **Hide limitations or issues**: 制限事項や問題を隠さない
+
+### 9.3 スコープの遵守
+
+- **Optimize or redesign beyond the task scope**: タスクスコープを超えて最適化や再設計を行わない
+- **Add features not requested**: 要求されていない機能を追加しない
+- **Refactor unrelated code**: 関連のないコードをリファクタリングしない
+
+---
+
+## 10. Stop Conditions（停止条件）
+
+### 10.1 必須停止条件
+
+以下のいずれかの条件が満たされた場合、**必ず実装を停止すること**：
+
+1. **タスク要件が不明確**: Section 1.3に該当する場合
+2. **必須ドキュメントが存在しない**: Section 2.2に該当する場合
+3. **品質要件が満たせない**: Section 5.2に該当する場合
+4. **検証が失敗し、修正できない**: Section 7.6に該当する場合
+5. **タスク完了条件が満たされない**: Section 8.3に該当する場合
+
+### 10.2 停止時の報告
+
+停止する際、**必ず以下を報告すること**：
+
+- **Reason for stopping**: 停止理由
+- **Current state**: 現在の状態
+- **What was completed**: 完了した内容
+- **What remains**: 残っている作業
+- **What is needed to proceed**: 進めるために必要なもの（情報、リソース、確認事項など）
+
+### 10.3 停止後の対応
+
+停止後、ユーザーからの指示を待つこと。推測で実装を再開しないこと。

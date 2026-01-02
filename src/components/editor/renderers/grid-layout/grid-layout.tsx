@@ -39,8 +39,6 @@ import { Switch } from "@/components/ui/switch";
 import { outputIsLoading } from "@/core/cells/cell";
 import type { CellId } from "@/core/cells/ids";
 import type { AppMode } from "@/core/mode";
-import { is3DModeAtom } from "@/core/mode";
-import { useAtomValue } from "jotai";
 import { useIsDragging } from "@/hooks/useIsDragging";
 import { cn } from "@/utils/cn";
 import { Maps } from "@/utils/maps";
@@ -61,7 +59,6 @@ export const GridLayoutRenderer: React.FC<Props> = ({
   mode,
 }) => {
   const isReading = mode === "read";
-  const is3DMode = useAtomValue(is3DModeAtom);
   const inGridIds = new Set(layout.cells.map((cell) => cell.i));
   const [droppingItem, setDroppingItem] = useState<{
     i: string;
@@ -387,7 +384,6 @@ const GridCell = memo(
     className,
   }: GridCellProps) => {
     const loading = outputIsLoading(status);
-    const is3DMode = useAtomValue(is3DModeAtom);
 
     const isOutputEmpty = output == null || output.data === "";
     // If not reading, show code when there is no output
@@ -409,7 +405,7 @@ const GridCell = memo(
         )}
       >
         <OutputArea
-          allowExpand={is3DMode}
+          allowExpand={false}
           output={output}
           cellId={cellId}
           stale={loading}

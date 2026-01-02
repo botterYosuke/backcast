@@ -55,6 +55,8 @@ import { useLayoutState, useLayoutActions } from "./layout/layout";
 import { GridLayoutPlugin } from "../components/editor/renderers/grid-layout/plugin";
 import type { GridLayout } from "../components/editor/renderers/grid-layout/types";
 import { Grid3DRenderer } from "../components/editor/renderers/grid-3d-renderer";
+import { Grid3DControls } from "../components/editor/renderers/3d-layout/grid-3d-controls";
+import { grid3DConfigAtom } from "./three/grid-3d-config";
 
 interface AppProps {
   /**
@@ -113,6 +115,10 @@ export const EditApp: React.FC<AppProps> = ({
   const cell3DView = useAtomValue(cell3DViewAtom);
   const setCell3DView = useSetAtom(cell3DViewAtom);
   const hasRestoredViewRef = useRef(false); // 視点復元済みフラグ
+
+  // 3Dモード用のグリッド設定
+  const grid3DConfig = useAtomValue(grid3DConfigAtom);
+  const setGrid3DConfig = useSetAtom(grid3DConfigAtom);
 
   // Initialize RuntimeState event-listeners
   useEffect(() => {
@@ -337,6 +343,8 @@ export const EditApp: React.FC<AppProps> = ({
         {/* 3D表示モード */}
         {is3DMode ? (
           <>
+            {/* 3Dモード用のグリッドコントロール */}
+            <Grid3DControls config={grid3DConfig} setConfig={setGrid3DConfig} />
             {/* アラートとバナーは通常の2D表示として表示 */}
             <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4 relative z-50">
               <PackageAlert />

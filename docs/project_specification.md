@@ -345,6 +345,9 @@ backcast/
 - `src/core/mode.ts`: アプリケーションモード管理（read/edit/present）
 - `src/core/three/`: 3D関連のコアロジック
 - `src/components/editor/renderers/`: レンダラー（Grid/3D）
+  - `grid-layout/`: Gridモード用レンダラー
+  - `3d-layout/`: 3Dモード専用レンダラー（`Grid3DLayoutRenderer`、`Grid3DControls`）
+  - `grid-3d-renderer.tsx`: 3Dモード用グリッドレンダラー
 - `vite.config.mts`: Vite設定
 - `package.json`: 依存関係とスクリプト
 
@@ -382,7 +385,7 @@ pnpm typecheck
 pnpm lint
 
 # ユニットテスト（Vitest）
-cd frontend && pnpm test src/path/to/file.test.ts
+pnpm test src/path/to/file.test.ts
 ```
 
 ---

@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import * as THREE from "three";
 import { CellCSS2DService } from "@/core/three/cell-css2d-service";
 import { SceneManager } from "@/core/three/scene-manager";
-import { GridLayoutRenderer } from "./grid-layout/grid-layout";
+import { Grid3DLayoutRenderer } from "./3d-layout/grid-3d-layout-renderer";
 import type { GridLayout } from "./grid-layout/types";
 import type { AppConfig, UserConfig } from "@/core/config/config-schema";
 import type { AppMode } from "@/core/mode";
@@ -26,9 +26,9 @@ interface Grid3DRendererProps {
  * Grid3DRenderer
  *
  * Gridレイアウトを3D空間に配置するコンポーネント
- * - GridLayoutRendererをCSS2DRendererで表示
+ * - Grid3DLayoutRendererをCSS2DRendererで表示
  * - 1つのCSS2DObjectとしてGrid全体を表示
- * - セルを追加するロジックは含めない（GridLayoutRendererが内部で処理）
+ * - セルを追加するロジックは含めない（Grid3DLayoutRendererが内部で処理）
  */
 export const Grid3DRenderer: React.FC<Grid3DRendererProps> = ({
   mode,
@@ -75,9 +75,9 @@ export const Grid3DRenderer: React.FC<Grid3DRendererProps> = ({
     return null;
   }
 
-  // GridLayoutRendererをCSS2Dコンテナ内にレンダリング
+  // Grid3DLayoutRendererをCSS2Dコンテナ内にレンダリング
   return createPortal(
-    <GridLayoutRenderer
+    <Grid3DLayoutRenderer
       appConfig={appConfig}
       mode={mode}
       cells={cells}

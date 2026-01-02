@@ -4,15 +4,15 @@ overview: "`GridLayoutRenderer`をベースに、3Dモード専用の`Grid3DLayo
 todos:
   - id: create-grid-3d-layout-renderer
     content: src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsxを作成し、GridLayoutRendererをベースにGrid3DLayoutRendererを実装（GridControlsを除外、isLockedは保持）
-    status: pending
+    status: completed
   - id: update-grid-3d-renderer
     content: src/components/editor/renderers/grid-3d-renderer.tsxを更新し、GridLayoutRendererの代わりにGrid3DLayoutRendererを使用
-    status: pending
+    status: completed
     dependencies:
       - create-grid-3d-layout-renderer
   - id: create-test-file
     content: src/components/editor/renderers/3d-layout/__tests__/grid-3d-layout-renderer.test.tsxを作成し、GridControlsが表示されないことを確認するテストを追加
-    status: pending
+    status: completed
     dependencies:
       - create-grid-3d-layout-renderer
 ---

@@ -321,7 +321,7 @@ pnpm lint
 
 # ユニットテスト（Vitest）
 # 個別ファイルのテスト実行
-cd frontend && pnpm test src/path/to/file.test.ts
+pnpm test src/path/to/file.test.ts
 
 # すべてのテスト実行
 pnpm test

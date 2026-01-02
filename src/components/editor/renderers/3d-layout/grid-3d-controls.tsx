@@ -17,7 +17,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
   setConfig,
 }) => {
   return (
-    <div className="flex flex-row absolute pl-5 top-8 gap-4 w-full justify-end pr-[350px] pb-3 border-b z-50">
+    <div className="flex flex-row absolute left-0 right-[350px] top-8 gap-4 px-5 pb-3 border-b z-50 overflow-x-auto">
       {/* 既存の設定項目 */}
       <div className="flex flex-row items-center gap-2">
         <Label htmlFor="columns">Columns</Label>

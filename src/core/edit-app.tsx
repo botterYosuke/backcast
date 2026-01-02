@@ -57,6 +57,7 @@ import type { GridLayout } from "../components/editor/renderers/grid-layout/type
 import { Grid3DRenderer } from "../components/editor/renderers/grid-3d-renderer";
 import { Grid3DControls } from "../components/editor/renderers/3d-layout/grid-3d-controls";
 import { grid3DConfigAtom } from "./three/grid-3d-config";
+import { convertGrid3DConfigToLayout } from "../components/editor/renderers/3d-layout/utils";
 
 interface AppProps {
   /**
@@ -101,8 +102,33 @@ export const EditApp: React.FC<AppProps> = ({
   const cells = flattenTopLevelNotebookCells(notebook);
   
   // GridLayoutRenderer用のsetLayoutラッパー
+  // 3Dモードでは、セル配置情報のみを保存し、設定値（columns, rowHeight, maxWidth, bordered）は
+  // grid3DConfigAtomに保存されるため、ここでは保存しない
   const setGridLayout = (layout: GridLayout) => {
-    setLayoutData({ layoutView: "grid", data: layout });
+    const currentGrid = layoutState.layoutData.grid as GridLayout | undefined;
+    
+    // セル配置情報のみを抽出
+    const cellLayoutData: Partial<GridLayout> = {
+      cells: layout.cells,
+      scrollableCells: layout.scrollableCells,
+      cellSide: layout.cellSide,
+    };
+    
+    if (currentGrid) {
+      // 既存のGridLayoutがある場合、セル配置情報のみを更新
+      // 設定値はgrid3DConfigAtomから取得するため、ここでは保持
+      setLayoutData({
+        layoutView: "grid",
+        data: {
+          ...currentGrid,
+          ...cellLayoutData,
+        },
+      });
+    } else {
+      // 初期化時は、grid3DConfigAtomから生成した設定値も含める
+      // ただし、将来的にはgrid3DConfigAtomを優先する方針
+      setLayoutData({ layoutView: "grid", data: layout });
+    }
   };
 
   // 3D表示用の状態管理
@@ -380,10 +406,12 @@ export const EditApp: React.FC<AppProps> = ({
                     appConfig={appConfig}
                     sceneManager={sceneManagerRef.current}
                     css2DService={css2DServiceRef.current}
-                    layout={
-                      (layoutState.layoutData.grid as GridLayout) ||
-                      GridLayoutPlugin.getInitialLayout(cells)
-                    }
+                    layout={(() => {
+                      // grid3DConfigAtomから設定値を取得し、layoutState.layoutData.gridのセル配置情報とマージ
+                      const baseLayout = (layoutState.layoutData.grid as GridLayout) ||
+                        GridLayoutPlugin.getInitialLayout(cells);
+                      return convertGrid3DConfigToLayout(grid3DConfig, baseLayout);
+                    })()}
                     setLayout={setGridLayout}
                     cells={cells}
                   />

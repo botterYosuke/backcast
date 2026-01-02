@@ -26,11 +26,6 @@ describe("Grid3DControls", () => {
     expect(screen.getByTestId("grid-3d-max-width-input")).toBeInTheDocument();
     expect(screen.getByTestId("grid-3d-bordered-switch")).toBeInTheDocument();
     expect(screen.getByTestId("grid-3d-lock-switch")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-spacing-x-input")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-spacing-z-input")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-spacing-y-input")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-opacity-input")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-snap-switch")).toBeInTheDocument();
   });
 
   // Note: NumberFieldのonChangeテストは、react-aria-componentsの動作により
@@ -49,10 +44,6 @@ describe("Grid3DControls", () => {
     expect(screen.getByLabelText(/columns/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/row height/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/max width/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/grid spacing x/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/grid depth/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/grid height/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/grid opacity/i)).toBeInTheDocument();
   });
 
   it("should call setConfig when bordered switch changes", () => {
@@ -90,29 +81,10 @@ describe("Grid3DControls", () => {
     );
   });
 
-  it("should call setConfig when snapToGrid switch changes", () => {
-    const mockSetConfig = vi.fn();
-    render(
-      <Grid3DControls
-        config={DEFAULT_GRID_3D_CONFIG}
-        setConfig={mockSetConfig}
-      />
-    );
-
-    const switchElement = screen.getByRole("switch", { name: /snap to grid/i });
-    fireEvent.click(switchElement);
-    
-    expect(mockSetConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ snapToGrid: true })
-    );
-  });
-
   it("should display current config values", () => {
     const customConfig = {
       ...DEFAULT_GRID_3D_CONFIG,
       columns: 24,
-      spacingX: 500,
-      gridOpacity: 0.5,
       bordered: true,
     };
     const mockSetConfig = vi.fn();
@@ -124,8 +96,6 @@ describe("Grid3DControls", () => {
     // withinを使用して、このテストでレンダリングされた要素のみを対象にする
     const withinContainer = within(container);
     expect(withinContainer.getByTestId("grid-3d-columns-input")).toBeInTheDocument();
-    expect(withinContainer.getByTestId("grid-3d-spacing-x-input")).toBeInTheDocument();
-    expect(withinContainer.getByTestId("grid-3d-opacity-input")).toBeInTheDocument();
     expect(withinContainer.getByTestId("grid-3d-bordered-switch")).toBeInTheDocument();
   });
 });

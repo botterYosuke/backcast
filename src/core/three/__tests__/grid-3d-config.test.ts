@@ -22,27 +22,27 @@ describe("grid3DConfigAtom", () => {
   });
 
   it("should persist values to storage", () => {
-    const newConfig = { ...DEFAULT_GRID_3D_CONFIG, spacingX: 500 };
+    const newConfig = { ...DEFAULT_GRID_3D_CONFIG, columns: 24 };
     store.set(grid3DConfigAtom, newConfig);
 
     // ストレージから直接確認
     const stored = localStorage.getItem(KEY);
     expect(stored).toBeTruthy();
     const parsed = JSON.parse(stored!);
-    expect(parsed.spacingX).toBe(500);
+    expect(parsed.columns).toBe(24);
   });
 
   it("should load values from storage", () => {
     // ストレージに値を設定
-    const testConfig = { ...DEFAULT_GRID_3D_CONFIG, spacingX: 600, spacingZ: 400 };
+    const testConfig = { ...DEFAULT_GRID_3D_CONFIG, columns: 24, rowHeight: 30 };
     localStorage.setItem(KEY, JSON.stringify(testConfig));
 
     // ストレージに値が保存されていることを確認
     const stored = localStorage.getItem(KEY);
     expect(stored).toBeTruthy();
     const parsed = JSON.parse(stored!);
-    expect(parsed.spacingX).toBe(600);
-    expect(parsed.spacingZ).toBe(400);
+    expect(parsed.columns).toBe(24);
+    expect(parsed.rowHeight).toBe(30);
 
     // 注意: atomWithStorageの実際の読み込み動作は非同期のため、
     // このテストはストレージへの保存のみを検証します
@@ -73,11 +73,6 @@ describe("grid3DConfigAtom", () => {
       maxWidth: 1200,
       bordered: true,
       isLocked: true,
-      spacingX: 500,
-      spacingZ: 400,
-      spacingY: 100,
-      gridOpacity: 0.5,
-      snapToGrid: true,
     };
     store.set(grid3DConfigAtom, newConfig);
     const config = store.get(grid3DConfigAtom);

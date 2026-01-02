@@ -200,7 +200,7 @@ describe("EditApp Grid3DControls Integration", () => {
   it("should pass grid3DConfigAtom value to Grid3DControls", () => {
     const customConfig = {
       ...DEFAULT_GRID_3D_CONFIG,
-      spacingX: 500,
+      columns: 24,
     };
     store.set(grid3DConfigAtom, customConfig);
 
@@ -216,7 +216,6 @@ describe("EditApp Grid3DControls Integration", () => {
 
     // Grid3DControlsが表示されていることを確認
     expect(screen.getByTestId("grid-3d-columns-input")).toBeInTheDocument();
-    expect(screen.getByTestId("grid-3d-spacing-x-input")).toBeInTheDocument();
   });
 
   it("should hide Grid3DControls when in read mode even if is3DModeAtom is true", () => {

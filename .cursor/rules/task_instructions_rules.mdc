@@ -54,6 +54,7 @@ alwaysApply: true
 
 - `docs/project_specification.md`: プロジェクト仕様書（最高優先度）
 - `docs/quality_guidelines.md`: 品質ガイドライン（受入基準の定義）
+- `docs/testing_guide.md`: テスト手法ガイド（テスト実装・実行の基準）
 - タスク固有のマークダウンファイル（明示的に提供された場合）
 
 ### 2.2 ドキュメントが存在しない場合
@@ -67,7 +68,8 @@ alwaysApply: true
 
 1. **project_specification.md** が最高優先度
 2. **quality_guidelines.md** が受入基準を定義
-3. **タスク記述** はスコープの精緻化のみ
+3. **testing_guide.md** がテスト実装・実行の基準を定義
+4. **タスク記述** はスコープの精緻化のみ
 
 ---
 
@@ -163,6 +165,11 @@ alwaysApply: true
 - **New or updated tests**: 該当する場合（特に新機能）、新しいテストを作成または既存テストを更新
 - **Manual verification steps**: 自動化が利用できない場合、手動検証を実行
 
+**重要**: テストの実装・実行は、`docs/testing_guide.md`に記載されている手法・パターン・ベストプラクティスに従うこと。
+- テスト階層（ユニットテスト、コンポーネントテスト、統合テスト、E2Eテスト）を適切に選択
+- テスト実行コマンドは`testing_guide.md`に記載されたコマンドを使用
+- テストの書き方は`testing_guide.md`の実装例を参照
+
 ### 7.3 Backcast/Marimoプロジェクト向け検証方法
 
 このアプリケーションのインタラクティブな性質を考慮し、検証には以下を含めること：
@@ -172,6 +179,11 @@ alwaysApply: true
 - **UI rendering**: UIコンポーネントが正しくレンダリングされ、ユーザー操作に応答することを確認
 - **Mode switching**: Gridモードと3Dモードの切り替えがシームレスに動作することを確認
 - **Backend integration**: フロントエンドとバックエンドの通信（WebSocket、API呼び出し）が正しく動作することを確認
+
+**テスト手法の参照**: 上記の検証を実施する際は、`docs/testing_guide.md`の以下のセクションを参照すること：
+- Section 8「テスト実行プロセス」: 3段階デバッグプロセス（Backend → Frontend → E2E）の遵守
+- Section 4-7: 各テスト階層の実装方法と実行方法
+- Section 10「トラブルシューティング」: 問題発生時の対処法
 
 ### 7.4 テストが実行できない場合
 

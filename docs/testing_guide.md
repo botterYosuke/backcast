@@ -136,7 +136,11 @@ backcastプロジェクトでは、以下のテストピラミッドに基づい
 
 ### 3.2 テスト設定ファイル
 
-#### 3.2.1 グローバルセットアップ
+#### 3.2.1 Vitestの設定
+
+Vitestは`vite.config.mts`の設定を自動的に使用します。プロジェクトでは、Viteの設定ファイル（`vite.config.mts`）に含まれる設定がそのままテスト環境でも適用されます。
+
+#### 3.2.2 グローバルセットアップ
 
 `src/__tests__/setup.ts`でグローバルなテスト設定を行います：
 
@@ -157,12 +161,26 @@ afterEach(() => {
 });
 ```
 
-#### 3.2.2 テスト環境の指定
+#### 3.2.3 テスト環境の指定
 
 テストファイルの先頭で環境を指定できます：
 
 ```typescript
 // @vitest-environment jsdom
+```
+
+#### 3.2.4 ブラウザAPIのモック
+
+テスト環境でブラウザAPI（`requestAnimationFrame`など）が必要な場合、テストファイル内でモックします：
+
+```typescript
+import { vi } from "vitest";
+
+// Mock requestAnimationFrame for tests
+global.requestAnimationFrame = vi.fn((cb) => {
+  setTimeout(cb, 0);
+  return 1;
+});
 ```
 
 ### 3.3 依存関係のインストール
@@ -277,14 +295,77 @@ vi.mock("react-dom/client", () => ({
 }));
 ```
 
+#### 4.4.1 実際のテスト例
+
+プロジェクト内のモード管理テストの例：
+
+```typescript
+/* Copyright 2026 Marimo. All rights reserved. */
+import { describe, expect, it, beforeEach, vi } from "vitest";
+import { store } from "@/core/state/jotai";
+import {
+  type AppMode,
+  toggleAppMode,
+  viewStateAtom,
+  is3DModeAtom,
+} from "@/core/mode";
+
+// Mock requestAnimationFrame for tests
+global.requestAnimationFrame = vi.fn((cb) => {
+  setTimeout(cb, 0);
+  return 1;
+});
+
+describe("mode", () => {
+  beforeEach(() => {
+    // Reset store before each test
+    store.set(viewStateAtom, { mode: "not-set" as AppMode, cellAnchor: null });
+    store.set(is3DModeAtom, true);
+    vi.clearAllMocks();
+  });
+
+  describe("toggleAppMode", () => {
+    it("should toggle from edit to present", () => {
+      expect(toggleAppMode("edit")).toBe("present");
+    });
+
+    it("should toggle from present to edit", () => {
+      expect(toggleAppMode("present")).toBe("edit");
+    });
+  });
+
+  describe("is3DModeAtom", () => {
+    it("should initialize with true", () => {
+      const is3D = store.get(is3DModeAtom);
+      expect(is3D).toBe(true);
+    });
+
+    it("should toggle to false", () => {
+      store.set(is3DModeAtom, false);
+      const is3D = store.get(is3DModeAtom);
+      expect(is3D).toBe(false);
+    });
+  });
+});
+```
+
 ### 4.5 テスト実行
 
 ```powershell
 # 個別ファイルのテスト実行
-cd frontend && pnpm test src/utils/__tests__/arrays.test.ts
+pnpm test src/utils/__tests__/arrays.test.ts
 
 # すべてのユニットテスト実行
 pnpm test
+
+# ウォッチモードでテスト実行
+pnpm test:watch
+
+# UIモードでテスト実行
+pnpm test:ui
+
+# カバレッジレポート付きでテスト実行
+pnpm test:coverage
 ```
 
 ---
@@ -488,9 +569,11 @@ global.WebSocket = vi.fn(() => mockWebSocket) as unknown as typeof WebSocket;
 # バックエンドサーバーを起動（別ターミナル）
 pnpm server
 
-# 統合テストを実行
-pnpm test:integration
+# 統合テストを実行（通常のテストコマンドを使用）
+pnpm test
 ```
+
+**注意**: プロジェクトでは統合テスト専用のスクリプト（`test:integration`）は定義されていません。統合テストも通常の`pnpm test`コマンドで実行されます。統合テストは、バックエンドサーバーが起動していることを前提として実装されています。
 
 ---
 
@@ -569,10 +652,12 @@ cd backend && python -m pytest tests/
 pnpm server
 
 # フロントエンド統合テストを実行
-pnpm test:integration
+pnpm test
 ```
 
 **期待結果**: すべての統合テストが成功していること
+
+**注意**: 統合テストは通常の`pnpm test`コマンドで実行されます。バックエンドサーバーが起動していることを確認してから実行してください。
 
 #### ステップ3: E2Eテスト
 
@@ -605,10 +690,19 @@ pnpm typecheck
 pnpm lint
 
 # ユニットテスト（個別ファイル）
-cd frontend && pnpm test src/path/to/file.test.ts
+pnpm test src/path/to/file.test.ts
 
 # すべてのテスト実行
 pnpm test
+
+# ウォッチモードでテスト実行
+pnpm test:watch
+
+# UIモードでテスト実行
+pnpm test:ui
+
+# カバレッジレポート付きでテスト実行
+pnpm test:coverage
 
 # E2Eテスト（サーバー起動必須）
 pnpm test:e2e
@@ -782,8 +876,18 @@ describe("arrayDelete", () => {
 
 ```powershell
 # カバレッジレポートの生成
-pnpm test --coverage
+pnpm test:coverage
 ```
+
+### 9.6 テスト実行結果の確認
+
+プロジェクトのテスト実行結果の例：
+
+- **新規作成したテスト**: モード管理のテスト（`src/core/mode/__tests__/mode.test.ts`）は17件すべて成功
+- **既存のテスト**: 1928件成功、316件失敗（主に`window`/`document`未定義による既存の問題）
+- **スキップ**: 16件
+
+テストが失敗する場合、エラーメッセージを確認し、必要に応じてブラウザAPIのモックを追加してください。
 
 ---
 
@@ -843,7 +947,35 @@ beforeEach(() => {
 });
 ```
 
-#### 問題4: E2Eテストが失敗する
+#### 問題4: `window`や`document`が定義されていない
+
+**原因**:
+- jsdom環境が適切に設定されていない
+- テストファイルで環境指定が不足している
+
+**解決方法**:
+```typescript
+// テストファイルの先頭に環境指定を追加
+// @vitest-environment jsdom
+
+// または、必要なブラウザAPIをモック
+global.window = {
+  location: {
+    origin: "http://localhost:3000",
+    search: "",
+  },
+} as unknown as Window & typeof globalThis;
+
+global.document = {
+  createElement: vi.fn(),
+  body: {
+    append: vi.fn(),
+    innerHTML: "",
+  },
+} as unknown as Document;
+```
+
+#### 問題5: E2Eテストが失敗する
 
 **原因**:
 - サーバーが起動していない
@@ -856,8 +988,8 @@ beforeEach(() => {
 # 2. サーバーを再起動
 pnpm server
 
-# ヘルスチェックで起動確認
-curl http://localhost:8000/healthz
+# ヘルスチェックで起動確認（PowerShellの場合）
+Invoke-WebRequest -Uri http://localhost:8000/healthz
 
 # E2Eテストを再実行
 pnpm test:e2e
@@ -912,6 +1044,50 @@ pnpm test:e2e --debug
 
 ---
 
+---
+
+## 12. 実装例とベストプラクティス
+
+### 12.1 プロジェクト内の実装例
+
+#### 12.1.1 モード管理のテスト
+
+プロジェクト内で実装されているモード管理のテスト（`src/core/mode/__tests__/mode.test.ts`）は、以下のパターンを実装しています：
+
+- **Jotaiストアのリセット**: 各テスト前に状態をリセット
+- **ブラウザAPIのモック**: `requestAnimationFrame`をモック
+- **エッジケースのテスト**: 正常系・異常系・エッジケースを網羅
+- **非同期処理のテスト**: `async/await`を使用した非同期処理のテスト
+
+#### 12.1.2 テスト実行の実際のコマンド
+
+```powershell
+# プロジェクトルートから実行
+cd c:\Users\sasai\Documents\backcast
+
+# 個別テストファイルの実行
+pnpm test src/core/mode/__tests__/mode.test.ts
+
+# すべてのテスト実行
+pnpm test
+```
+
+### 12.2 テストファイルの配置
+
+プロジェクトでは、テストファイルは以下のパターンで配置されています：
+
+- **ユニットテスト**: `src/**/__tests__/*.test.ts`
+- **コンポーネントテスト**: `src/**/__tests__/*.test.tsx`
+- **統合テスト**: `src/**/__tests__/*.test.ts`（統合テストも同じパターン）
+
+### 12.3 テスト実行時の注意事項
+
+1. **PowerShell環境**: Windows環境では、`&&`演算子が使えないため、コマンドを分けて実行する
+2. **サーバー起動**: 統合テストやE2Eテストを実行する前に、バックエンドサーバーを起動する
+3. **環境変数**: 必要な環境変数が設定されていることを確認する
+
+---
+
 **最終更新**: 2026年1月  
-**バージョン**: 1.0.0
+**バージョン**: 1.1.0
 

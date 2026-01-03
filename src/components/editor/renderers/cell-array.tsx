@@ -330,7 +330,7 @@ export const AddCellButtons: React.FC<{
             aiEnabled ? null : <span>Enable via settings under AI Assist</span>
           }
           delayDuration={100}
-          asChild={false}
+          asChild={true}
         >
           <Button
             className={buttonClass}
@@ -348,10 +348,10 @@ export const AddCellButtons: React.FC<{
   };
 
   return (
-    <div className={cn("flex justify-center mt-4 pt-6 group gap-4 w-full print:hidden", is3DMode ? "pb-4" : "pb-32")}>
+    <div className={cn("flex justify-center mt-4 pt-6 group gap-4 w-full print:hidden pointer-events-none", is3DMode ? "pb-4" : "pb-32")}>
       <div
         className={cn(
-          "shadow-sm border border-border rounded transition-all duration-200 overflow-hidden divide-x divide-border flex",
+          "shadow-sm border border-border rounded transition-all duration-200 overflow-hidden divide-x divide-border flex pointer-events-auto",
           !isAiButtonOpen && "w-fit",
           isAiButtonOpen &&
             "w-full max-w-4xl shadow-lg shadow-(color:--blue-3)",

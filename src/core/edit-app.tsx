@@ -283,6 +283,45 @@ export const EditApp: React.FC<AppProps> = ({
     }
   }, [is3DMode]);
 
+  // モード切り替え時にグリッド設定を同期
+  const prevIs3DMode = usePrevious(is3DMode);
+  useEffect(() => {
+    // モードが切り替わった時のみ同期（初回レンダリング時は実行しない）
+    if (prevIs3DMode === undefined || prevIs3DMode === is3DMode) {
+      return;
+    }
+
+    if (is3DMode) {
+      // 3Dモードに切り替えた時: layoutState.layoutData.grid → grid3DConfigAtom
+      const currentGrid = layoutState.layoutData.grid as GridLayout | undefined;
+      if (currentGrid) {
+        setGrid3DConfig((prev) => ({
+          ...prev,
+          columns: currentGrid.columns,
+          rowHeight: currentGrid.rowHeight,
+          maxWidth: currentGrid.maxWidth,
+          bordered: currentGrid.bordered ?? false,
+        }));
+      }
+    } else {
+      // 2Dモードに切り替えた時: grid3DConfigAtom → layoutState.layoutData.grid
+      const currentGrid = layoutState.layoutData.grid as GridLayout | undefined;
+      if (currentGrid) {
+        setLayoutData({
+          layoutView: "grid",
+          data: {
+            ...currentGrid,
+            columns: grid3DConfig.columns,
+            rowHeight: grid3DConfig.rowHeight,
+            maxWidth: grid3DConfig.maxWidth,
+            bordered: grid3DConfig.bordered,
+          },
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [is3DMode, prevIs3DMode]);
+
   const { connection } = useMarimoKernelConnection({
     autoInstantiate: userConfig.runtime.auto_instantiate,
     setCells: (cells, layout) => {

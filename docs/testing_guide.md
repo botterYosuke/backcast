@@ -14,6 +14,7 @@
 3. [テスト環境のセットアップ](#3-テスト環境のセットアップ)
 4. [ユニットテスト](#4-ユニットテスト)
 5. [コンポーネントテスト](#5-コンポーネントテスト)
+   - [5.6 CSS/デザイン変更のテスト](#56-cssデザイン変更のテスト)
 6. [統合テスト](#6-統合テスト)
 7. [E2Eテスト](#7-e2eテスト)
 8. [テスト実行プロセス](#8-テスト実行プロセス)
@@ -516,6 +517,146 @@ it("should match snapshot", () => {
   const { container } = render(<MyComponent />);
   expect(container).toMatchSnapshot();
 });
+```
+
+### 5.6 CSS/デザイン変更のテスト
+
+CSSやデザインの変更を検証するには、**コンポーネントテスト**と**スナップショットテスト**を組み合わせて使用します。
+
+#### 5.6.1 CSSクラス名の検証
+
+コンポーネントに適用されているCSSクラス名を検証します：
+
+```typescript
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Grid3DControls } from "../grid-3d-controls";
+
+// @vitest-environment jsdom
+
+describe("Grid3DControls CSS classes", () => {
+  it("should have correct CSS classes", () => {
+    const { container } = render(
+      <Grid3DControls config={mockConfig} setConfig={mockSetConfig} />
+    );
+    
+    const element = container.firstChild as HTMLElement;
+    const classes = element.className.split(" ");
+    
+    // 必須クラスの確認
+    expect(classes).toContain("flex");
+    expect(classes).toContain("flex-row");
+    expect(classes).toContain("absolute");
+    expect(classes).toContain("w-full");
+    expect(classes).toContain("justify-end");
+    
+    // 削除されたクラスの確認
+    expect(classes).not.toContain("overflow-x-auto");
+  });
+});
+```
+
+#### 5.6.2 スナップショットテストによる構造検証
+
+コンポーネントのDOM構造が期待通りであることをスナップショットで検証します：
+
+```typescript
+import { render } from "@testing-library/react";
+import { describe, expect, it } from "vitest";
+import { Grid3DControls } from "../grid-3d-controls";
+import { GridControls } from "../../grid-layout/grid-layout";
+
+describe("Grid3DControls vs GridControls", () => {
+  it("should match GridControls structure", () => {
+    const { container: container3D } = render(
+      <Grid3DControls config={mockConfig} setConfig={mockSetConfig} />
+    );
+    
+    const { container: container2D } = render(
+      <GridControls layout={mockLayout} setLayout={mockSetLayout} />
+    );
+    
+    // スナップショット比較
+    expect(container3D.firstChild).toMatchSnapshot("grid-3d-controls");
+    expect(container2D.firstChild).toMatchSnapshot("grid-controls");
+  });
+});
+```
+
+#### 5.6.3 実装例：Grid3DControlsのテスト
+
+実際のコンポーネントテストの実装例：
+
+```typescript
+// src/components/editor/renderers/3d-layout/__tests__/grid-3d-controls.test.tsx
+import { render } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { Grid3DControls } from "../grid-3d-controls";
+import type { Grid3DConfig } from "../types";
+
+// @vitest-environment jsdom
+
+const mockConfig: Grid3DConfig = {
+  columns: 12,
+  rows: 8,
+  rowHeight: 50,
+  maxWidth: 1200,
+  bordered: false,
+  isLocked: false,
+};
+
+const mockSetConfig = vi.fn();
+
+describe("Grid3DControls", () => {
+  it("should have same CSS classes as GridControls", () => {
+    const { container } = render(
+      <Grid3DControls config={mockConfig} setConfig={mockSetConfig} />
+    );
+    
+    const element = container.firstChild as HTMLElement;
+    const classes = element.className.split(" ");
+    
+    // 必須クラスの確認
+    expect(classes).toContain("flex");
+    expect(classes).toContain("flex-row");
+    expect(classes).toContain("absolute");
+    expect(classes).toContain("pl-5");
+    expect(classes).toContain("w-full");
+    expect(classes).toContain("justify-end");
+    expect(classes).toContain("pr-[350px]");
+    expect(classes).toContain("pb-3");
+    expect(classes).toContain("border-b");
+    expect(classes).toContain("z-50");
+    
+    // 削除されたクラスの確認
+    expect(classes).not.toContain("left-0");
+    expect(classes).not.toContain("right-[350px]");
+    expect(classes).not.toContain("px-5");
+    expect(classes).not.toContain("overflow-x-auto");
+  });
+  
+  it("should match snapshot", () => {
+    const { container } = render(
+      <Grid3DControls config={mockConfig} setConfig={mockSetConfig} />
+    );
+    expect(container.firstChild).toMatchSnapshot();
+  });
+});
+```
+
+#### 5.6.4 CSS/デザイン変更テストのベストプラクティス
+
+1. **CSSクラス名の検証**: 重要なCSSクラスが正しく適用されているか確認
+2. **スナップショットテスト**: DOM構造の変更を検出
+3. **比較テスト**: 類似コンポーネント（例：2Dと3D）の構造を比較
+4. **テスト実行**: CSS変更後は必ずテストを実行してリグレッションを確認
+
+```powershell
+# CSS変更後のテスト実行
+pnpm test src/components/editor/renderers/3d-layout/__tests__/grid-3d-controls.test.tsx
+
+# スナップショットの更新（構造変更が意図的な場合）
+pnpm test -- -u
 ```
 
 ---

@@ -17,9 +17,9 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
   setConfig,
 }) => {
   return (
-    <div className="flex flex-row absolute left-0 right-[350px] top-8 gap-4 px-5 pb-3 border-b z-50 overflow-x-auto">
+    <div className="flex flex-row absolute pl-5 top-8 gap-4 w-full justify-end pr-[350px] pb-3 border-b z-50 pointer-events-none">
       {/* 既存の設定項目 */}
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label htmlFor="columns">Columns</Label>
         <NumberField
           data-testid="grid-3d-columns-input"
@@ -36,7 +36,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
           }}
         />
       </div>
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label htmlFor="rows">Rows</Label>
         <NumberField
           data-testid="grid-3d-rows-input"
@@ -53,7 +53,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
           }}
         />
       </div>
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label htmlFor="rowHeight">Row Height (px)</Label>
         <NumberField
           data-testid="grid-3d-row-height-input"
@@ -70,7 +70,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
           }}
         />
       </div>
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label htmlFor="maxWidth">Max Width (px)</Label>
         <NumberField
           data-testid="grid-3d-max-width-input"
@@ -87,7 +87,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
           }}
         />
       </div>
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label className="flex flex-row items-center gap-1" htmlFor="bordered">
           <BorderAllIcon className="h-3 w-3" />
           Bordered
@@ -105,7 +105,7 @@ export const Grid3DControls: React.FC<Grid3DControlsProps> = ({
           }}
         />
       </div>
-      <div className="flex flex-row items-center gap-2">
+      <div className="flex flex-row items-center gap-2 pointer-events-auto">
         <Label className="flex flex-row items-center gap-1" htmlFor="lock">
           <LockIcon className="h-3 w-3" />
           Lock Grid

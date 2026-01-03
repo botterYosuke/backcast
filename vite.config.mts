@@ -61,7 +61,9 @@ const jsonImportPlugin = (): Plugin => {
     resolveId(id, importer) {
       if (
         id === "@marimo-team/llm-info/models.json" ||
-        id === "@marimo-team/llm-info/providers.json"
+        id === "@marimo-team/llm-info/providers.json" ||
+        id === "@marimo-team/llm-info/models.ts" ||
+        id === "@marimo-team/llm-info/providers.ts"
       ) {
         // 仮想モジュールIDを返すことで、標準のJSONローダーが処理しないようにする
         const resolvedId = `\0json-import:${id}`;
@@ -177,10 +179,10 @@ const jsonImportPlugin = (): Plugin => {
       if (id.startsWith("\0json-import:")) {
         const jsonPath = id.replace("\0json-import:", "");
         // .tsファイルを優先的に使用
-        if (jsonPath === "@marimo-team/llm-info/models.json" || jsonPath === modelsJsonPath || jsonPath === modelsTsPath) {
+        if (jsonPath === "@marimo-team/llm-info/models.json" || jsonPath === "@marimo-team/llm-info/models.ts" || jsonPath === modelsJsonPath || jsonPath === modelsTsPath) {
           filePath = existsSync(modelsTsPath) ? modelsTsPath : modelsJsonPath;
           isModels = true;
-        } else if (jsonPath === "@marimo-team/llm-info/providers.json" || jsonPath === providersJsonPath || jsonPath === providersTsPath) {
+        } else if (jsonPath === "@marimo-team/llm-info/providers.json" || jsonPath === "@marimo-team/llm-info/providers.ts" || jsonPath === providersJsonPath || jsonPath === providersTsPath) {
           filePath = existsSync(providersTsPath) ? providersTsPath : providersJsonPath;
           isModels = false;
         } else {
@@ -238,12 +240,12 @@ const jsonImportPlugin = (): Plugin => {
                    id.includes('data/generated/providers')) {
           filePath = existsSync(providersTsPath) ? providersTsPath : providersJsonPath;
           isModels = false;
-        } else if (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/providers.json") {
+        } else if (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/providers.json" || id === "@marimo-team/llm-info/models.ts" || id === "@marimo-team/llm-info/providers.ts") {
           // 元のIDで直接呼ばれた場合
-          filePath = id === "@marimo-team/llm-info/models.json" 
+          filePath = (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/models.ts")
             ? (existsSync(modelsTsPath) ? modelsTsPath : modelsJsonPath)
             : (existsSync(providersTsPath) ? providersTsPath : providersJsonPath);
-          isModels = id === "@marimo-team/llm-info/models.json";
+          isModels = id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/models.ts";
         }
       }
       

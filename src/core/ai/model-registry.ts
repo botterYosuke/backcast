@@ -5,8 +5,8 @@ import type {
   AiProvider,
   Role,
 } from "@marimo-team/llm-info";
-import { models } from "@marimo-team/llm-info/models.ts";
-import { providers } from "@marimo-team/llm-info/providers.ts";
+import { models } from "@marimo-team/llm-info/models.json";
+import { providers } from "@marimo-team/llm-info/providers.json";
 import { Logger } from "@/utils/Logger";
 import { MultiMap } from "@/utils/multi-map";
 import { once } from "@/utils/once";

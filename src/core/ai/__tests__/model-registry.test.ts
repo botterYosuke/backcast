@@ -1,8 +1,8 @@
 /* Copyright 2026 Marimo. All rights reserved. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// Mock the models.ts import
-vi.mock("@marimo-team/llm-info/models.ts", () => {
+// Mock the models.json import
+vi.mock("@marimo-team/llm-info/models.json", () => {
   const models: AiModel[] = [
     {
       name: "GPT-4",

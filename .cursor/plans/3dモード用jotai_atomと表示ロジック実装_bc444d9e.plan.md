@@ -1,30 +1,3 @@
----
-name: 3Dモード用Jotai atomと表示ロジック実装
-overview: 3Dモード用の設定を管理するJotai atomを作成し、EditAppで3Dモード時にGrid3DControlsを表示するロジックを実装します。設定は永続化され、3Dモード時にコントロールUIが表示されるようにします。また、testing_guide.mdに従ったテストも実装します。
-todos:
-  - id: create-atom
-    content: src/core/three/grid-3d-config.tsを作成し、grid3DConfigAtomを実装
-    status: pending
-  - id: integrate-controls
-    content: EditAppで3Dモード時にGrid3DControlsを表示するロジックを実装
-    status: pending
-    dependencies:
-      - create-atom
-  - id: test-atom
-    content: src/core/three/__tests__/grid-3d-config.test.tsを作成し、grid3DConfigAtomのユニットテストを実装
-    status: pending
-    dependencies:
-      - create-atom
-  - id: test-controls
-    content: src/components/editor/renderers/3d-layout/__tests__/grid-3d-controls.test.tsxを作成し、Grid3DControlsのコンポーネントテストを実装
-    status: pending
-  - id: test-integration
-    content: EditAppでのGrid3DControls統合テストを実装
-    status: pending
-    dependencies:
-      - integrate-controls
----
-
 # 3Dモード用Jotai atomと表示ロジック実装計画
 
 ## 概要
@@ -65,34 +38,34 @@ todos:
 
 - `src/core/three/__tests__/grid-3d-config.test.ts`を作成
 - `grid3DConfigAtom`のテスト：
-  - デフォルト値が正しく設定されること
-  - ストレージから値を読み込めること
-  - ストレージに値を保存できること
-  - ストレージが空の場合、デフォルト値が使用されること
-  - 不正な値がストレージにある場合、デフォルト値にフォールバックすること
+- デフォルト値が正しく設定されること
+- ストレージから値を読み込めること
+- ストレージに値を保存できること
+- ストレージが空の場合、デフォルト値が使用されること
+- 不正な値がストレージにある場合、デフォルト値にフォールバックすること
 
 ### 4.2 コンポーネントテスト: Grid3DControls
 
 - `src/components/editor/renderers/3d-layout/__tests__/grid-3d-controls.test.tsx`を作成
 - `Grid3DControls`コンポーネントのテスト：
-  - すべてのコントロールが正しくレンダリングされること
-  - 各入力フィールドが正しく動作すること（正常系）
-  - 各入力フィールドのバリデーションが正しく動作すること（異常系・エッジケース）
-  - 設定変更時に`setConfig`が正しく呼ばれること
-  - 各コントロールの`data-testid`が正しく設定されていること
+- すべてのコントロールが正しくレンダリングされること
+- 各入力フィールドが正しく動作すること（正常系）
+- 各入力フィールドのバリデーションが正しく動作すること（異常系・エッジケース）
+- 設定変更時に`setConfig`が正しく呼ばれること
+- 各コントロールの`data-testid`が正しく設定されていること
 
 ### 4.3 統合テスト: EditAppでのGrid3DControls統合
 
 - `src/core/__tests__/edit-app-3d-controls.test.tsx`を作成（または既存のEditAppテストに追加）
 - EditAppでの統合テスト：
-  - 3Dモード時に`Grid3DControls`が表示されること
-  - 3Dモードでない時に`Grid3DControls`が表示されないこと
-  - `grid3DConfigAtom`の値が`Grid3DControls`に正しく渡されること
-  - `Grid3DControls`での設定変更が`grid3DConfigAtom`に反映されること
+- 3Dモード時に`Grid3DControls`が表示されること
+- 3Dモードでない時に`Grid3DControls`が表示されないこと
+- `grid3DConfigAtom`の値が`Grid3DControls`に正しく渡されること
+- `Grid3DControls`での設定変更が`grid3DConfigAtom`に反映されること
 
 ## ファイル構成
 
-```javascript
+````javascript
 src/
 ├── core/
 │   ├── three/
@@ -230,4 +203,5 @@ describe("EditApp Grid3DControls Integration", () => {
 
 ## 次のステップ（この計画では含まない）
 
-- 3Dレンダラーでの設定の実際の適用（Grid3DRendererでの使用）
+
+````

@@ -70,9 +70,9 @@ ll-css2d-service統合計画
 2. **統合内容**: `calculateScale`のカメラチェックロジックを有効化
 3. **リファクタリング**: コード品質レビューで指摘された改善を同時に実施
 
-            - 重複コードの削減（スケール更新ロジックの共通化）
-            - マジックナンバーの定数化
-            - タイミング問題の解決（`calculateScale`に`camera`を引数で渡す）
+                                                - 重複コードの削減（スケール更新ロジックの共通化）
+                                                - マジックナンバーの定数化
+                                                - タイミング問題の解決（`calculateScale`に`camera`を引数で渡す）
 
 4. **インポート修正**: `src/core/edit-app.tsx`のインポートパスを確認・修正
 5. **削除**: `src/three/cell-css2d-service.ts`を削除
@@ -92,6 +92,8 @@ private readonly MAX_SCALE = 5.0;
 private readonly DEFAULT_BASE_DISTANCE = 1200; // デフォルト基準距離
 private readonly GRID_DISTANCE_OFFSET = 800; // グリッドコンテナの距離オフセット（グリッドをセルより手前に配置するための調整値）
 ```
+
+
 
 ### 2. `calculateScale`メソッドの修正
 
@@ -144,15 +146,15 @@ private calculateScale(distance: number, camera?: THREE.PerspectiveCamera): numb
 }
 ```
 
+
+
 ### 3. スケール更新ロジックの共通化
 
-`updateContainerScale`と`updateGridContainerScale`の重複コードを共通メソッドに抽出します。
-
-**共通メソッドの追加**:
+`updateContainerScale`と`updateGridContainerScale`の重複コードを共通メソッドに抽出します。**共通メソッドの追加**:
 
 ```typescript
 /**
- * コンテナのスケールを更新する共通ロジック
+    * コンテナのスケールを更新する共通ロジック
  */
 private updateContainerScaleInternal(
   container: HTMLDivElement,
@@ -212,33 +214,30 @@ private updateGridContainerScale(camera: THREE.PerspectiveCamera): void {
 }
 ```
 
+
+
 ### 4. インポートパスの確認
 
-[src/core/edit-app.tsx](src/core/edit-app.tsx)の50行目のインポートパスを確認します。現在は`./three/cell-css2d-service`となっていますが、これは`src/core/three/cell-css2d-service.ts`を指しているはずです。もし`src/three/cell-css2d-service.ts`を参照している場合は、`@/core/three/cell-css2d-service`に変更します。
-
-**確認結果**: `./three/cell-css2d-service`は`src/core/three/cell-css2d-service.ts`を正しく指しているため、変更不要です。
+[src/core/edit-app.tsx](src/core/edit-app.tsx)の50行目のインポートパスを確認します。現在は`./three/cell-css2d-service`となっていますが、これは`src/core/three/cell-css2d-service.ts`を指しているはずです。もし`src/three/cell-css2d-service.ts`を参照している場合は、`@/core/three/cell-css2d-service`に変更します。**確認結果**: `./three/cell-css2d-service`は`src/core/three/cell-css2d-service.ts`を正しく指しているため、変更不要です。
 
 ### 5. メソッドの使用状況確認
 
 以下のメソッドが使用されていることを確認済みです：
 
 - `getContainerPosition()`: 
-                                - `cells-3d-renderer.tsx`で3箇所使用（95行目、176行目、316行目）
-                                - `cell-3d-wrapper.tsx`で1箇所使用（115行目）
-                                - **維持が必要**
-
+                                                                                                                                - `cells-3d-renderer.tsx`で3箇所使用（95行目、176行目、316行目）
+                                                                                                                                - `cell-3d-wrapper.tsx`で1箇所使用（115行目）
+                                                                                                                                - **維持が必要**
 - `setScene()`:
-                                - `edit-app.tsx`の184行目で使用
-                                - `cells-3d-renderer.tsx`の164行目で使用
-                                - **維持が必要**
+                                                                                                                                - `edit-app.tsx`の184行目で使用
+                                                                                                                                - `cells-3d-renderer.tsx`の164行目で使用
+                                                                                                                                - **維持が必要**
 
 これらのメソッドは`src/core/three/cell-css2d-service.ts`に既に存在するため、統合時に問題はありません。
 
 ### 6. `src/three/cell-css2d-service.ts`の削除
 
-統合が完了したら、[src/three/cell-css2d-service.ts](src/three/cell-css2d-service.ts)を削除します。
-
-**注意**: このファイルの5行目に未使用のインポート`import type { SceneManager } from "./scene-manager";`がありますが、ファイル削除と同時に解消されます。
+統合が完了したら、[src/three/cell-css2d-service.ts](src/three/cell-css2d-service.ts)を削除します。**注意**: このファイルの5行目に未使用のインポート`import type { SceneManager } from "./scene-manager";`がありますが、ファイル削除と同時に解消されます。
 
 ### 7. 動作確認
 
@@ -292,5 +291,3 @@ private updateGridContainerScale(camera: THREE.PerspectiveCamera): void {
 - ✅ グリッドコンテナ機能: `src/core/three/cell-css2d-service.ts`に存在し、統合後も維持される
 
 ### インポートパス
-
-- ✅ `src/core/edit-app.tsx`の`./three/cell-css2d-service`は`src/core/three/cell-css2d-service.ts`を正しく指している

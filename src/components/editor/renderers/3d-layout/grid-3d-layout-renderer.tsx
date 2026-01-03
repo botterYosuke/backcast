@@ -174,51 +174,104 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   // ReactGridLayout上のホイールイベントをthree.js OrbitControlsに転送
   useEffect(() => {
     // 3Dモード時のみ有効化
-    if (!grid3DConfig || !sceneManager) return;
+    if (!grid3DConfig || !sceneManager) {
+      return;
+    }
 
-    // grid-3d-container内のreact-grid-layoutを取得
-    const gridContainer = document.querySelector('.grid-3d-container');
-    if (!gridContainer) return;
+    // grid-3d-containerとreact-grid-layout要素が見つかるまで待つ
+    let cleanupFn: (() => void) | null = null;
+    let isSetup = false;
 
-    const gridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
-    if (!gridLayoutElement) return;
+    const setupWheelHandler = (): boolean => {
+      if (isSetup) return true;
 
-    const handleWheel = (event: WheelEvent) => {
-      // イベント発生元がスクロール可能なセル内かチェック
-      const target = event.target as HTMLElement;
-      const scrollableCell = target.closest('[data-scrollable="true"]');
-
-      if (scrollableCell) {
-        // スクロール可能なセル内では通常のスクロールを許可
-        return;
+      // grid-3d-container内のreact-grid-layoutを取得
+      const gridContainer = document.querySelector('.grid-3d-container');
+      if (!gridContainer) {
+        return false;
       }
 
-      // デフォルトのスクロールを無効化
-      event.preventDefault();
+      const gridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
+      if (!gridLayoutElement) {
+        return false;
+      }
 
-      const renderer = sceneManager.getRenderer();
-      const canvas = renderer?.domElement;
-      if (!canvas) return;
+      const handleWheel = (event: WheelEvent) => {
+        // イベント発生元がスクロール可能なセル内かチェック
+        const target = event.target as HTMLElement;
+        const scrollableCell = target.closest('[data-scrollable="true"]');
 
-      // イベントをcanvas要素に転送（clientX/Yは既にビューポート座標なのでそのまま使用可能）
-      const wheelEvent = new WheelEvent(event.type, {
-        deltaX: event.deltaX,
-        deltaY: event.deltaY,
-        deltaZ: event.deltaZ,
-        deltaMode: event.deltaMode,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        bubbles: true,
-        cancelable: true,
-      });
+        if (scrollableCell) {
+          // スクロール可能なセル内では通常のスクロールを許可
+          return;
+        }
 
-      canvas.dispatchEvent(wheelEvent);
+        // デフォルトのスクロールを無効化
+        event.preventDefault();
+
+        const renderer = sceneManager.getRenderer();
+        const canvas = renderer?.domElement;
+        if (!canvas) {
+          return;
+        }
+
+        // イベントをcanvas要素に転送（clientX/Yは既にビューポート座標なのでそのまま使用可能）
+        const wheelEvent = new WheelEvent(event.type, {
+          deltaX: event.deltaX,
+          deltaY: event.deltaY,
+          deltaZ: event.deltaZ,
+          deltaMode: event.deltaMode,
+          clientX: event.clientX,
+          clientY: event.clientY,
+          bubbles: true,
+          cancelable: true,
+        });
+
+        canvas.dispatchEvent(wheelEvent);
+      };
+
+      gridLayoutElement.addEventListener('wheel', handleWheel, { passive: false });
+
+      cleanupFn = () => {
+        gridLayoutElement.removeEventListener('wheel', handleWheel);
+      };
+      isSetup = true;
+      return true;
     };
 
-    gridLayoutElement.addEventListener('wheel', handleWheel, { passive: false });
+    // 初回試行
+    if (setupWheelHandler()) {
+      return () => {
+        if (cleanupFn) {
+          cleanupFn();
+        }
+      };
+    }
+
+    // 要素が見つからない場合、MutationObserverで監視して見つかるまで待つ
+    const observer = new MutationObserver(() => {
+      if (setupWheelHandler()) {
+        observer.disconnect();
+      }
+    });
+
+    // DOM全体を監視（grid-3d-containerが追加されるのを待つ）
+    observer.observe(document.body, {
+      childList: true,
+      subtree: true,
+    });
+
+    // タイムアウトも設定（最大5秒待つ）
+    const timeoutId = setTimeout(() => {
+      observer.disconnect();
+    }, 5000);
 
     return () => {
-      gridLayoutElement.removeEventListener('wheel', handleWheel);
+      observer.disconnect();
+      clearTimeout(timeoutId);
+      if (cleanupFn) {
+        cleanupFn();
+      }
     };
   }, [grid3DConfig, sceneManager]);
 

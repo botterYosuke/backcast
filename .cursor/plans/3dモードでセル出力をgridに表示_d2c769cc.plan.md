@@ -56,7 +56,7 @@ GridCellコンポーネントで3Dモードかどうかを検出する方法を�
 
 ### データフロー
 
-```javascript
+````javascript
 EditApp (3D Mode)
   ├─ Cells3DRenderer (セルのコードを3D空間に表示)
   └─ GridLayoutRenderer (セルの出力をGridレイアウトで表示)
@@ -68,4 +68,5 @@ EditApp (3D Mode)
 ## 注意事項
 
 - Gridレイアウトの初期配置は、GridLayoutPluginの`getInitialLayout`を使用
-- レイアウトデータは`useLayoutState`で管理され、`useLayoutActions`で更新
+
+````

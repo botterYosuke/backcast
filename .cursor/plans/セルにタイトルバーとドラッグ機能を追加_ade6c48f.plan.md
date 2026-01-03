@@ -1,37 +1,3 @@
----
-name: セルにタイトルバーとドラッグ機能を追加
-overview: サンプルコード（BackcastPro-Steam）を参考に、3D空間に表示されるセルにタイトルバーを追加し、ドラッグ可能にします。各セルを個別のCSS2DObjectとして管理し、タイトルバーをドラッグして3D空間内で移動できるようにします。
-todos:
-  - id: create-drag-manager
-    content: CellDragManagerサービスを作成（ドラッグ開始/終了、マウス移動処理、スケール考慮）
-    status: completed
-  - id: extend-css2d-service
-    content: CellCSS2DServiceにセルごとのCSS2DObject管理を追加（Map<cellId, CSS2DObject>、位置更新メソッド）
-    status: completed
-  - id: create-cell-wrapper
-    content: Cell3DWrapperコンポーネントを作成（タイトルバー、ドラッグハンドル、セルコンテンツのラップ）
-    status: completed
-    dependencies:
-      - create-drag-manager
-  - id: modify-cells-3d-renderer
-    content: Cells3DRendererを修正して各セルを個別のCSS2DObjectとして管理し、Cell3DWrapperを使用
-    status: completed
-    dependencies:
-      - extend-css2d-service
-      - create-cell-wrapper
-  - id: add-styles
-    content: タイトルバーのスタイルを追加（サンプルコードのfloating-window-base.styles.scssを参考）
-    status: completed
-    dependencies:
-      - create-cell-wrapper
-  - id: test-dragging
-    content: ドラッグ機能の動作確認とパフォーマンス調整
-    status: completed
-    dependencies:
-      - modify-cells-3d-renderer
-      - add-styles
----
-
 # セルにタイトルバーとド
 
 ラッグ機能を追加
@@ -76,7 +42,7 @@ todos:
 
 ### セルドラッグ管理サービスの設計
 
-```typescript
+````typescript
 class CellDragManager {
   private activeCellId: string | null = null;
   private isDragging = false;
@@ -137,4 +103,5 @@ const adjustedDeltaY = scale > 0 ? deltaY / scale : deltaY;
 
 ## 実装順序
 
-1. `CellDragManager`サービスの作成
+
+````

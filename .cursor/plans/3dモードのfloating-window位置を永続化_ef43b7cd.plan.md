@@ -1,27 +1,3 @@
----
-name: 3Dモードのfloating-window位置を永続化
-overview: 3Dモードのセル（floating-window）の位置情報をLocalStorageに保存し、3Dモードを切り替えても位置が保持されるようにする
-todos:
-  - id: create-position-atom
-    content: 3Dモードのセル位置情報を管理するatomを作成（src/core/three/cell-3d-positions.ts）。LocalStorageキー名は"marimo:3d:cellPositions:v1"とする
-    status: pending
-  - id: integrate-position-restore
-    content: Cells3DRendererのupdatePositions関数内で、atomから位置情報を復元（167行目前に処理を追加）
-    status: pending
-    dependencies:
-      - create-position-atom
-  - id: integrate-position-save
-    content: Cells3DRendererのdragManager.setPositionUpdateCallback内で、位置更新時にatomも更新
-    status: pending
-    dependencies:
-      - create-position-atom
-  - id: cleanup-positions
-    content: 既存のクリーンアップ処理（192-199行目）に、atomからの位置情報削除も追加
-    status: pending
-    dependencies:
-      - create-position-atom
----
-
 # 3Dモードのfloating-window位置を永続化
 
 ## 問題
@@ -100,5 +76,3 @@ THREE.Vector3は直接シリアライズできないため、`{x: number, y: num
 `dragManager.setPositionUpdateCallback`はドラッグ中の各フレームで呼ばれる可能性があります。現在の実装では、各更新時にatomを更新しますが、LocalStorageへの書き込みはJotaiが適切に管理するため、過度な負荷は発生しません。将来的に最適化が必要な場合は、ドラッグ終了時にのみatomを更新する方式も検討可能です。
 
 ### 型定義の場所
-
-`Cell3DPosition`型は`cell-3d-positions.ts`に定義します（atomと一緒で管理しやすい）。THREE.Vector3との変換は、`cells-3d-renderer.tsx`内で行います。

@@ -7,7 +7,7 @@ import topLevelAwait from "vite-plugin-top-level-await";
 import wasm from "vite-plugin-wasm";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +46,87 @@ const svgInlinePlugin = (): Plugin => {
   };
 };
 
+// Plugin to handle JSON imports from @marimo-team/llm-info
+const jsonImportPlugin = (): Plugin => {
+  const modelsJsonPath = path.resolve(__dirname, "./packages/llm-info/data/generated/models.json");
+  const providersJsonPath = path.resolve(__dirname, "./packages/llm-info/data/generated/providers.json");
+  
+  return {
+    name: "json-import-plugin",
+    enforce: "pre",
+    resolveId(id, _importer) {
+      // パッケージ名でのインポートを処理
+      if (
+        id === "@marimo-team/llm-info/models.json" ||
+        id === "@marimo-team/llm-info/providers.json"
+      ) {
+        return `\0json-import:${id}`;
+      }
+      
+      // package.jsonのexports解決後のパスを処理
+      // WindowsとUnixのパス形式の両方に対応
+      const normalizedId = id.replace(/\\/g, '/');
+      const normalizedModelsJsonPath = modelsJsonPath.replace(/\\/g, '/');
+      const normalizedProvidersJsonPath = providersJsonPath.replace(/\\/g, '/');
+      
+      if (
+        normalizedId === normalizedModelsJsonPath ||
+        normalizedId === normalizedProvidersJsonPath ||
+        id === modelsJsonPath ||
+        id === providersJsonPath ||
+        id.endsWith('/data/generated/models.json') ||
+        id.endsWith('/data/generated/providers.json') ||
+        id.endsWith('\\data\\generated\\models.json') ||
+        id.endsWith('\\data\\generated\\providers.json')
+      ) {
+        // 実際のファイルパスを仮想モジュールIDに変換
+        const isModels = normalizedId === normalizedModelsJsonPath || 
+                        id === modelsJsonPath ||
+                        id.endsWith('/data/generated/models.json') ||
+                        id.endsWith('\\data\\generated\\models.json');
+        const moduleId = isModels 
+          ? "@marimo-team/llm-info/models.json"
+          : "@marimo-team/llm-info/providers.json";
+        return `\0json-import:${moduleId}`;
+      }
+      
+      return null;
+    },
+    load(id) {
+      if (id.startsWith("\0json-import:")) {
+        const jsonPath = id.replace("\0json-import:", "");
+        let filePath: string | null = null;
+        let exportKey: string | null = null;
+        
+        if (jsonPath === "@marimo-team/llm-info/models.json") {
+          filePath = modelsJsonPath;
+          exportKey = "models";
+        } else if (jsonPath === "@marimo-team/llm-info/providers.json") {
+          filePath = providersJsonPath;
+          exportKey = "providers";
+        }
+        
+        if (filePath && exportKey) {
+          if (!existsSync(filePath)) {
+            throw new Error(`File does not exist: ${filePath}`);
+          }
+          
+          const fileContent = readFileSync(filePath, "utf-8");
+          const jsonData = JSON.parse(fileContent);
+          
+          if (!jsonData[exportKey]) {
+            throw new Error(
+              `Expected key "${exportKey}" not found in ${filePath}. Found keys: ${Object.keys(jsonData).join(", ")}`
+            );
+          }
+          
+          return `export const ${exportKey} = ${JSON.stringify(jsonData[exportKey], null, 2)};`;
+        }
+      }
+      return null;
+    },
+  };
+};
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -96,6 +177,7 @@ export default defineConfig({
   },
   plugins: [
     svgInlinePlugin(),
+    jsonImportPlugin(),
     react({
       babel: {
         presets: ["@babel/preset-typescript"],

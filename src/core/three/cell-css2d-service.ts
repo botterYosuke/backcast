@@ -336,7 +336,7 @@ export class CellCSS2DService {
     this.gridCSS2DObject.getWorldPosition(objectPosition);
 
     // 距離を計算（y方向のみ）
-    const distance = Math.abs(cameraPosition.y - objectPosition.y);
+    const distance = Math.abs(cameraPosition.y - objectPosition.y) - 800;
 
     // スケールを計算
     const scale = this.calculateScale(distance);

@@ -8,7 +8,7 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=[
-        ('backcast.py', '.'),
+        # backcast.pyは実行時にrun.pyによって自動生成されるため、含めない
     ],
     hiddenimports=[
         'marimo._server.file_router',

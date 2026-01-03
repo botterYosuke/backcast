@@ -16,9 +16,6 @@ import * as THREE from "three";
 export class CellCSS2DService {
   private css2DRenderer?: CSS2DRenderer;
   private css2DObject?: CSS2DObject;
-  private hostElement?: HTMLElement;
-  private scene?: THREE.Scene;
-  private camera?: THREE.PerspectiveCamera;
   private cellContainer?: HTMLDivElement;
   private isContainerVisible = true;
   private gridContainer?: HTMLDivElement;

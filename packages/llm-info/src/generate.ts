@@ -92,6 +92,12 @@ function writeJsonFile(filePath: string, data: any): void {
   writeFileSync(filePath, JSON.stringify(data, null, 2));
 }
 
+function writeTsFile(filePath: string, exportKey: string, data: any): void {
+  ensureDirectoryExists(filePath);
+  const content = `/* This file is auto-generated. Do not edit manually. */\n\nexport const ${exportKey} = ${JSON.stringify(data, null, 2)} as const;\n`;
+  writeFileSync(filePath, content, "utf-8");
+}
+
 async function main(): Promise<void> {
   try {
     // Define paths
@@ -101,6 +107,8 @@ async function main(): Promise<void> {
     const providersYamlPath = join(dataDir, "providers.yml");
     const modelsJsonPath = join(generatedDir, "models.json");
     const providersJsonPath = join(generatedDir, "providers.json");
+    const modelsTsPath = join(generatedDir, "models.ts");
+    const providersTsPath = join(generatedDir, "providers.ts");
 
     // For compatibility with Vite and other bundlers, `import` returns a JS module and not a JSON object.
     // So we need to nest the models and providers data under a json key to access them,
@@ -108,11 +116,15 @@ async function main(): Promise<void> {
 
     // Load and validate models
     const models = loadAndValidateModels(modelsYamlPath);
-    writeJsonFile(modelsJsonPath, { models: models });
+    // .jsonファイルは生成しない（.tsファイルのみを使用）
+    // writeJsonFile(modelsJsonPath, { models: models });
+    writeTsFile(modelsTsPath, "models", models);
 
     // Load and validate providers
     const providers = loadAndValidateProviders(providersYamlPath);
-    writeJsonFile(providersJsonPath, { providers: providers });
+    // .jsonファイルは生成しない（.tsファイルのみを使用）
+    // writeJsonFile(providersJsonPath, { providers: providers });
+    writeTsFile(providersTsPath, "providers", providers);
 
     Logger.info(
       `Generated ${models.length} models and ${providers.length} providers`,

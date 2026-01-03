@@ -5,13 +5,14 @@
   "type": "module",
   "sideEffects": false,
   "files": [
-    "data/generated/*.json"
+    "data/generated/*.json",
+    "data/generated/*.ts"
   ],
   "exports": {
     ".": "./src/index.ts",
     "./icons/*": "./icons/*",
-    "./models.json": "./data/generated/models.json",
-    "./providers.json": "./data/generated/providers.json"
+    "./models.ts": "./data/generated/models.ts",
+    "./providers.ts": "./data/generated/providers.ts"
   },
   "scripts": {
     "codegen": "tsx src/generate.ts",

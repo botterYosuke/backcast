@@ -46,6 +46,54 @@ const svgInlinePlugin = (): Plugin => {
   };
 };
 
+// Plugin to handle JSON imports from @marimo-team/llm-info
+const jsonImportPlugin = (): Plugin => {
+  return {
+    name: "json-import-plugin",
+    resolveId(id) {
+      if (
+        id === "@marimo-team/llm-info/models.json" ||
+        id === "@marimo-team/llm-info/providers.json"
+      ) {
+        return `\0json-import:${id}`;
+      }
+      return null;
+    },
+    load(id) {
+      if (id.startsWith("\0json-import:")) {
+        const jsonPath = id.replace("\0json-import:", "");
+        const isModels = jsonPath === "@marimo-team/llm-info/models.json";
+        const filePath = isModels
+          ? path.resolve(__dirname, "./packages/llm-info/data/generated/models.json")
+          : path.resolve(__dirname, "./packages/llm-info/data/generated/providers.json");
+        
+        try {
+          const jsonContent = readFileSync(filePath, "utf-8");
+          const jsonData = JSON.parse(jsonContent);
+          const exportKey = isModels ? "models" : "providers";
+          
+          // JSONファイルの構造を確認: { "models": [...] } または { "providers": [...] }
+          if (!jsonData[exportKey]) {
+            throw new Error(
+              `Expected key "${exportKey}" not found in ${filePath}. Found keys: ${Object.keys(jsonData).join(", ")}`
+            );
+          }
+          
+          return `export const ${exportKey} = ${JSON.stringify(jsonData[exportKey], null, 2)};`;
+        } catch (error) {
+          if (error instanceof Error) {
+            throw new Error(
+              `Failed to load JSON file ${filePath}: ${error.message}`
+            );
+          }
+          throw error;
+        }
+      }
+      return null;
+    },
+  };
+};
+
 // https://vitejs.dev/config/
 export default defineConfig({
   // This allows for a dynamic <base> tag in index.html
@@ -95,6 +143,7 @@ export default defineConfig({
   },
   plugins: [
     svgInlinePlugin(),
+    jsonImportPlugin(),
     react({
       babel: {
         presets: ["@babel/preset-typescript"],

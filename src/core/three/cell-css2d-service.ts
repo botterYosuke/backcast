@@ -29,6 +29,8 @@ export class CellCSS2DService {
   private baseDistance: number | null = null; // 基準距離（起動時の距離で初期化）
   private readonly MIN_SCALE = 0.1; // 最小スケール
   private readonly MAX_SCALE = 5.0; // 最大スケール
+  private readonly DEFAULT_BASE_DISTANCE = 1200; // デフォルト基準距離
+  private readonly GRID_DISTANCE_OFFSET = 800; // グリッドコンテナの距離オフセット（グリッドをセルより手前に配置するための調整値）
 
   // レンダリング最適化用
   private needsRender = false;
@@ -264,19 +266,19 @@ export class CellCSS2DService {
   /**
    * カメラからの距離に基づいてスケール値を計算します
    */
-  private calculateScale(distance: number): number {
+  private calculateScale(distance: number, camera?: THREE.PerspectiveCamera): number {
     if (distance <= 0) {
       return this.MAX_SCALE;
     }
 
     // 基準距離が設定されていない場合は、現在の距離を基準距離として使用
     if (this.baseDistance === null) {
-      // if (this.camera) {
-      //   // カメラの高さ位置を基準距離として使用
-      //   this.baseDistance = Math.abs(this.camera.position.y);
-      // } else {
-        this.baseDistance = 1200;
-      // }
+      if (camera) {
+        // カメラの高さ位置を基準距離として使用
+        this.baseDistance = Math.abs(camera.position.y);
+      } else {
+        this.baseDistance = this.DEFAULT_BASE_DISTANCE;
+      }
     }
 
     // スケール = 基準距離 / 現在の距離
@@ -288,26 +290,27 @@ export class CellCSS2DService {
   }
 
   /**
-   * セルコンテナのスケールを更新します
+   * コンテナのスケールを更新する共通ロジック
    */
-  private updateContainerScale(camera: THREE.PerspectiveCamera): void {
-    if (!this.cellContainer || !this.css2DObject) {
-      return;
-    }
-
+  private updateContainerScaleInternal(
+    container: HTMLDivElement,
+    css2DObject: CSS2DObject,
+    camera: THREE.PerspectiveCamera,
+    distanceOffset: number = 0
+  ): void {
     // カメラとCSS2Dオブジェクトの3D空間での位置を取得
     const cameraPosition = camera.position;
     const objectPosition = new THREE.Vector3();
-    this.css2DObject.getWorldPosition(objectPosition);
+    css2DObject.getWorldPosition(objectPosition);
 
-    // 距離を計算（y方向のみ）
-    const distance = Math.abs(cameraPosition.y - objectPosition.y);
+    // 距離を計算（y方向のみ）+ オフセット
+    const distance = Math.abs(cameraPosition.y - objectPosition.y) + distanceOffset;
 
-    // スケールを計算
-    const scale = this.calculateScale(distance);
+    // スケールを計算（cameraを引数で渡す）
+    const scale = this.calculateScale(distance, camera);
 
     // CSS2DRendererが設定した既存のtransformを取得
-    const existingTransform = this.cellContainer.style.transform || "";
+    const existingTransform = container.style.transform || "";
 
     // 既存のtransformからscale()を削除（既に存在する場合）
     let cleanedTransform = existingTransform.replace(/\s*scale\([^)]*\)/gi, "");
@@ -318,8 +321,18 @@ export class CellCSS2DService {
       : `scale(${scale})`;
 
     // DOM要素のtransformスタイルを更新
-    this.cellContainer.style.transform = newTransform;
-    this.cellContainer.style.transformOrigin = "center center";
+    container.style.transform = newTransform;
+    container.style.transformOrigin = "center center";
+  }
+
+  /**
+   * セルコンテナのスケールを更新します
+   */
+  private updateContainerScale(camera: THREE.PerspectiveCamera): void {
+    if (!this.cellContainer || !this.css2DObject) {
+      return;
+    }
+    this.updateContainerScaleInternal(this.cellContainer, this.css2DObject, camera);
   }
 
   /**
@@ -329,32 +342,13 @@ export class CellCSS2DService {
     if (!this.gridContainer || !this.gridCSS2DObject) {
       return;
     }
-
-    // カメラとCSS2Dオブジェクトの3D空間での位置を取得
-    const cameraPosition = camera.position;
-    const objectPosition = new THREE.Vector3();
-    this.gridCSS2DObject.getWorldPosition(objectPosition);
-
-    // 距離を計算（y方向のみ）
-    const distance = Math.abs(cameraPosition.y - objectPosition.y) - 800;
-
-    // スケールを計算
-    const scale = this.calculateScale(distance);
-
-    // CSS2DRendererが設定した既存のtransformを取得
-    const existingTransform = this.gridContainer.style.transform || "";
-
-    // 既存のtransformからscale()を削除（既に存在する場合）
-    let cleanedTransform = existingTransform.replace(/\s*scale\([^)]*\)/gi, "");
-
-    // 既存のtransformにscale()を追加
-    const newTransform = cleanedTransform.trim()
-      ? `${cleanedTransform.trim()} scale(${scale})`
-      : `scale(${scale})`;
-
-    // DOM要素のtransformスタイルを更新
-    this.gridContainer.style.transform = newTransform;
-    this.gridContainer.style.transformOrigin = "center center";
+    // グリッドコンテナは負のオフセット（手前に配置）
+    this.updateContainerScaleInternal(
+      this.gridContainer,
+      this.gridCSS2DObject,
+      camera,
+      -this.GRID_DISTANCE_OFFSET
+    );
   }
 
   /**

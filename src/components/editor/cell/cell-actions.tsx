@@ -184,11 +184,10 @@ const CellActionsDropdownInternal = (
     <Popover open={open} onOpenChange={handleOpenChange}>
       <TooltipRoot delayDuration={200} disableHoverableContent={true}>
         {!open && tooltipContent}
-        {/* This creates a warning in React due to nested <button> elements.
-        Adding asChild could fix this, but it also changes the styling (is hidden) of the button when
-        the Popover is open. */}
-        <TooltipTrigger ref={buttonRef}>
-          <PopoverTrigger className="flex">{children}</PopoverTrigger>
+        <TooltipTrigger asChild={true} ref={buttonRef}>
+          <PopoverTrigger asChild={true} className="flex">
+            {children}
+          </PopoverTrigger>
         </TooltipTrigger>
       </TooltipRoot>
       {content}

@@ -59,111 +59,98 @@ const jsonImportPlugin = (): Plugin => {
     buildStart() {
     },
     resolveId(id, importer) {
+      // .tsファイルの場合は、Viteの標準的なTypeScript処理に任せる
       if (
-        id === "@marimo-team/llm-info/models.json" ||
-        id === "@marimo-team/llm-info/providers.json" ||
         id === "@marimo-team/llm-info/models.ts" ||
         id === "@marimo-team/llm-info/providers.ts"
+      ) {
+        return null; // Viteの標準処理に任せる
+      }
+      if (
+        id === "@marimo-team/llm-info/models.json" ||
+        id === "@marimo-team/llm-info/providers.json"
       ) {
         // 仮想モジュールIDを返すことで、標準のJSONローダーが処理しないようにする
         const resolvedId = `\0json-import:${id}`;
         return resolvedId;
       }
       // ファイルパスでもチェック（標準のJSONローダーが処理しようとする場合に備える）
-      // WindowsとUnixのパス形式の両方に対応
+      // .tsファイルの場合は、Viteの標準処理に任せる
       const normalizedId = id.replace(/\\/g, '/');
+      if (
+        normalizedId === modelsTsPath.replace(/\\/g, '/') ||
+        id === modelsTsPath ||
+        normalizedId === providersTsPath.replace(/\\/g, '/') ||
+        id === providersTsPath ||
+        id.endsWith('/packages/llm-info/data/generated/models.ts') ||
+        id.endsWith('/packages/llm-info/data/generated/providers.ts') ||
+        id.endsWith('/data/generated/models.ts') ||
+        id.endsWith('/data/generated/providers.ts') ||
+        id.endsWith('\\packages\\llm-info\\data\\generated\\models.ts') ||
+        id.endsWith('\\packages\\llm-info\\data\\generated\\providers.ts') ||
+        id.endsWith('\\data\\generated\\models.ts') ||
+        id.endsWith('\\data\\generated\\providers.ts')
+      ) {
+        return null; // Viteの標準処理に任せる
+      }
+      
+      // WindowsとUnixのパス形式の両方に対応
       const normalizedModelsJsonPath = modelsJsonPath.replace(/\\/g, '/');
       const normalizedProvidersJsonPath = providersJsonPath.replace(/\\/g, '/');
-      const normalizedModelsTsPath = modelsTsPath.replace(/\\/g, '/');
-      const normalizedProvidersTsPath = providersTsPath.replace(/\\/g, '/');
       
       // 相対パスでもチェック（package.jsonのexports解決後のパス）
-      const relativeModelsTsPath = './packages/llm-info/data/generated/models.ts';
-      const relativeProvidersTsPath = './packages/llm-info/data/generated/providers.ts';
       const relativeModelsJsonPath = './packages/llm-info/data/generated/models.json';
       const relativeProvidersJsonPath = './packages/llm-info/data/generated/providers.json';
       
-      // package.jsonのexports解決後のパス（相対パス、./data/generated/models.tsなど）
-      const exportsRelativeModelsTsPath = './data/generated/models.ts';
-      const exportsRelativeProvidersTsPath = './data/generated/providers.ts';
+      // package.jsonのexports解決後のパス（相対パス、./data/generated/models.jsonなど）
       const exportsRelativeModelsJsonPath = './data/generated/models.json';
       const exportsRelativeProvidersJsonPath = './data/generated/providers.json';
       
       // package.jsonのexports解決後のパス（相対パスから絶対パスへの解決後）
-      const resolvedRelativeModelsTsPath = path.resolve(__dirname, relativeModelsTsPath);
-      const resolvedRelativeProvidersTsPath = path.resolve(__dirname, relativeProvidersTsPath);
       const resolvedRelativeModelsJsonPath = path.resolve(__dirname, relativeModelsJsonPath);
       const resolvedRelativeProvidersJsonPath = path.resolve(__dirname, relativeProvidersJsonPath);
-      const normalizedResolvedRelativeModelsTsPath = resolvedRelativeModelsTsPath.replace(/\\/g, '/');
-      const normalizedResolvedRelativeProvidersTsPath = resolvedRelativeProvidersTsPath.replace(/\\/g, '/');
       const normalizedResolvedRelativeModelsJsonPath = resolvedRelativeModelsJsonPath.replace(/\\/g, '/');
       const normalizedResolvedRelativeProvidersJsonPath = resolvedRelativeProvidersJsonPath.replace(/\\/g, '/');
       
       // package.jsonのexports解決後のパス（node_modules内からの解決後）
-      const nodeModulesModelsTsPath = path.resolve(__dirname, './node_modules/@marimo-team/llm-info/data/generated/models.ts');
-      const nodeModulesProvidersTsPath = path.resolve(__dirname, './node_modules/@marimo-team/llm-info/data/generated/providers.ts');
       const nodeModulesModelsJsonPath = path.resolve(__dirname, './node_modules/@marimo-team/llm-info/data/generated/models.json');
       const nodeModulesProvidersJsonPath = path.resolve(__dirname, './node_modules/@marimo-team/llm-info/data/generated/providers.json');
-      const normalizedNodeModulesModelsTsPath = nodeModulesModelsTsPath.replace(/\\/g, '/');
-      const normalizedNodeModulesProvidersTsPath = nodeModulesProvidersTsPath.replace(/\\/g, '/');
       const normalizedNodeModulesModelsJsonPath = nodeModulesModelsJsonPath.replace(/\\/g, '/');
       const normalizedNodeModulesProvidersJsonPath = nodeModulesProvidersJsonPath.replace(/\\/g, '/');
       
-      // package.jsonのexports解決後のパス（./data/generated/models.tsなど）を解決
-      const resolvedExportsRelativeModelsTsPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.ts');
-      const resolvedExportsRelativeProvidersTsPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.ts');
+      // package.jsonのexports解決後のパス（./data/generated/models.jsonなど）を解決
       const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.json');
       const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.json');
-      const normalizedResolvedExportsRelativeModelsTsPath = resolvedExportsRelativeModelsTsPath.replace(/\\/g, '/');
-      const normalizedResolvedExportsRelativeProvidersTsPath = resolvedExportsRelativeProvidersTsPath.replace(/\\/g, '/');
       const normalizedResolvedExportsRelativeModelsJsonPath = resolvedExportsRelativeModelsJsonPath.replace(/\\/g, '/');
       const normalizedResolvedExportsRelativeProvidersJsonPath = resolvedExportsRelativeProvidersJsonPath.replace(/\\/g, '/');
       
       if (
         normalizedId === normalizedModelsJsonPath || normalizedId === normalizedProvidersJsonPath ||
         id === modelsJsonPath || id === providersJsonPath ||
-        normalizedId === normalizedModelsTsPath || normalizedId === normalizedProvidersTsPath ||
-        id === modelsTsPath || id === providersTsPath ||
-        id === relativeModelsTsPath || id === relativeProvidersTsPath ||
         id === relativeModelsJsonPath || id === relativeProvidersJsonPath ||
-        id === exportsRelativeModelsTsPath || id === exportsRelativeProvidersTsPath ||
         id === exportsRelativeModelsJsonPath || id === exportsRelativeProvidersJsonPath ||
-        normalizedId === normalizedResolvedRelativeModelsTsPath || normalizedId === normalizedResolvedRelativeProvidersTsPath ||
-        id === resolvedRelativeModelsTsPath || id === resolvedRelativeProvidersTsPath ||
         normalizedId === normalizedResolvedRelativeModelsJsonPath || normalizedId === normalizedResolvedRelativeProvidersJsonPath ||
         id === resolvedRelativeModelsJsonPath || id === resolvedRelativeProvidersJsonPath ||
-        normalizedId === normalizedResolvedExportsRelativeModelsTsPath || normalizedId === normalizedResolvedExportsRelativeProvidersTsPath ||
-        id === resolvedExportsRelativeModelsTsPath || id === resolvedExportsRelativeProvidersTsPath ||
         normalizedId === normalizedResolvedExportsRelativeModelsJsonPath || normalizedId === normalizedResolvedExportsRelativeProvidersJsonPath ||
         id === resolvedExportsRelativeModelsJsonPath || id === resolvedExportsRelativeProvidersJsonPath ||
-        normalizedId === normalizedNodeModulesModelsTsPath || normalizedId === normalizedNodeModulesProvidersTsPath ||
-        id === nodeModulesModelsTsPath || id === nodeModulesProvidersTsPath ||
         normalizedId === normalizedNodeModulesModelsJsonPath || normalizedId === normalizedNodeModulesProvidersJsonPath ||
         id === nodeModulesModelsJsonPath || id === nodeModulesProvidersJsonPath ||
-        id.endsWith('/packages/llm-info/data/generated/models.ts') ||
-        id.endsWith('/packages/llm-info/data/generated/providers.ts') ||
         id.endsWith('/packages/llm-info/data/generated/models.json') ||
         id.endsWith('/packages/llm-info/data/generated/providers.json') ||
-        id.endsWith('/data/generated/models.ts') ||
-        id.endsWith('/data/generated/providers.ts') ||
         id.endsWith('/data/generated/models.json') ||
         id.endsWith('/data/generated/providers.json') ||
-        id.endsWith('\\packages\\llm-info\\data\\generated\\models.ts') ||
-        id.endsWith('\\packages\\llm-info\\data\\generated\\providers.ts') ||
         id.endsWith('\\packages\\llm-info\\data\\generated\\models.json') ||
         id.endsWith('\\packages\\llm-info\\data\\generated\\providers.json') ||
-        id.endsWith('\\data\\generated\\models.ts') ||
-        id.endsWith('\\data\\generated\\providers.ts') ||
         id.endsWith('\\data\\generated\\models.json') ||
         id.endsWith('\\data\\generated\\providers.json') ||
-        id.includes('packages/llm-info/data/generated/models') ||
-        id.includes('packages/llm-info/data/generated/providers') ||
-        id.includes('packages\\llm-info\\data\\generated\\models') ||
-        id.includes('packages\\llm-info\\data\\generated\\providers') ||
-        id.includes('@marimo-team/llm-info/data/generated/models') ||
-        id.includes('@marimo-team/llm-info/data/generated/providers') ||
-        id.includes('data/generated/models') ||
-        id.includes('data/generated/providers')
+        (id.includes('packages/llm-info/data/generated/models.json') && !id.includes('.ts')) ||
+        (id.includes('packages/llm-info/data/generated/providers.json') && !id.includes('.ts')) ||
+        (id.includes('packages\\llm-info\\data\\generated\\models.json') && !id.includes('.ts')) ||
+        (id.includes('packages\\llm-info\\data\\generated\\providers.json') && !id.includes('.ts')) ||
+        (id.includes('@marimo-team/llm-info/data/generated/models.json') && !id.includes('.ts')) ||
+        (id.includes('@marimo-team/llm-info/data/generated/providers.json') && !id.includes('.ts')) ||
+        (id.includes('data/generated/models.json') && !id.includes('.ts')) ||
+        (id.includes('data/generated/providers.json') && !id.includes('.ts'))
       ) {
         // 仮想モジュールIDを返すことで、標準のJSONローダーが処理しないようにする
         const resolvedId = `\0json-import:${id}`;
@@ -178,12 +165,16 @@ const jsonImportPlugin = (): Plugin => {
       
       if (id.startsWith("\0json-import:")) {
         const jsonPath = id.replace("\0json-import:", "");
-        // .tsファイルを優先的に使用
-        if (jsonPath === "@marimo-team/llm-info/models.json" || jsonPath === "@marimo-team/llm-info/models.ts" || jsonPath === modelsJsonPath || jsonPath === modelsTsPath) {
-          filePath = existsSync(modelsTsPath) ? modelsTsPath : modelsJsonPath;
+        // .tsファイルは処理しない（Viteの標準処理に任せる）
+        if (jsonPath === "@marimo-team/llm-info/models.ts" || jsonPath === "@marimo-team/llm-info/providers.ts" || jsonPath === modelsTsPath || jsonPath === providersTsPath) {
+          return null; // Viteの標準処理に任せる
+        }
+        // .jsonファイルのみ処理
+        if (jsonPath === "@marimo-team/llm-info/models.json" || jsonPath === modelsJsonPath) {
+          filePath = modelsJsonPath;
           isModels = true;
-        } else if (jsonPath === "@marimo-team/llm-info/providers.json" || jsonPath === "@marimo-team/llm-info/providers.ts" || jsonPath === providersJsonPath || jsonPath === providersTsPath) {
-          filePath = existsSync(providersTsPath) ? providersTsPath : providersJsonPath;
+        } else if (jsonPath === "@marimo-team/llm-info/providers.json" || jsonPath === providersJsonPath) {
+          filePath = providersJsonPath;
           isModels = false;
         } else {
           // ファイルパスが仮想モジュールIDに含まれている場合
@@ -202,50 +193,46 @@ const jsonImportPlugin = (): Plugin => {
         }
       } else {
         // 実際のファイルパスで直接呼ばれた場合（標準のJSONローダーが処理しようとしている可能性）
+        // .tsファイルの場合は、Viteの標準処理に任せる
+        if (id === modelsTsPath || id === providersTsPath || 
+            id.endsWith('/data/generated/models.ts') || id.endsWith('\\data\\generated\\models.ts') ||
+            id.endsWith('/data/generated/providers.ts') || id.endsWith('\\data\\generated\\providers.ts') ||
+            id === "@marimo-team/llm-info/models.ts" || id === "@marimo-team/llm-info/providers.ts") {
+          return null; // Viteの標準処理に任せる
+        }
+        
         const normalizedId = id.replace(/\\/g, '/');
         const normalizedModelsJsonPath = modelsJsonPath.replace(/\\/g, '/');
         const normalizedProvidersJsonPath = providersJsonPath.replace(/\\/g, '/');
-        const normalizedModelsTsPath = modelsTsPath.replace(/\\/g, '/');
-        const normalizedProvidersTsPath = providersTsPath.replace(/\\/g, '/');
         
-        // package.jsonのexports解決後のパス（./data/generated/models.tsなど）もチェック
-        const exportsRelativeModelsTsPath = './data/generated/models.ts';
-        const exportsRelativeProvidersTsPath = './data/generated/providers.ts';
+        // package.jsonのexports解決後のパス（./data/generated/models.jsonなど）もチェック
         const exportsRelativeModelsJsonPath = './data/generated/models.json';
         const exportsRelativeProvidersJsonPath = './data/generated/providers.json';
-        const resolvedExportsRelativeModelsTsPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.ts');
-        const resolvedExportsRelativeProvidersTsPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.ts');
         const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.json');
         const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.json');
-        const normalizedResolvedExportsRelativeModelsTsPath = resolvedExportsRelativeModelsTsPath.replace(/\\/g, '/');
-        const normalizedResolvedExportsRelativeProvidersTsPath = resolvedExportsRelativeProvidersTsPath.replace(/\\/g, '/');
         const normalizedResolvedExportsRelativeModelsJsonPath = resolvedExportsRelativeModelsJsonPath.replace(/\\/g, '/');
         const normalizedResolvedExportsRelativeProvidersJsonPath = resolvedExportsRelativeProvidersJsonPath.replace(/\\/g, '/');
         
-        if (normalizedId === normalizedModelsJsonPath || id === modelsJsonPath || normalizedId === normalizedModelsTsPath || id === modelsTsPath ||
-            normalizedId === normalizedResolvedExportsRelativeModelsTsPath || id === resolvedExportsRelativeModelsTsPath ||
+        if (normalizedId === normalizedModelsJsonPath || id === modelsJsonPath ||
             normalizedId === normalizedResolvedExportsRelativeModelsJsonPath || id === resolvedExportsRelativeModelsJsonPath ||
-            id === exportsRelativeModelsTsPath || id === exportsRelativeModelsJsonPath ||
-            id.endsWith('/data/generated/models.ts') || id.endsWith('/data/generated/models.json') ||
-            id.endsWith('\\data\\generated\\models.ts') || id.endsWith('\\data\\generated\\models.json') ||
-            id.includes('data/generated/models')) {
-          filePath = existsSync(modelsTsPath) ? modelsTsPath : modelsJsonPath;
+            id === exportsRelativeModelsJsonPath ||
+            id.endsWith('/data/generated/models.json') ||
+            id.endsWith('\\data\\generated\\models.json') ||
+            id.includes('data/generated/models.json')) {
+          filePath = modelsJsonPath;
           isModels = true;
-        } else if (normalizedId === normalizedProvidersJsonPath || id === providersJsonPath || normalizedId === normalizedProvidersTsPath || id === providersTsPath ||
-                   normalizedId === normalizedResolvedExportsRelativeProvidersTsPath || id === resolvedExportsRelativeProvidersTsPath ||
+        } else if (normalizedId === normalizedProvidersJsonPath || id === providersJsonPath ||
                    normalizedId === normalizedResolvedExportsRelativeProvidersJsonPath || id === resolvedExportsRelativeProvidersJsonPath ||
-                   id === exportsRelativeProvidersTsPath || id === exportsRelativeProvidersJsonPath ||
-                   id.endsWith('/data/generated/providers.ts') || id.endsWith('/data/generated/providers.json') ||
-                   id.endsWith('\\data\\generated\\providers.ts') || id.endsWith('\\data\\generated\\providers.json') ||
-                   id.includes('data/generated/providers')) {
-          filePath = existsSync(providersTsPath) ? providersTsPath : providersJsonPath;
+                   id === exportsRelativeProvidersJsonPath ||
+                   id.endsWith('/data/generated/providers.json') ||
+                   id.endsWith('\\data\\generated\\providers.json') ||
+                   id.includes('data/generated/providers.json')) {
+          filePath = providersJsonPath;
           isModels = false;
-        } else if (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/providers.json" || id === "@marimo-team/llm-info/models.ts" || id === "@marimo-team/llm-info/providers.ts") {
-          // 元のIDで直接呼ばれた場合
-          filePath = (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/models.ts")
-            ? (existsSync(modelsTsPath) ? modelsTsPath : modelsJsonPath)
-            : (existsSync(providersTsPath) ? providersTsPath : providersJsonPath);
-          isModels = id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/models.ts";
+        } else if (id === "@marimo-team/llm-info/models.json" || id === "@marimo-team/llm-info/providers.json") {
+          // 元のIDで直接呼ばれた場合（.jsonのみ）
+          filePath = id === "@marimo-team/llm-info/models.json" ? modelsJsonPath : providersJsonPath;
+          isModels = id === "@marimo-team/llm-info/models.json";
         }
       }
       
@@ -266,11 +253,6 @@ const jsonImportPlugin = (): Plugin => {
           // 空ファイルのチェック
           if (isEmpty) {
             throw new Error(`File is empty: ${filePath}`);
-          }
-          
-          // .tsファイルの場合は、そのまま返す
-          if (filePath.endsWith('.ts')) {
-            return fileContent;
           }
           
           // JSONファイルの場合は、従来通り処理
@@ -297,13 +279,22 @@ const jsonImportPlugin = (): Plugin => {
     },
     transform(code, id) {
       // 標準のJSONローダーが処理しようとするのを防ぐ
+      // .tsファイルの場合は、Viteの標準処理に任せる
+      if (
+        id === modelsTsPath ||
+        id === providersTsPath ||
+        id.endsWith('/data/generated/models.ts') ||
+        id.endsWith('\\data\\generated\\models.ts') ||
+        id.endsWith('/data/generated/providers.ts') ||
+        id.endsWith('\\data\\generated\\providers.ts')
+      ) {
+        return null; // Viteの標準処理に任せる
+      }
       if (
         id === "@marimo-team/llm-info/models.json" ||
         id === "@marimo-team/llm-info/providers.json" ||
         id === modelsJsonPath ||
         id === providersJsonPath ||
-        id === modelsTsPath ||
-        id === providersTsPath ||
         id.startsWith("\0json-import:")
       ) {
         // 既にloadで処理されているので、nullを返して標準のJSONローダーが処理しないようにする

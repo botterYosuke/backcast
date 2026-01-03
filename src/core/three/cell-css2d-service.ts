@@ -270,12 +270,7 @@ export class CellCSS2DService {
 
     // 基準距離が設定されていない場合は、現在の距離を基準距離として使用
     if (this.baseDistance === null) {
-      if (camera) {
-        // カメラの高さ位置を基準距離として使用
-        this.baseDistance = Math.abs(camera.position.y);
-      } else {
         this.baseDistance = this.DEFAULT_BASE_DISTANCE;
-      }
     }
 
     // スケール = 基準距離 / 現在の距離

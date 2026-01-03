@@ -171,7 +171,3 @@ GridCellコンポーネントに`data-scrollable`属性を追加：
   "transparent-when-disconnected"
 )}>
 ```
-
-
-
-## 注意事項

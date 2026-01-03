@@ -178,25 +178,9 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       return;
     }
 
-    // grid-3d-containerとreact-grid-layout要素が見つかるまで待つ
-    let cleanupFn: (() => void) | null = null;
-    let isSetup = false;
-
-    const setupWheelHandler = (): boolean => {
-      if (isSetup) return true;
-
-      // grid-3d-container内のreact-grid-layoutを取得
-      const gridContainer = document.querySelector('.grid-3d-container');
-      if (!gridContainer) {
-        return false;
-      }
-
-      const gridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
-      if (!gridLayoutElement) {
-        return false;
-      }
-
-      const handleWheel = (event: WheelEvent) => {
+    // 共通のホイールイベントハンドラーを作成
+    const createWheelHandler = (sceneManager: SceneManager) => {
+      return (event: WheelEvent) => {
         // イベント発生元がスクロール可能なセル内かチェック
         const target = event.target as HTMLElement;
         const scrollableCell = target.closest('[data-scrollable="true"]');
@@ -229,11 +213,48 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
 
         canvas.dispatchEvent(wheelEvent);
       };
+    };
 
-      gridLayoutElement.addEventListener('wheel', handleWheel, { passive: false });
+    // grid-3d-containerとreact-grid-layout要素が見つかるまで待つ
+    let cleanupFn: (() => void) | null = null;
+    let isSetup = false;
+
+    const setupWheelHandler = (): boolean => {
+      if (isSetup) return true;
+
+      // grid-3d-container内のreact-grid-layoutを取得
+      const gridContainer = document.querySelector('.grid-3d-container');
+      if (!gridContainer) {
+        return false;
+      }
+
+      const gridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
+      if (!gridLayoutElement) {
+        return false;
+      }
+
+      const cleanupFns: (() => void)[] = [];
+      const wheelHandler = createWheelHandler(sceneManager);
+
+      // ReactGridLayoutにイベントリスナーを追加
+      gridLayoutElement.addEventListener('wheel', wheelHandler, { passive: false });
+      cleanupFns.push(() => {
+        gridLayoutElement.removeEventListener('wheel', wheelHandler);
+      });
+
+      // サイドバー要素にイベントリスナーを追加
+      const sidebarElement = gridContainer.querySelector('[data-sidebar="outputs"]') as HTMLElement;
+      if (sidebarElement) {
+        sidebarElement.addEventListener('wheel', wheelHandler, { passive: false });
+        cleanupFns.push(() => {
+          sidebarElement.removeEventListener('wheel', wheelHandler);
+        });
+      }
 
       cleanupFn = () => {
-        gridLayoutElement.removeEventListener('wheel', handleWheel);
+        for (const cleanup of cleanupFns) {
+          cleanup();
+        }
       };
       isSetup = true;
       return true;
@@ -514,7 +535,10 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       )}>
         {grid}
       </div>
-      <div className="flex-none flex flex-col w-[300px] p-2 pb-20 gap-2 overflow-auto bg-(--slate-2) border-t border-x rounded-t shadow-sm transparent-when-disconnected mx-2 mt-4">
+      <div 
+        data-sidebar="outputs"
+        className="flex-none flex flex-col w-[300px] p-2 pb-20 gap-2 overflow-auto bg-(--slate-2) border-t border-x rounded-t shadow-sm transparent-when-disconnected mx-2 mt-4"
+      >
         <div className="text font-bold text-(--slate-20) shrink-0">
           Outputs
         </div>

@@ -87,6 +87,7 @@ export const Grid3DRenderer: React.FC<Grid3DRendererProps> = ({
       layout={layout}
       setLayout={setLayout}
       grid3DConfig={grid3DConfig}
+      sceneManager={sceneManager}
     />,
     gridContainer,
   );

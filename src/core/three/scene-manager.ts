@@ -64,7 +64,7 @@ export class SceneManager {
     this.controls.mouseButtons.LEFT = THREE.MOUSE.PAN;
     // ズーム制限を設定
     this.controls.minDistance = 100;
-    this.controls.maxDistance = 50000;
+    this.controls.maxDistance = this.camera.far * 0.9;
     // パン制限を設定
     this.controls.enablePan = true;
 

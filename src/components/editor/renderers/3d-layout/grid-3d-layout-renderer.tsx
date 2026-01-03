@@ -12,6 +12,7 @@ import type { CellRuntimeState } from "@/core/cells/types";
 import type { ICellRendererProps } from "../types";
 import type { GridLayout, GridLayoutCellSide } from "../grid-layout/types";
 import type { Grid3DConfig } from "./types";
+import type { SceneManager } from "@/core/three/scene-manager";
 
 import "react-grid-layout/css/styles.css";
 import "../grid-layout/styles.css";
@@ -43,6 +44,7 @@ import { Objects } from "@/utils/objects";
 
 type Props = ICellRendererProps<GridLayout> & {
   grid3DConfig?: Grid3DConfig;
+  sceneManager?: SceneManager;
 };
 
 const ReactGridLayout = WidthProvider(Responsive);
@@ -64,6 +66,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   cells,
   mode,
   grid3DConfig,
+  sceneManager,
 }) => {
   const isReading = mode === "read";
   const inGridIds = new Set(layout.cells.map((cell) => cell.i));
@@ -167,6 +170,57 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       clearInterval(intervalId);
     };
   }, []);
+
+  // ReactGridLayout上のホイールイベントをthree.js OrbitControlsに転送
+  useEffect(() => {
+    // 3Dモード時のみ有効化
+    if (!grid3DConfig || !sceneManager) return;
+
+    // grid-3d-container内のreact-grid-layoutを取得
+    const gridContainer = document.querySelector('.grid-3d-container');
+    if (!gridContainer) return;
+
+    const gridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
+    if (!gridLayoutElement) return;
+
+    const handleWheel = (event: WheelEvent) => {
+      // イベント発生元がスクロール可能なセル内かチェック
+      const target = event.target as HTMLElement;
+      const scrollableCell = target.closest('[data-scrollable="true"]');
+
+      if (scrollableCell) {
+        // スクロール可能なセル内では通常のスクロールを許可
+        return;
+      }
+
+      // デフォルトのスクロールを無効化
+      event.preventDefault();
+
+      const renderer = sceneManager.getRenderer();
+      const canvas = renderer?.domElement;
+      if (!canvas) return;
+
+      // イベントをcanvas要素に転送（clientX/Yは既にビューポート座標なのでそのまま使用可能）
+      const wheelEvent = new WheelEvent(event.type, {
+        deltaX: event.deltaX,
+        deltaY: event.deltaY,
+        deltaZ: event.deltaZ,
+        deltaMode: event.deltaMode,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        bubbles: true,
+        cancelable: true,
+      });
+
+      canvas.dispatchEvent(wheelEvent);
+    };
+
+    gridLayoutElement.addEventListener('wheel', handleWheel, { passive: false });
+
+    return () => {
+      gridLayoutElement.removeEventListener('wheel', handleWheel);
+    };
+  }, [grid3DConfig, sceneManager]);
 
   const handleMakeScrollable = (cellId: CellId) => (isScrollable: boolean) => {
     const scrollableCells = new Set(layout.scrollableCells);
@@ -390,7 +444,9 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
         style={styles}
         className="bg-background border rounded shadow-sm w-full mx-auto mt-4 h-[calc(100%-1rem)] overflow-hidden"
       >
-        <div className="h-full overflow-auto">{grid}</div>
+        <div className={cn("h-full", grid3DConfig ? "overflow-hidden" : "overflow-auto")}>
+          {grid}
+        </div>
       </div>
     );
   }
@@ -398,7 +454,11 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   // GridControlsを除外して直接divを返す
   return (
     <div className={cn("relative flex z-10 flex-1 overflow-hidden")}>
-      <div className={cn("grow overflow-auto transparent-when-disconnected")}>
+      <div className={cn(
+        "grow",
+        grid3DConfig ? "overflow-hidden" : "overflow-auto",
+        "transparent-when-disconnected"
+      )}>
         {grid}
       </div>
       <div className="flex-none flex flex-col w-[300px] p-2 pb-20 gap-2 overflow-auto bg-(--slate-2) border-t border-x rounded-t shadow-sm transparent-when-disconnected mx-2 mt-4">
@@ -479,6 +539,7 @@ const GridCell = memo(
 
     return (
       <div
+        data-scrollable={isScrollable ? "true" : "false"}
         className={cn(
           className,
           "h-full w-full p-2 overflow-x-auto",

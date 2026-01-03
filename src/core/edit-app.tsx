@@ -411,12 +411,14 @@ export const EditApp: React.FC<AppProps> = ({
             {/* 3Dモード用のグリッドコントロール */}
             <Grid3DControls config={grid3DConfig} setConfig={setGrid3DConfig} />
             {/* アラートとバナーは通常の2D表示として表示 */}
-            <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4 relative z-50">
-              <PackageAlert />
-              <StartupLogsAlert />
-              <StdinBlockingAlert />
-              <ConnectingAlert />
-              <NotebookBanner width={appConfig.width} />
+            <div className="m-auto pb-24 sm:pb-12 max-w-(--content-width) min-w-[400px] pr-4 relative z-50 pointer-events-none">
+              <div className="pointer-events-auto">
+                <PackageAlert />
+                <StartupLogsAlert />
+                <StdinBlockingAlert />
+                <ConnectingAlert />
+                <NotebookBanner width={appConfig.width} />
+              </div>
             </div>
             {/* AddCellButtonsを3Dモードでも表示 */}
             {columnIds[0] && (

@@ -59,12 +59,12 @@ const jsonImportPlugin = (): Plugin => {
     buildStart() {
     },
     resolveId(id, importer) {
-      // .tsファイルの場合は、Viteの標準的なTypeScript処理に任せる
-      if (
-        id === "@marimo-team/llm-info/models.ts" ||
-        id === "@marimo-team/llm-info/providers.ts"
-      ) {
-        return null; // Viteの標準処理に任せる
+      // .tsファイルの場合は、実際のファイルパスを返す（Rolldownが解決できるようにする）
+      if (id === "@marimo-team/llm-info/models.ts") {
+        return modelsTsPath;
+      }
+      if (id === "@marimo-team/llm-info/providers.ts") {
+        return providersTsPath;
       }
       if (
         id === "@marimo-team/llm-info/models.json" ||
@@ -75,23 +75,27 @@ const jsonImportPlugin = (): Plugin => {
         return resolvedId;
       }
       // ファイルパスでもチェック（標準のJSONローダーが処理しようとする場合に備える）
-      // .tsファイルの場合は、Viteの標準処理に任せる
+      // .tsファイルの場合は、実際のファイルパスを返す（Rolldownが解決できるようにする）
       const normalizedId = id.replace(/\\/g, '/');
       if (
         normalizedId === modelsTsPath.replace(/\\/g, '/') ||
         id === modelsTsPath ||
+        id.endsWith('/packages/llm-info/data/generated/models.ts') ||
+        id.endsWith('/data/generated/models.ts') ||
+        id.endsWith('\\packages\\llm-info\\data\\generated\\models.ts') ||
+        id.endsWith('\\data\\generated\\models.ts')
+      ) {
+        return modelsTsPath;
+      }
+      if (
         normalizedId === providersTsPath.replace(/\\/g, '/') ||
         id === providersTsPath ||
-        id.endsWith('/packages/llm-info/data/generated/models.ts') ||
         id.endsWith('/packages/llm-info/data/generated/providers.ts') ||
-        id.endsWith('/data/generated/models.ts') ||
         id.endsWith('/data/generated/providers.ts') ||
-        id.endsWith('\\packages\\llm-info\\data\\generated\\models.ts') ||
         id.endsWith('\\packages\\llm-info\\data\\generated\\providers.ts') ||
-        id.endsWith('\\data\\generated\\models.ts') ||
         id.endsWith('\\data\\generated\\providers.ts')
       ) {
-        return null; // Viteの標準処理に任せる
+        return providersTsPath;
       }
       
       // WindowsとUnixのパス形式の両方に対応

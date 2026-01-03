@@ -107,6 +107,67 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   const enableInteractions = !isReading && !isLocked;
   const layoutByCellId = Maps.keyBy(layout.cells, (cell) => cell.i);
 
+  // スケール変更を監視して、react-grid-layout要素のDOMサイズを調整
+  useEffect(() => {
+    let lastScale: number | null = null;
+
+    const updateGridLayoutSize = () => {
+      // grid-3d-container要素を取得
+      const gridContainer = document.querySelector('.grid-3d-container') as HTMLElement;
+      if (!gridContainer) {
+        return;
+      }
+
+      // react-grid-layout要素を取得
+      const reactGridLayoutElement = gridContainer.querySelector('.react-grid-layout') as HTMLElement;
+      if (!reactGridLayoutElement) {
+        return;
+      }
+
+      // スケール値を取得
+      const transform = gridContainer.style.transform || '';
+      const scaleMatch = transform.match(/scale\(([^)]+)\)/);
+      const scale = scaleMatch?.[1] ? parseFloat(scaleMatch[1].trim()) : 1.0;
+
+      // スケール値が変わっていない場合はスキップ（初回を除く）
+      if (lastScale !== null && scale === lastScale) {
+        return;
+      }
+      lastScale = scale;
+
+      if (scale <= 0 || Number.isNaN(scale) || scale === 1.0) {
+        // スケールが1.0の場合は、サイズをリセット
+        reactGridLayoutElement.style.width = '';
+        reactGridLayoutElement.style.height = '';
+        return;
+      }
+
+      // 現在の見た目サイズを取得
+      const rect = reactGridLayoutElement.getBoundingClientRect();
+      const currentVisualWidth = rect.width;
+      const currentVisualHeight = rect.height;
+
+      // DOMサイズを計算（見た目サイズ / スケール）
+      const domWidth = currentVisualWidth / scale;
+      const domHeight = currentVisualHeight / scale;
+
+      // DOMサイズを設定
+      reactGridLayoutElement.style.width = `${domWidth}px`;
+      reactGridLayoutElement.style.height = `${domHeight}px`;
+    };
+
+    // 初回実行を少し遅らせる（DOM要素が確実に存在するように）
+    const timeoutId = setTimeout(updateGridLayoutSize, 0);
+
+    // 定期的にチェック（スケール変更を検出）
+    const intervalId = setInterval(updateGridLayoutSize, 100);
+
+    return () => {
+      clearTimeout(timeoutId);
+      clearInterval(intervalId);
+    };
+  }, []);
+
   const handleMakeScrollable = (cellId: CellId) => (isScrollable: boolean) => {
     const scrollableCells = new Set(layout.scrollableCells);
     if (isScrollable) {
@@ -537,6 +598,10 @@ const GridHoverActions: React.FC<GridHoverActionsProps> = ({
         ? AlignEndVerticalIcon
         : undefined;
 
+  const handleButtonClick = (_event: React.MouseEvent, _buttonType: string) => {
+    // Button click handler - no-op for now
+  };
+
   return (
     <div
       className={cn(
@@ -591,7 +656,7 @@ const GridHoverActions: React.FC<GridHoverActionsProps> = ({
       <GripHorizontalIcon
         className={cn(DRAG_HANDLE, "cursor-move", buttonClassName)}
       />
-      <XIcon className={buttonClassName} onClick={() => onDelete()} />
+      <XIcon className={buttonClassName} onClick={(e) => { handleButtonClick(e, 'delete'); onDelete(); }} />
     </div>
   );
 };

@@ -439,6 +439,27 @@ export class CellCSS2DService {
   }
 
   /**
+   * グリッドコンテナの現在のスケール値を取得します
+   */
+  getGridContainerScale(): number {
+    if (!this.gridContainer) {
+      return 1.0;
+    }
+
+    // transformスタイルからscale値を抽出
+    const transform = this.gridContainer.style.transform || "";
+    const scaleMatch = transform.match(/scale\(([^)]+)\)/);
+
+    if (scaleMatch && scaleMatch[1]) {
+      const scaleValue = parseFloat(scaleMatch[1].trim());
+      return isNaN(scaleValue) ? 1.0 : scaleValue;
+    }
+
+    // scaleが見つからない場合は1.0を返す
+    return 1.0;
+  }
+
+  /**
    * セルコンテナを非表示にします
    */
   hideCellContainer(): void {

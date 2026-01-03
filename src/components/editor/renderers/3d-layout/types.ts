@@ -27,9 +27,9 @@ export interface Grid3DConfig {
 export const DEFAULT_GRID_3D_CONFIG: Grid3DConfig = {
   // 既存の設定項目のデフォルト値
   columns: 12,
-  rows: undefined,
+  rows: 24,
   rowHeight: 20,
-  maxWidth: undefined,
+  maxWidth: 1400,
   bordered: false,
   isLocked: false,
 

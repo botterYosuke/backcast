@@ -33,7 +33,7 @@ todos:
 - セルを追加するロジックは含めません（GridLayoutRendererが内部で処理）
 - `GridLayoutRenderer`を`createPortal`でCSS2Dコンテナにレンダリング
 - 1つのCSS2DObjectとしてGrid全体を表示
-- Propsは`Cells3DRenderer`と同様に：
+- Propsは以下の通り（実装済み、15-25行目）：
   ```typescript
       interface Grid3DRendererProps {
         mode: AppMode;
@@ -44,44 +44,46 @@ todos:
         layout: GridLayout;
         setLayout: (layout: GridLayout) => void;
         cells: (CellRuntimeState & CellData)[];
+        grid3DConfig?: Grid3DConfig; // 追加されている
       }
   ```
 
 
 
 
-- 実装の流れ：
+- 実装の流れ（実装済み、45-93行目）：
 
-1. CSS2DServiceからセルコンテナを取得
-2. Gridコンテナ用のdiv要素を作成
-3. そのdiv要素をCSS2DObjectとして3D空間に配置
-4. `createPortal`で`GridLayoutRenderer`をそのdiv要素内にレンダリング
+1. CSS2DServiceからグリッドコンテナを取得（`getGridContainer()`）
+2. グリッドコンテナをCSS2DObjectとして3D空間に配置（`attachGridContainerToScene()`）
+3. `createPortal`で`Grid3DLayoutRenderer`をグリッドコンテナ内にレンダリング
 
-### 2. `edit-app.tsx`の修正
+**注意**: プランでは`GridLayoutRenderer`を使用すると書かれていましたが、実際の実装では`Grid3DLayoutRenderer`を使用しています（8行目、83行目）。これは、3Dモード専用のレンダラーが作成されたためです。
 
-[src/core/edit-app.tsx](src/core/edit-app.tsx)を修正します。
+### 2. `edit-app.tsx`の修正（実装済み）
 
-- 298-317行目のGridLayoutRendererのオーバーレイ表示を削除
-- 代わりに、`Grid3DRenderer`を`Cells3DRenderer`と同様に3Dコンテナ内に配置
-- `Grid3DRenderer`に必要なprops（layout、setLayout、cells）を渡す
+[src/core/edit-app.tsx](src/core/edit-app.tsx)を修正済み（444-459行目）。
 
-### 3. インポートの追加
+- `Grid3DRenderer`を`Cells3DRenderer`と同様に3Dコンテナ内に配置（実装済み）
+- `Grid3DRenderer`に必要なprops（layout、setLayout、cells、grid3DConfig）を渡す（実装済み）
+- `grid3DConfigAtom`から設定値を取得し、`layoutState.layoutData.grid`のセル配置情報とマージ（450-455行目）
 
-- `edit-app.tsx`に`Grid3DRenderer`のインポートを追加
-- `grid-3d-renderer.tsx`に必要な依存関係（`GridLayoutRenderer`、`GridLayout`型など）をインポート
+### 3. インポートの追加（実装済み）
+
+- `edit-app.tsx`に`Grid3DRenderer`のインポートを追加（57行目）
+- `grid-3d-renderer.tsx`に必要な依存関係（`Grid3DLayoutRenderer`、`GridLayout`型、`Grid3DConfig`型など）をインポート（実装済み）
 
 ## 技術的な詳細
 
-### CSS2DObjectの配置
+### CSS2DObjectの配置（実装済み）
 
-- Grid全体を1つのCSS2DObjectとして表示
-- 位置は3D空間の適切な位置（例：`new THREE.Vector3(0, 0, 0)`）に配置
+- Grid全体を1つのCSS2DObjectとして表示（実装済み）
+- 位置は3D空間の`(0, 0, 0)`に配置（72行目）
 - カメラ距離に応じたスケール調整は`CellCSS2DService`が自動的に処理
 
-### createPortalの使用
+### createPortalの使用（実装済み）
 
-- `GridLayoutRenderer`を通常のDOM要素としてレンダリング
-- `createPortal`でCSS2Dコンテナ内に配置することで、3D空間上に表示
+- `Grid3DLayoutRenderer`を通常のDOM要素としてレンダリング
+- `createPortal`でCSS2Dコンテナ内に配置することで、3D空間上に表示（82-93行目）
 
 ## 注意点
 

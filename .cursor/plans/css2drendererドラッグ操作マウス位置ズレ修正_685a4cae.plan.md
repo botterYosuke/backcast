@@ -89,8 +89,10 @@ SS2DRendererドラッグ操作マウス位置ズレ修正
 
 1. `react-grid-layout`要素の親要素（`.grid-3d-container`内の`.react-grid-layout`要素）を取得（119行目、125行目）
 2. スケール値を取得：DOM要素（`.grid-3d-container`）の`style.transform`から直接スケール値を抽出（131-133行目）
-   - **注意**: プランでは`cell-css2d-service.ts`の`getCurrentGridScale()`メソッドを使用する予定でしたが、実際の実装ではDOMから直接読み取る方法が採用されています
-   - `cell-css2d-service.ts`の`getGridContainerScale()`メソッドは実装されていますが、このプランでは使用されていません
+
+- **注意**: プランでは`cell-css2d-service.ts`の`getCurrentGridScale()`メソッドを使用する予定でしたが、実際の実装ではDOMから直接読み取る方法が採用されています
+- `cell-css2d-service.ts`の`getGridContainerScale()`メソッドは実装されていますが、このプランでは使用されていません
+
 3. `react-grid-layout`要素のDOMサイズを`現在のサイズ / スケール値`に設定（148-159行目）
 4. 親要素（`.grid-3d-container`）に`scale()`を適用（既存の実装を維持、CellCSS2DServiceが管理）
 
@@ -136,5 +138,3 @@ SS2DRendererドラッグ操作マウス位置ズレ修正
 実際の実装では、`grid-3d-layout-renderer.tsx`の`useEffect`フック（113-172行目）で、DOM要素（`.grid-3d-container`）の`style.transform`から直接スケール値を抽出しています。`cell-css2d-service.ts`の`getGridContainerScale()`メソッドは実装されていますが、このプランでは使用されていません。
 
 ## 確認事項
-
-- ドラッグ時にセルが正しく移動するか（大きく飛ばないか）

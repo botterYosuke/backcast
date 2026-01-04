@@ -1,22 +1,3 @@
----
-name: 3Dモード専用GridLayoutRenderer作成
-overview: "`GridLayoutRenderer`をベースに、3Dモード専用の`Grid3DLayoutRenderer`を作成します。`GridControls`を表示せず、グリッドレイアウト機能のみを提供します。`Grid3DRenderer`で`Grid3DLayoutRenderer`を使用するように変更します。"
-todos:
-  - id: create-grid-3d-layout-renderer
-    content: src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsxを作成し、GridLayoutRendererをベースにGrid3DLayoutRendererを実装（GridControlsを除外、isLockedは保持）
-    status: completed
-  - id: update-grid-3d-renderer
-    content: src/components/editor/renderers/grid-3d-renderer.tsxを更新し、GridLayoutRendererの代わりにGrid3DLayoutRendererを使用
-    status: completed
-    dependencies:
-      - create-grid-3d-layout-renderer
-  - id: create-test-file
-    content: src/components/editor/renderers/3d-layout/__tests__/grid-3d-layout-renderer.test.tsxを作成し、GridControlsが表示されないことを確認するテストを追加
-    status: completed
-    dependencies:
-      - create-grid-3d-layout-renderer
----
-
 # 3D
 
 モード専用GridLayoutRenderer作成計画
@@ -40,8 +21,8 @@ todos:
 - `GridControls`の表示を削除（305-312行目の`GridControls`コンポーネントを削除）
 - `GridControls`のインポートを削除（使用しないため）
 - `isLocked`と`setIsLocked`のstateは保持（`enableInteractions`の計算で使用されるため）
-  - ただし、`GridControls`を削除すると`isLocked`を変更するUIがなくなるため、現時点では常に`false`のまま
-  - 将来的に`Grid3DControls`に「Lock Grid」機能を追加する可能性がある
+- ただし、`GridControls`を削除すると`isLocked`を変更するUIがなくなるため、現時点では常に`false`のまま
+- 将来的に`Grid3DControls`に「Lock Grid」機能を追加する可能性がある
 - その他の機能（グリッドレイアウト、セル表示、Outputsパネルなど）は全て保持
 - Props型は`ICellRendererProps<GridLayout>`を継承
 
@@ -75,7 +56,7 @@ todos:
 
 ## ファイル構成
 
-```javascript
+````javascript
 src/components/editor/renderers/
 ├── grid-layout/
 │   ├── grid-layout.tsx (既存 - 通常モード用)
@@ -146,4 +127,5 @@ return (
 - 3Dモードでは`Grid3DControls`が`edit-app.tsx`で表示されるため、`Grid3DLayoutRenderer`内では表示しません
 - 将来的に共通部分を抽出してリファクタリングする可能性がありますが、今回は実装の簡潔さを優先します
 
-## 次のステップ（この計画では含まない）
+
+````

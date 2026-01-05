@@ -50,6 +50,23 @@ const svgInlinePlugin = (): Plugin => {
 // Vite automatically handles JSON imports via package.json exports
 // See: packages/llm-info/package.json exports configuration
 
+// Plugin to inject <marimo-wasm> element when PYODIDE=true
+const pyodideHtmlPlugin = (): Plugin => {
+  return {
+    name: "pyodide-html-plugin",
+    transformIndexHtml(html) {
+      if (isPyodide) {
+        // <marimo-server-token>の後に<marimo-wasm>を追加
+        return html.replace(
+          /(<marimo-server-token[^>]*>)/,
+          `$1\n    <marimo-wasm hidden></marimo-wasm>`,
+        );
+      }
+      return html;
+    },
+  };
+};
+
 // https://vitejs.dev/config/
 export default defineConfig({
   root: __dirname,
@@ -100,6 +117,7 @@ export default defineConfig({
     format: "es",
   },
   plugins: [
+    pyodideHtmlPlugin(),
     svgInlinePlugin(),
     // jsonImportPlugin(), // REMOVED: Using Vite's standard JSON loader
     react({

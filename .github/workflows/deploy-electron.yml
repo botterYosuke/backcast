@@ -54,6 +54,9 @@ jobs:
       - name: Generate LLM info TypeScript files
         run: pnpm --filter @marimo-team/llm-info codegen
 
+      - name: Reinstall llm-info package to include generated files
+        run: pnpm install --filter @marimo-team/llm-info --force
+
       - name: Verify generated TypeScript files
         shell: bash
         run: |
@@ -73,6 +76,21 @@ jobs:
             echo "First 100 chars: $(head -c 100 packages/llm-info/data/generated/providers.ts)"
           else
             echo "ERROR: providers.ts does not exist"
+            exit 1
+          fi
+          echo "=== Checking files in node_modules ==="
+          if [ -f node_modules/@marimo-team/llm-info/data/generated/models.ts ]; then
+            echo "✓ models.ts exists in node_modules"
+            echo "Size: $(wc -c < node_modules/@marimo-team/llm-info/data/generated/models.ts) bytes"
+          else
+            echo "ERROR: models.ts does not exist in node_modules"
+            exit 1
+          fi
+          if [ -f node_modules/@marimo-team/llm-info/data/generated/providers.ts ]; then
+            echo "✓ providers.ts exists in node_modules"
+            echo "Size: $(wc -c < node_modules/@marimo-team/llm-info/data/generated/providers.ts) bytes"
+          else
+            echo "ERROR: providers.ts does not exist in node_modules"
             exit 1
           fi
 

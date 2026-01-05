@@ -54,7 +54,9 @@ jobs:
           fi
 
       - name: Build pyodide version
-        run: cross-env PYODIDE=true vite build --config frontend/vite.config.mts
+        env:
+          PYODIDE: "true"
+        run: vite build --config frontend/vite.config.mts
 
       - name: Verify build output
         run: |

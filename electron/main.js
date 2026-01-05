@@ -31,7 +31,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false, // Required for preload script
     },
-    icon: path.join(getAppRoot(), "public", "logo.png"),
+    icon: path.join(getAppRoot(), "frontend", "public", "logo.png"),
   });
 
   // Load the app

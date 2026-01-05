@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.json",
+  "extends": "@marimo-team/tsconfig/library.json",
   "compilerOptions": {
     "module": "ESNext",
     "moduleResolution": "Bundler",

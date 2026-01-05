@@ -691,6 +691,9 @@ importers:
         specifier: 0.9.7
         version: 0.9.7
     devDependencies:
+      '@marimo-team/tsconfig':
+        specifier: file:../tsconfig
+        version: link:../tsconfig
       openapi-typescript:
         specifier: ^7.8.0
         version: 7.10.1(typescript@5.9.3)

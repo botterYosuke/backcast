@@ -37,7 +37,7 @@ const svgInlinePlugin = (): Plugin => {
     load(id) {
       if (id.startsWith("\0svg-inline:")) {
         const svgPath = id.replace("\0svg-inline:", "");
-        const fullPath = path.resolve(__dirname, "./packages/llm-info/icons", svgPath);
+        const fullPath = path.resolve(__dirname, "../packages/llm-info/icons", svgPath);
         const svgContent = readFileSync(fullPath, "utf-8");
         return `export default ${JSON.stringify(svgContent)};`;
       }
@@ -48,10 +48,10 @@ const svgInlinePlugin = (): Plugin => {
 
 // Plugin to handle JSON imports from @marimo-team/llm-info
 const jsonImportPlugin = (): Plugin => {
-  const modelsJsonPath = path.resolve(__dirname, "./packages/llm-info/data/generated/models.json");
-  const providersJsonPath = path.resolve(__dirname, "./packages/llm-info/data/generated/providers.json");
-  const modelsTsPath = path.resolve(__dirname, "./packages/llm-info/data/generated/models.ts");
-  const providersTsPath = path.resolve(__dirname, "./packages/llm-info/data/generated/providers.ts");
+  const modelsJsonPath = path.resolve(__dirname, "../packages/llm-info/data/generated/models.json");
+  const providersJsonPath = path.resolve(__dirname, "../packages/llm-info/data/generated/providers.json");
+  const modelsTsPath = path.resolve(__dirname, "../packages/llm-info/data/generated/models.ts");
+  const providersTsPath = path.resolve(__dirname, "../packages/llm-info/data/generated/providers.ts");
   
   return {
     name: "json-import-plugin",
@@ -103,8 +103,8 @@ const jsonImportPlugin = (): Plugin => {
       const normalizedProvidersJsonPath = providersJsonPath.replace(/\\/g, '/');
       
       // 相対パスでもチェック（package.jsonのexports解決後のパス）
-      const relativeModelsJsonPath = './packages/llm-info/data/generated/models.json';
-      const relativeProvidersJsonPath = './packages/llm-info/data/generated/providers.json';
+      const relativeModelsJsonPath = '../packages/llm-info/data/generated/models.json';
+      const relativeProvidersJsonPath = '../packages/llm-info/data/generated/providers.json';
       
       // package.jsonのexports解決後のパス（相対パス、./data/generated/models.jsonなど）
       const exportsRelativeModelsJsonPath = './data/generated/models.json';
@@ -123,8 +123,8 @@ const jsonImportPlugin = (): Plugin => {
       const normalizedNodeModulesProvidersJsonPath = nodeModulesProvidersJsonPath.replace(/\\/g, '/');
       
       // package.jsonのexports解決後のパス（./data/generated/models.jsonなど）を解決
-      const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.json');
-      const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.json');
+      const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, '../packages/llm-info/data/generated/models.json');
+      const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, '../packages/llm-info/data/generated/providers.json');
       const normalizedResolvedExportsRelativeModelsJsonPath = resolvedExportsRelativeModelsJsonPath.replace(/\\/g, '/');
       const normalizedResolvedExportsRelativeProvidersJsonPath = resolvedExportsRelativeProvidersJsonPath.replace(/\\/g, '/');
       
@@ -212,8 +212,8 @@ const jsonImportPlugin = (): Plugin => {
         // package.jsonのexports解決後のパス（./data/generated/models.jsonなど）もチェック
         const exportsRelativeModelsJsonPath = './data/generated/models.json';
         const exportsRelativeProvidersJsonPath = './data/generated/providers.json';
-        const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/models.json');
-        const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, './packages/llm-info/data/generated/providers.json');
+        const resolvedExportsRelativeModelsJsonPath = path.resolve(__dirname, '../packages/llm-info/data/generated/models.json');
+        const resolvedExportsRelativeProvidersJsonPath = path.resolve(__dirname, '../packages/llm-info/data/generated/providers.json');
         const normalizedResolvedExportsRelativeModelsJsonPath = resolvedExportsRelativeModelsJsonPath.replace(/\\/g, '/');
         const normalizedResolvedExportsRelativeProvidersJsonPath = resolvedExportsRelativeProvidersJsonPath.replace(/\\/g, '/');
         
@@ -311,6 +311,7 @@ const jsonImportPlugin = (): Plugin => {
 
 // https://vitejs.dev/config/
 export default defineConfig({
+  root: __dirname,
   // This allows for a dynamic <base> tag in index.html
   base: "./",
   server: {
@@ -330,6 +331,7 @@ export default defineConfig({
     "process.env.NODE_ENV": JSON.stringify(process.env.NODE_ENV),
   },
   build: {
+    outDir: "../dist",
     minify: isDev ? false : "oxc", // default is "oxc"
     sourcemap: isDev,
   },
@@ -337,7 +339,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      "@marimo-team/llm-info/icons": path.resolve(__dirname, "./packages/llm-info/icons"),
+      "@marimo-team/llm-info/icons": path.resolve(__dirname, "../packages/llm-info/icons"),
     },
     tsconfigPaths: true,
     dedupe: [

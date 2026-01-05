@@ -56,7 +56,7 @@ jobs:
       - name: Build pyodide version
         env:
           PYODIDE: "true"
-        run: vite build --config frontend/vite.config.mts
+        run: pnpm exec vite build --config frontend/vite.config.mts
 
       - name: Verify build output
         run: |

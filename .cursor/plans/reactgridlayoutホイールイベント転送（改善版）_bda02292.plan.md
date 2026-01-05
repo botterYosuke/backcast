@@ -87,7 +87,7 @@ todos:
 
 ### イベント転送の実装
 
-```typescript
+````typescript
 // Grid3DLayoutRenderer内
 useEffect(() => {
   // 3Dモード時のみ有効化
@@ -170,4 +170,5 @@ GridCellコンポーネントに`data-scrollable`属性を追加：
   grid3DConfig ? "overflow-hidden" : "overflow-auto",
   "transparent-when-disconnected"
 )}>
-```
+
+````

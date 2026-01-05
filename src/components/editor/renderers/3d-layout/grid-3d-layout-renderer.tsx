@@ -260,8 +260,31 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       return true;
     };
 
-    // 初回試行
-    if (setupWheelHandler()) {
+    // 複数の方法で要素を見つける試行
+    let retryCount = 0;
+    const maxRetries = 200; // 約10秒（50ms * 200）
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+    let rafId: number | null = null;
+    let rafRetryCount = 0;
+    const maxRafRetries = 300; // 約5秒（60fps * 5秒 = 300フレーム）
+
+    const trySetup = () => {
+      if (setupWheelHandler()) {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        return true;
+      }
+      return false;
+    };
+
+    // 初回試行（即座に）
+    if (trySetup()) {
       return () => {
         if (cleanupFn) {
           cleanupFn();
@@ -269,9 +292,36 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       };
     }
 
-    // 要素が見つからない場合、MutationObserverで監視して見つかるまで待つ
+    // requestAnimationFrameで再試行（次のフレームで、最大300フレーム）
+    const tryWithRAF = () => {
+      rafRetryCount++;
+      if (rafRetryCount >= maxRafRetries) {
+        // 最大試行回数に達したら停止
+        return;
+      }
+      rafId = requestAnimationFrame(() => {
+        if (!trySetup()) {
+          // まだ見つからない場合、次のフレームで再試行
+          tryWithRAF();
+        }
+      });
+    };
+    tryWithRAF();
+
+    // 定期的な再試行（50msごと、最大10秒）
+    intervalId = setInterval(() => {
+      retryCount++;
+      if (trySetup() || retryCount >= maxRetries) {
+        if (intervalId) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      }
+    }, 50);
+
+    // MutationObserverで監視（要素が後から追加される場合に備える）
     const observer = new MutationObserver(() => {
-      if (setupWheelHandler()) {
+      if (trySetup()) {
         observer.disconnect();
       }
     });
@@ -282,14 +332,30 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
       subtree: true,
     });
 
-    // タイムアウトも設定（最大5秒待つ）
+    // タイムアウトも設定（最大10秒待つ）
     const timeoutId = setTimeout(() => {
       observer.disconnect();
-    }, 5000);
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
+    }, 10000);
 
     return () => {
       observer.disconnect();
       clearTimeout(timeoutId);
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        rafId = null;
+      }
       if (cleanupFn) {
         cleanupFn();
       }

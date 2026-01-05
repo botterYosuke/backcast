@@ -98,6 +98,14 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "./src"),
       "@marimo-team/llm-info/icons": path.resolve(__dirname, "../packages/llm-info/icons"),
+      "@marimo-team/llm-info/models.ts": path.resolve(
+        __dirname,
+        "../packages/llm-info/data/generated/models.ts",
+      ),
+      "@marimo-team/llm-info/providers.ts": path.resolve(
+        __dirname,
+        "../packages/llm-info/data/generated/providers.ts",
+      ),
     },
     tsconfigPaths: true,
     dedupe: [

@@ -29,7 +29,7 @@ const getKnownModelMap = once((): ReadonlyMap<QualifiedModelId, AiModel> => {
       ...model,
       model: model.model as ShortModelId,
       roles: model.roles.map((role) => role as Role),
-      providers: model.providers as ProviderId[],
+      providers: [...model.providers] as ProviderId[],
       custom: false,
     };
 

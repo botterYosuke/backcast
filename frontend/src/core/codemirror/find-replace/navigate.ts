@@ -37,6 +37,9 @@ function searchCommand<T>(
 const findInDirection = (direction: "next" | "prev") =>
   searchCommand(({ query }) => {
     const views = getAllEditorViews();
+    if (views.length === 0) {
+      return false;
+    }
     // Get starting view from the store
     const currentView = store.get(findReplaceAtom).currentView || {
       view: views[0],
@@ -56,7 +59,7 @@ const findInDirection = (direction: "next" | "prev") =>
       startingViewIndex = 0;
     }
 
-    const viewsToSearch = [...views, ...views].slice(startingViewIndex);
+    const viewsToSearch = [...views, ...views].slice(startingViewIndex).filter((v): v is NonNullable<typeof v> => v != null);
 
     for (const view of viewsToSearch) {
       const next =

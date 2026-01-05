@@ -1,4 +1,5 @@
 {
+  "extends": "../tsconfig.json",
   "compilerOptions": {
     "target": "ES2019",
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
@@ -20,7 +21,7 @@
     "noImplicitOverride": true,
 
     /* Style */
-    "allowJs": true,
+    "allowJs": true /* needed for storybook */,
     "paths": {
       "@/*": ["./src/*"],
       /* Pin zod to root (v4); v3 exists via @modelcontextprotocol/sdk */
@@ -35,5 +36,5 @@
     "incremental": true,
     "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.app.tsbuildinfo"
   },
-  "include": ["src"]
+  "include": ["src", "playwright.config.ts", "e2e-tests"]
 }

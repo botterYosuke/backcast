@@ -183,7 +183,7 @@ export class RequestingTree {
     const openFolders = [
       this.rootPath,
       ...ids.map((id) => this.delegate.find(id)?.data.path),
-    ].filter(Boolean);
+    ].filter((path): path is string => path !== undefined);
     // Request all folders in parallel, and catch any errors
     const data = await Promise.all(
       openFolders.map((path) =>

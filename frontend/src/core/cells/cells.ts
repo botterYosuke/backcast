@@ -1512,7 +1512,7 @@ export const cellErrorsAtom = atom((get) => {
 
       return null;
     })
-    .filter(Boolean);
+    .filter((error): error is NonNullable<typeof error> => error !== null);
   return errors;
 });
 

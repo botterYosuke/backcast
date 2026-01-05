@@ -88,7 +88,7 @@ export class DatasourceContextProvider extends AIContextProvider<DatasourceConte
           data: data,
         };
       })
-      .filter(Boolean);
+      .filter((item): item is DatasourceContextItem => item !== null);
   }
 
   formatContext(item: DatasourceContextItem): string {

@@ -19,7 +19,7 @@ let didAlreadyToastError = false;
 
 export function getCellLogsForMessage(cell: CellMessage): CellLog[] {
   const logs: CellLog[] = [];
-  const consoleOutputs: OutputMessage[] = [cell.console].filter(Boolean).flat();
+  const consoleOutputs: OutputMessage[] = [cell.console].filter((output): output is NonNullable<typeof output> => output !== null && output !== undefined).flat();
 
   for (const output of consoleOutputs) {
     // Handle text/plain, text/html, and traceback MIME types

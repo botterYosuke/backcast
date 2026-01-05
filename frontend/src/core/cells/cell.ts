@@ -140,7 +140,7 @@ export function transitionCell(
   nextCell.outline = parseOutline(nextCell.output);
 
   // Transition PDB
-  const newConsoleOutputs = [message.console].flat().filter(Boolean);
+  const newConsoleOutputs = [message.console].flat().filter((output): output is NonNullable<typeof output> => output !== null && output !== undefined);
   const pdbOutputs = newConsoleOutputs.filter(
     (output) => output.channel === "pdb",
   );

@@ -22,7 +22,6 @@ import { SETUP_CELL_ID, type CellId } from "@/core/cells/ids";
 import { SortableCellsProvider } from "@/components/sort/SortableCellsProvider";
 import {
   cell3DPositionsAtom,
-  type Cell3DPosition,
 } from "@/core/three/cell-3d-positions";
 
 interface Cells3DRendererProps {

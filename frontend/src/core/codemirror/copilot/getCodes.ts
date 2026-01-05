@@ -19,6 +19,7 @@ export function getOtherCellsCode(otherCode: string) {
   // Put `import` statements at the top, as it can help copilot give better suggestions
   // TODO: we should sort this topologically
   const codes = getAllEditorViews()
+    .filter((view): view is NonNullable<typeof view> => view != null)
     .map((editorView) => {
       const code = getEditorCodeAsPython(editorView);
       if (code === otherCode) {
@@ -26,7 +27,7 @@ export function getOtherCellsCode(otherCode: string) {
       }
       return code;
     })
-    .filter(Boolean)
+    .filter((code): code is string => code !== null)
     .sort((a, b) => {
       if (a.startsWith("import") && !b.startsWith("import")) {
         return -1;

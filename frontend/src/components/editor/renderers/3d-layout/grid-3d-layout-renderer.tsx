@@ -79,7 +79,7 @@ export const Grid3DLayoutRenderer: React.FC<Props> = ({
   // ただし、GridControlsを削除したため、現時点では常にfalseのまま
   // 将来的にGrid3DControlsに「Lock Grid」機能を追加する可能性がある
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [isLocked, setIsLocked] = useState(false);
+  const [isLocked] = useState(false);
 
   const cols = useMemo(
     () => ({

@@ -124,7 +124,7 @@ export function findOutlineElements(items: OutlineItem[]) {
 
       return [el, identifier] as const;
     })
-    .filter(Boolean);
+    .filter((item): item is readonly [HTMLElement, string] => item !== null);
 }
 
 /**

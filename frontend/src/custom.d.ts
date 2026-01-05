@@ -1,18 +1,28 @@
 /* Copyright 2026 Marimo. All rights reserved. */
-
+/* eslint-disable @typescript-eslint/no-explicit-any */
 declare module "*.svg" {
-  const content: string;
+  const content: string | undefined;
   export default content;
 }
 
-declare module "*.svg?inline" {
-  const content: string;
-  export default content;
+// Stricter lib types
+interface Body {
+  json<T = unknown>(): Promise<T>;
 }
 
-declare module "*.png?inline" {
-  const content: string;
-  export default content;
+// Stricter lib types
+interface JSON {
+  parse(
+    text: string,
+    reviver?: (this: any, key: string, value: any) => any,
+  ): unknown;
+
+  rawJSON(value: string): unknown;
+}
+
+// Improve type inference for Array.filter with BooleanConstructor
+interface Array<T> {
+  filter(predicate: BooleanConstructor): NonNullable<T>[];
 }
 
 // Electron API type definitions
@@ -38,3 +48,5 @@ declare global {
     electronAPI?: ElectronAPI;
   }
 }
+
+export {};

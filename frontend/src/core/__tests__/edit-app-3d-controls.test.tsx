@@ -150,8 +150,10 @@ const defaultUserConfig: UserConfig = {
 };
 
 const defaultAppConfig: AppConfig = {
-  width: "normal",
+  width: "medium",
   app_title: null,
+  auto_download: [],
+  sql_output: "auto",
 };
 
 describe("EditApp Grid3DControls Integration", () => {

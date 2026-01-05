@@ -33,23 +33,10 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
     interrupted: false,
     errored: false,
     stopped: false,
-    runElapsedTime: null,
-    runStartTime: null,
-    lastRunTime: null,
-    staleInputs: new Set(),
-    staleOutputs: new Set(),
+    runElapsedTimeMs: null,
+    runStartTimestamp: null,
+    staleInputs: false,
     serializedEditorState: null,
-  });
-
-  const createMockLayout = (overrides?: Partial<GridLayout>): GridLayout => ({
-    columns: 24,
-    rowHeight: 20,
-    maxWidth: 1000,
-    bordered: false,
-    cells: [],
-    scrollableCells: new Set(),
-    cellSide: new Map(),
-    ...overrides,
   });
 
   // Test component that combines Grid3DControls and Grid3DLayoutRenderer
@@ -90,7 +77,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
             setLayout={setLayout}
             cells={cells}
             mode="edit"
-            appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
             grid3DConfig={config}
           />
         </div>
@@ -136,7 +123,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               setLayout={setLayout}
               cells={cells}
               mode="edit"
-              appConfig={{ width: "normal" }}
+              appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
               grid3DConfig={config}
             />
           </div>
@@ -158,7 +145,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
 
     // Simulate config change by directly calling setConfig
     if (setConfigFn) {
-      setConfigFn({ ...initialConfig, maxWidth: 1500 });
+      (setConfigFn as (config: Grid3DConfig) => void)({ ...initialConfig, maxWidth: 1500 });
     }
 
     // Wait for layout to update
@@ -213,7 +200,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               setLayout={setLayout}
               cells={cells}
               mode="edit"
-              appConfig={{ width: "normal" }}
+              appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
               grid3DConfig={config}
             />
           </div>
@@ -234,7 +221,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
 
     // Simulate config change by directly calling setConfig
     if (setConfigFn) {
-      setConfigFn({ ...initialConfig, columns: 24 });
+      (setConfigFn as (config: Grid3DConfig) => void)({ ...initialConfig, columns: 24 });
     }
 
     // Wait for layout to update
@@ -287,7 +274,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               setLayout={setLayout}
               cells={cells}
               mode="edit"
-              appConfig={{ width: "normal" }}
+              appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
               grid3DConfig={config}
             />
           </div>
@@ -306,7 +293,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
 
     // Simulate config change by directly calling setConfig
     if (setConfigFn) {
-      setConfigFn({ ...initialConfig, rows: 24 });
+      (setConfigFn as (config: Grid3DConfig) => void)({ ...initialConfig, rows: 24 });
     }
 
     // Wait for config to update
@@ -360,7 +347,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               setLayout={setLayout}
               cells={cells}
               mode="edit"
-              appConfig={{ width: "normal" }}
+              appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
               grid3DConfig={config}
             />
           </div>
@@ -381,7 +368,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
 
     // Simulate config change by directly calling setConfig
     if (setConfigFn) {
-      setConfigFn({ ...initialConfig, rowHeight: 30 });
+      (setConfigFn as (config: Grid3DConfig) => void)({ ...initialConfig, rowHeight: 30 });
     }
 
     // Wait for layout to update
@@ -497,7 +484,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
               setLayout={vi.fn()}
               cells={cells}
               mode="edit"
-              appConfig={{ width: "normal" }}
+              appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
               grid3DConfig={config}
             />
           </div>
@@ -513,7 +500,7 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
 
     // Verify layout has maxWidth
     expect(receivedLayout).not.toBeNull();
-    expect(receivedLayout?.maxWidth).toBe(1900);
+    expect((receivedLayout as unknown as GridLayout)?.maxWidth).toBe(1900);
 
     // Grid3DLayoutRenderer applies maxWidth to the styles object
     // which is then applied to ReactGridLayout's style prop

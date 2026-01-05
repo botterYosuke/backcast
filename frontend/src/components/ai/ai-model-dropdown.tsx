@@ -77,7 +77,7 @@ export const AIModelDropdown = ({
       ai?.models?.chat_model,
       autocompleteModel,
       ai?.models?.edit_model,
-    ].filter(Boolean),
+    ].filter((model): model is string => Boolean(model)),
     displayedModels: ai?.models?.displayed_models,
   });
   const modelsByProvider = aiModelRegistry.getListModelsByProvider();

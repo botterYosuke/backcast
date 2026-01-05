@@ -149,15 +149,16 @@ export const Cell3DWrapper: React.FC<Cell3DWrapperProps> = ({
       // タイトルバーにネイティブイベントリスナーを直接追加（Reactイベントが発火しない場合のフォールバック）
       const titlebar = wrapperRef.current?.querySelector('.window-titlebar');
       if (titlebar) {
-        const nativeMouseDownHandler = (e: MouseEvent) => {
+        const nativeMouseDownHandler = (e: Event) => {
           // Reactイベントハンドラーを手動で呼び出す
+          const mouseEvent = e as MouseEvent;
           const syntheticEvent = {
-            ...e,
-            nativeEvent: e,
+            ...mouseEvent,
+            nativeEvent: mouseEvent,
             currentTarget: titlebar,
-            target: e.target,
-            preventDefault: () => e.preventDefault(),
-            stopPropagation: () => e.stopPropagation(),
+            target: mouseEvent.target,
+            preventDefault: () => mouseEvent.preventDefault(),
+            stopPropagation: () => mouseEvent.stopPropagation(),
           } as unknown as React.MouseEvent;
           handleTitleBarMouseDown(syntheticEvent);
         };

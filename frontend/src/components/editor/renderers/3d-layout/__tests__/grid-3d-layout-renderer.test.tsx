@@ -26,11 +26,9 @@ describe("Grid3DLayoutRenderer", () => {
     interrupted: false,
     errored: false,
     stopped: false,
-    runElapsedTime: null,
-    runStartTime: null,
-    lastRunTime: null,
-    staleInputs: new Set(),
-    staleOutputs: new Set(),
+    runElapsedTimeMs: null,
+    runStartTimestamp: null,
+    staleInputs: false,
     serializedEditorState: null,
   });
 
@@ -55,7 +53,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="edit"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 
@@ -84,7 +82,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="edit"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 
@@ -116,7 +114,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="edit"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 
@@ -140,7 +138,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="edit"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 
@@ -159,7 +157,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="read"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 
@@ -179,7 +177,7 @@ describe("Grid3DLayoutRenderer", () => {
         setLayout={mockSetLayout}
         cells={cells}
         mode="edit"
-        appConfig={{ width: "normal" }}
+            appConfig={{ width: "medium", auto_download: [], sql_output: "auto" }}
       />
     );
 

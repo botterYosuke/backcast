@@ -14,7 +14,6 @@ import {
   type KeyboardEvent,
   memo,
   useCallback,
-  useEffect,
   useImperativeHandle,
   useMemo,
   useRef,

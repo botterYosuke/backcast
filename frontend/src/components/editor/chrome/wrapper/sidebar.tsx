@@ -30,7 +30,7 @@ export const Sidebar: React.FC = () => {
 
   const currentItems = sidebarOrder
     .map((id) => PANEL_MAP.get(id))
-    .filter(Boolean);
+    .filter((item): item is PanelDescriptor => item !== undefined);
 
   const handleSetValue = (panels: PanelDescriptor[]) => {
     setSidebarOrder(panels.map((p) => p.id));

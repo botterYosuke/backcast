@@ -6,6 +6,9 @@ declare global {
   interface BigInt {
     toJSON(): unknown;
   }
+  interface JSON {
+    rawJSON(text: string): unknown;
+  }
 }
 
 // Treat BigInts as numbers

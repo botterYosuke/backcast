@@ -41,7 +41,6 @@ import { useTogglePresenting } from "./layout/useTogglePresenting";
 import { is3DModeAtom, viewStateAtom } from "./mode";
 import {
   cell3DViewAtom,
-  type Cell3DViewState,
 } from "./three/cell-3d-view";
 import { useRequestClient } from "./network/requests";
 import { useFilename } from "./saving/filename";

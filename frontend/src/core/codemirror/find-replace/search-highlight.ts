@@ -22,7 +22,7 @@ export function setGlobalSearchQuery() {
   const state = store.get(findReplaceAtom);
   const views = getAllEditorViews();
   for (const view of views) {
-    if (view.state.readOnly) {
+    if (!view || view.state.readOnly) {
       continue;
     }
     view.dispatch({
@@ -45,7 +45,7 @@ export function setGlobalSearchQuery() {
 export function clearGlobalSearchQuery() {
   const views = getAllEditorViews();
   for (const view of views) {
-    if (view.state.readOnly) {
+    if (!view || view.state.readOnly) {
       continue;
     }
     view.dispatch({

@@ -368,12 +368,12 @@ export function useMarimoKernelConnection(opts: {
       const reasonString = typeof e.reason === "string" ? e.reason : "";
       
       // Check for timeout
-      // e.code can be a number (1000) or string ("close")
-      // e.reason can be a string or an object with {code: 1000, reason: "timeout"}
-      const closeCode = typeof e.code === "number" ? e.code : (typeof e.reason === "object" && e.reason !== null && "code" in e.reason ? e.reason.code : null);
-      const timeoutReason = typeof e.reason === "object" && e.reason !== null && "reason" in e.reason ? e.reason.reason : reasonString;
+      // e.code is always a number in CloseEvent
+      // e.reason is always a string in CloseEvent
+      const closeCode = e.code;
+      const timeoutReason = reasonString;
       
-      const isTimeout = (closeCode === 1000 || e.code === "close") && (
+      const isTimeout = closeCode === 1000 && (
         timeoutReason === "timeout" || reasonString === "timeout"
       );
       

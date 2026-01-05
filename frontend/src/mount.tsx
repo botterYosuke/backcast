@@ -325,7 +325,7 @@ async function initElectronRuntime(
     }
 
     // Listen for server status changes
-    const cleanup = electronAPI.onServerStatusChange((status) => {
+    electronAPI.onServerStatusChange((status) => {
       if (status.status === "running" && status.url) {
         Logger.debug("⚡ Server status changed, updating runtime config", status.url);
         store.set(runtimeConfigAtom, {
@@ -337,7 +337,7 @@ async function initElectronRuntime(
       }
     });
 
-    // Store cleanup function (could be used when unmounting, but not critical)
+    // The cleanup function could be used when unmounting, but not critical
     // For now, we'll let it run until the app closes
   } catch (error) {
     Logger.error("Failed to initialize Electron runtime", error);

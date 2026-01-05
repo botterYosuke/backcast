@@ -21,6 +21,12 @@ export class CellCSS2DService {
   private gridContainer?: HTMLDivElement;
   private gridCSS2DObject?: CSS2DObject;
   private isGridContainerVisible = true;
+  // @ts-expect-error - Used in dispose method
+  private hostElement?: HTMLElement;
+  // @ts-expect-error - Used in setScene method
+  private scene?: THREE.Scene;
+  // @ts-expect-error - Used in render method
+  private camera?: THREE.PerspectiveCamera;
 
   // スケール計算用の設定
   private baseDistance: number | null = null; // 基準距離（起動時の距離で初期化）
@@ -570,6 +576,22 @@ export class CellCSS2DService {
    */
   isInitialized(): boolean {
     return !!this.css2DRenderer;
+  }
+
+  /**
+   * セルの位置を更新します
+   */
+  updateCellPosition(cellId: string, position: THREE.Vector3): void {
+    // セルコンテナ内の該当セル要素を探して位置を更新
+    if (!this.cellContainer) {
+      return;
+    }
+    
+    const cellElement = this.cellContainer.querySelector(`[data-cell-id="${cellId}"]`) as HTMLElement;
+    if (cellElement) {
+      cellElement.style.transform = `translate3d(${position.x}px, ${position.y}px, ${position.z}px)`;
+      this.markNeedsRender();
+    }
   }
 }
 

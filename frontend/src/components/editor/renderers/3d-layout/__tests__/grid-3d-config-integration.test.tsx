@@ -37,6 +37,13 @@ describe("Grid3DConfig and Grid3DLayoutRenderer Integration", () => {
     runStartTimestamp: null,
     staleInputs: false,
     serializedEditorState: null,
+    outline: null,
+    consoleOutputs: [],
+    lastRunStartTimestamp: null,
+    debuggerActive: false,
+    edited: false,
+    lastCodeRun: null,
+    lastExecutionTime: null,
   });
 
   // Test component that combines Grid3DControls and Grid3DLayoutRenderer

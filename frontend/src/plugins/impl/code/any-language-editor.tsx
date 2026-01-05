@@ -42,7 +42,8 @@ const AnyLanguageCodeMirror: React.FC<
     if (!language) {
       return extensions;
     }
-    return [loadLanguage(language), ...extensions].filter(Boolean);
+    const langExtension = loadLanguage(language as keyof typeof langs);
+    return [langExtension, ...extensions].filter((ext): ext is Extension => ext !== null && ext !== undefined);
   }, [language, extensions]);
 
   return (

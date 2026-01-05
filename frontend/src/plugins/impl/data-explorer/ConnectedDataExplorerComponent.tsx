@@ -161,7 +161,7 @@ export const DataExplorerComponent = ({
           charts.addQuantitativeField?.plots,
           charts.addTemporalField?.plots,
         ]
-          .filter(Boolean)
+          .filter((plots): plots is NonNullable<typeof plots> => plots !== null && plots !== undefined)
           .flat()
           .map((plot, idx) => (
             <HorizontalCarouselItem

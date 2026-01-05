@@ -10,6 +10,7 @@ import {
   is3DModeAtom,
   runDuringPresentMode,
 } from "@/core/mode";
+import type { CellId } from "@/core/cells/ids";
 
 // Mock requestAnimationFrame for tests
 global.requestAnimationFrame = vi.fn((cb) => {
@@ -80,7 +81,7 @@ describe("mode", () => {
     });
 
     it("should update cellAnchor", () => {
-      const cellId = "test-cell-id" as const;
+      const cellId = "test-cell-id" as CellId;
       store.set(viewStateAtom, { mode: "edit", cellAnchor: cellId });
       const state = store.get(viewStateAtom);
       expect(state.cellAnchor).toBe(cellId);

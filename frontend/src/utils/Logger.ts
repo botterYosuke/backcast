@@ -12,6 +12,7 @@ declare global {
 interface ILogger {
   debug: (typeof console)["debug"];
   log: (typeof console)["log"];
+  info: (typeof console)["info"];
   warn: (typeof console)["warn"];
   error: (typeof console)["error"];
   trace: (typeof console)["trace"];
@@ -27,6 +28,7 @@ const createNamespacedLogger = (
   return {
     debug: (...args) => console.debug(prefix, ...args),
     log: (...args) => baseLogger.log(prefix, ...args),
+    info: (...args) => console.info(prefix, ...args),
     warn: (...args) => baseLogger.warn(prefix, ...args),
     error: (...args) => baseLogger.error(prefix, ...args),
     trace: (...args) => baseLogger.trace(prefix, ...args),
@@ -51,6 +53,9 @@ const ConsoleLogger: ILogger = {
   log: (...args) => {
     console.log(...args);
   },
+  info: (...args) => {
+    console.info(...args);
+  },
   warn: (...args) => {
     console.warn(...args);
   },
@@ -73,6 +78,7 @@ const ConsoleLogger: ILogger = {
 const DisabledLogger: ILogger = {
   debug: () => Functions.NOOP,
   log: () => Functions.NOOP,
+  info: () => Functions.NOOP,
   warn: () => Functions.NOOP,
   error: () => Functions.NOOP,
   trace: () => Functions.NOOP,

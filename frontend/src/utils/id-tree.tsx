@@ -780,7 +780,7 @@ export class MultiColumn<T> {
     const [left, right] = column.split(cellId);
     const newColumns = this.columns.flatMap((c) => {
       if (c === column) {
-        return [left, right].filter(Boolean);
+        return [left, right].filter((col): col is CollapsibleTree<T> => col !== undefined);
       }
       return [c];
     });

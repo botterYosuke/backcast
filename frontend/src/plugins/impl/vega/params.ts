@@ -170,12 +170,10 @@ export function getSelectionParamNames(
   if ("params" in spec && spec.params && spec.params.length > 0) {
     const params = spec.params;
     const paramNames = params
-      // @ts-expect-error TS doesn't know that `param` is an object
-      .filter((param) => {
+      .filter((param): param is NonNullable<typeof param> & { select?: unknown } => {
         if (param == null) {
           return false;
         }
-        // @ts-expect-error TS doesn't know that `param` is an object
         return "select" in param && param.select !== undefined;
       })
       .map((param) => param.name);

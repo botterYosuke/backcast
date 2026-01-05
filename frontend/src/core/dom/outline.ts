@@ -63,7 +63,7 @@ export function headingToIdentifier(heading: Element): OutlineItem["by"] {
 
 export function mergeOutlines(outlines: (Outline | null)[]): Outline {
   return {
-    items: outlines.filter(Boolean).flatMap((outline) => outline.items),
+    items: outlines.filter((outline): outline is Outline => outline !== null).flatMap((outline) => outline.items),
   };
 }
 

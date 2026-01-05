@@ -17,7 +17,6 @@
     "build": "cross-env vite build --config frontend/vite.config.mts && pnpm build:server && electron-builder",
     "preview": "vite preview --config frontend/vite.config.mts",
     "typecheck": "tsc --project frontend/tsconfig.json",
-    "check:pyinstaller": "node scripts/check-pyinstaller.js",
     "lint": "biome check --write .",
     "test": "vitest run",
     "test:watch": "vitest",

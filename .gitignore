@@ -40,3 +40,4 @@ server/__marimo__/
 server/backcast.py
 server/layouts/backcast.slides.json
 server/layouts/backcast.grid.json
+release/

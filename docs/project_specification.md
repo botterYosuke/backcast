@@ -317,39 +317,53 @@
 
 ```
 backcast/
-├── src/                    # ソースコード
-│   ├── components/         # Reactコンポーネント
-│   ├── core/              # コアロジック
-│   │   ├── three/         # 3D関連ロジック
-│   │   ├── cells/         # セル管理
-│   │   ├── codemirror/    # エディタ統合
+├── frontend/              # フロントエンドソース
+│   ├── src/               # ソースコード
+│   │   ├── components/    # Reactコンポーネント
+│   │   ├── core/          # コアロジック
+│   │   │   ├── three/     # 3D関連ロジック
+│   │   │   ├── cells/     # セル管理
+│   │   │   ├── codemirror/# エディタ統合
+│   │   │   └── ...
+│   │   ├── hooks/         # カスタムフック
+│   │   ├── plugins/       # プラグインシステム
+│   │   ├── utils/         # ユーティリティ関数
 │   │   └── ...
-│   ├── hooks/             # カスタムフック
-│   ├── plugins/           # プラグインシステム
-│   ├── utils/             # ユーティリティ関数
-│   └── ...
-├── packages/               # モノレポパッケージ
+│   ├── public/            # 静的ファイル
+│   ├── index.html         # エントリーポイントHTML
+│   ├── vite.config.mts    # Vite設定
+│   ├── tsconfig.json      # TypeScript設定
+│   ├── tailwind.config.cjs# Tailwind CSS設定
+│   └── postcss.config.cjs # PostCSS設定
+├── packages/              # モノレポパッケージ
 │   ├── llm-info/          # LLM情報パッケージ
 │   ├── marimo-api/        # API型定義
 │   ├── smart-cells/       # スマートセル
 │   └── tsconfig/          # TypeScript設定
 ├── server/                # Pythonサーバー
+│   ├── run.py             # サーバースタートアップスクリプト
+│   ├── backcast.py        # ノートブックファイル
+│   ├── server-manager.js  # サーバー管理（Node.js）
+│   └── ...
 ├── electron/              # Electron設定
+│   ├── main.js            # Electronメインプロセス
+│   ├── preload.js         # プリロードスクリプト
+│   └── utils/             # Electronユーティリティ
 ├── docs/                  # ドキュメント
 └── ...
 ```
 
 ### 6.2 主要ファイル
 
-- `src/core/edit-app.tsx`: メインアプリケーションコンポーネント
-- `src/core/mode.ts`: アプリケーションモード管理（read/edit/present）
-- `src/core/three/`: 3D関連のコアロジック
-- `src/components/editor/renderers/`: レンダラー（Grid/3D）
+- `frontend/src/core/edit-app.tsx`: メインアプリケーションコンポーネント
+- `frontend/src/core/mode.ts`: アプリケーションモード管理（read/edit/present）
+- `frontend/src/core/three/`: 3D関連のコアロジック
+- `frontend/src/components/editor/renderers/`: レンダラー（Grid/3D）
   - `grid-layout/`: Gridモード用レンダラー
   - `3d-layout/`: 3Dモード専用レンダラー（`Grid3DLayoutRenderer`、`Grid3DControls`）
   - `grid-3d-renderer.tsx`: 3Dモード用グリッドレンダラー
-- `vite.config.mts`: Vite設定
-- `package.json`: 依存関係とスクリプト
+- `frontend/vite.config.mts`: Vite設定
+- `package.json`: 依存関係とスクリプト（ルート）
 
 ---
 

@@ -85,12 +85,14 @@ SS2DRendererドラッグ操作マウス位置ズレ修正
 - CSS transformの`scale()`で見た目サイズを調整
 - これにより、`react-grid-layout`が使用する`offsetWidth`とマウス座標の座標系が一致する
 
-**実装方法**:
+**実装方法**（実装済み、grid-3d-layout-renderer.tsx 113-172行目）:
 
-1. `react-grid-layout`要素の親要素（`.grid-3d-container`内の`.react-grid-layout`要素）を取得
-2. スケール値を取得（`cell-css2d-service.ts`の`getCurrentGridScale()`メソッドを使用）
-3. `react-grid-layout`要素のDOMサイズを`現在のサイズ / スケール値`に設定
-4. 親要素（`.grid-3d-container`）に`scale()`を適用（既存の実装を維持）
+1. `react-grid-layout`要素の親要素（`.grid-3d-container`内の`.react-grid-layout`要素）を取得（119行目、125行目）
+2. スケール値を取得：DOM要素（`.grid-3d-container`）の`style.transform`から直接スケール値を抽出（131-133行目）
+   - **注意**: プランでは`cell-css2d-service.ts`の`getCurrentGridScale()`メソッドを使用する予定でしたが、実際の実装ではDOMから直接読み取る方法が採用されています
+   - `cell-css2d-service.ts`の`getGridContainerScale()`メソッドは実装されていますが、このプランでは使用されていません
+3. `react-grid-layout`要素のDOMサイズを`現在のサイズ / スケール値`に設定（148-159行目）
+4. 親要素（`.grid-3d-container`）に`scale()`を適用（既存の実装を維持、CellCSS2DServiceが管理）
 
 **注意点**:
 
@@ -104,19 +106,20 @@ SS2DRendererドラッグ操作マウス位置ズレ修正
 
 ## 実装手順
 
-1. **`cell-css2d-service.ts`にグリッドスケール取得メソッドを追加**（既存の`getCurrentGridScale()`メソッドを確認）
-2. **`grid-3d-layout-renderer.tsx`でスケール変更を監視**
+1. **`cell-css2d-service.ts`にグリッドスケール取得メソッドを追加**（実装済み：`getGridContainerScale()`メソッドが存在）
+2. **`grid-3d-layout-renderer.tsx`でスケール変更を監視**（実装済み）
 
 - `useEffect`フックでスケール値を監視
+- DOM要素（`.grid-3d-container`）の`style.transform`から直接スケール値を抽出（`cell-css2d-service.ts`のメソッドを使用せず、DOMから直接読み取る実装）
 - スケール変更時に`react-grid-layout`要素のDOMサイズを更新
 
-3. **DOMサイズの計算と適用**
+3. **DOMサイズの計算と適用**（実装済み）
 
 - `react-grid-layout`要素の現在の見た目サイズを取得（`getBoundingClientRect()`）
 - スケール値で割って、DOMサイズを計算
 - `react-grid-layout`要素の`style.width`と`style.height`を設定
 
-4. **動作確認**
+4. **動作確認**（実装済み）
 
 - ドラッグ時にセルが正しく移動するか確認
 - マウスの移動距離とセルの移動距離が一致するか確認
@@ -125,10 +128,13 @@ SS2DRendererドラッグ操作マウス位置ズレ修正
 
 ## 実装ファイル
 
-- [src/core/three/cell-css2d-service.ts](src/core/three/cell-css2d-service.ts) - グリッドスケール取得メソッドの確認/追加
-- [src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsx](src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsx) - スケール監視とDOMサイズ更新の実装
+- [src/core/three/cell-css2d-service.ts](src/core/three/cell-css2d-service.ts) - グリッドスケール取得メソッド`getGridContainerScale()`が実装済み（実際の実装では使用されていない）
+- [src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsx](src/components/editor/renderers/3d-layout/grid-3d-layout-renderer.tsx) - スケール監視とDOMサイズ更新の実装（113-172行目）
+
+## 実装の詳細（実際の実装）
+
+実際の実装では、`grid-3d-layout-renderer.tsx`の`useEffect`フック（113-172行目）で、DOM要素（`.grid-3d-container`）の`style.transform`から直接スケール値を抽出しています。`cell-css2d-service.ts`の`getGridContainerScale()`メソッドは実装されていますが、このプランでは使用されていません。
 
 ## 確認事項
 
 - ドラッグ時にセルが正しく移動するか（大きく飛ばないか）
-- マウスの移動距離とセルの移動距離が一致するか

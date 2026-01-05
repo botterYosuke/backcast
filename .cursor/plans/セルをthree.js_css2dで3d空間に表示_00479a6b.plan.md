@@ -1,49 +1,3 @@
----
-name: セルをThree.js CSS2Dで3D空間に表示
-overview: セルをThree.jsのCSS2DRendererを使用して3D空間に浮かせて表示する機能を実装します。BackcastPro-Steamのサンプルコードを参考に、React/TypeScript環境に適した実装を行います。
-todos:
-  - id: install-deps
-    content: package.jsonにthreeと@types/threeを追加
-    status: pending
-  - id: create-scene-manager
-    content: Three.jsシーン、カメラ、OrbitControlsを管理するSceneManagerを作成
-    status: pending
-    dependencies:
-      - install-deps
-  - id: create-css2d-service
-    content: CSS2DRendererを管理するCellCSS2DServiceを作成（サンプルコードのFloatingWindowCSS2DServiceを参考）
-    status: pending
-    dependencies:
-      - create-scene-manager
-  - id: create-cells-3d-renderer
-    content: セルを3D空間に配置するCells3DRendererコンポーネントを作成
-    status: pending
-    dependencies:
-      - create-css2d-service
-  - id: integrate-edit-app
-    content: EditAppに3D表示モードを統合し、Cells3DRendererを使用
-    status: pending
-    dependencies:
-      - create-cells-3d-renderer
-  - id: implement-grid-layout
-    content: セルをグリッド状に配置するアルゴリズムを実装
-    status: pending
-    dependencies:
-      - create-cells-3d-renderer
-  - id: add-orbit-controls
-    content: OrbitControlsを統合してマウス操作で3D空間を操作可能にする
-    status: pending
-    dependencies:
-      - create-scene-manager
-  - id: test-and-adjust
-    content: 動作確認とパフォーマンス調整
-    status: pending
-    dependencies:
-      - integrate-edit-app
-      - implement-grid-layout
-      - add-orbit-controls
----
-
 # セルをThr
 
 ee.js CSS2Dで3D空間に表示する実装計画
@@ -139,4 +93,3 @@ ee.js CSS2Dで3D空間に表示する実装計画
 
 1. 依存関係の追加（three, @types/three）
 2. Three.jsシーン管理の実装
-3. CSS2Dサービスの実装

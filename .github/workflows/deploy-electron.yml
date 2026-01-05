@@ -3,7 +3,7 @@ name: Deploy Electron App to GitHub Releases
 on:
   push:
     branches:
-      - sasa/frontoend
+      - game
   workflow_dispatch:
 
 jobs:

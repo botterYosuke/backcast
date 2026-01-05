@@ -116,14 +116,12 @@ async function main(): Promise<void> {
 
     // Load and validate models
     const models = loadAndValidateModels(modelsYamlPath);
-    // .jsonファイルは生成しない（.tsファイルのみを使用）
-    // writeJsonFile(modelsJsonPath, { models: models });
+    writeJsonFile(modelsJsonPath, { models: models });
     writeTsFile(modelsTsPath, "models", models);
 
     // Load and validate providers
     const providers = loadAndValidateProviders(providersYamlPath);
-    // .jsonファイルは生成しない（.tsファイルのみを使用）
-    // writeJsonFile(providersJsonPath, { providers: providers });
+    writeJsonFile(providersJsonPath, { providers: providers });
     writeTsFile(providersTsPath, "providers", providers);
 
     Logger.info(

@@ -1,0 +1,84 @@
+name: Deploy Web to Firebase
+
+on:
+  push:
+    branches:
+      - sasa/pyodide
+  workflow_dispatch:
+
+jobs:
+  deploy-web:
+    name: Deploy Web to Firebase
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 8
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Generate LLM info TypeScript files
+        run: pnpm --filter @marimo-team/llm-info codegen
+
+      - name: Verify generated TypeScript files
+        shell: bash
+        run: |
+          echo "=== Checking generated TypeScript files ==="
+          ls -lah packages/llm-info/data/generated/ || echo "Directory does not exist"
+          if [ -f packages/llm-info/data/generated/models.ts ]; then
+            echo "models.ts exists"
+            echo "Size: $(wc -c < packages/llm-info/data/generated/models.ts) bytes"
+          else
+            echo "ERROR: models.ts does not exist"
+            exit 1
+          fi
+          if [ -f packages/llm-info/data/generated/providers.ts ]; then
+            echo "providers.ts exists"
+            echo "Size: $(wc -c < packages/llm-info/data/generated/providers.ts) bytes"
+          else
+            echo "ERROR: providers.ts does not exist"
+            exit 1
+          fi
+
+      - name: Build pyodide version
+        run: cross-env PYODIDE=true vite build --config frontend/vite.config.mts
+
+      - name: Verify build output
+        run: |
+          echo "Checking build output structure..."
+          ls -la dist/ || echo "dist directory not found"
+          if [ -f dist/index.html ]; then
+            echo "index.html exists"
+            # Check if marimo-wasm element is present
+            if grep -q "marimo-wasm" dist/index.html; then
+              echo "✓ marimo-wasm element found in index.html"
+            else
+              echo "WARNING: marimo-wasm element not found in index.html"
+            fi
+          else
+            echo "ERROR: index.html not found"
+            exit 1
+          fi
+
+      - name: Setup Firebase CLI
+        run: npm install -g firebase-tools
+
+      - name: Deploy to Firebase
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          firebase deploy --only hosting --project ${{ secrets.FIREBASE_PROJECT_ID }} --token "$FIREBASE_TOKEN"
+

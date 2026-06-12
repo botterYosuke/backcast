@@ -1,0 +1,16 @@
+# CLAUDE.md — The-Trader-Was-Replaced
+
+## 実装完了後の必須アクション
+
+実装・修正・フェーズが完了したとき（「完成した」「done」「finished」「実装した」「修正した」「コミットした」「マージする」「フェーズ終了」などのフレーズが出たとき）は、**必ず** `post-impl-skill-update`, `code-review(simplify)` スキルを発動すること。
+
+### `post-impl-skill-update`スキルは：
+- 今回使用したスキルの振り返り
+- 使えばよかった（使い忘れた）スキルの特定
+- スキルの description（トリガー条件）や内容の改善
+
+を行い、スキルエコシステムを育てる。
+
+### `code-review(simplify)` スキルを発動した際は：
+
+**Medium** 以上の指摘が無くなるまで `/pair-relay` でレビュー＆修正を繰り返すこと。

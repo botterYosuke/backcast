@@ -60,7 +60,8 @@ ADR-0019（In-proc only backend transport）, ADR-0026（Nautilus catalog precis
    submodule 参照・pinned-package-from-TTWR は採らない（TTWR は #5 で**廃止**するため）。
    engine は host 非依存を保ち（host 結合は **sink 注入点・`engine.core`/`engine.inproc_server` の 2 入口・
    dict 境界**に既に局所化済み）、Unity(C#) は decision 8 の adapter でこれを駆動する。
-   pin（**CPython 3.13.13 / nautilus-trader 1.226.0 stock wheel / PRECISION_BYTES=16**）は移植時に
+   pin（**CPython 3.13.13 / nautilus-trader 1.226.0 / PRECISION_BYTES=8 standard**。Intel Mac は PyPI に
+   standard wheel 不在のため sdist を `HIGH_PRECISION=false` で再ビルド必須・共有 catalog も 8）は移植時に
    TTWR `uv.lock` から確定し、以後 backcast の `pyproject`／埋め込み venv に住む。
 8. **C#↔Python は単一 adapter 層**：呼び出し面を 1 つの adapter に集約し、C# 製 sink を engine の
    sink 口へ差す。worker→main は **GIL なしで読める C#/native バッファ**で受け渡す（main thread は
@@ -125,7 +126,7 @@ backcast へ移植済みなので二重 co-development は発生せず、fallbac
 seam ゲートは段ごとに分ける（前段 green は後段を保証しない）：
 
 - **Step 0（ゲート / #2）**：S0 spike — **threaded** Nautilus backtest（C# サブスレッド＋`Py.GIL()`、
-  main は GIL なし・≥300fps、本番 pin と PRECISION_BYTES=16 を in-process assert、real catalog 小サンプル）
+  main は GIL なし・≥300fps、本番 pin と PRECISION_BYTES=8 を in-process assert、real catalog 小サンプル）
   ＋ numpy/torch zero-copy→GraphicsBuffer。**最終的に deploy OS = Windows で通す**。落ちたら事実ベースで再考。
 - **Step 1（#3）**：Unity host + 埋め込み Python ランタイム + **Replay parity**（実弾ゼロ）。engine を
   backcast に移植し package 化、埋め込み venv に同一 pin で install。

@@ -105,3 +105,9 @@ InitTestScene*.unity*
 
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
+
+# Python S0 spike (issue #2) — embedded venv & fixtures are not committed
+python/.venv/
+__pycache__/
+*.pyc
+python/spike/fixtures/

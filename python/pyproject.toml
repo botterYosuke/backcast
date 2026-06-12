@@ -1,0 +1,12 @@
+[project]
+name = "backcast-spike"
+version = "0.0.0"
+description = "S0 spike: threaded Nautilus backtest under Unity Mono+pythonnet (issue #2 gate)"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "nautilus-trader==1.226.0",
+]
+
+[tool.uv]
+# spike はパッケージではなく venv 管理のみ（spike/ スクリプトは path 実行）
+package = false

@@ -106,8 +106,9 @@ InitTestScene*.unity*
 # Auto-generated scenes by play mode tests
 /[Aa]ssets/[Ii]nit[Tt]est[Ss]cene*.unity*
 
-# Python S0 spike (issue #2) — embedded venv & fixtures are not committed
+# Python spike — embedded venv & re-stageable parquet data are not committed
+# (strategy fixtures under python/spike/fixtures/strategies/ ARE source → tracked)
 python/.venv/
 __pycache__/
 *.pyc
-python/spike/fixtures/
+python/spike/fixtures/jquants-catalog/

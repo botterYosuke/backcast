@@ -1,0 +1,158 @@
+"""AccountSync — Phase 9 Step 4 の口座同期 push（余力・建玉の定期 fetch + 差分 emit）。
+
+責務（§3.4 / Success Criteria「口座同期」）:
+- 起動直後に 1 回 `fetch_account()` して **必ず emit**（初期ロード。GetAccount RPC を
+  新設せず初回 push でまかなう — 計画書 §3.12 のドリフト訂正、下記設計判断参照）。
+- 以降は `interval_s` 毎に fetch し、**前回 emit した snapshot と異なるときだけ emit**
+  （等価判定は `AccountSnapshot` の pydantic frozen `==`。ts_ms を持たないため時刻差で
+  誤判定しない）。
+
+設計判断:
+- **transport 非依存**: proto を import しない（reducer_bridge と同思想）。`on_account_event`
+  コールバックに `AccountSnapshot` を渡すだけ。proto 変換と `ts_ms` 採番は _backend_impl の責務。
+- **callback は同期関数**: live loop thread 上で走り、_backend_impl では threadsafe な
+  `BackendEventStream.publish` を直接叩く（Step 0 設計）ため await 不要。
+- **fetch_account の例外**: reducer_bridge は「例外でループ終了 + last_error 記録」だが、
+  口座同期で「1 回の transient 失敗で永久停止」は実運用で困る。よって本実装は
+  **warning ログ + last_error 記録のうえでループ継続**（best-effort・継続性優先）し、
+  正常な `CancelledError` のみで終了する。`on_account_event` 内の例外も同様に try で囲み
+  ログのみ（呼び出し側責務だがループを守る）。
+- `_last_emitted` は emit した snapshot のみ更新する。fetch 失敗時は前回値を保持し、
+  復旧後に値が変わっていれば改めて emit される。
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from typing import Callable, Optional, Protocol
+
+from engine.live.order_types import AccountSnapshot
+from engine.live.supervised_task import IntervalPollTask
+
+_LOG = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class LiveErrorRecord:
+    """source 付きの live エラー観測点（D2 で _backend_impl が読み、BackendError event へ寄せる布石）。"""
+    source: str
+    detail: str
+
+
+class _AccountSource(Protocol):
+    async def fetch_account(self) -> AccountSnapshot: ...
+
+
+class AccountSync(IntervalPollTask):
+    """venue 口座の定期同期。起動時 1 回 + interval_s 毎に fetch し差分のみ emit。"""
+
+    def __init__(
+        self,
+        adapter: _AccountSource,
+        on_account_event: Callable[[AccountSnapshot], None],
+        interval_s: float = 30.0,
+        on_error: Optional[Callable[[LiveErrorRecord], None]] = None,
+        mode_provider: Optional[Callable[[], str]] = None,
+    ) -> None:
+        self._adapter = adapter
+        self._on_account_event = on_account_event
+        self._interval_s = interval_s
+        self._on_error = on_error
+        # issue #39 Slice 2: Replay 中は fetch/emit を入口で抑止する（kline bridge の
+        # mode_provider と対称）。None なら従来どおり常に同期する（mode 非依存テスト用）。
+        self._mode_provider = mode_provider
+        self._last_emitted: Optional[AccountSnapshot] = None
+        self._last_error_record: Optional[LiveErrorRecord] = None
+
+    async def force_resync(self) -> bool:
+        """dedup を貫通して即座に 1 回 fetch + emit する（issue #29 Slice 2'）。
+
+        Replay→Live 切替直後に Rust が PortfolioState を reset するため、backend は
+        値不変でも強制的に AccountEvent を再 push する必要がある。`_tick(force_emit=True)`
+        は snapshot が `_last_emitted` と同一でも emit する。fetch 失敗時は `_tick` 内の
+        on_error 経路（既存）で surface され、例外を握り潰さず継続する。
+
+        戻り値: emit に成功したら True、fetch 失敗等で emit できなければ False
+        （handler が success/error_code を判定するのに使う）。"""
+        return await self._tick(force_emit=True)
+
+    async def _run(self) -> None:
+        # 初期ロード: interval を待たず即 fetch + emit（必ず 1 回出す）。
+        await self._tick(force_emit=True)
+        while True:
+            try:
+                await asyncio.sleep(self._interval_s)
+            except asyncio.CancelledError:
+                return
+            await self._tick(force_emit=False)
+
+    async def _tick(self, *, force_emit: bool) -> bool:
+        """1 回 fetch + emit を試みる。emit に成功したら True、fetch 失敗や
+        callback 失敗で emit できなかった場合は False を返す（dedup skip も False）。"""
+        # issue #39 Slice 2 (案A+Y): Replay 中は fetch/dedup/force すべての前に gate する。
+        # force_emit=True（force_resync 経由）でも Replay では emit しない。これにより
+        # callback の dedup 汚染（_last_emitted）も起きず、Live 切替後の差分 push が健全に残る。
+        if self._mode_provider is not None and self._mode_provider() == "Replay":
+            return False
+        try:
+            snapshot = await self._adapter.fetch_account()
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 — best-effort: 1 回失敗で停止させない
+            self._last_error = exc
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else repr(exc)
+            record = LiveErrorRecord(source="account_sync", detail=detail)
+            self._last_error_record = record
+            _LOG.warning("AccountSync: fetch_account failed, continuing", exc_info=exc)
+            if self._on_error is not None:
+                try:
+                    self._on_error(record)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:  # noqa: BLE001 — on_error の失敗でループを止めない
+                    _LOG.warning("AccountSync: on_error callback failed", exc_info=True)
+            return False
+
+        if not force_emit and snapshot == self._last_emitted:
+            return False  # 不変なら emit しない（差分 push）
+
+        try:
+            self._on_account_event(snapshot)
+        except asyncio.CancelledError:
+            raise
+        except BaseException as exc:  # noqa: BLE001 — callback の失敗でループを止めない
+            # `_last_emitted` は **成功時のみ** 更新する。ここで先に更新してしまうと、
+            # 配信に失敗した snapshot を「emit 済み」と誤記録し、値が変わるまで二度と
+            # 再送されない（特に force_emit=True の初回ロードが永久に欠落しうる）。
+            # fetch 失敗と同様に on_error で surface する（issue #29 review残）: ここで
+            # 握り潰すと force_resync が False を返して handler が FORCE_RESYNC_NO_EMIT
+            # を返すのに BackendError トーストが出ず、失敗がサイレントになる。
+            self._last_error = exc
+            detail = f"{type(exc).__name__}: {exc}" if str(exc) else repr(exc)
+            record = LiveErrorRecord(source="account_sync", detail=detail)
+            self._last_error_record = record
+            _LOG.warning("AccountSync: on_account_event callback failed", exc_info=exc)
+            if self._on_error is not None:
+                try:
+                    self._on_error(record)
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:  # noqa: BLE001 — on_error の失敗でループを止めない
+                    _LOG.warning("AccountSync: on_error callback failed", exc_info=True)
+            return False
+        self._last_emitted = snapshot
+        return True
+
+    @property
+    def last_snapshot(self) -> Optional[AccountSnapshot]:
+        """直近に emit した口座スナップショット（#114 M1: 発注時の buying_power 供給源）。
+
+        起動時 1 回 + interval_s 毎の fetch で更新される（emit した値のみ保持。fetch 失敗
+        時は前回値を保つ）。未ログイン直後など 1 度も emit していなければ None。発注ハンドラは
+        これを読んで `facade.place(buying_power=)` に渡す（余力超過の pre-trade 拒否）。"""
+        return self._last_emitted
+
+    @property
+    def last_error_record(self) -> Optional[LiveErrorRecord]:
+        return self._last_error_record

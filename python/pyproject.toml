@@ -1,12 +1,23 @@
 [project]
-name = "backcast-spike"
+name = "backcast-engine"
 version = "0.0.0"
-description = "S0 spike: threaded Nautilus backtest under Unity Mono+pythonnet (issue #2 gate)"
+description = "Ported TTWR replay engine running under Unity Mono+pythonnet (S1 / issue #9)"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "nautilus-trader==1.226.0",
+    "orjson>=3.11.9",
+    "pydantic>=2.13.4",
+    "httpx>=0.27",
+    "websockets>=16.0",
+    "joblib>=1.5.3",
+    "scikit-learn>=1.8.0",
+    "numpy>=2.4.4",
+    "pandas>=2.3.3",
 ]
 
-[tool.uv]
-# spike はパッケージではなく venv 管理のみ（spike/ スクリプトは path 実行）
-package = false
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["engine"]

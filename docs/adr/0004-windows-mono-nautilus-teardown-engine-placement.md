@@ -1,5 +1,8 @@
 ---
-status: proposed
+status: accepted
+decision: 案 C（pure-Python Backcast Execution Kernel）
+accepted-date: 2026-06-13
+accepted-by: owner
 supersedes-conditionally: ADR-0001 (decisions 2/3/4/6, for the Windows deploy target)
 ---
 
@@ -8,8 +11,12 @@ supersedes-conditionally: ADR-0001 (decisions 2/3/4/6, for the Windows deploy ta
 `grill-with-docs` / #18（Windows live prerequisites）の S0 Windows leg 診断で判明した
 **deploy OS（Windows）固有の事実**に基づき、ADR-0001 が前提とした「Python/Nautilus を Unity プロセスに
 全埋め込み」の **Windows での成立性**を再決定する。ADR-0001 は self-protected のため本 ADR で **supersede**
-する（ADR-0001 は編集しない）。**本 ADR は `proposed`。Decision は owner 判断で確定する（勝手に `accepted`
-へ昇格しない）。**
+する（ADR-0001 は編集しない）。**Decision = 案 C（pure-Python Backcast Execution Kernel）で `accepted`
+（2026-06-13・owner 確定）。** 昇格条件（案 C の最初の tracer bullet が golden 一致 ＋ Windows-Mono clean
+teardown で GREEN）を #24 で充足: AC① golden 一致（CPython subprocess 隔離）/ AC② Unity-Mono batchmode
+（`KernelTeardownProbe.Run`）で exit 0・新規 crash dump 無し・clean `PythonEngine.Shutdown`・heartbeat 生存 /
+AC③ 既存 gates 発火。実証記録は `docs/findings/0008-backcast-execution-kernel-tracer.md`。**以降、本 Decision は
+固定**（下記「自己保護」）。案 B（別プロセス）は不採用（fallback としても起こさない）。
 
 関連: ADR-0001（decision 2 全埋め込み / 3 Unity死=Python死 / 4 重い計算は C# sub-thread / 6 正常終了で
 broker 残注文取消）, ADR-0002（runtime 配置）, findings: `docs/spike/s0-result.md §1.1–§1.3`,
@@ -145,9 +152,11 @@ Nautilus 互換 API 全体 / 高度な reconciliation。
   とした（2026-06-13）。case-B 行きの根拠（多重 CRT/FLS teardown）は **「nautilus Rust core を排せば消える」**ため、
   案 C は **in-proc・zero-copy・Unity死=Python死 を保ったまま root cause を構造的に除去**できる（案 B の IPC/watchdog
   を回避）。S2-spike の pure-Python asyncio lifecycle が Windows-Mono GREEN である事実が裏付け。
-- **採用方針 = 案 C**。ただし **本 ADR は `proposed` 据え置き**、`accepted` 昇格は **案 C の最初の tracer bullet
-  （pure-Python kernel が Nautilus golden と一致 ＋ Windows-Mono で clean teardown）が GREEN になってから**
-  （owner 指定）。tracer issue: **#24**（Backcast Execution Kernel・golden 契約）。それまで案 B は fallback として残す。
+- **採用 = 案 C（`accepted` 2026-06-13）**。昇格条件（案 C の最初の tracer bullet = pure-Python kernel が
+  Nautilus golden と一致 ＋ Windows-Mono で clean teardown が GREEN）を **#24 で充足**: AC① golden 一致 /
+  AC② `KernelTeardownProbe.Run` 実走で exit 0・新規 crash dump 無し・clean `PythonEngine.Shutdown`・heartbeat
+  生存（過去の nautilus 版は同経路で必ず SIGSEGV）/ AC③ gates 発火。実証記録 = `docs/findings/0008`。
+  **案 B（別プロセス）は不採用**（fallback としても残さない）。
 
 ## Considered Options
 

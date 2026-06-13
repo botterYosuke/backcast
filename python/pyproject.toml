@@ -5,6 +5,10 @@ description = "Ported TTWR replay engine running under Unity Mono+pythonnet (S1 
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "nautilus-trader==1.226.0",
+    # Direct dep: the Backcast Execution Kernel (engine.kernel.bars) reads catalog parquet
+    # via pyarrow independently of Nautilus (#24). Pinned directly so it survives the
+    # eventual nautilus_trader removal rather than relying on it as a transitive dep.
+    "pyarrow>=18",
     "orjson>=3.11.9",
     "pydantic>=2.13.4",
     "httpx>=0.27",

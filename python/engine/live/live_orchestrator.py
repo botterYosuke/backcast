@@ -1603,6 +1603,12 @@ class LiveLoopManager:
             original_path=handle.original_path,
             safety_rails=rails,
         )
+        # #25 finding 3: post-trade baseline は **start_run（attach→on_start→intent drain）の前** に
+        # 確定する。start_run は controller.attach→strategy.on_start→発注まで走らせるため、on_start 即時
+        # 約定後の snapshot を baseline にすると初回損失を見逃す。ここで run 開始前の equity を取る。
+        # last_snapshot 優先・None なら明示 fetch_account（D7）。run_id 採番後に dict へ設定する。
+        baseline_snapshot = self._resolve_post_trade_baseline_snapshot()
+
         with self._live_strategy_lock:
             try:
                 record = self._strategy_host.start_run(start_params)
@@ -1613,30 +1619,8 @@ class LiveLoopManager:
                     error_code=exc.error_code,
                     error_message=str(exc.__cause__) if exc.__cause__ else str(exc),
                 )
-        # post-trade（max_daily_loss）評価用に run の rails を記録する。
-        # rails dict は live loop の評価 callback と共有するので専用 lock で囲う
-        # （_live_strategy_lock を live loop に晒さないため、外で取得する）。
-        # #25 D7: post-trade baseline を run 開始時に **即時確立** する。旧実装は baseline を消去して
-        # 次 snapshot で初設定していたため、最初の次 snapshot が fill 後だと初回損失を見逃した。
-        # account_sync.last_snapshot を優先するが、初回 fetch が Replay mode で抑止されている等で None の
-        # ときは **明示 fetch_account** で確定する（D7「無ければ controller が明示 fetch」）。round-trip は
-        # _run_rails_lock の外で行う（live loop callback が同 lock を取るため、保持したまま待たない）。
-        sess = self._session
-        acct = sess.account_sync if sess is not None else None
-        baseline_snapshot = acct.last_snapshot if acct is not None else None
-        if baseline_snapshot is None:
-            adapter = self._live_adapter()
-            if adapter is not None:
-                loop = self._ensure_live_loop()
-                try:
-                    baseline_snapshot = asyncio.run_coroutine_threadsafe(
-                        adapter.fetch_account(), loop
-                    ).result(timeout=self._live_timeout_s)
-                except Exception:
-                    logging.warning(
-                        "start_live_strategy: baseline fetch_account failed", exc_info=True
-                    )
-                    baseline_snapshot = None
+        # post-trade（max_daily_loss）評価用に run の rails + baseline を記録する。rails dict は live loop の
+        # 評価 callback と共有するので専用 lock で囲う（_live_strategy_lock を live loop に晒さない）。
         with self._run_rails_lock:
             self._run_rails[record.run_id] = rails
             if baseline_snapshot is not None:
@@ -1650,6 +1634,30 @@ class LiveLoopManager:
             error_code="",
             run_id=record.run_id,
         )
+
+    def _resolve_post_trade_baseline_snapshot(self):
+        """run 開始前の口座スナップショットを返す（post-trade baseline 用・#25 D7/finding 3）。
+
+        `account_sync.last_snapshot`（login 直後の forced fetch）を優先し、None（初回 fetch が Replay
+        mode で抑止されている等）なら **明示 fetch_account** で確定する。round-trip は呼び出し側の lock の
+        外で行う（live loop callback が `_run_rails_lock` を取るため、保持したまま待たない）。
+        """
+        sess = self._session
+        acct = sess.account_sync if sess is not None else None
+        snapshot = acct.last_snapshot if acct is not None else None
+        if snapshot is not None:
+            return snapshot
+        adapter = self._live_adapter()
+        if adapter is None:
+            return None
+        loop = self._ensure_live_loop()
+        try:
+            return asyncio.run_coroutine_threadsafe(
+                adapter.fetch_account(), loop
+            ).result(timeout=self._live_timeout_s)
+        except Exception:
+            logging.warning("start_live_strategy: baseline fetch_account failed", exc_info=True)
+            return None
 
     def _control_run(self, run_id, op) -> CommandAck:
         """Pause/Resume/Stop の共通骨子。run 存在チェック + host 呼び出し + event push。"""

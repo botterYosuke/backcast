@@ -244,6 +244,146 @@ def test_mock_live_strategy_exception_signals_error():
         thread.join(timeout=2.0)
 
 
+def _live_harness(on_safety_violation=None, on_strategy_error=None, on_order_event=None):
+    """controller + background live loop + MockVenueAdapter を組んで (loop, run, adapter, controller) を返す。"""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run(coro, timeout=5.0):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+
+    adapter = MockVenueAdapter()
+    runner = LiveRunner(adapter, interval_ns=DAY_NS)
+    runner._loop = loop
+    controller = KernelLiveEngineController(
+        loop_provider=lambda: loop,
+        adapter_provider=lambda: adapter,
+        runner_provider=lambda: runner,
+        on_order_event=on_order_event,
+        on_safety_violation=on_safety_violation,
+        on_strategy_error=on_strategy_error,
+    )
+    run(adapter.login(None))
+    adapter.set_account_snapshot(cash=10_000_000.0, buying_power=10_000_000.0, positions=())
+    run(runner.start())
+    return loop, thread, run, adapter, runner, controller
+
+
+def test_mock_live_max_order_value_denies_oversized_order():
+    """MARKET 注文の概算金額（直近価格×数量）が max_order_value_jpy 超過なら DENIED・venue 未到達（#25 finding 1）。"""
+    violations: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_safety_violation=lambda v: violations.append(v)
+    )
+    rails = SafetyRails(SafetyLimits(max_order_value_jpy=500))  # 100 株 @8 = 800 > 500
+    try:
+        controller.attach(
+            strategy_cls=KernelSpikeBuySell, scenario=SCENARIO, instrument_id=IID,
+            venue="MOCK", params={}, nautilus_strategy_id="LIVE-cap00001",
+            session=object(), safety_rails=rails,
+        )
+        for i in range(1, 4):
+            loop.call_soon_threadsafe(adapter.inject_tick, _kline(i, 8.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not violations:
+            time.sleep(0.02)
+        assert violations and violations[0].kind == "MAX_ORDER_VALUE"
+        assert adapter.submit_order_call_count == 0  # venue 未到達
+        assert controller._driver._portfolio.open_positions() == []
+        controller.detach(nautilus_strategy_id="LIVE-cap00001")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_mock_live_max_orders_per_minute_rate_limits():
+    """max_orders_per_minute 超過分は venue へ送らず DENIED（旧 native rate rail の kernel 実装・#25 finding 1）。"""
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _Burst(KernelStrategyBase):
+        def on_bar(self, bar):
+            for _ in range(3):
+                self.submit_market(self.instrument_id, OrderSide.BUY, 100)
+
+    violations: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_safety_violation=lambda v: violations.append(v)
+    )
+    rails = SafetyRails(SafetyLimits(max_orders_per_minute=2))  # 他 rail は 0=無効
+    try:
+        controller.attach(
+            strategy_cls=_Burst, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-rate0001", session=object(), safety_rails=rails,
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 8.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not any(
+            v.kind == "MAX_ORDERS_PER_MINUTE" for v in violations
+        ):
+            time.sleep(0.02)
+        assert any(v.kind == "MAX_ORDERS_PER_MINUTE" for v in violations)
+        assert adapter.submit_order_call_count == 2  # 2 件だけ venue 到達、3 件目は rate-denied
+        controller.detach(nautilus_strategy_id="LIVE-rate0001")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_mock_live_no_send_of_queued_order_after_strategy_exception():
+    """on_order で積んだ注文の後に例外を投げたら、その注文は venue へ送らない（#25 finding 2）。"""
+    from engine.kernel.orders import OrderFilled, OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _QueueThenRaise(KernelStrategyBase):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self._raised = False
+
+        def on_bar(self, bar):
+            self.submit_market(self.instrument_id, OrderSide.BUY, 100)  # order 1
+
+        def on_order(self, event):
+            if isinstance(event, OrderFilled) and not self._raised:
+                self._raised = True
+                self.submit_market(self.instrument_id, OrderSide.BUY, 100)  # order 2: 送られてはいけない
+                raise RuntimeError("boom after queueing order 2")
+
+    errors: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_strategy_error=lambda exc: errors.append(exc)
+    )
+    try:
+        controller.attach(
+            strategy_cls=_QueueThenRaise, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-q0000001", session=object(),
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 8.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not errors:
+            time.sleep(0.02)
+        assert errors  # 例外は伝播した
+        # order 1 のみ venue 到達。例外後にキュー済みだった order 2 は破棄される。
+        assert adapter.submit_order_call_count == 1
+        controller.detach(nautilus_strategy_id="LIVE-q0000001")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
 def test_mock_live_seeded_position_in_pretrade():
     """venue 既存建玉が seed され pre-trade position cap に効く（D7）。"""
     loop = asyncio.new_event_loop()

@@ -1,4 +1,4 @@
-# findings 0010 — Kernel Live Foundation（#25・grill 中）
+# findings 0011 — Kernel Live Foundation（#25・grill 中）
 
 方針: **ADR-0004 案 C**（pure-Python Backcast Execution Kernel）。本書は #25 スライスの下位確定事実を
 記録し、ADR-0004 を「方針: ADR-0004」として参照する（ADR-0004 は自己保護のため編集しない）。
@@ -272,6 +272,26 @@ engine/kernel/live/
 - **post-trade live 発火 + baseline 堅牢化**: baseline は `last_snapshot` が None（初回 fetch が Replay mode で
   抑止）でも **明示 fetch_account** で run 開始時に確定（D7）。test: `test_post_trade_max_daily_loss_fires_on_live_path`
   （full chain で損失 snapshot → `MAX_DAILY_LOSS` violation → run STOPPED）。
+
+### code-review 反映 round 2（#25 codex review・2026-06-13・GREEN 101 passed）
+
+Safety Rails 退行ほか 3 件（High）を修正:
+- **Safety Rails を LiveAuto で実効化**: ①MARKET の `order_notional_jpy` を **直近価格×数量**
+  （`driver.last_prices` は当該 bar close で更新済み）で precheck に渡し `max_position_size_jpy`/
+  `max_order_value_jpy` を有効化（価格未取得時のみ 0＝Nautilus native も market data 前は notional 不可と同じ）。
+  ②旧 native の `max_order_value_jpy` を **`SafetyRails.check_pre_trade` の pure rail に追加**
+  （`KIND_MAX_ORDER_VALUE`）。③`max_orders_per_minute` を **driver の 60s 窓 rate limiter**として実装
+  （`KIND_MAX_ORDERS_PER_MINUTE`・monotonic・controller が `rails.limits.max_orders_per_minute` を注入）。
+  test: `test_mock_live_max_order_value_denies_oversized_order` / `test_mock_live_max_orders_per_minute_rate_limits`。
+- **戦略例外後にキュー済み注文を送らない**: `_signal_strategy_error` で `_intents.clear()`、`_drain` ループ
+  先頭と `_process_intent` 入口で `_stopping` を確認して破棄。test:
+  `test_mock_live_no_send_of_queued_order_after_strategy_exception`。
+- **post-trade baseline を attach（on_start 発注）より前に確定**: `start_live_strategy` が baseline snapshot を
+  `start_run` の前に解決（`_resolve_post_trade_baseline_snapshot`・last_snapshot 優先／None なら明示 fetch）し
+  run_id 採番後に設定。on_start 即時約定後 snapshot を baseline にして初回損失を見逃すのを防ぐ。
+
+> 注: 本 findings は #16（Strategy Editor）が `docs/findings/0010-strategy-editor.md` を採番したため
+> **0010 → 0011 にリネーム**（番号衝突回避）。
 
 **残 manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行）**:
 `Assets/Editor/KernelLiveProbe.cs`（`KernelTeardownProbe` 同型）。`run_mock_live.run()` を Mono+pythonnet で

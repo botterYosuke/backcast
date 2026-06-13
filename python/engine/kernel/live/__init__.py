@@ -1,4 +1,4 @@
-"""engine.kernel.live — kernel の Live/Auto 統合（#25・方針: ADR-0004 案 C・記録: findings 0010）。
+"""engine.kernel.live — kernel の Live/Auto 統合（#25・方針: ADR-0004 案 C・記録: findings 0011）。
 
 Rust core を一切ロードしない pure-Python の Live 実体:
 - `broker.LiveBroker` — kernel `OrderEngine` ↔ 実 venue `OrderingVenueAdapter` の約定 bridge + order FSM。

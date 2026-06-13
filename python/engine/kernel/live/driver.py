@@ -30,6 +30,7 @@ from engine.kernel.orders import (
 from engine.kernel.portfolio import Portfolio
 from engine.kernel.strategy import Strategy
 from engine.live.adapter import KlineUpdate, TradesUpdate
+from engine.live.safety_rails import KIND_MAX_ORDERS_PER_MINUTE, RailViolation
 from engine.live.strategy_log import StrategyLogRecord
 
 log = logging.getLogger(__name__)
@@ -85,6 +86,7 @@ class KernelLiveDriver:
         is_run_gated: Optional[Callable[[], bool]] = None,
         on_safety_violation: Optional[Callable[[Any], None]] = None,
         on_strategy_error: Optional[Callable[[BaseException], None]] = None,
+        max_orders_per_minute: int = 0,
     ) -> None:
         self._strategy = strategy
         self._order_engine = order_engine
@@ -116,6 +118,10 @@ class KernelLiveDriver:
         self._orders: dict[str, Order] = {}
         self.fill_count = 0  # 実 fill イベント数（partial 含む counter・D7）
         self.last_prices: dict[str, float] = {}
+        # max_orders_per_minute（旧 Nautilus native rate rail）の kernel 実装。venue へ送る注文の
+        # monotonic 時刻を 60s 窓で保持し、超過を deny する（#25 finding 1）。0 は無効。
+        self._max_orders_per_minute = int(max_orders_per_minute or 0)
+        self._order_times: deque[float] = deque()
 
     def set_telemetry_emitter(self, emit_telemetry: Callable[[], None]) -> None:
         """telemetry emitter を後から差す（controller が driver の counters を読む closure を渡す）。"""
@@ -241,12 +247,19 @@ class KernelLiveDriver:
         self._draining = True
         try:
             while self._intents:
+                # teardown / 戦略例外後は積まれた intent を venue に送らず破棄する（#25 finding 2）。
+                if self._stopping:
+                    self._intents.clear()
+                    break
                 intent = self._intents.popleft()
                 await self._process_intent(intent)
         finally:
             self._draining = False
 
     async def _process_intent(self, intent: _Intent) -> None:
+        # finding 2: pop と process の間で stop/error が立った場合も venue に送らない。
+        if self._stopping:
+            return
         order = Order(
             client_order_id=intent.client_order_id,
             strategy_id=self._strategy.id,
@@ -263,11 +276,23 @@ class KernelLiveDriver:
             self._deliver(order, self._denied(order, "STRATEGY_PAUSED", "run is PAUSED; new orders gated"))
             return
 
+        # max_orders_per_minute（旧 native rate rail）を venue 送信前に判定（#25 finding 1）。
+        rate_violation = self._check_rate_limit()
+        if rate_violation is not None:
+            self._deliver(order, self._denied(order, rate_violation.kind, rate_violation.detail))
+            if self._on_safety_violation is not None:
+                self._on_safety_violation(rate_violation)
+            return
+
+        # 独自 pre-trade（allowlist / max_position_size / max_order_value / 規制）。MARKET の概算約定金額は
+        # 直近価格 × 数量（last_prices は当該 bar の close で更新済み）。価格未取得時のみ 0（§8 Open Risk・
+        # Nautilus native も market data 前は notional 評価不可と同じ・#25 finding 1）。
+        notional = self.last_prices.get(intent.instrument_id, 0.0) * intent.quantity
         violation = self._order_engine.precheck(
             order,
             net_signed_qty=self._portfolio.net_signed_qty(intent.instrument_id),
             current_position_value_jpy=self._portfolio.position_value_jpy(intent.instrument_id),
-            order_notional_jpy=0.0,  # MARKET: price unknown at submit
+            order_notional_jpy=notional,
         )
         if violation is not None:
             self._deliver(order, self._denied(order, violation.kind, violation.detail))
@@ -278,6 +303,26 @@ class KernelLiveDriver:
         events = await self._broker.submit(order)
         for ev in events:
             self._deliver(order, ev)
+
+    def _check_rate_limit(self) -> Optional[RailViolation]:
+        """max_orders_per_minute（旧 Nautilus native rate rail）の kernel 実装。0 は無効。
+
+        venue へ送る注文の monotonic 時刻を 60s 窓で保持し、窓内件数が上限以上なら違反を返す。
+        違反でない場合のみ今回の時刻を記録する（denied 注文は窓を消費しない）。
+        """
+        if self._max_orders_per_minute <= 0:
+            return None
+        now = time.monotonic()
+        cutoff = now - 60.0
+        while self._order_times and self._order_times[0] < cutoff:
+            self._order_times.popleft()
+        if len(self._order_times) >= self._max_orders_per_minute:
+            return RailViolation(
+                KIND_MAX_ORDERS_PER_MINUTE,
+                f"order submit rate exceeds {self._max_orders_per_minute}/min",
+            )
+        self._order_times.append(now)
+        return None
 
     # ── event delivery ─────────────────────────────────────────────────────────
 
@@ -327,6 +372,7 @@ class KernelLiveDriver:
             return
         self._failed = True
         self._stopping = True
+        self._intents.clear()  # finding 2: 失敗後はキュー済み注文を venue に送らない
         if self._on_strategy_error is not None:
             try:
                 self._on_strategy_error(exc)

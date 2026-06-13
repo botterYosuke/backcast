@@ -1,5 +1,5 @@
 // editor-only throwaway probe for #25 — Kernel Live Foundation Mono full-Live gate
-// KernelLiveProbe.cs — ADR-0004 案 C / docs/findings/0010 §Unity-Mono full Live gate (D5 layer 3)
+// KernelLiveProbe.cs — ADR-0004 案 C / docs/findings/0011 §Unity-Mono full Live gate (D5 layer 3)
 //
 // #25 AC: prove the pure-Python KernelLiveEngineController drives a full mock-venue LiveAuto
 // roundtrip (start→order→fill→position→stop) under Unity's Mono runtime + pythonnet, with the

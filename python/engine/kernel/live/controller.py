@@ -177,6 +177,7 @@ class KernelLiveEngineController:
             is_run_gated=self._make_is_run_gated(nautilus_strategy_id),
             on_safety_violation=self._on_safety_violation,
             on_strategy_error=self._on_strategy_error,
+            max_orders_per_minute=rails.limits.max_orders_per_minute,
         )
         # telemetry は driver の counters（order_count/fill_count）を読むため driver 確定後に差す。
         driver.set_telemetry_emitter(

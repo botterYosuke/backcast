@@ -57,6 +57,10 @@ KIND_ALLOWED_INSTRUMENTS = "ALLOWED_INSTRUMENTS"
 KIND_MAX_DAILY_LOSS = "MAX_DAILY_LOSS"
 KIND_BUYING_POWER = "BUYING_POWER"
 KIND_REGULATION = "REGULATION"
+# #25: pure-Python kernel は Nautilus native rail（LiveRiskEngineConfig）を持たないので、
+# 旧 native だった max_order_value / max_orders_per_minute も pre-trade rail として明示する。
+KIND_MAX_ORDER_VALUE = "MAX_ORDER_VALUE"
+KIND_MAX_ORDERS_PER_MINUTE = "MAX_ORDERS_PER_MINUTE"
 
 
 def order_increases_exposure(
@@ -153,6 +157,15 @@ class SafetyRails:
             return RailViolation(
                 KIND_ALLOWED_INSTRUMENTS,
                 f"{instrument_id} not in allowed_instruments {list(allowed)}",
+            )
+
+        # max_order_value_jpy（旧 Nautilus native `max_notional_per_order`）。新規注文 1 件の概算
+        # 約定金額が上限超過なら違反（0 は無効）。kernel には native rail が無いのでここで担う（#25）。
+        order_cap = self._limits.max_order_value_jpy
+        if order_cap > 0 and abs(order_notional_jpy) > order_cap:
+            return RailViolation(
+                KIND_MAX_ORDER_VALUE,
+                f"order value {abs(order_notional_jpy):.0f} JPY exceeds cap {order_cap} JPY",
             )
 
         cap = self._limits.max_position_size_jpy

@@ -1,0 +1,106 @@
+---
+status: proposed
+supersedes-conditionally: ADR-0001 (decisions 2/3/4/6, for the Windows deploy target)
+---
+
+# Windows-Mono で nautilus Rust core を走らせた thread の teardown が crash する — engine 配置の再決定（in-proc 長命 thread vs 別プロセス）
+
+`grill-with-docs` / #18（Windows live prerequisites）の S0 Windows leg 診断で判明した
+**deploy OS（Windows）固有の事実**に基づき、ADR-0001 が前提とした「Python/Nautilus を Unity プロセスに
+全埋め込み」の **Windows での成立性**を再決定する。ADR-0001 は self-protected のため本 ADR で **supersede**
+する（ADR-0001 は編集しない）。**本 ADR は `proposed`。Decision は owner 判断で確定する（勝手に `accepted`
+へ昇格しない）。**
+
+関連: ADR-0001（decision 2 全埋め込み / 3 Unity死=Python死 / 4 重い計算は C# sub-thread / 6 正常終了で
+broker 残注文取消）, ADR-0002（runtime 配置）, findings: `docs/spike/s0-result.md §1.1–§1.3`,
+`docs/findings/0005-s2-spike-live-loop.md §8.1`。
+
+## Context（#18 で初めて分かった事実）
+
+deploy OS = Windows（kabuステーションが Windows 専用）。Mac-Mono leg は全 GREEN だったが、**Windows-Mono で
+S0（threaded nautilus backtest）が FAIL**。段階マーカー＋owner 指定の診断ラダー＋2 spike で root cause を切り分けた:
+
+1. **load は通る**: `import nautilus_trader` + 精度 pin（PRECISION_BYTES=8）まで Windows-Mono+pythonnet で成功。
+2. **run は thread context 依存**:
+   - C# `new Thread` 上で `BacktestEngine.run()` → **実行中に SIGSEGV**（§1.1。logging / strategy callback /
+     catalog data はいずれも除外済＝diagnostic A/B）。
+   - **main thread** で run → **GREEN**（`bars=204`、diagnostic C）。
+   - **Python-owned `threading.Thread`** 上で run → **完走**（`bars=204`、§1.2/§1.3）。
+   - ⇒ run 自体は off-main の **python-owned** thread で通る。問題は「C# が作った foreign thread」での実行。
+3. **teardown は必ず crash（本 ADR の核心）**: nautilus Rust core を走らせた thread を畳む段で Windows-Mono が
+   native crash する。**per-run でスレッドを終了**（§1.2 spike1）でも、**長命 daemon thread を生かしたまま
+   process exit**（§1.3 spike2）でも、同様に SIGSEGV。S2-spike の teardown が clean だったのは、その thread が
+   **pure-Python asyncio loop（Rust core 非実行）** だったため。
+4. **付随**: 本番同等 `log_level=ERROR` で multi-run すると nautilus の **logger は process-global singleton** の
+   ため 2 回目の engine 生成が Rust panic（init-once logging が別途必要）。
+
+### なぜ重大か（ADR-0001 への影響）
+
+- **decision 4**（重い計算を C# sub-thread で実行）: C# foreign thread での run が crash するため**現状不成立**。
+- **decision 6**（**正常終了**で venue 残注文を best-effort 取消）: **正常終了が必ず crash する**なら graceful
+  shutdown 自体が成立せず、resting order 取消が**達成不能**。これは「crash 時は取りこぼし受容」とは別問題で、
+  *normal* shutdown が存在し得なくなる安全要件の毀損。
+- **decision 2/3**（全埋め込み＝同一プロセス＝Unity死=Python死）: 埋め込み自体は run まで通るが、teardown crash が
+  解けない限り Windows で**安定運用できない**。
+
+## Decision（fork — owner が確定）
+
+下記 2 案を比較する。**本 ADR では選択せず**、owner が確定する。確定後、本 ADR を更新（または確定案で新 ADR）。
+
+### 案 A: in-proc 維持 ＋ teardown crash を解く
+
+nautilus を Unity プロセス内（Mono+pythonnet）で動かす ADR-0001 路線を維持し、**teardown crash の根治**を図る。
+未消化の調査余地: ① crash dump（`%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`）の native 解析で crash 関数を特定
+（CPython thread teardown / nautilus tokio runtime / pythonnet finalizer のどれか）。② nautilus Rust runtime
+（tokio/global logger）を process 寿命で 1 回だけ初期化し、engine thread を**完全に終了させない**運用に倒す
+（ただし §1.3 で process exit でも crash したため、"終了させない" だけでは不足の可能性）。③ Mono ランタイム設定
+/ pythonnet バージョン。
+
+- **Pros**: ADR-0001 の zero-copy（C#↔Python・viz GraphicsBuffer #8）と「Unity死=Python死」が無改造で保たれる。
+  要望者がレイテンシ理由で却下した IPC を導入しない。
+- **Cons**: teardown crash が **根治可能か不明**（spike 2 本＋3 診断で run は通すも teardown は両 model で crash）。
+  owner 指定で「場当たり修正はしない」方針のため、根治には native dump 解析という重い一歩が要る。decision 6 の
+  安全要件が解けるまで #4 は進めない。
+
+### 案 B: engine を別 CPython プロセスへ（ADR-0001 decision 2 の反転）
+
+nautilus engine を **Mono 外の素の CPython プロセス**で動かし、Unity(C#) とは IPC で接続する。teardown crash は
+Mono ホスト固有のため、**nautilus を Mono 上で走らせない**ことで構造的に回避する。
+
+- **Pros**: Windows-Mono teardown crash を確実に回避（素 CPython では S0 backtest が完走済）。nautilus の Rust
+  runtime / logger も独立プロセスで素直。graceful shutdown（decision 6 の resting order 取消）が成立する。
+- **Cons**: **ADR-0001 が明示的に却下した構成**（要望者がレイテンシ理由で loopback/gRPC を却下）。**C#↔Python の
+  zero-copy が困難**（viz #8 の GraphicsBuffer 直送が崩れる→ IPC 一括 or C# 側計算で代替）。「Unity死=Python死」を
+  **能動的に保証**する機構が必要（子プロセス + Job Object / parent-watch dead-man's-switch。ADR-0001 が
+  「不要」とした配管を導入することになる）。TTWR は元々 PyO3 in-proc だったため engine 側の IPC 境界を新設する
+  実装コスト。
+
+### 判定材料 / 暫定リコメンド（owner 確定待ち）
+
+- run が off-main python thread で完走する事実は「埋め込み完全否定」ではないが、**teardown crash が両 ownership
+  model で再現**し、それが **decision 6（正常終了の安全要件）を直接毀損**する点が決定的。
+- したがって暫定的には **案 B（別プロセス）** が安全要件を満たす確度が高い。ただし zero-copy 喪失と
+  「Unity死=Python死」の能動保証という ADR-0001 の核を覆すため、**案 A の native dump 解析を 1 回行ってから**
+  決めるのが妥当（crash 関数が判明し容易に直せるなら案 A で zero-copy を保てる）。
+- どちらを採るかは **owner の判断**（zero-copy/レイテンシ要件 vs 安全要件の優先順位）。
+
+## Considered Options
+
+- **案 A（in-proc 維持＋根治）** / **案 B（別プロセス）** — 上記。
+- **不採用（記録のみ）: Windows を deploy 対象から外す** — kabuステーションが Windows 専用のため不可。
+- **不採用（記録のみ）: Mac のみ**（Windows-Mono を諦め Mac-Mono で運用）— deploy = Windows の要件に反する。
+
+## Consequences
+
+- 確定まで **#18（および依存する #19–#23 / #4 全体）は blocked**。ADR-0001 は `proposed` 据え置き
+  （S0 Windows AC① 未達のまま）。
+- S2-spike の Windows leg は GREEN（findings 0005 §8.1）— asyncio loop seam（Rust core 非実行）は Mono で健全。
+  案 B でも案 A でも、live の **venue I/O / asyncio marshal 層**は再利用可能（teardown crash は nautilus Rust
+  backtest/run core 固有）。
+- 案 B を採る場合、ADR-0002（runtime 配置）も別プロセス前提に見直しが要る（venv は別プロセスが load）。
+
+## 自己保護
+
+本 ADR の Decision が確定したら固定する。覆す場合は本 ファイルを編集せず supersede する新規 ADR を起こす。
+スライス内で確定する下位事実（IPC 機構・watchdog 実装等）は本 ADR に書き戻さず当該スライスの `docs/findings/`
+に記録し、本 ADR を「方針: ADR-0004」として参照する。

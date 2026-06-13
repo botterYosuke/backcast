@@ -91,11 +91,19 @@ public class ReplayChartHarness : MonoBehaviour
     static readonly Color UP_COLOR    = new Color(0.20f, 0.80f, 0.35f, 1f);
     static readonly Color DOWN_COLOR  = new Color(0.85f, 0.28f, 0.28f, 1f);
 
+    // SUPERSEDED by #11 ReplayPanelsHarness: that harness now OWNS Play (chart + 4
+    // panels in one Play). This #10 auto-bootstrap is PRESERVED but flag-OFF so it
+    // never collides with #11's PythonEngine.Initialize() (one Play-owner rule;
+    // findings 0003 §4). Flip AutoBootstrapEnabled back to true to resurrect the #10
+    // chart-only playmode gate (e.g. the Windows leg re-run). Mirrors S0SpikeHarness.
+    const bool AutoBootstrapEnabled = false;
+
     // TURNKEY auto-bootstrap: owner just presses Play. Guarded OUT of batchmode so the
     // headless compile gate (`-batchmode -nographics -quit`) never inits Python / renders.
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
     {
+        if (!AutoBootstrapEnabled) return;   // #11 ReplayPanelsHarness owns Play (findings 0003 §4)
         if (Application.isBatchMode) return;
         var go = new GameObject("ReplayChartHarness");
         DontDestroyOnLoad(go);

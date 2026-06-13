@@ -239,7 +239,20 @@ harness によっては subagent (Navigator / Driver) に **Bash が付与され
 5. proto/codegen の生成物 fixup（例: `engine_pb2_grpc.py` の import 再パッチ）も Edit なので Driver に渡す（司令塔が直接 Edit しない）。codegen コマンド自体は司令塔が走らせる。
 6. この harness では Navigator/Driver が**最初の 1-2 ターンで「Bash を持っていない」と返して判明する**。判明したら即この運用に切り替える。
 
+## Navigator が Agent + Bash を持つ harness（自走する Navigator）の運用
+
+逆に、harness によっては **Navigator subagent が `Agent` + `Bash` をフルに持つ**ことがある（backcast の `pair-relay-navigator` がこれ。`.claude/agents/pair-relay-navigator.md` に Agent/Bash 付与）。この場合 Navigator は「次の 1 手」を返すだけでなく、**自分で Driver subagent を spawn し、Edit を反映させ、`cargo`/`pytest`/Unity batchmode compile まで自走する**（auto-pair-relay 寄りの挙動）。司令塔がリレーする前に既にファイルが書かれ「compile OK」と報告が返ることがある。実例（backcast #11 2026-06）: Navigator が hand 2（`ReplayRunLifecycle.cs`）と M3 harness を自分で Driver に書かせ compile も自走、司令塔の完了報告に「done, audit-clean」を含めて返した。
+
+この運用でも司令塔の核は変わらない —— **完了報告を信用対象ではなく検証対象として扱う**:
+
+1. Navigator が「書いた／compile 通った」と報告したら、司令塔は **必ず on-disk で裏取り**する: `git status --short`（意図したファイルだけが変わったか）＋ `Read`（中身が報告どおりか）。Navigator は Write を持たないので、報告と disk が食い違うことは原理的に起こり得る（Navigator が spawn した Driver が別物を書く／書き損じる等）。
+2. **authoritative なゲートは司令塔が自分で回す**。Navigator が「compile exit=0」と言っても、司令塔が改めて Unity batchmode（`-executeMethod <...>Probe.Run` 等）／`pytest` を実行し raw 出力で確認する。これは「Medium 以上なし確定前に必ずテストを回す」原則の延長で、Navigator の自走 compile はあくまで Navigator の作業ログであり最終ゲートではない。
+3. Navigator が findings 0003 §2 のような確定設計から **逸脱した設計判断を自走で入れた**ら（#11 で Navigator が lifecycle を main-thread-owned にする等の call をした）、その判断を司令塔が握り潰さず、disk で確認した上で必要なら owner / 次の Navigator に明示的に晒す。自走は速いが、設計逸脱が報告サマリに 1 行で埋もれやすい。
+
+要するに自走 Navigator harness では司令塔の価値は「運ぶ」から **「on-disk 裏取り＋authoritative ゲート再実行」** に寄る。報告の流暢さに乗らない。
+
 ## 合言葉
 
 運ぶ。混ぜない。削らない。急がせない。  
-Navigator には判断を、Driver には 1 手を、Human には事実を渡す。
+Navigator には判断を、Driver には 1 手を、Human には事実を渡す。  
+自走 Navigator の「書いた・通った」は disk とゲート再実行で裏を取る。

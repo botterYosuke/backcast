@@ -194,10 +194,18 @@ class GuiBridgeActor:
                     positions: list[dict] = []
                 else:
                     try:
-                        account = cache.account_for_venue(venue_str)
+                        from nautilus_trader.model.identifiers import Venue
+
+                        account = cache.account_for_venue(Venue(venue_str))
                         buying_power = float(account.balance_free().as_double()) if account else 0.0
                         equity = float(account.balance_total().as_double()) if account else 0.0
                     except Exception:
+                        log.warning(
+                            "[GuiBridgeActor] account_for_venue(%r) failed; "
+                            "equity/buying_power fallback to 0",
+                            venue_str,
+                            exc_info=True,
+                        )
                         buying_power = 0.0
                         equity = 0.0
 

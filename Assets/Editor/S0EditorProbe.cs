@@ -24,11 +24,6 @@ using Python.Runtime;
 
 public static class S0EditorProbe
 {
-    const string LIBPYTHON    = "/Users/sasac/.local/share/uv/python/cpython-3.13.13-macos-x86_64-none/lib/libpython3.13.dylib";
-    const string PYTHONHOME   = "/Users/sasac/.local/share/uv/python/cpython-3.13.13-macos-x86_64-none";
-    const string VENV_SITE    = "/Users/sasac/backcast/python/.venv/lib/python3.13/site-packages";
-    const string PROJECT_ROOT = "/Users/sasac/backcast/python";
-
     // worker -> main result (only C# primitives cross the thread boundary)
     static long   _bars;
     static long   _fills;
@@ -44,21 +39,43 @@ public static class S0EditorProbe
 
         try
         {
-            Python.Runtime.Runtime.PythonDLL = LIBPYTHON;
-            Environment.SetEnvironmentVariable("PYTHONHOME", PYTHONHOME);
-            Environment.SetEnvironmentVariable("PYTHONPATH", VENV_SITE + Path.PathSeparator + PROJECT_ROOT);
-            PythonEngine.PythonHome = PYTHONHOME;
+            // Runtime paths come from the shared OS-aware resolver
+            // (PythonRuntimeLocator, #9; Windows branch added in #18) instead of
+            // the original Mac-only consts. Runs on the Unity main thread (the
+            // -executeMethod entry) before Initialize, so it caches the four
+            // strings and the worker thread later reads cached values only.
+            PythonRuntimeLocator.ConfigureBeforeInitialize();
+            Debug.Log($"[S0 PROBE MARK] configured: dll={PythonRuntimeLocator.LibPython} home={PythonRuntimeLocator.PythonHome} site={PythonRuntimeLocator.VenvSite}");
 
             PythonEngine.Initialize();
             engineStarted = true;
+            Debug.Log("[S0 PROBE MARK] PythonEngine.Initialize OK");
 
-            // Main releases the GIL Initialize() holds; main NEVER reacquires it
-            // until after the worker has stopped (mirrors the harness).
-            ts = PythonEngine.BeginAllowThreads();
+            // #18 Windows-leg diagnostic C: S0_MAIN_THREAD=1 runs the backtest on
+            // the Unity MAIN thread (no background worker, GIL held from Initialize)
+            // to isolate whether the segfault is tied to the C# background-worker
+            // thread context (pythonnet thread-state/GIL registration) vs the core
+            // run itself. The production design keeps engine work OFF main; this is
+            // a diagnostic only.
+            if (Environment.GetEnvironmentVariable("S0_MAIN_THREAD") == "1")
+            {
+                Debug.Log("[S0 PROBE MARK] main-thread mode: running backtest on main thread");
+                Worker();   // main holds the GIL from Initialize; Py.GIL() nests safely
+                workerStopped = true;
+            }
+            else
+            {
+                // Main releases the GIL Initialize() holds; main NEVER reacquires it
+                // until after the worker has stopped (mirrors the harness).
+                ts = PythonEngine.BeginAllowThreads();
+                Debug.Log("[S0 PROBE MARK] BeginAllowThreads OK; starting worker");
 
-            var worker = new Thread(Worker) { IsBackground = true, Name = "S0ProbeWorker" };
-            worker.Start();
-            workerStopped = worker.Join(60000);   // main only waits; it does NOT take the GIL
+                // 64 MiB explicit stack does NOT prevent the segfault under
+                // Windows-Mono (thread-stack exhaustion ruled out). Kept but immaterial.
+                var worker = new Thread(Worker, 64 * 1024 * 1024) { IsBackground = true, Name = "S0ProbeWorker" };
+                worker.Start();
+                workerStopped = worker.Join(60000);   // main only waits; it does NOT take the GIL
+            }
 
             string err = Volatile.Read(ref _error);
             if (!workerStopped)
@@ -117,19 +134,23 @@ public static class S0EditorProbe
         {
             using (Py.GIL())
             {
+                Debug.Log("[S0 PROBE MARK] worker GIL acquired");
                 using (PyObject sys = Py.Import("sys"))
                 using (PyObject sysPath = sys.GetAttr("path"))
                 {
-                    sysPath.InvokeMethod("insert", new PyInt(0), new PyString(PROJECT_ROOT)).Dispose();
-                    sysPath.InvokeMethod("insert", new PyInt(0), new PyString(VENV_SITE)).Dispose();
+                    sysPath.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.ProjectRoot)).Dispose();
+                    sysPath.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.VenvSite)).Dispose();
                 }
+                Debug.Log("[S0 PROBE MARK] sys.path set; importing spike.s0_backtest (loads nautilus_pyo3)");
 
                 using (PyObject m = Py.Import("spike.s0_backtest"))
                 {
+                    Debug.Log("[S0 PROBE MARK] nautilus import OK; running gates");
                     // S0 AC① core: run the self-failing pin/footer gates on THIS
                     // interpreter first; a wrong wheel raises here (-> _error) instead
                     // of SIGABRT'ing deep in Rust.
                     m.InvokeMethod("run_gates").Dispose();
+                    Debug.Log("[S0 PROBE MARK] gates OK; running backtest");
 
                     using (PyObject r = m.InvokeMethod("run_backtest"))
                     using (PyObject barsObj = r["bars"])

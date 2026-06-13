@@ -92,9 +92,29 @@ public static class PythonRuntimeLocator
             // from the project layout so moving the repo cannot stale the dev paths.
             string repoRoot = Directory.GetParent(Application.dataPath).FullName;
             _projectRoot    = Path.Combine(repoRoot, "python");
-            _venvSite       = Path.Combine(_projectRoot, ".venv", "lib", PY_TAG, "site-packages");
-            _libPython      = UV_LIBPYTHON;   // external uv install (documented const)
-            _pythonHome     = UV_PYTHONHOME;  // external uv install (documented const)
+            string venvRoot = Path.Combine(_projectRoot, ".venv");
+
+            if (Application.platform == RuntimePlatform.WindowsEditor)
+            {
+                // Windows leg (#18 / Step2 prereq, deploy OS = Windows). The
+                // externally-installed uv CPython root is recorded in the venv's
+                // own pyvenv.cfg `home=`, so we DERIVE it (portable across
+                // machines) instead of hardcoding a per-user absolute path.
+                // libpython is python<minor-nodot>.dll in that home; venv
+                // site-packages is Lib/site-packages (not Mac's lib/<tag>/).
+                _pythonHome = ResolveVenvHome(venvRoot);
+                _libPython  = Path.Combine(_pythonHome, "python" + PY_MINOR.Replace(".", "") + ".dll");
+                _venvSite   = Path.Combine(venvRoot, "Lib", "site-packages");
+            }
+            else
+            {
+                // macOS dev leg (S0/S1 Mac green): external uv install carried as
+                // documented absolute consts (ADR-0002: the uv cpython path is
+                // genuinely external/absolute).
+                _libPython  = UV_LIBPYTHON;
+                _pythonHome = UV_PYTHONHOME;
+                _venvSite   = Path.Combine(venvRoot, "lib", PY_TAG, "site-packages");
+            }
         }
         else
         {
@@ -110,5 +130,27 @@ public static class PythonRuntimeLocator
         }
 
         _resolved = true;
+    }
+
+    // Reads the venv's pyvenv.cfg `home = <uv cpython root>` line — the venv's own
+    // portable record of its base interpreter, so the Windows uv path is never a
+    // per-user hardcode. Throws a clear error if absent (mis-staged venv) rather
+    // than failing later inside PythonEngine.Initialize with an opaque dlopen miss.
+    static string ResolveVenvHome(string venvRoot)
+    {
+        string cfg = Path.Combine(venvRoot, "pyvenv.cfg");
+        if (File.Exists(cfg))
+        {
+            foreach (string line in File.ReadAllLines(cfg))
+            {
+                int eq = line.IndexOf('=');
+                if (eq < 0) continue;
+                if (line.Substring(0, eq).Trim() == "home")
+                    return line.Substring(eq + 1).Trim();
+            }
+        }
+        throw new InvalidOperationException(
+            "PythonRuntimeLocator: could not resolve uv CPython home from " + cfg +
+            " (missing `home=`). Stage the Windows venv (python/.venv) before running.");
     }
 }

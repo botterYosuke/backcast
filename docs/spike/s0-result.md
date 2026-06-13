@@ -33,6 +33,127 @@ nautilus 初ロードが重く、その完走時点で main が既に 300 フレ
 
 ---
 
+## 1.1 ⛔ Windows leg = RED（2026-06-13, #18 / Step2 prereq）— BacktestEngine.run が Windows-Mono で segfault
+
+**deploy OS（Windows）で S0 AC① が FAIL。** ADR-0001 が「唯一の非可逆コミットメントの前提」とした
+「Nautilus が Mono+pythonnet 上で load し**実 backtest を完走**できるか」が、**Windows-Mono では完走しない**。
+
+実行環境: Windows 11 / CPython **3.13.11** win_amd64（production pin）/ nautilus-trader 1.226.0 / Unity 6000.4.11f1（Mono）/ `S0EditorProbe.Run` batchmode。
+
+**正確な落下段階（段階マーカーで特定・3 回再現）**:
+
+```
+[S0 PROBE MARK] configured (python313.dll / Windows uv home / .venv\Lib\site-packages)  ✓
+[S0 PROBE MARK] PythonEngine.Initialize OK                                              ✓
+[S0 PROBE MARK] BeginAllowThreads OK; starting worker                                   ✓
+[S0 PROBE MARK] worker GIL acquired                                                     ✓
+[S0 PROBE MARK] sys.path set; importing spike.s0_backtest (loads nautilus_pyo3)         ✓
+[S0 PROBE MARK] nautilus import OK; running gates                                       ✓   ← nautilus_pyo3 は LOAD する
+[S0 PROBE MARK] gates OK; running backtest                                              ✓   ← pin/footer (PRECISION_BYTES=8) PASS
+→ Crash!!! (Segmentation fault, exit 139) — S0EditorProbe.cs:136 = m.InvokeMethod("run_backtest") の中
+```
+
+**つまり load 失敗ではない**。`import nautilus_trader` + 精度 pin 検査までは Windows-Mono で通り、**`BacktestEngine.run()` の実行中に native segfault**する。
+
+**三点測量（原因の切り分け）**:
+- standalone Windows-CPython（同一 `python/.venv`）で同じ backtest は完走 → `[S0 BACKTEST OK] bars=204`。**wheel/venv 自体は健全**。
+- Mac-Mono では同じ probe が full backtest 完走（§1, `bars=204` / playmode `frames=1233`）。**Mono+pythonnet 一般の問題ではなく Windows 固有**。
+- nautilus 非依存の S2-spike は同一 Windows-Mono で GREEN（findings 0005 §8.1）→ **pythonnet の cross-thread/GIL marshal 一般の問題でもない**。
+- → 切り分け結果: **「Windows-Mono + pythonnet + nautilus Rust-core の backtest 実行」の組み合わせ固有**。
+
+**ruled out**: worker thread の stack 枯渇（明示 64 MiB stack でも同一段階で crash）。
+
+**証跡**: `C:/tmp/s0_win{,2,3,4}_*.log` / `s0_diag{A1,A2,A3,B1,B2,C}_*.log`、crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
+
+### 診断ラダー（owner 指定の 3 実験・2026-06-13）— 原因を C# background-thread context に切り分け
+
+owner 確定の安価・高識別 3 変数を順に除外（闇雲な Mono 設定変更 / nautilus 再ビルドには広げない）:
+
+| # | 除外した変数 | 設定 | 結果 |
+|---|---|---|---|
+| A | logging（`bypass_logging` vs Live 同等） | `LoggingConfig(log_level="ERROR", log_level_file="OFF")`、Mono 3 回 | **RED** → logging init / native→Python log callback **除外** |
+| B1 | Python strategy callback（`on_bar`） | `S0_NO_STRATEGY=1`（catalog data・strategy なし） | **RED** → strategy callback **除外** |
+| B2 | catalog / parquet / data marshal | `S0_SYNTHETIC=1 S0_NO_STRATEGY=1`（in-memory bars・catalog なし・strategy なし） | **RED** → data 経路 **除外**（pure Rust run） |
+| C | **実行スレッド context** | `S0_MAIN_THREAD=1`（C# background worker ではなく **main thread** で run） | **🟢 GREEN** `[S0 PROBE PASS] bars=204` |
+
+**verdict**: segfault は **「C# background worker thread 上で nautilus の Rust run-loop を回す」context 固有**。同一 backtest は (i) standalone Windows-CPython、(ii) Mac-Mono の background worker、(iii) **Windows-Mono の main thread** で完走する。落ちるのは **Windows-Mono + pythonnet で foreign（C# background）thread に GIL state を載せて Rust run-loop を駆動する**組合せのみ。owner 決定表の「worker のみ RED / main GREEN ＝ **pythonnet thread-state/GIL 登録との相互作用**」に一致。**stack 枯渇は除外**（64 MiB でも RED）。
+
+### 含意（owner 判断事項・先回り設計しない＝ADR-0001 方針）
+
+- **Windows-Mono 埋め込み自体の非互換ではない**（main thread で nautilus load + 実 backtest 完走）。「全条件 RED → 新規 superseding ADR」には**該当しない**。
+- ただし **ADR-0001 decision 4 の脅威**：decision 4 は「重い Python 計算を C# サブスレッドで実行し main を GIL から守る」を前提とする。Windows-Mono ではその **background-thread 実行経路**が現状 segfault する。S0 AC① は「**main は GIL 非取得**で background が回る」を要求するため、main-thread GREEN は **AC① 充足ではない**（threading 規律を満たさない）。
+- **ADR-0001 は `accepted` に昇格できない**（昇格条件＝S0 Windows AC①＝background-worker で GREEN が未達）。`proposed` 据え置き。
+- **#18 / #4 は本件が解けるまで前進不可**（Live も同じ background asyncio-loop thread で Rust を回すため同根のはず。ただし S2-spike の seam model は nautilus 非依存だったため GREEN だった ＝ nautilus Rust run-loop を background で回す live exec が本丸）。
+- 次アクションは owner 判断（pythonnet が C# background thread を Mono ランタイムへ attach する経路 / `PyGILState` 登録 / Mono thread attach の調査）。**対策は先回り設計せず**、診断はこの 3 実験で打ち切り（owner 指定）。
+
+### 1.2 bounded spike: Python-owned engine thread（owner 指示・2026-06-13）
+
+owner 指示の spike：C# `new Thread` 上で `BacktestEngine.run()` を回さず、**Python 側で `threading.Thread` を生成**してその中で既存 S0 backtest を実行（`spike/s0_backtest.py:S0EngineSeam`）。C# は start 要求 / GIL-free 待機 / 結果取得のみ（`Assets/Editor/S0PyThreadProbe.cs`、S2-spike と同じ GIL 規律：main は `BeginAllowThreads` で GIL 非取得、worker が `Py.GIL()` で seam を駆動、`Thread.join` は待機中に GIL を解放）。C# background-thread 直 run の RED（§1.1）は `S0EditorProbe.Run` に regression 証跡として温存（条件 6）。
+
+**結果（Windows-Mono batchmode、3 回再現）**:
+
+```
+[S0 PYTHREAD MARK] gates OK; creating seam + spawning python-owned engine thread  ✓
+[S0 PYTHREAD] python-owned engine thread spawned (daemon)                          ✓
+[S0 PYTHREAD] python-owned engine thread: nautilus run start                       ✓
+[S0 PYTHREAD] python-owned engine thread: run done bars=204                        ✓   ← backtest 完走（run+dispose）
+→ Native Crash Reporting: "Got a UNKNOWN while executing native code ... fatal error
+   in the mono runtime or one of the native libraries" / Managed Stacktrace: (空) / SIGSEGV
+   （`engine thread join: terminated=...` は未出力 ＝ join 復帰前にクラッシュ）
+```
+
+**正確な落下段階**: `BacktestEngine.run()` は **Python-owned thread 上で完走**（`bars=204`・`engine.dispose()` 後の print まで到達）。クラッシュは **その python-owned thread の終了（finalization）中**＝`_run` が return し CPython がスレッド状態を破棄する段で、native（mono runtime / native lib）crash。3/3 で `run_done=1 / join_returned=0 / crash=1`（決定的）。
+
+**§1.1 からの差分（重要）**: 原因スレッド context を C#→Python に替えると、segfault は **「run 中」→「スレッド終了中」へ移動**する。
+- C# `new Thread`: `engine.run()` の**実行中**に crash（nautilus Rust run-loop を foreign thread で回せない）。
+- Python-owned `threading.Thread`: `engine.run()`＋`dispose()` は**完走**するが、**スレッド終了で crash**。
+- → **Windows-Mono 埋め込みは「nautilus backtest を off-main の python-owned thread で完走」できる**（"全条件 RED ＝ 埋め込み非互換" ではない）。残課題は **nautilus Rust core が走ったスレッドの終了 lifecycle**に局所化された。
+
+**判定（owner GREEN/RED 基準）**: 条件 1（3 回連続完走・毎回 bars=204）は backtest 自体は満たすが **プロセスが終了時 crash**＝clean 完了せず → **gate は RED**。条件 2–5 は crash 前のため未到達。**owner 指示の RED 分岐**（場当たり修正に進まず・正確な落下段階＋dump を記録し superseding ADR 判断へ戻す）に従い停止。
+
+**証跡**: `C:/tmp/s0_pythread{1,2,3}_*.log`、crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
+
+**owner 判断材料（superseding ADR 検討の入力）**:
+- run が off-main python-thread で完走する事実は、**埋め込み路線を「別プロセス必須」と断ずる前の重要な反証**。残るのは終了 lifecycle のみ。
+- S2-spike の **engine-owned 長命 daemon**（`loop.run_forever()` を per-run で終了させない）との整合を考えると、「engine thread を per-run で生成・終了させる」本 spike のモデルではなく、**長命 engine thread にバックテスト/ live run を marshal して per-run では終了させない**設計なら終了 crash を回避できる可能性がある（ただし owner 指定により本 spike では先回り実装せず、ADR 判断に委ねる）。
+- 別プロセス案（engine を別 CPython プロセスに出し IPC）も superseding ADR の選択肢として残る。
+
+### 1.3 bounded spike (2): long-lived engine thread（owner 指示・2026-06-13）
+
+owner 指示の決定ゲート：per-run でスレッドを終了させず、S2-spike/production と同じ **プロセス寿命の長命 daemon engine thread**（command queue・`spike/s0_backtest.py:S0LongLivedEngine` / `get_long_lived_engine`）に backtest を marshal。C# は start 一度＋submit を繰り返すのみ、engine thread は join/再生成せず、明示 finalize もしない（OS が process exit で一括回収）。probe: `Assets/Editor/S0LongThreadProbe.cs`（main は GIL-free heartbeat）。
+
+**結果（Windows-Mono batchmode）**:
+
+| 構成 | run 0 | その後 |
+|---|---|---|
+| `bypass_logging=True`, 3 runs | 💥 **run 0 実行中に crash** | — |
+| `log_level=ERROR`, 1 run（confound 解消用） | ✅ `bars=204`・**wait 状態へ復帰**（`waiting=True`・threadId 安定） | 💥 **process exit で crash** |
+
+**confound 解消**: spike(1) は `log_level=ERROR` で run 完走 → teardown crash。spike(2) を最初 `bypass_logging=True`（multi-run には logger singleton 回避が必須）で回したら **run 中 crash** になったため、logging mode と thread model の 2 変数が交絡。`S0_LOG_MODE=error S0_RUNS=1` で分離した結果、**長命 thread + `log_level=ERROR` では run 0 が完走し wait へ復帰**し、**process exit で crash**。
+
+**正確な落下段階（長命 model）**: `BacktestEngine.run()` は長命 python-owned thread 上で**完走**（`bars=204`）し、thread は **command queue の wait 状態へ正常復帰**（per-run termination crash は発生せず＝spike(1) の crash 点は回避）。だが **process 終了時**、nautilus Rust core を走らせた daemon thread が生存したまま Unity/Mono が runtime を畳む段で **native crash**。owner GREEN 条件「process 終了が正常」を**満たさない → RED**。
+
+**追加の制約（process-global）**: 本番 Live と同じ `log_level=ERROR` で**複数回** backtest を回すと、nautilus の **logger は process-global singleton** のため 2 回目の `BacktestEngine` が Rust panic（"attempted to set a logger after ... already initialized"）。長命 multi-run には init-once logging が別途必要（CPython でも再現・Mono 非依存）。
+
+**統合判定（両 spike）**: **nautilus Rust core を走らせた thread の teardown が Windows-Mono で必ず crash**する — per-run 終了（spike1）でも process exit（spike2）でも。run 自体は off-main の python thread で完走する。S2-spike が clean な teardown だったのは、その thread が pure-Python asyncio loop で **Rust core を走らせていない**から。
+- ADR-0001 decision 6（正常終了で resting order を best-effort 取消）は、**正常終了が常に crash する**なら**達成不能**。
+- owner 指定の RED 分岐に従い、**追加 spike を打ち切り**、**長命 thread 案 vs 別 CPython プロセス案**を比較する **superseding ADR** へ進む。現時点の事実は **別プロセス案（nautilus を Mono 外の素の CPython で動かし IPC）** を強く示唆（teardown crash は Mono ホスト固有のため、nautilus を Mono 上で走らせない構成が回避策になる）。
+
+**証跡**: `C:/tmp/s0_longthread1_*.log`（bypass・run 中 crash）, `C:/tmp/s0_longconfound_*.log`（error・run 完走→exit crash）, crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
+
+### 1.4 native crash-dump 解析（owner 指示・dump 1 件・cdbX64・2026-06-13）
+
+`Unity.exe.10148.dmp`（§1.3 confound run）を cdbX64 で解析（詳細・loaded modules は **ADR-0004 §native crash-dump 解析**）:
+
+- **exception** `c0000005` AV at `ntdll!RtlFlsSetValue+0xb4`（解放済 FLS スロットへの書込）。
+- **無限再帰 → stack overflow**: `RtlFlsSetValue`(AV) → `_CxxFrameHandler3`(その AV の C++ 例外ハンドラ) → `_vcrt_getptd`/`FlsSetValue` → 再び `RtlFlsSetValue`(AV) → ∞。
+- **faulting module = ntdll/ucrtbase（Windows CRT の thread-local/FLS teardown）**。python313/mono/nautilus の自前コードではない。
+- **多重 CRT 確認**: `nautilus_pyo3_cp313_win_amd64`（Rust・自前 CRT）+ `python313` + `ucrtbase`/`VCRUNTIME140(_1)` + side-by-side `msvcp140_<hash>` 複数 + `msvcp100`。
+- **機構**: thread/process 終了時、複数 CRT が登録した FLS callback が別 CRT 解放済の per-thread data を deref → AV → 例外処理自身が FLS 再入 → 無限再帰。§1.1/§1.2/§1.3 が同一根（多重 CRT thread-local destructor 競合）と確定。
+- **判定**: owner 基準の「Rust/CPython/Mono 間の終了順・thread-local destructor → 根治性を示せない場合は案 B」に**該当**。局所的・保守可能な 1 点修正は無し → **案 B（別プロセス）支持**。最終確定は owner（ADR-0004 へ）。
+
+---
+
 ## 2. 検証した本番 pin（16-byte → 8-byte 訂正の経緯）
 
 issue #2 / ADR-0001 の元の pin は「16-byte (high-precision) stock wheel」を前提にしていたが、これは本番 catalog と矛盾していた:

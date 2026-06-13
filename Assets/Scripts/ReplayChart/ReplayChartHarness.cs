@@ -218,12 +218,18 @@ public class ReplayChartHarness : MonoBehaviour
             }
 
             // Drain GIL-free; keep ONLY the latest payload (cumulative -> latest = full series).
+            bool newPayload = false;
             while (_sink.TryDequeueBar(out string payload))
             {
                 _lastPayload = payload;
+                newPayload = true;
             }
 
-            if (_lastPayload != null)
+            // Decode + render ONLY when a new bar was drained this frame. Without this
+            // guard, the run streams 68 bars in ~7s but Update() keeps running for
+            // thousands more frames, re-parsing the unchanged final ~KB payload every
+            // frame (JsonUtility.FromJson allocates) for zero render work.
+            if (newPayload && _lastPayload != null)
             {
                 ReplayBarFrame frame = ReplayBarDecoder.Decode(_lastPayload);
                 if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)

@@ -11,7 +11,7 @@ kernel order path using the exact same import-pure logic the live path uses:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Callable, Iterable, Optional, Sequence
 
 from engine.live.post_trade_gate import evaluate_post_trade
 from engine.live.pre_trade_gate import evaluate_pre_trade
@@ -32,8 +32,15 @@ class _EquitySnapshot:
 
 
 class RiskEngine:
-    def __init__(self, rails: Optional[SafetyRails]) -> None:
+    def __init__(
+        self,
+        rails: Optional[SafetyRails],
+        regulation_provider: Optional[Callable[[], Iterable[str]]] = None,
+    ) -> None:
         self._rails = rails
+        # 信用規制 pre-trade フィルタ（() -> 規制中 instrument_id 集合）。None = 規制フィルタ無し
+        # （Replay の既定。golden への影響なし）。Live は controller が注入する（D6）。
+        self._regulation_provider = regulation_provider
 
     @property
     def rails(self) -> Optional[SafetyRails]:
@@ -57,6 +64,7 @@ class RiskEngine:
             current_position_value_jpy=current_position_value_jpy,
             net_signed_qty=net_signed_qty,
             rails=self._rails,
+            regulation_provider=self._regulation_provider,
         )
 
     def check_post_trade(

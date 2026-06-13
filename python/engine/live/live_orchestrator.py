@@ -137,11 +137,25 @@ class LiveLoopManager:
         self._secret_vault: SecretVault = SecretVault()
 
         # live auto strategy
+        # #25: kernel-native loader（nautilus Strategy ではなく engine.kernel.strategy.Strategy の
+        # subclass を検出 = Rust core 非ロード）。register_live_strategy（StrategyRegistry）と
+        # start_live_strategy（LiveStrategyHost）の **両方** に同じ kernel loader を差す。register 側を
+        # nautilus 既定のままにすると、①kernel 戦略ファイルが 0 subclass で登録できず ②register 時点で
+        # Rust core をロードし LiveAuto import-purity を破る（codex review #25）。
+        import functools
+
+        from engine.kernel.strategy import Strategy as _KernelStrategy
+        from engine.strategy_runtime import strategy_loader as _strategy_loader
+
+        _kernel_loader = functools.partial(_strategy_loader.load, base_cls=_KernelStrategy)
+
         self._run_registry: RunRegistry = RunRegistry()
-        self._strategy_registry: StrategyRegistry = StrategyRegistry()
+        self._strategy_registry: StrategyRegistry = StrategyRegistry(loader=_kernel_loader)
         if engine_controller is None:
-            from engine.live.engine_controller import NautilusLiveEngineController
-            engine_controller = NautilusLiveEngineController(
+            # #25: 既定 controller を pure-Python kernel 実体に置換（Live でも Rust core 非ロード・
+            # ADR-0004 案 C）。ctor seam は NautilusLiveEngineController と同一なので引数は不変。
+            from engine.kernel.live.controller import KernelLiveEngineController
+            engine_controller = KernelLiveEngineController(
                 loop_provider=self._ensure_live_loop,
                 adapter_provider=self._live_adapter,
                 runner_provider=self._live_runner_provider,
@@ -150,11 +164,13 @@ class LiveLoopManager:
                 on_telemetry=self._on_auto_telemetry,
                 on_strategy_log=self._on_auto_strategy_log,
                 run_gate_provider=self._is_run_gated,
+                on_strategy_error=self._on_auto_strategy_error,
             )
         self._strategy_host: LiveStrategyHost = LiveStrategyHost(
             run_registry=self._run_registry,
             session_provider=self._live_session_view,
             engine_controller=engine_controller,
+            loader=_kernel_loader,
         )
         self._live_strategy_lock = threading.Lock()
         self._run_rails_lock = threading.Lock()
@@ -1296,6 +1312,13 @@ class LiveLoopManager:
         self._emit(
             self._order_event_to_typed(ev, strategy_id=strategy_id)
         )
+        # #25 finding 4: kernel の同期 OrderResult fill 後は venue 口座を再 fetch して、UI の権威 position
+        # 表示と post-trade（max_daily_loss）評価を即時発火させる。adapter EC 経路（_publish_order_event）と
+        # 同じ refetch を auto 経路にも掛ける（mock は EC stream を出さないので、これが唯一の促進点）。
+        if ev.status in _ACCOUNT_REFETCH_STATUSES:
+            account_sync = self._session.account_sync if self._session is not None else None
+            if account_sync is not None and self._live_loop is not None and self._live_loop.is_running():
+                asyncio.ensure_future(account_sync.force_resync())
 
     def _on_auto_telemetry(self, strategy_id: str, metrics: dict) -> None:
         """controller の on_telemetry callback: run 別 telemetry を UI へ push (Step 7 D)。
@@ -1472,6 +1495,33 @@ class LiveLoopManager:
         self._publish_safety_rail_violation(run_id, violation)
         self._publish_live_strategy_event(record)
 
+    def _on_auto_strategy_error(self, exc: BaseException) -> None:
+        """controller（live loop thread）からの走行中戦略例外 callback（#25 finding 5）。
+
+        戦略の on_bar/on_tick/on_order が例外を投げたら run を握り潰さず fail させる。単一 run MVP
+        なので active run に紐付ける。fail_run（controller.detach が同 loop へ blocking round-trip する）は
+        **別スレッド**に逃がす（live loop 上での自己待ちデッドロック回避・_evaluate_post_trade_loss と同方針）。
+        """
+        active = self._run_registry.list_active()
+        if not active:
+            return
+        run_id = active[0].run_id
+        threading.Thread(
+            target=self._fail_run_for_strategy_error,
+            args=(run_id,),
+            name="phase10-strategy-error-stop",
+            daemon=True,
+        ).start()
+
+    def _fail_run_for_strategy_error(self, run_id: str) -> None:
+        """worker thread: 戦略例外で run を ERROR→STOPPED に落とし、状態遷移を push する。"""
+        try:
+            with self._live_strategy_lock:
+                record = self._strategy_host.fail_run(run_id, "STRATEGY_EXCEPTION")
+        except LiveStrategyHostError:
+            return
+        self._publish_live_strategy_event(record)
+
     def register_live_strategy(self, strategy_file: str, expected_sha256: str = "", request_id: str = "", original_path: str = ""):
         # 検証系: saved .py をロードして strategy_id を発行する（mode gate なし、§2.5）。
         try:
@@ -1518,10 +1568,10 @@ class LiveLoopManager:
                 error_message=str(exc.__cause__) if exc.__cause__ else str(exc),
             )
         # instrument_id を **kernel 構築前** に well-formed 検証する。malformed（venue
-        # サフィックス欠落など）だと controller.attach の `InstrumentId.from_str` が
-        # kernel を live loop に撒いた **後** に落ち、STRATEGY_ATTACH_FAILED という不透明な
-        # エラーになる。同じ `from_str` をここで使うことで、guard の許容条件を attach の
-        # 実際の検証と完全一致させたまま明示エラーに前倒しする。
+        # サフィックス欠落など）だと controller.attach の検証が kernel driver を live loop に
+        # 撒いた **後** に落ち、STRATEGY_ATTACH_FAILED という不透明なエラーになる。controller と
+        # 同じ `is_valid_instrument_id` をここで使い、許容条件を attach の検証と完全一致させたまま
+        # 明示エラーに前倒しする。
         #
         # 注意（設計確認、Step 9 検証）: instrument の venue サフィックス（例 `.TSE`）が
         # live session の `venue_id`（例 `TACHIBANA` / `MOCK`）と一致する必要は **無い**。
@@ -1530,11 +1580,12 @@ class LiveLoopManager:
         # subscribe → tick filter → exec の間で内部一貫していれば良く（`venue_id` は
         # 別メタデータ）、現に mock 経路は `7203.TSE` + `MOCK` セッションで動作する。
         # よって venue 一致を強制する guard は **入れない**（設計と既存テストに反する）。
-        from nautilus_trader.model.identifiers import InstrumentId
+        # #25: 純 Python validator（nautilus InstrumentId.from_str は Rust core をロードし
+        # LiveAuto import-purity gate を破る・D5/D8）。SYMBOL.VENUE の well-formedness を
+        # kernel controller.attach の検証と同条件で前倒しチェックする。
+        from engine.kernel.instrument_id import is_valid_instrument_id
 
-        try:
-            InstrumentId.from_str(instrument_id)
-        except Exception:  # noqa: BLE001 — malformed instrument id（venue 欠落 / 空など）
+        if not is_valid_instrument_id(instrument_id):
             return LiveStrategyStartResult(
                 success=False,
                 request_id=request_id,
@@ -1565,9 +1616,33 @@ class LiveLoopManager:
         # post-trade（max_daily_loss）評価用に run の rails を記録する。
         # rails dict は live loop の評価 callback と共有するので専用 lock で囲う
         # （_live_strategy_lock を live loop に晒さないため、外で取得する）。
+        # #25 D7: post-trade baseline を run 開始時に **即時確立** する。旧実装は baseline を消去して
+        # 次 snapshot で初設定していたため、最初の次 snapshot が fill 後だと初回損失を見逃した。
+        # account_sync.last_snapshot を優先するが、初回 fetch が Replay mode で抑止されている等で None の
+        # ときは **明示 fetch_account** で確定する（D7「無ければ controller が明示 fetch」）。round-trip は
+        # _run_rails_lock の外で行う（live loop callback が同 lock を取るため、保持したまま待たない）。
+        sess = self._session
+        acct = sess.account_sync if sess is not None else None
+        baseline_snapshot = acct.last_snapshot if acct is not None else None
+        if baseline_snapshot is None:
+            adapter = self._live_adapter()
+            if adapter is not None:
+                loop = self._ensure_live_loop()
+                try:
+                    baseline_snapshot = asyncio.run_coroutine_threadsafe(
+                        adapter.fetch_account(), loop
+                    ).result(timeout=self._live_timeout_s)
+                except Exception:
+                    logging.warning(
+                        "start_live_strategy: baseline fetch_account failed", exc_info=True
+                    )
+                    baseline_snapshot = None
         with self._run_rails_lock:
             self._run_rails[record.run_id] = rails
-            self._run_equity_baseline.pop(record.run_id, None)
+            if baseline_snapshot is not None:
+                self._run_equity_baseline[record.run_id] = equity_from_snapshot(baseline_snapshot)
+            else:
+                self._run_equity_baseline.pop(record.run_id, None)
         self._publish_live_strategy_event(record)
         return LiveStrategyStartResult(
             success=True,

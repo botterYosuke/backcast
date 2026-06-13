@@ -44,13 +44,23 @@ class StrategyLoadError(Exception):
     pass
 
 
-def load(path: str | Path, *, original_path: Path | None = None) -> tuple[ModuleType, dict, Any]:  # Any = type[Strategy]
+def load(
+    path: str | Path,
+    *,
+    original_path: Path | None = None,
+    base_cls: type | None = None,
+) -> tuple[ModuleType, dict, Any]:  # Any = type[Strategy]
     """戦略 .py を読み込み ``(module, scenario, strategy_cls)`` を返す。
 
     - SCENARIO は ast.literal_eval で安全抽出し validate まで適用する。
     - strategy_cls はインスタンス化しない（呼び出し元 engine_runner の責務）。
     - ``STRATEGY_PARAM_*`` 環境変数の適用は ``get_strategy_param_env()`` で
       取得した dict を engine_runner が StrategyConfig / __init__ kwargs に注入する。
+    - ``base_cls``: subclass 検出に使う基底クラス。``None`` のときだけ
+      ``nautilus_trader.trading.strategy.Strategy`` を import する（既定・後方互換）。
+      kernel 経路は ``engine.kernel.strategy.Strategy`` を渡し、**この import に到達しない**
+      （Rust core 非ロード・D4）。default 引数に nautilus クラスを直書きしないこと
+      （module import 時に Rust core を引いてしまうため）。
 
     Raises:
         FileNotFoundError: path が存在しない場合。
@@ -88,25 +98,29 @@ def load(path: str | Path, *, original_path: Path | None = None) -> tuple[Module
     from engine.strategy_runtime.scenario import load_scenario
     scenario = load_scenario(path)
 
-    # Strategy サブクラス検索（このファイルで定義されたものだけ）
-    try:
-        from nautilus_trader.trading.strategy import Strategy
-    except ImportError as exc:
-        raise StrategyLoadError(f"nautilus_trader not available: {exc}") from exc
+    # Strategy サブクラス検索（このファイルで定義されたものだけ）。
+    # base_cls 未指定時のみ nautilus Strategy を import する（既定・後方互換）。kernel 経路は
+    # engine.kernel.strategy.Strategy を渡すのでこの import 行に到達しない（Rust core 非ロード・D4）。
+    if base_cls is None:
+        try:
+            from nautilus_trader.trading.strategy import Strategy as base_cls  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise StrategyLoadError(f"nautilus_trader not available: {exc}") from exc
 
     subclasses: list[type] = [
         cls
         for _name, cls in inspect.getmembers(module, inspect.isclass)
-        if issubclass(cls, Strategy)
-        and cls is not Strategy
+        if issubclass(cls, base_cls)
+        and cls is not base_cls
         and cls.__module__ == module_name
     ]
 
+    base_name = f"{base_cls.__module__}.{base_cls.__name__}"
     if len(subclasses) == 0:
-        raise StrategyLoadError(f"no Strategy subclass found in {path}")
+        raise StrategyLoadError(f"no {base_name} subclass found in {path}")
     if len(subclasses) > 1:
         names = ", ".join(cls.__name__ for cls in subclasses)
-        raise StrategyLoadError(f"multiple Strategy subclasses found: [{names}]")
+        raise StrategyLoadError(f"multiple {base_name} subclasses found: [{names}]")
 
     strategy_cls = subclasses[0]
     _check_compat(path)
@@ -140,7 +154,7 @@ def _check_compat(path: Path) -> None:
             and node.name in _INCOMPATIBLE_HANDLERS
         ):
             log.warning(
-                "strategy file %s defines '%s' which is not supported in replay mode "
+                "strategy file %s defines '%s' which is not supported by this runtime "
                 "(TradeTick/OrderBookDelta feeds are not available). "
                 "This handler will not be called.",
                 path,

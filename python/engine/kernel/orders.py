@@ -23,8 +23,15 @@ class OrderSide(enum.Enum):
 
 class OrderStatus(enum.Enum):
     INITIALIZED = "INITIALIZED"
+    SUBMITTED = "SUBMITTED"
     ACCEPTED = "ACCEPTED"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
     FILLED = "FILLED"
+    REJECTED = "REJECTED"
+    CANCELED = "CANCELED"
+    EXPIRED = "EXPIRED"
+    PENDING_UPDATE = "PENDING_UPDATE"
+    PENDING_CANCEL = "PENDING_CANCEL"
     DENIED = "DENIED"
 
 
@@ -45,7 +52,14 @@ class Order:
 
 @dataclass
 class OrderFilled:
-    """Terminal fill event handed to Strategy.on_order and the EventSink."""
+    """Fill event handed to Strategy.on_order and the EventSink.
+
+    `last_qty` is the INCREMENTAL fill quantity applied to the Portfolio (D6). For a Live
+    partial-fill stream the cumulative venue-reported quantity is carried separately in
+    `cumulative_filled_qty` so the dedup (delta = incoming_cumulative - order.filled_qty)
+    can run without changing `last_qty`'s meaning. Replay (ReplayBroker, full fill) leaves
+    `cumulative_filled_qty` at its default and only `last_qty` is read by the sink.
+    """
 
     client_order_id: str
     venue_order_id: str
@@ -54,6 +68,43 @@ class OrderFilled:
     side: OrderSide
     last_qty: float
     last_px: float
+    ts_event_ns: int
+    cumulative_filled_qty: float = 0.0
+
+
+@dataclass
+class OrderAccepted:
+    """Venue-accepted event (Live FSM, SUBMITTED → ACCEPTED). Handed to Strategy.on_order."""
+
+    client_order_id: str
+    venue_order_id: str
+    strategy_id: str
+    instrument_id: str
+    side: OrderSide
+    ts_event_ns: int
+
+
+@dataclass
+class OrderRejected:
+    """Venue/adapter reject (Live FSM, SUBMITTED → REJECTED). Handed to Strategy.on_order."""
+
+    client_order_id: str
+    strategy_id: str
+    instrument_id: str
+    side: OrderSide
+    reason: str
+    ts_event_ns: int
+
+
+@dataclass
+class OrderCanceled:
+    """Cancel confirmation (Live FSM → CANCELED). Handed to Strategy.on_order."""
+
+    client_order_id: str
+    venue_order_id: str
+    strategy_id: str
+    instrument_id: str
+    side: OrderSide
     ts_event_ns: int
 
 
@@ -89,7 +140,7 @@ class OrderEngine:
         self._seq += 1
         return f"{self._venue}-{self._seq:03d}"
 
-    def submit(
+    def precheck(
         self,
         order: Order,
         *,
@@ -97,11 +148,15 @@ class OrderEngine:
         current_position_value_jpy: float,
         order_notional_jpy: float = 0.0,
     ) -> RailViolation | None:
-        """Apply the duplicate guard + pre-trade rail. Returns a RailViolation if denied.
+        """Reserve the client_order_id (dup guard) + evaluate the pre-trade rail.
 
-        On acceptance the order transitions to ACCEPTED. On denial it transitions to
-        DENIED with `denied_reason` set. A duplicate client_order_id raises ValueError
-        (a programming error in the strategy, not a rail violation).
+        On denial the order transitions to DENIED with `denied_reason` set and the
+        violation is returned. On pass the order is **left at INITIALIZED** and None is
+        returned — the caller decides the next transition (Replay → ACCEPTED via submit();
+        Live → SUBMITTED via the LiveBroker before the venue round-trip). A duplicate
+        client_order_id raises ValueError (a strategy programming error, not a rail
+        violation). The PAUSE/run gate is NOT evaluated here — that is the LiveBroker's
+        responsibility before the venue send (D6/D8).
         """
         if order.client_order_id in self._seen_ids:
             raise ValueError(f"duplicate client_order_id: {order.client_order_id}")
@@ -118,7 +173,28 @@ class OrderEngine:
         if violation is not None:
             order.status = OrderStatus.DENIED
             order.denied_reason = violation.detail
-            return violation
+        return violation
 
-        order.status = OrderStatus.ACCEPTED
-        return None
+    def submit(
+        self,
+        order: Order,
+        *,
+        net_signed_qty: float,
+        current_position_value_jpy: float,
+        order_notional_jpy: float = 0.0,
+    ) -> RailViolation | None:
+        """Replay submit: precheck + (on pass) transition to ACCEPTED.
+
+        Observable behaviour is unchanged from #24 (DENIED on violation, ACCEPTED on pass,
+        ValueError on duplicate) so the committed Replay golden is bit-identical. Live does
+        NOT call this — it uses precheck() then drives SUBMITTED→… via the LiveBroker (D6).
+        """
+        violation = self.precheck(
+            order,
+            net_signed_qty=net_signed_qty,
+            current_position_value_jpy=current_position_value_jpy,
+            order_notional_jpy=order_notional_jpy,
+        )
+        if violation is None:
+            order.status = OrderStatus.ACCEPTED
+        return violation

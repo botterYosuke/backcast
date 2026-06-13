@@ -35,7 +35,7 @@ class _PartialBar:
         self.close = tick.price
         self.volume += tick.size
 
-    def to_kline(self, instrument_id: str) -> KlineUpdate:
+    def to_kline(self, instrument_id: str, *, is_closed: bool) -> KlineUpdate:
         return KlineUpdate(
             kind="kline",
             instrument_id=instrument_id,
@@ -45,6 +45,7 @@ class _PartialBar:
             low=self.low,
             close=self.close,
             volume=self.volume,
+            is_closed=is_closed,
         )
 
 
@@ -72,14 +73,16 @@ class TickBarAggregator:
             self._current.apply(tick)
             return None
 
-        closed = self._current.to_kline(self._instrument_id)
+        closed = self._current.to_kline(self._instrument_id, is_closed=True)
         self._current = _new_partial(tick, bucket, self._interval_ns)
         return closed
 
     def build_now(self) -> Optional[KlineUpdate]:
+        # 進行中バーのスナップショット = partial（is_closed=False）。UI 用で、strategy.on_bar には
+        # 渡さない（kernel live driver が is_closed で弾く・#25 D3）。
         if self._current is None:
             return None
-        return self._current.to_kline(self._instrument_id)
+        return self._current.to_kline(self._instrument_id, is_closed=False)
 
 
 def _new_partial(tick: TradesUpdate, bucket: int, interval_ns: int) -> _PartialBar:

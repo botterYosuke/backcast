@@ -81,7 +81,13 @@ class InstrumentRaw(BaseModel):
 
 
 class KlineUpdate(BaseModel):
-    """OHLCV bar update（Replay の KlineUpdate と同形式）。"""
+    """OHLCV bar update（Replay の KlineUpdate と同形式）。
+
+    `is_closed`: True = 確定バー（aggregator の bucket-rollover or venue 直送）、False = 進行中の
+    partial スナップショット（`LiveRunner._partial_push` が UI 用に毎秒 publish するもの）。kernel
+    live driver は **確定バーだけ** strategy.on_bar に渡す（partial を渡すと毎秒重複発注する・#25 D3）。
+    既定 True なので、venue 直送 bar や既存呼び出しは確定バー扱い（後方互換）。
+    """
 
     kind: Literal["kline"]
     instrument_id: InstrumentId
@@ -91,6 +97,7 @@ class KlineUpdate(BaseModel):
     low: float
     close: float
     volume: float
+    is_closed: bool = True
 
     model_config = {"frozen": True}
 

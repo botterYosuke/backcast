@@ -28,6 +28,24 @@ class Portfolio:
         self._initial_cash = float(initial_cash)
         self._cash = float(initial_cash)
         self._positions: dict[str, Position] = {}
+        # Explicitly accrued realized P&L (D7). The flat-book `cash - initial_cash` shortcut
+        # is wrong once the book is seeded with venue positions or left non-flat, so Live
+        # accrues realized P&L on each reducing fill. For a flat round-trip this equals the
+        # cash delta, so the Replay golden is unchanged.
+        self._realized: float = 0.0
+
+    def seed_position(self, instrument_id: str, quantity: float, avg_px: float) -> None:
+        """Seed an existing venue position at attach (D7). Does NOT touch cash or realized.
+
+        The venue AccountSnapshot is the authority for the opening book; the kernel Portfolio
+        mirrors it so the pre-trade position cap and MTM telemetry see real holdings. A zero
+        quantity is ignored (flat).
+        """
+        if quantity == 0.0:
+            return
+        self._positions[instrument_id] = Position(
+            instrument_id=instrument_id, quantity=float(quantity), avg_px=float(avg_px)
+        )
 
     @property
     def cash(self) -> float:
@@ -59,8 +77,12 @@ class Portfolio:
 
     @property
     def realized_pnl(self) -> float:
-        """Realized P&L == cash delta (exact only when the book is flat)."""
-        return self._cash - self._initial_cash
+        """Realized P&L accrued on reducing fills (correct with seeded / non-flat books).
+
+        Equals `cash - initial_cash` for a flat round-trip (the Replay tracer case), so the
+        committed Replay golden is unchanged; diverges only once the book is seeded or left
+        open, where the cash-delta shortcut would be wrong (D7)."""
+        return self._realized
 
     def net_signed_qty(self, instrument_id: str) -> float:
         pos = self._positions.get(instrument_id)
@@ -82,6 +104,17 @@ class Portfolio:
         if pos is None:
             pos = Position(instrument_id=fill.instrument_id)
             self._positions[fill.instrument_id] = pos
+
+        # Accrue realized P&L on the portion of this fill that REDUCES the open position
+        # (opposite direction). Closing a long realizes (fill_px - avg_px) per share; closing
+        # a short realizes (avg_px - fill_px). The residual past flat opens a new position at
+        # the fill price and does not realize. (D7)
+        if pos.quantity != 0.0 and (pos.quantity > 0) != (signed > 0):
+            reduce_qty = min(abs(signed), abs(pos.quantity))
+            if pos.quantity > 0:
+                self._realized += reduce_qty * (fill.last_px - pos.avg_px)
+            else:
+                self._realized += reduce_qty * (pos.avg_px - fill.last_px)
 
         new_qty = pos.quantity + signed
         if pos.quantity == 0.0:

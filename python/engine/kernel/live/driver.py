@@ -1,0 +1,350 @@
+"""engine.kernel.live.driver — LiveRunner.bus → kernel Strategy のドライバ (#25 D3/D8)。
+
+`LiveRunner.bus` を単一 async consumer で消費し、確定 `KlineUpdate` を kernel `Bar` に、`TradesUpdate`
+を tick に変換して strategy の `on_bar` / `on_tick` を駆動する。strategy が `submit_market` で積んだ
+intent は、各 callback 後に **再入防止 FIFO drain loop** で OrderEngine.precheck → LiveBroker.submit に
+流す。fill / deny は Portfolio 反映・strategy.on_order・UI 投影 callback へ配る。
+
+すべて live loop thread 上で動く。strategy callback 内で adapter を await しない（intent を積むだけ）。
+Nautilus-free。
+"""
+from __future__ import annotations
+
+import asyncio
+import logging
+import time
+from collections import deque
+from dataclasses import dataclass
+from typing import Any, Callable, Optional
+
+from engine.kernel.bars import Bar
+from engine.kernel.live.broker import LiveBroker
+from engine.kernel.orders import (
+    Order,
+    OrderDenied,
+    OrderEngine,
+    OrderFilled,
+    OrderSide,
+    OrderStatus,
+)
+from engine.kernel.portfolio import Portfolio
+from engine.kernel.strategy import Strategy
+from engine.live.adapter import KlineUpdate, TradesUpdate
+from engine.live.strategy_log import StrategyLogRecord
+
+log = logging.getLogger(__name__)
+
+_OPEN_STATES = frozenset(
+    {
+        OrderStatus.SUBMITTED,
+        OrderStatus.ACCEPTED,
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.PENDING_UPDATE,
+    }
+)
+
+
+@dataclass
+class _Intent:
+    client_order_id: str
+    instrument_id: str
+    side: OrderSide
+    quantity: float
+
+
+class _Ctx:
+    """StrategyContext 実装: submit_market は intent を積むだけ（adapter は await しない）。"""
+
+    def __init__(self, driver: "KernelLiveDriver") -> None:
+        self._driver = driver
+
+    def submit_market(
+        self, *, strategy_id: str, instrument_id: str, side: OrderSide, quantity: float
+    ) -> None:
+        self._driver._enqueue(instrument_id=instrument_id, side=side, quantity=quantity)
+
+    def log(self, message: str) -> None:
+        self._driver._on_strategy_log(message)
+
+
+class KernelLiveDriver:
+    """1 run 分の kernel Strategy を live loop 上で駆動する（単一 run・§0.7）。"""
+
+    def __init__(
+        self,
+        *,
+        strategy: Strategy,
+        order_engine: OrderEngine,
+        portfolio: Portfolio,
+        broker: LiveBroker,
+        bus,
+        instrument_ids: list[str],
+        nautilus_strategy_id: str,
+        emit_order: Callable[[Order, Any], None],
+        emit_log: Optional[Callable[[StrategyLogRecord], None]] = None,
+        is_run_gated: Optional[Callable[[], bool]] = None,
+        on_safety_violation: Optional[Callable[[Any], None]] = None,
+        on_strategy_error: Optional[Callable[[BaseException], None]] = None,
+    ) -> None:
+        self._strategy = strategy
+        self._order_engine = order_engine
+        self._portfolio = portfolio
+        self._broker = broker
+        self._bus = bus
+        self._instrument_ids = set(instrument_ids)
+        self._nsid = nautilus_strategy_id
+        self._emit_order = emit_order
+        # telemetry emitter は driver の counters を読む closure のため、driver 構築後に
+        # controller が set_telemetry_emitter で差す（chicken-and-egg 回避）。
+        self._emit_telemetry: Optional[Callable[[], None]] = None
+        self._emit_log = emit_log
+
+        self._is_run_gated = is_run_gated
+        self._on_safety_violation = on_safety_violation
+        # 戦略 callback（on_bar/on_tick/on_order）が走行中に例外を投げたら、握り潰さず run を
+        # 失敗させる経路（host.fail_run）へ伝える seam（#25 finding 5）。controller→orchestrator が注入。
+        self._on_strategy_error = on_strategy_error
+
+        self.ctx = _Ctx(self)
+        self._intents: deque[_Intent] = deque()
+        self._draining = False
+        self._stopping = False
+        self._failed = False
+        self._bus_iter = None
+        self._consumer_task: Optional[asyncio.Task] = None
+        self._client_seq = 0
+        self._orders: dict[str, Order] = {}
+        self.fill_count = 0  # 実 fill イベント数（partial 含む counter・D7）
+        self.last_prices: dict[str, float] = {}
+
+    def set_telemetry_emitter(self, emit_telemetry: Callable[[], None]) -> None:
+        """telemetry emitter を後から差す（controller が driver の counters を読む closure を渡す）。"""
+        self._emit_telemetry = emit_telemetry
+
+    # ── lifecycle ────────────────────────────────────────────────────────────
+
+    def subscribe_bus(self) -> None:
+        """bus consumer iterator を **同期確立**する（task 開始前。初回 event を逃さない・D8）。"""
+        self._bus_iter = self._bus.subscribe()
+
+    def start_consumer(self) -> None:
+        self._consumer_task = asyncio.create_task(self._consume())
+
+    async def run_on_start(self) -> None:
+        """strategy.on_start を呼び、積まれた intent を drain する。"""
+        try:
+            self._strategy.on_start()
+        finally:
+            await self._drain()
+
+    async def stop(self) -> None:
+        """新規 intent 受付停止 → consumer 停止・await → on_stop 最大 1 回（D8）。"""
+        self._stopping = True
+        task = self._consumer_task
+        self._consumer_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        try:
+            self._strategy.on_stop()
+        except Exception:  # noqa: BLE001 — teardown は best-effort
+            log.exception("kernel strategy on_stop failed")
+
+    async def cancel_inflight(self) -> None:
+        """この run の open order（SUBMITTED/ACCEPTED/PARTIALLY_FILLED/PENDING_UPDATE）を取消（D8）。
+
+        各 cancel は個別 try で隔離し、1 件の失敗で残りを止めない。
+        """
+        for order in list(self._orders.values()):
+            if order.status not in _OPEN_STATES:
+                continue
+            try:
+                events = await self._broker.cancel(order)
+            except Exception:  # noqa: BLE001
+                log.exception("cancel_inflight: broker.cancel failed for %s", order.client_order_id)
+                continue
+            for ev in events:
+                self._deliver(order, ev)
+
+    # ── bus consumer ─────────────────────────────────────────────────────────
+
+    async def _consume(self) -> None:
+        if self._bus_iter is None:
+            self.subscribe_bus()
+        try:
+            async for evt in self._bus_iter:  # type: ignore[union-attr]
+                try:
+                    if getattr(evt, "instrument_id", None) not in self._instrument_ids:
+                        continue
+                    if isinstance(evt, TradesUpdate):
+                        self.last_prices[evt.instrument_id] = evt.price
+                        self._strategy.on_tick(evt)
+                        await self._drain()
+                    elif isinstance(evt, KlineUpdate) and evt.is_closed:
+                        # 確定バーのみ on_bar（partial は弾く・D3）。
+                        self.last_prices[evt.instrument_id] = evt.close
+                        bar = Bar(
+                            instrument_id=evt.instrument_id,
+                            ts_event_ns=evt.ts_ns,
+                            open=evt.open,
+                            high=evt.high,
+                            low=evt.low,
+                            close=evt.close,
+                            volume=evt.volume,
+                        )
+                        self._strategy.on_bar(bar)
+                        await self._drain()
+                except Exception as exc:  # noqa: BLE001 — 戦略/イベント処理失敗は run を fail させる
+                    # 握り潰さない: on_bar/on_tick/drain（dup 等）例外は run の障害として host.fail_run へ
+                    # 伝える（#25 finding 5）。consumer 自体は detach 経由で停止される。
+                    log.exception("kernel live driver: strategy/event handling failed")
+                    self._signal_strategy_error(exc)
+        except asyncio.CancelledError:
+            return
+        except Exception:  # noqa: BLE001 — bus close 後など
+            log.warning("kernel live driver consumer stopped on error", exc_info=True)
+            return
+
+    # ── intent submission ──────────────────────────────────────────────────────
+
+    def _enqueue(self, *, instrument_id: str, side: OrderSide, quantity: float) -> None:
+        self._client_seq += 1
+        cid = f"O-{self._nsid}-{self._client_seq}"
+        if self._stopping:
+            # detach 開始後の新規発注は破棄でも DENIED でもなく**明示的 terminal event**で閉じる（D8）。
+            order = Order(
+                client_order_id=cid,
+                strategy_id=self._strategy.id,
+                instrument_id=instrument_id,
+                side=side,
+                quantity=quantity,
+                status=OrderStatus.DENIED,
+                denied_reason="RUN_STOPPING",
+            )
+            self._orders[order.client_order_id] = order
+            self._deliver(
+                order,
+                self._denied(order, "RUN_STOPPING", "new orders rejected: run is stopping"),
+            )
+            return
+        self._intents.append(
+            _Intent(client_order_id=cid, instrument_id=instrument_id, side=side, quantity=quantity)
+        )
+
+    async def _drain(self) -> None:
+        """積まれた intent を FIFO 逐次処理する。再入防止: drain 中の submit_market は同じ loop が拾う。"""
+        if self._draining:
+            return
+        self._draining = True
+        try:
+            while self._intents:
+                intent = self._intents.popleft()
+                await self._process_intent(intent)
+        finally:
+            self._draining = False
+
+    async def _process_intent(self, intent: _Intent) -> None:
+        order = Order(
+            client_order_id=intent.client_order_id,
+            strategy_id=self._strategy.id,
+            instrument_id=intent.instrument_id,
+            side=intent.side,
+            quantity=intent.quantity,
+        )
+        self._orders[order.client_order_id] = order
+
+        # PAUSE / run gate は venue 送信前（precheck 前）に判定する（D8）。
+        if self._is_run_gated is not None and self._is_run_gated():
+            order.status = OrderStatus.DENIED
+            order.denied_reason = "STRATEGY_PAUSED"
+            self._deliver(order, self._denied(order, "STRATEGY_PAUSED", "run is PAUSED; new orders gated"))
+            return
+
+        violation = self._order_engine.precheck(
+            order,
+            net_signed_qty=self._portfolio.net_signed_qty(intent.instrument_id),
+            current_position_value_jpy=self._portfolio.position_value_jpy(intent.instrument_id),
+            order_notional_jpy=0.0,  # MARKET: price unknown at submit
+        )
+        if violation is not None:
+            self._deliver(order, self._denied(order, violation.kind, violation.detail))
+            if self._on_safety_violation is not None:
+                self._on_safety_violation(violation)
+            return
+
+        events = await self._broker.submit(order)
+        for ev in events:
+            self._deliver(order, ev)
+
+    # ── event delivery ─────────────────────────────────────────────────────────
+
+    def _deliver(self, order: Order, event) -> None:
+        """1 FSM event を Portfolio / strategy.on_order / UI 投影へ配る。"""
+        if isinstance(event, OrderFilled):
+            self._portfolio.apply_fill(event)
+            self.fill_count += 1
+        # domain hook（戦略は on_order で新規 intent を積み得る → 同じ drain loop が拾う）。
+        # Portfolio 反映後に呼ぶので、例外でも建玉会計は確定済み。例外は run の障害として伝える。
+        try:
+            self._strategy.on_order(event)
+        except Exception as exc:  # noqa: BLE001
+            log.exception("kernel strategy on_order failed")
+            self._signal_strategy_error(exc)
+        # UI 投影（controller が event の種類から OrderEventData にして on_order_event へ）。
+        try:
+            self._emit_order(order, event)
+        except Exception:  # noqa: BLE001 — UI bridge は best-effort
+            log.exception("emit_order failed")
+        if isinstance(event, OrderFilled) and self._emit_telemetry is not None:
+            try:
+                self._emit_telemetry()
+            except Exception:  # noqa: BLE001
+                log.exception("emit_telemetry failed")
+
+    def _denied(self, order: Order, kind: str, reason: str) -> OrderDenied:
+        return OrderDenied(
+            client_order_id=order.client_order_id,
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            side=order.side,
+            quantity=order.quantity,
+            kind=kind,
+            reason=reason,
+            ts_event_ns=0,
+        )
+
+    def _signal_strategy_error(self, exc: BaseException) -> None:
+        """走行中の戦略例外を run の障害として外へ通知する（host.fail_run 経路・#25 finding 5）。
+
+        冪等（最初の 1 回だけ通知）。以降の新規 intent は受けない（_stopping）。実際の teardown
+        （cancel_inflight → detach → driver.stop）は orchestrator が **別スレッド**で fail_run して行う
+        （on_strategy_error は live loop thread から呼ばれるので、ここで blocking teardown はしない）。
+        """
+        if self._failed:
+            return
+        self._failed = True
+        self._stopping = True
+        if self._on_strategy_error is not None:
+            try:
+                self._on_strategy_error(exc)
+            except Exception:  # noqa: BLE001
+                log.exception("on_strategy_error callback failed")
+
+    def _on_strategy_log(self, message: str) -> None:
+        if self._emit_log is None:
+            return
+        try:
+            self._emit_log(
+                StrategyLogRecord(level="INFO", message=str(message), ts_ns=time.time_ns())
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("emit_log failed")
+
+    # ── telemetry inputs (read by the controller) ───────────────────────────────
+
+    @property
+    def order_count(self) -> int:
+        return len(self._orders)

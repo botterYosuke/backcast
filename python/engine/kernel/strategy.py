@@ -27,10 +27,21 @@ class StrategyContext(Protocol):
 
 
 class Strategy:
-    """Base strategy. Subclasses override the hooks they need."""
+    """Base strategy. Subclasses override the hooks they need.
 
-    def __init__(self, *, strategy_id: str) -> None:
+    Common construction contract (#25): the engine instantiates a strategy as
+    `strategy_cls(instrument_id=..., **params)` (same shape the backtest runner uses), so the
+    base accepts `instrument_id` + arbitrary `params` and a minimal subclass that only overrides
+    hooks is constructible without a bespoke `__init__`. `strategy_id` is the RUN identity — in
+    Live the controller injects the run's `nautilus_strategy_id` after construction (mirroring
+    Nautilus `change_id`); in Replay the twin hardcodes it. Defaulted so the engine never has to
+    pass it at construction.
+    """
+
+    def __init__(self, *, strategy_id: str = "", instrument_id: str = "", **params) -> None:
         self.id = strategy_id
+        self.instrument_id = instrument_id
+        self.params: dict = dict(params)
         self._ctx: StrategyContext | None = None
 
     def register(self, ctx: StrategyContext) -> None:

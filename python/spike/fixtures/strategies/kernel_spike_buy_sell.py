@@ -17,6 +17,19 @@ from engine.kernel.bars import Bar
 from engine.kernel.orders import OrderSide
 from engine.kernel.strategy import Strategy
 
+# Inline SCENARIO (schema v2) — kept in lock-step with the oracle's SCENARIO
+# (spike_buy_sell.py) so the kernel-native loader (strategy_loader.load(base_cls=
+# engine.kernel.strategy.Strategy)) resolves the same run window. Exactly the 6 keys the
+# loader accepts; do NOT add account_type.
+SCENARIO: dict = {
+    "schema_version": 2,
+    "instruments": ["8918.TSE"],
+    "start": "2024-10-01",
+    "end": "2025-01-10",
+    "granularity": "Daily",
+    "initial_cash": 10_000_000,
+}
+
 INSTRUMENT_ID = "8918.TSE"
 BUY_AT_BAR = 3
 SELL_AT_BAR = 40

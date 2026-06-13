@@ -1485,15 +1485,30 @@ class LiveLoopManager:
             daemon=True,
         ).start()
 
-    def _fail_run_for_loss(self, run_id: str, violation: RailViolation) -> None:
-        """worker thread: run を ERROR→STOPPED に落とし、違反 + 状態遷移を push する。"""
+    def _terminate_run_from_live_loop(
+        self, run_id: str, reason: str, violation: Optional[RailViolation] = None
+    ) -> None:
+        """worker thread: live-loop 由来の障害（post-trade 損失 / 走行中戦略例外）で run を
+        ERROR→STOPPED に落とす共通骨子。
+
+        ① 違反 toast（あれば）を先に surface し ② rails+baseline を **冪等に解放**し ③ stop を試みる。
+        この順序により、stop が失敗（既に terminal 等）しても違反は出ており rails も外れている（後続
+        snapshot は素通り＝二重発火しない）。loss 経路は `_evaluate_post_trade_loss` が offload 前に
+        release 済みだが、ここでの解放は冪等なので二重には効かない（#25 review finding 2/6）。"""
+        if violation is not None:
+            self._publish_safety_rail_violation(run_id, violation)
+        with self._run_rails_lock:
+            self._release_run_rails_locked(run_id)
         try:
             with self._live_strategy_lock:
-                record = self._strategy_host.fail_run(run_id, "MAX_DAILY_LOSS_EXCEEDED")
+                record = self._strategy_host.fail_run(run_id, reason)
         except LiveStrategyHostError:
             return
-        self._publish_safety_rail_violation(run_id, violation)
         self._publish_live_strategy_event(record)
+
+    def _fail_run_for_loss(self, run_id: str, violation: RailViolation) -> None:
+        """worker thread: post-trade 損失で run を停止する（共通骨子へ委譲）。"""
+        self._terminate_run_from_live_loop(run_id, "MAX_DAILY_LOSS_EXCEEDED", violation)
 
     def _on_auto_strategy_error(self, exc: BaseException) -> None:
         """controller（live loop thread）からの走行中戦略例外 callback（#25 finding 5）。
@@ -1514,13 +1529,8 @@ class LiveLoopManager:
         ).start()
 
     def _fail_run_for_strategy_error(self, run_id: str) -> None:
-        """worker thread: 戦略例外で run を ERROR→STOPPED に落とし、状態遷移を push する。"""
-        try:
-            with self._live_strategy_lock:
-                record = self._strategy_host.fail_run(run_id, "STRATEGY_EXCEPTION")
-        except LiveStrategyHostError:
-            return
-        self._publish_live_strategy_event(record)
+        """worker thread: 走行中戦略例外で run を停止する（共通骨子へ委譲）。"""
+        self._terminate_run_from_live_loop(run_id, "STRATEGY_EXCEPTION")
 
     def register_live_strategy(self, strategy_file: str, expected_sha256: str = "", request_id: str = "", original_path: str = ""):
         # 検証系: saved .py をロードして strategy_id を発行する（mode gate なし、§2.5）。
@@ -1627,7 +1637,18 @@ class LiveLoopManager:
                 self._run_equity_baseline[record.run_id] = equity_from_snapshot(baseline_snapshot)
             else:
                 self._run_equity_baseline.pop(record.run_id, None)
+        # RUNNING/STARTED を**先に**publish してから post-trade 再評価する。再評価が即 STOP を起こすと
+        # `_evaluate_post_trade_loss` が別スレッドで record を STOPPED に遷移＆publish するため、再評価を
+        # 先に走らせると STARTED より前に STOPPED が出る（record は共有・状態は publish 時に lazy 読み）。
         self._publish_live_strategy_event(record)
+        # #25 finding 2: on_start 即時約定が起こす force_resync は rails 登録**前**に走り得るため、その
+        # snapshot 評価は rails 未登録でスキップされ、初回損失で run を STOP できない。登録直後に最新
+        # snapshot を **必ず再評価**して取りこぼしを塞ぐ。`_run_rails_lock` の外で呼ぶ
+        # （_evaluate_post_trade_loss が同 lock を取る・非再入）。違反確定で rails を外すので、後続の
+        # force_resync callback と二重発火しない（冪等）。
+        post_start_snapshot = self._fetch_account_snapshot()
+        if post_start_snapshot is not None:
+            self._evaluate_post_trade_loss(post_start_snapshot)
         return LiveStrategyStartResult(
             success=True,
             request_id=request_id,
@@ -1647,6 +1668,17 @@ class LiveLoopManager:
         snapshot = acct.last_snapshot if acct is not None else None
         if snapshot is not None:
             return snapshot
+        return self._fetch_account_snapshot()
+
+    def _fetch_account_snapshot(self):
+        """口座を **即時 fetch** して最新スナップショットを返す（cached last_snapshot を使わない）。
+
+        post-trade 再評価（#25 finding 2）は on_start 約定を確実に反映した最新値が要る。AccountSync の
+        `last_snapshot` は callback 成功**後**に更新されるため（account_sync.py、emit 後に `_last_emitted`
+        を設定）、登録直後に読むと on_start 約定の force_resync が未完了だと古い値になり得る。よってここでは
+        必ず venue へ round-trip する。round-trip は呼び出し側の lock の外で行う（live loop callback が
+        `_run_rails_lock` を取るため、保持したまま待たない）。失敗時は None。
+        """
         adapter = self._live_adapter()
         if adapter is None:
             return None
@@ -1656,7 +1688,7 @@ class LiveLoopManager:
                 adapter.fetch_account(), loop
             ).result(timeout=self._live_timeout_s)
         except Exception:
-            logging.warning("start_live_strategy: baseline fetch_account failed", exc_info=True)
+            logging.warning("start_live_strategy: fetch_account failed", exc_info=True)
             return None
 
     def _control_run(self, run_id, op) -> CommandAck:

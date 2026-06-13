@@ -89,7 +89,12 @@ class LiveBroker:
         return self.apply_venue_update(order, res, source="submit_result")
 
     async def cancel(self, order: Order) -> list:
-        """当該 order を venue で取消。CANCELED へ。取消拒否なら live 据え置き（D8）。"""
+        """当該 order を venue で取消。取消拒否なら live 据え置き（D8）。
+
+        キャンセル競合で venue が約定（FILLED/PARTIALLY_FILLED）や EXPIRED を応答した場合に取りこぼさ
+        ないよう、**取消拒否以外は `apply_venue_update` に通して**正規化する。素朴に CANCELED へ強制すると
+        競合約定が Portfolio に反映されず kernel は flat と誤認し venue 建玉と desync する（#25 review finding 3）。
+        """
         if order.status in _TERMINAL_STATES:
             return []
         prior = order.status
@@ -101,10 +106,9 @@ class LiveBroker:
             order.status = prior
             return []
         if res.status == "REJECTED":
-            order.status = prior  # 取消拒否: 元注文は live のまま
+            order.status = prior  # 取消拒否: 元注文は live のまま（注文自体の REJECTED ではない）
             return []
-        order.status = OrderStatus.CANCELED
-        return [self._canceled(order)]
+        return self.apply_venue_update(order, res, source="cancel_result")
 
     async def modify(
         self, order: Order, *, new_price: float | None = None, new_qty: float | None = None
@@ -160,6 +164,13 @@ class LiveBroker:
         events: list = []
 
         if res.status == "REJECTED":
+            # 既に部分約定済みに後から REJECTED が来た（async EC の stale/残数量 reject 等）場合、注文全体を
+            # REJECTED にすると既約定分の会計が宙に浮く。約定済みなら CANCELED で終端化し fill を保持する
+            # （REJECTED は未約定からのみ・#25 review finding 5）。
+            if order.filled_qty > 0:
+                order.status = OrderStatus.CANCELED
+                order.venue_order_id = order.venue_order_id or order.client_order_id
+                return [self._canceled(order)]
             order.status = OrderStatus.REJECTED
             order.denied_reason = res.reject_reason or "REJECTED"
             events.append(

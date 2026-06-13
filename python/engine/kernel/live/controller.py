@@ -38,6 +38,11 @@ from engine.live.safety_rails import SafetyLimits, SafetyRails
 
 log = logging.getLogger(__name__)
 
+# attach 本体は live loop 上で `wait_for(_attach_timeout_s)` が時間制限する。boundary 側の
+# `fut.result` はそれを **必ず後から** 取りこぼすため、内側より長く待つ（この差が縮むと boundary が
+# 先に諦め、wait_for の cancel/rollback が走る前に孤児 driver を残す fail-open に戻る）。
+_ATTACH_RESULT_BACKSTOP_SLACK_S = 5.0
+
 
 class KernelLiveEngineController:
     """共有 venue adapter を kernel live engine に bridge する controller（`NautilusLiveEngineController` 置換）。"""
@@ -94,19 +99,28 @@ class KernelLiveEngineController:
         adapter = self._adapter_provider()
         if loop is None or adapter is None:
             raise RuntimeError("live loop / venue adapter not available for attach")
+        # attach 本体を **live loop 上で** `wait_for` により時間制限する。boundary（run_coroutine_threadsafe）
+        # 側の result(timeout) では、超過してもコルーチンは cancel されず走り続け、後から self._driver を
+        # commit して consumer を起動する「孤児 driver」が残る（run は host 側で既に unregister 済みなので
+        # gate が開き、ガバナンス無しで venue に発注し得る fail-open・#25 review finding 1）。wait_for が
+        # 超過時にコルーチンを cancel すると、下の rollback（BaseException も捕捉）が driver を teardown し、
+        # self._driver は commit されない（fail-closed）。外側は wait_for を先に発火させるため少し長く待つ。
         fut = asyncio.run_coroutine_threadsafe(
-            self._do_attach(
-                strategy_cls=strategy_cls,
-                scenario=scenario,
-                instrument_id=instrument_id,
-                params=params,
-                nautilus_strategy_id=nautilus_strategy_id,
-                adapter=adapter,
-                safety_rails=safety_rails,
+            asyncio.wait_for(
+                self._do_attach(
+                    strategy_cls=strategy_cls,
+                    scenario=scenario,
+                    instrument_id=instrument_id,
+                    params=params,
+                    nautilus_strategy_id=nautilus_strategy_id,
+                    adapter=adapter,
+                    safety_rails=safety_rails,
+                ),
+                self._attach_timeout_s,
             ),
             loop,
         )
-        fut.result(timeout=self._attach_timeout_s)
+        fut.result(timeout=self._attach_timeout_s + _ATTACH_RESULT_BACKSTOP_SLACK_S)
 
     async def _do_attach(
         self,
@@ -197,7 +211,7 @@ class KernelLiveEngineController:
                 await runner.subscribe(iid)
             await driver.run_on_start()
             driver.start_consumer()
-        except Exception:
+        except BaseException:  # noqa: BLE001 — timeout/cancel(CancelledError) も含め必ず teardown する
             log.exception("kernel live attach failed during start; rolling back")
             try:
                 await driver.stop()

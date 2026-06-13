@@ -59,7 +59,8 @@ def evaluate_pre_trade(
     -------
     RailViolation | None — 違反があれば最初に引っかかった違反、なければ None。
     """
-    if order_increases_exposure(net_signed_qty, is_buy=is_buy, order_qty=qty):
+    increases = order_increases_exposure(net_signed_qty, is_buy=is_buy, order_qty=qty)
+    if increases:
         reg = _check_regulation_fail_closed(instrument_id, regulation_provider)
         if reg is not None:
             return reg
@@ -69,6 +70,7 @@ def evaluate_pre_trade(
             instrument_id=instrument_id,
             order_notional_jpy=order_notional_jpy,
             current_position_value_jpy=current_position_value_jpy,
+            increases_exposure=increases,
         )
     log.debug("evaluate_pre_trade: rails=None, allowlist/position_cap checks skipped for %s", instrument_id)
     return None

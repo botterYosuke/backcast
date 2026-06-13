@@ -384,6 +384,139 @@ def test_mock_live_no_send_of_queued_order_after_strategy_exception():
         thread.join(timeout=2.0)
 
 
+def test_mock_live_no_send_when_on_start_raises_after_queueing():
+    """on_start が intent を積んだ直後に例外を投げたら、その intent は venue へ送らない（#25 finding 1）。
+
+    attach 失敗（on_start で artifact 不足等を fail-loud に raise）でも `finally` で drain すると
+    注文が venue に到達してしまう回帰を塞ぐ。成功時のみ drain し、失敗時はキューを破棄する。
+    """
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _QueueInOnStartThenRaise(KernelStrategyBase):
+        def on_start(self):
+            self.submit_market(self.instrument_id, OrderSide.BUY, 100)  # 送られてはいけない
+            raise RuntimeError("boom in on_start (attach fail)")
+
+    loop, thread, run, adapter, runner, controller = _live_harness()
+    try:
+        # 仮にバグで drain されてしまった場合に venue 到達を確実に観測できるよう fill outcome を仕込む。
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
+        with pytest.raises(Exception):
+            controller.attach(
+                strategy_cls=_QueueInOnStartThenRaise, scenario=SCENARIO, instrument_id=IID,
+                venue="MOCK", params={}, nautilus_strategy_id="LIVE-os000001", session=object(),
+            )
+        assert adapter.submit_order_call_count == 0  # on_start 失敗時、キュー済み intent は破棄
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_mock_live_pretrade_denied_order_does_not_consume_rate_limit():
+    """pre-trade DENIED 注文は rate-limit 枠を消費しない（rate check は precheck 後・venue 直前・#25 review finding 2）。"""
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _BigThenSmall(KernelStrategyBase):
+        def on_bar(self, bar):
+            self.submit_market(self.instrument_id, OrderSide.BUY, 1000)  # 8000>500 → MAX_ORDER_VALUE deny
+            self.submit_market(self.instrument_id, OrderSide.BUY, 10)    # 80<500 → 正常・venue へ届くべき
+
+    violations: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_safety_violation=lambda v: violations.append(v)
+    )
+    rails = SafetyRails(SafetyLimits(max_orders_per_minute=1, max_order_value_jpy=500))
+    try:
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=10.0, avg_price=8.0)
+        controller.attach(
+            strategy_cls=_BigThenSmall, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-rate0002", session=object(), safety_rails=rails,
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 8.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and adapter.submit_order_call_count == 0:
+            time.sleep(0.02)
+        time.sleep(0.1)  # 後続イベントが来ないことを確認するための余白
+        # 大口は MAX_ORDER_VALUE で deny（rate 枠を消費しない）→ 小口だけ venue 到達。
+        assert adapter.submit_order_call_count == 1, [v.kind for v in violations]
+        assert not any(v.kind == "MAX_ORDERS_PER_MINUTE" for v in violations), [v.kind for v in violations]
+        assert any(v.kind == "MAX_ORDER_VALUE" for v in violations)
+        controller.detach(nautilus_strategy_id="LIVE-rate0002")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_mock_live_position_cap_allows_reducing_order():
+    """建玉を減らす注文（決済 SELL）は max_position_size cap で弾かれず venue に届く（#25 review finding 4）。"""
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _SellToClose(KernelStrategyBase):
+        def on_bar(self, bar):
+            self.submit_market(self.instrument_id, OrderSide.SELL, 100)  # long 300 を 200 へ減らす決済
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run(coro, timeout=5.0):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+
+    violations: list = []
+    adapter = MockVenueAdapter()
+    runner = LiveRunner(adapter, interval_ns=DAY_NS)
+    runner._loop = loop
+    controller = KernelLiveEngineController(
+        loop_provider=lambda: loop,
+        adapter_provider=lambda: adapter,
+        runner_provider=lambda: runner,
+        on_safety_violation=lambda v: violations.append(v),
+    )
+    # 既存 long 300 @9 = 2700。cap=3000。決済 SELL の概算金額 100@9=900。旧ロジックは
+    # projected=2700+900=3600>3000 で MAX_POSITION_SIZE deny（決済を弾く）。新ロジックは
+    # 減少注文なので cap をスキップ → venue 到達。
+    rails = SafetyRails(SafetyLimits(max_position_size_jpy=3000))
+    try:
+        run(adapter.login(None))
+        adapter.set_account_snapshot(
+            cash=1_000_000.0,
+            buying_power=1_000_000.0,
+            positions=[AccountPositionData(symbol="8918", qty=300, avg_price=9.0, unrealized_pnl=0.0)],
+        )
+        run(runner.start())
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=9.0)
+        controller.attach(
+            strategy_cls=_SellToClose, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-close001", session=object(), safety_rails=rails,
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 9.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and adapter.submit_order_call_count == 0:
+            time.sleep(0.02)
+        time.sleep(0.1)
+        assert adapter.submit_order_call_count == 1, [v.kind for v in violations]
+        assert not any(v.kind == "MAX_POSITION_SIZE" for v in violations), [v.kind for v in violations]
+        controller.detach(nautilus_strategy_id="LIVE-close001")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
 def test_mock_live_seeded_position_in_pretrade():
     """venue 既存建玉が seed され pre-trade position cap に効く（D7）。"""
     loop = asyncio.new_event_loop()
@@ -425,5 +558,77 @@ def test_mock_live_seeded_position_in_pretrade():
             run(runner.aclose())
         except Exception:
             pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_instrument_id_rejects_trailing_newline():
+    """is_valid_instrument_id は末尾改行を弾く（`$` でなく fullmatch・#25 review finding 8）。"""
+    from engine.kernel.instrument_id import is_valid_instrument_id
+
+    assert is_valid_instrument_id("7203.TSE")
+    assert not is_valid_instrument_id("7203.TSE\n")
+    assert not is_valid_instrument_id("7203")        # venue サフィックス欠落
+    assert not is_valid_instrument_id("7203.")       # venue 空
+    assert not is_valid_instrument_id("7203 .TSE")   # 空白混入
+
+
+def test_market_data_bus_subscription_close_unsubscribes_without_iteration():
+    """consumer を一度も iterate せず close しても bus 購読が外れる（rollback leak 回避・#25 review finding 7）。"""
+    from engine.live.event_bus import MarketDataBus
+
+    bus = MarketDataBus()
+    sub = bus.subscribe()
+    assert len(bus._subscribers) == 1
+    sub.close()
+    assert len(bus._subscribers) == 0
+    sub.close()  # 冪等
+    assert len(bus._subscribers) == 0
+
+
+def test_attach_timeout_does_not_leave_orphan_driver():
+    """attach がタイムアウトしたら driver を commit せず bus 購読も残さない（fail-closed・#25 review finding 1/7）。"""
+    from engine.live.event_bus import MarketDataBus
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run(coro, timeout=5.0):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+
+    bus = MarketDataBus()
+
+    class _SlowRunner:
+        def __init__(self):
+            self.bus = bus
+
+        async def subscribe(self, instrument_id):
+            # attach_timeout（0.3s）を超え、かつ test の待ち（1.5s）より短くハングする。修正前は
+            # wait_for が無いので boundary timeout 後も _do_attach が走り続け、ここを抜けて
+            # self._driver を commit（孤児）。修正後は 0.3s で cancel され rollback で teardown。
+            await asyncio.sleep(1.0)
+
+    adapter = MockVenueAdapter()
+    runner = _SlowRunner()
+    controller = KernelLiveEngineController(
+        loop_provider=lambda: loop,
+        adapter_provider=lambda: adapter,
+        runner_provider=lambda: runner,
+        attach_timeout_s=0.3,
+    )
+    try:
+        run(adapter.login(None))
+        adapter.set_account_snapshot(cash=1_000_000.0, buying_power=1_000_000.0, positions=())
+        with pytest.raises(Exception):
+            controller.attach(
+                strategy_cls=KernelSpikeBuySell, scenario=SCENARIO, instrument_id=IID,
+                venue="MOCK", params={}, nautilus_strategy_id="LIVE-orph0001", session=object(),
+            )
+        # _do_attach が（修正前なら）commit を終えるであろう時刻まで待ってから検証する。
+        time.sleep(1.5)
+        assert controller._driver is None, "orphan driver committed after attach timeout"
+        assert len(bus._subscribers) == 0, "bus subscription leaked after attach timeout"
+    finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2.0)

@@ -137,14 +137,21 @@ class KernelLiveDriver:
         self._consumer_task = asyncio.create_task(self._consume())
 
     async def run_on_start(self) -> None:
-        """strategy.on_start を呼び、積まれた intent を drain する。"""
+        """strategy.on_start を呼び、**成功時のみ**積まれた intent を drain する（#25 finding 1）。
+
+        on_start が例外を投げた（attach 失敗。例: artifact 不足で fail-loud に raise）場合は、例外前に
+        キュー済みの intent を venue に送らず破棄して再送出する。`finally` で drain すると attach が
+        失敗しても注文が venue に到達してしまうため、ここでは成功パスでのみ drain する。
+        """
         try:
             self._strategy.on_start()
-        finally:
-            await self._drain()
+        except Exception:
+            self._intents.clear()
+            raise
+        await self._drain()
 
     async def stop(self) -> None:
-        """新規 intent 受付停止 → consumer 停止・await → on_stop 最大 1 回（D8）。"""
+        """新規 intent 受付停止 → consumer 停止・await → bus 購読解除 → on_stop 最大 1 回（D8）。"""
         self._stopping = True
         task = self._consumer_task
         self._consumer_task = None
@@ -154,6 +161,11 @@ class KernelLiveDriver:
                 await task
             except asyncio.CancelledError:
                 pass
+        # 共有 bus の購読を解除する。consumer が一度も起動していない rollback 経路では生成器の finally が
+        # 走らず queue が bus に残り leak するため、明示 close で確実に外す（冪等・#25 review finding 7）。
+        if self._bus_iter is not None:
+            self._bus_iter.close()
+            self._bus_iter = None
         try:
             self._strategy.on_stop()
         except Exception:  # noqa: BLE001 — teardown は best-effort
@@ -276,14 +288,6 @@ class KernelLiveDriver:
             self._deliver(order, self._denied(order, "STRATEGY_PAUSED", "run is PAUSED; new orders gated"))
             return
 
-        # max_orders_per_minute（旧 native rate rail）を venue 送信前に判定（#25 finding 1）。
-        rate_violation = self._check_rate_limit()
-        if rate_violation is not None:
-            self._deliver(order, self._denied(order, rate_violation.kind, rate_violation.detail))
-            if self._on_safety_violation is not None:
-                self._on_safety_violation(rate_violation)
-            return
-
         # 独自 pre-trade（allowlist / max_position_size / max_order_value / 規制）。MARKET の概算約定金額は
         # 直近価格 × 数量（last_prices は当該 bar の close で更新済み）。価格未取得時のみ 0（§8 Open Risk・
         # Nautilus native も market data 前は notional 評価不可と同じ・#25 finding 1）。
@@ -298,6 +302,17 @@ class KernelLiveDriver:
             self._deliver(order, self._denied(order, violation.kind, violation.detail))
             if self._on_safety_violation is not None:
                 self._on_safety_violation(violation)
+            return
+
+        # max_orders_per_minute（旧 native rate rail）は **他の pre-trade rail を通過した後・venue 送信の
+        # 直前**に判定する。precheck で DENIED になった注文は venue に送られないので rate 窓を消費させない
+        # （rate check を precheck より前に置くと、拒否注文が枠を食って後続の正常注文を誤って rate-deny する
+        # ・#25 review finding 2）。
+        rate_violation = self._check_rate_limit()
+        if rate_violation is not None:
+            self._deliver(order, self._denied(order, rate_violation.kind, rate_violation.detail))
+            if self._on_safety_violation is not None:
+                self._on_safety_violation(rate_violation)
             return
 
         events = await self._broker.submit(order)

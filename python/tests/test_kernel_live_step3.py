@@ -174,6 +174,47 @@ async def test_cancel_reject_keeps_order_live():
     assert order.status is OrderStatus.ACCEPTED  # 取消拒否 → live 据え置き
 
 
+async def test_cancel_race_fill_is_not_discarded():
+    """cancel 応答が約定（キャンセル競合）を運んだら捨てず fill として正規化する（#25 review finding 3）。"""
+
+    class _FillOnCancelAdapter:
+        async def cancel_order(self, *, venue, order_id):
+            return OrderResult(
+                status="FILLED", filled_qty=100.0, avg_price=8.0, client_order_id=order_id
+            )
+
+    broker = LiveBroker(adapter=_FillOnCancelAdapter(), venue="MOCK")
+    order = _order(qty=100.0)
+    order.status = OrderStatus.ACCEPTED  # live order being canceled
+    events = await broker.cancel(order)
+    assert _types(events) == [OrderFilled]
+    assert order.status is OrderStatus.FILLED
+    assert order.filled_qty == 100.0
+
+
+async def test_reject_after_partial_fill_terminates_as_canceled():
+    """部分約定済みに後から REJECTED が来たら既約定を捨てず CANCELED で終端する（#25 review finding 5）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="PARTIALLY_FILLED", filled_qty=50.0, avg_price=8.0)
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    assert order.status is OrderStatus.PARTIALLY_FILLED and order.filled_qty == 50.0
+
+    events = broker.apply_venue_update(
+        order,
+        OrderResult(
+            status="REJECTED", filled_qty=0.0, avg_price=None,
+            client_order_id="O-1", reject_reason="STALE",
+        ),
+        source="venue_stream",
+    )
+    assert _types(events) == [OrderCanceled]
+    assert order.status is OrderStatus.CANCELED
+    assert order.filled_qty == 50.0  # 既約定分は保持（注文全体を REJECTED にしない）
+
+
 async def test_modify_reject_restores_prior_state():
     a = MockVenueAdapter()
     await a.login(None)  # type: ignore[arg-type]

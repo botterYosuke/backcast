@@ -118,8 +118,10 @@ tests（`python/tests/`・standalone 実行可＝`python tests/<x>.py`、pytest 
 `test_gate_import_purity.py` / `test_kernel_bars.py` / `test_kernel_risk_gate.py` /
 `test_kernel_golden_cpython.py`（subprocess 隔離 dual-gate）/ `test_kernel_teardown_mono.py`。
 
-AC② Mono 実走 probe: `Assets/Editor/KernelTeardownProbe.cs`（editor-only throwaway・`S0EditorProbe` 同型）。
-実行: `<Unity 6000.4.11f1> -batchmode -nographics -quit -projectPath <repo> -executeMethod KernelTeardownProbe.Run`。
+Unity-Mono probe（editor-only throwaway・`-executeMethod <Probe>.Run` で batchmode 実行）:
+- AC② teardown: `Assets/Editor/KernelTeardownProbe.cs`（`S0EditorProbe` 同型）。
+- AC④ C# decode: `Assets/Editor/KernelSinkDecodeProbe.cs`（`ReplayPanelsDecodeProbe` の kernel 版・C# `ReplayEventSink`
+  を kernel push_target に渡し無改修 decoder で VALUE 照合）。Python 口 = `run_kernel.run_into(push_target)`。
 
 実行手順:
 ```
@@ -146,12 +148,24 @@ python -m spike.kernel_golden.verify_golden
     （実証済み）。headless 自動分 `test_kernel_teardown_mono.py`（subprocess exit 0＋Rust core 不在＋golden）は
     この構造保証の回帰ガードとして残す。
 
+## 7c. AC④ — C# decoder 実読込（GREEN 実証済み 2026-06-13）
+
+- **AC④ = 既存 C# decoder が kernel sink を無改修で読む：GREEN**。`Assets/Editor/KernelSinkDecodeProbe.cs`
+  （`ReplayPanelsDecodeProbe` の kernel 版）が kernel の `push_target` に **C# `ReplayEventSink` をそのまま渡し**
+  （kernel sink は RustBacktestSink を duck-type）、kernel を走らせて push_bar/push_order/push_portfolio/
+  push_run_complete を C# sink のキューへ流す → **無改修の `ReplayBarDecoder.Decode` / `ReplayPanelDecoder.
+  DecodeOrder|DecodePortfolio|DecodeRunResult`** で drain・decode し VALUE assert。Python 側口は
+  `spike.kernel_golden.run_kernel.run_into(push_target)`。
+  - **結果**: `[KERNEL SINK DECODE PASS] bars=68 ordersPushed=2 portfoliosPushed=2 fills=2`・exit 0・compile error 無し。
+    JsonUtility は key 不一致で silent zero-fill するため **count ではなく値**（Side∈{BUY,SELL}・Status=FILLED・
+    Qty>0・Price>0・open Position(qty>0,avg_price>0)・Equity>0・FillsCount=2・EquityPoints=68・bar Price>0）で gate。
+  - ⇒ kernel の EventSink payload は既存 Replay sink 契約と同一で、**C# decoder は無改修で読める**ことを実機実証。
+  - 証跡: `C:/tmp/kernel_sink_decode.log`。
+  - 注: order payload の `client_order_id`/`venue_order_id`/`strategy_id` は実装固有で oracle と値が異なる（golden は
+    volatile id を除いた正規化 contract で gate）。C# decoder はキーで bind するため値差は無関係＝無改修で読める。
+
 ## 7b. 残 manual-gate
-- **AC④ C# decoder 無改修**: EventSink の JSON payload は `GuiBridgeActor` と **キー集合・bar/portfolio payload は
-  byte 一致**（実測）。ただし **order payload の `client_order_id`/`venue_order_id`/`strategy_id` は実装固有で
-  oracle と異なる**（例: oracle `O-20241003-…`/`TSE-1-001`/`spike-000` vs kernel `O-spike-buy-sell-1`/`TSE-001`/
-  `spike-buy-sell`）。golden はこれら volatile id を除いた**正規化 contract 一致**で gate する（raw byte 一致では
-  ない）。C# decoder は同一キーで読めるため無改修で動く見込みだが、**実読込確認は Unity 結線時の manual-gate**。
+- なし（AC④ は §7c で GREEN。kernel を本番 C# adapter に結線する slice で live 経路の回帰は別途）。
 
 ## 8. AC 対応表
 
@@ -160,9 +174,8 @@ python -m spike.kernel_golden.verify_golden
 | ① golden 6 項目一致（CPython） | ✅ GREEN | `test_kernel_golden_cpython`（oracle==committed==kernel・subprocess 隔離・正規化 contract） |
 | ② Windows-Mono clean teardown | ✅ **GREEN** | **`KernelTeardownProbe.Run` 実走で exit 0＋新規 crash dump 無し＋Shutdown clean＋heartbeat 生存**（§7・2026-06-13）。回帰ガード `test_kernel_teardown_mono` |
 | ③ gates 発火 | ✅ GREEN | `test_kernel_risk_gate`（pre allowlist deny ＋ post MTM daily-loss halt）＋ `test_gate_import_purity` |
-| ④ sink JSON 同一（C# 無改修） | 🟡 一部 | bar/portfolio は byte 一致・order は ID 除く semantic 一致（§7b）。C# decoder 実読込は Unity 結線時の manual-gate |
-| ⑤ golden script+手順を findings 記録／GREEN で ADR-0004 案 C を accepted（owner 確認後） | 🟡 | 本書 §6＋capture/verify script。**AC① ② ③ GREEN ＝ accepted 昇格条件を充足。昇格自体は owner 判断** |
+| ④ sink JSON 同一（C# 無改修） | ✅ **GREEN** | **`KernelSinkDecodeProbe.Run` 実走で無改修 `ReplayBarDecoder`/`ReplayPanelDecoder` が kernel sink を VALUE decode**（bars=68・orders=2 BUY+SELL FILLED・open Position・Equity>0・FillsCount=2）（§7c・2026-06-13） |
+| ⑤ golden script+手順を findings 記録／GREEN で ADR-0004 案 C を accepted | ✅ GREEN | 本書 §6＋capture/verify script。**ADR-0004 案 C `accepted` 昇格済み**（2026-06-13・owner） |
 
-> **判定（2026-06-13）**: ① ② ③ GREEN、④ は contract parity 実証＋C# 実読込のみ manual 残。**tracer bullet の中核 AC（golden 一致 ＋
-> Windows-Mono clean teardown ＋ gates 発火）は達成**。ADR-0004 案 C の `accepted` 昇格条件（owner 指定 = AC② GREEN）を満たした
-> ので、昇格は owner 判断で可。
+> **判定（2026-06-13）**: **AC① ② ③ ④ ⑤ すべて GREEN**（実機実証）。tracer bullet 完了。ADR-0004 案 C は `accepted`。
+> kernel を本番 C# adapter に結線する live 経路の回帰は別 slice（#24 非目標）。

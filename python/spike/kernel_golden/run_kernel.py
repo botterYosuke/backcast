@@ -19,11 +19,17 @@ from spike.kernel_golden import scenario
 from spike.kernel_golden.normalize import CaptureSink, canonical_json, normalize
 
 
-def run() -> dict:
+def _run_into(push_target) -> None:
+    """Run the kernel tracer pushing the sink contract into `push_target`.
+
+    `push_target` duck-types RustBacktestSink (push_bar/push_order/push_portfolio/
+    push_run_complete). Used by run() with a CaptureSink, and by the AC#4 C# decode
+    probe (KernelSinkDecodeProbe) with a C# ReplayEventSink — so the SAME kernel sink
+    JSON is fed to the unmodified ReplayBarDecoder / ReplayPanelDecoder.
+    """
     from engine.kernel.runner import KernelRunner
     from spike.fixtures.strategies.kernel_spike_buy_sell import KernelSpikeBuySell
 
-    sink = CaptureSink()
     KernelRunner(
         catalog_path=scenario.CATALOG,
         instrument_id=scenario.INSTRUMENT,
@@ -31,8 +37,18 @@ def run() -> dict:
         end=scenario.END,
         initial_cash=scenario.INITIAL_CASH,
         strategy=KernelSpikeBuySell(),
-        push_target=sink,
+        push_target=push_target,
     ).run()
+
+
+def run_into(push_target) -> None:
+    """Public entry for the C# AC#4 probe: run the kernel into a C# sink."""
+    _run_into(push_target)
+
+
+def run() -> dict:
+    sink = CaptureSink()
+    _run_into(sink)
     return normalize(sink.events, initial_cash=scenario.INITIAL_CASH)
 
 

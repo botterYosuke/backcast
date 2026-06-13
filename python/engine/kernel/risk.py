@@ -46,6 +46,18 @@ class RiskEngine:
     def rails(self) -> Optional[SafetyRails]:
         return self._rails
 
+    @property
+    def requires_reference_price(self) -> bool:
+        """True if a notional-dependent pre-trade rail (`max_order_value_jpy` /
+        `max_position_size_jpy`) is configured. Both gate on the order's estimated notional
+        (reference price × qty), so without a price the caller cannot evaluate them and must
+        DENY rather than pass a 0-JPY notional that silently bypasses the cap (#25 review finding 1).
+        """
+        if self._rails is None:
+            return False
+        limits = self._rails.limits
+        return limits.max_order_value_jpy > 0 or limits.max_position_size_jpy > 0
+
     def check_pre_trade(
         self,
         *,

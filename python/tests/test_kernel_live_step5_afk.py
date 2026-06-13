@@ -632,3 +632,117 @@ def test_attach_timeout_does_not_leave_orphan_driver():
     finally:
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2.0)
+
+
+def test_mock_live_on_start_order_without_price_denied_when_money_rail_set():
+    """市場データ受信前の on_start 発注は、金額rail設定時に参照価格無しで素通しせず DENIED（#25 review finding 1）。
+
+    notional を `last_prices.get(.., 0.0) * qty` で 0 円扱いすると、on_start 注文が
+    max_order_value / max_position_size cap を常に回避して venue に到達する。参照価格未取得かつ
+    金額rail有効なら bypass せず deny する。
+    """
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _OrderInOnStart(KernelStrategyBase):
+        def on_start(self):
+            self.submit_market(self.instrument_id, OrderSide.BUY, 100)  # 価格不明・送られてはいけない
+
+    violations: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_safety_violation=lambda v: violations.append(v)
+    )
+    rails = SafetyRails(SafetyLimits(max_order_value_jpy=1, max_position_size_jpy=1))
+    try:
+        # 仮にバグで素通ししたら venue 到達を観測できるよう fill outcome を仕込む。
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
+        controller.attach(
+            strategy_cls=_OrderInOnStart, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-onstart1", session=object(), safety_rails=rails,
+        )
+        # market data を一切注入しない。on_start 発注は参照価格無しで deny されねばならない。
+        deadline = time.time() + 3.0
+        while time.time() < deadline and not violations:
+            time.sleep(0.02)
+        assert violations, "on_start order was not denied without a reference price"
+        assert violations[0].kind == "NO_REFERENCE_PRICE", [v.kind for v in violations]
+        assert adapter.submit_order_call_count == 0  # venue 未到達
+        controller.detach(nautilus_strategy_id="LIVE-onstart1")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_mock_live_invalid_quantity_denied_before_venue():
+    """quantity<=0 / NaN / inf は precheck 前に DENIED、venue 未到達（#25 review finding 2）。"""
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _BadQty(KernelStrategyBase):
+        def on_bar(self, bar):
+            self.submit_market(self.instrument_id, OrderSide.BUY, -100)        # 負数
+            self.submit_market(self.instrument_id, OrderSide.BUY, 0)           # ゼロ
+            self.submit_market(self.instrument_id, OrderSide.BUY, float("nan"))  # NaN
+            self.submit_market(self.instrument_id, OrderSide.BUY, float("inf"))  # inf
+
+    statuses: list = []
+    loop, thread, run, adapter, runner, controller = _live_harness(
+        on_order_event=lambda ev, sid: statuses.append(ev.status)
+    )
+    try:
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
+        controller.attach(
+            strategy_cls=_BadQty, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-badqty01", session=object(),
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 8.0))
+        deadline = time.time() + 3.0
+        while time.time() < deadline and statuses.count("DENIED") < 4:
+            time.sleep(0.02)
+        # rails 無も valid instrument なので、4 注文が DENIED になる原因は数量検証以外に無い。
+        assert statuses.count("DENIED") == 4, statuses
+        assert adapter.submit_order_call_count == 0  # 不正数量は venue へ送られない
+        # 各 Order が DENIED 終端し、人間可読な理由（finite positive 違反）が刻まれている。
+        denied = [o for o in controller._driver._orders.values() if o.status.value == "DENIED"]
+        assert len(denied) == 4
+        assert all("finite positive" in o.denied_reason for o in denied), [o.denied_reason for o in denied]
+        controller.detach(nautilus_strategy_id="LIVE-badqty01")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
+def test_broker_modify_rejects_invalid_new_qty():
+    """broker.modify は new_qty が非有限/非正なら venue へ送らず order を変えない（#25 review finding 2）。"""
+    from engine.kernel.live.broker import LiveBroker
+    from engine.kernel.orders import Order, OrderSide, OrderStatus
+
+    class _SpyAdapter:
+        def __init__(self):
+            self.modify_calls = 0
+
+        async def modify_order(self, **kw):
+            self.modify_calls += 1
+            raise AssertionError("venue must not be called for invalid new_qty")
+
+    adapter = _SpyAdapter()
+    broker = LiveBroker(adapter=adapter, venue="MOCK")
+
+    for bad in (-1.0, 0.0, float("nan"), float("inf")):
+        order = Order(
+            client_order_id="O-1", strategy_id="s", instrument_id=IID,
+            side=OrderSide.BUY, quantity=100.0, status=OrderStatus.ACCEPTED,
+        )
+        events = asyncio.run(broker.modify(order, new_qty=bad))
+        assert events == []
+        assert order.quantity == 100.0  # 不正 modify で数量は据え置き
+        assert order.status == OrderStatus.ACCEPTED  # live のまま
+    assert adapter.modify_calls == 0

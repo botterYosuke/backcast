@@ -19,6 +19,7 @@ Nautilus-free。
 """
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from engine.kernel.orders import (
@@ -117,8 +118,15 @@ class LiveBroker:
 
         拒否系 terminal（REJECTED/DENIED/EXPIRED 等）は更新を適用せず元状態へ復帰する（注文全体を
         terminal にしない・D6）。
+
+        `new_qty` / `new_price` は **有限かつ正数**でなければ venue へ送らず order を据え置く（不正値を
+        adapter に渡さない・#25 review finding 2）。`<= 0` だけでは NaN を取りこぼすため isfinite を明示。
         """
         if order.status in _TERMINAL_STATES:
+            return []
+        if new_qty is not None and (not math.isfinite(new_qty) or new_qty <= 0):
+            return []
+        if new_price is not None and (not math.isfinite(new_price) or new_price <= 0):
             return []
         prior = order.status
         try:

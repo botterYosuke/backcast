@@ -346,10 +346,32 @@ review 指摘 2 件（High/Medium）＋ 自前 high-effort code-review の指摘
 - **instrument_id 検証が末尾改行を許容（Low・自前 #8）** — `re.match(r"...$")` が末尾 `\n` 直前で一致。`re.fullmatch` に変更。
   test: `test_instrument_id_rejects_trailing_newline`。
 
+### code-review 反映 round 5（#25 codex review・2026-06-14・GREEN 116 passed）
+
+live-safety bypass 2 件（High）を修正。各 fix は RED→GREEN ガード付き（`uv run pytest -q` 全 GREEN・
+import-purity 権威ゲート PASS）:
+
+- **on_start 発注が金額rail を回避（High・review finding 1）** — `driver._process_intent` の notional が
+  `last_prices.get(.., 0.0) × qty` のため、market data 受信前の on_start 注文は常に 0 円扱いとなり
+  `max_order_value_jpy` / `max_position_size_jpy` を素通りして venue に到達していた。**参照価格が未取得で、かつ
+  金額rail（order value / position size）が有効なら `NO_REFERENCE_PRICE` で deny**（`order_engine.requires_reference_price`
+  が金額rail有効を判定。金額rail無効時のみ従来通り notional=0 で precheck を通す）。
+  test: `test_mock_live_on_start_order_without_price_denied_when_money_rail_set`。
+- **不正数量（≤0 / NaN / inf）を venue へ送信（High・review finding 2）** — kernel 経路に手動経路
+  （`order_facade._place`）相当の数量検証が無く、`-100` 等が adapter に到達していた。**`_process_intent` の precheck 前に
+  `math.isfinite(qty) and qty > 0` を検証し `INVALID_QTY` で deny**。`broker.modify` の `new_qty` / `new_price` にも同等の
+  有限・正数検証を追加（不正値を venue へ送らず order 据え置き）。
+  test: `test_mock_live_invalid_quantity_denied_before_venue` / `test_broker_modify_rejects_invalid_new_qty`。
+
+> **未確認事項（#25 完了判定の留保）**: 下記 **Unity-Mono full Live gate（D5 layer 3）は未実施**。CPython 全ゲート
+> （116 passed）と import-purity 権威ゲート（fresh subprocess full LiveAuto）は GREEN だが、Mono+pythonnet 上の
+> full Live teardown probe は owner が Windows で手動実行するまで **未検証**。最終完了サマリーではこのゲートを
+> 未確認として扱うこと。
+
 > 注: 本 findings は #16（Strategy Editor）が `docs/findings/0010-strategy-editor.md` を採番したため
 > **0010 → 0011 にリネーム**（番号衝突回避）。
 
-**残 manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行）**:
+**残 manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行・未実施）**:
 `Assets/Editor/KernelLiveProbe.cs`（`KernelTeardownProbe` 同型）。`run_mock_live.run()` を Mono+pythonnet で
 完走させ fills=2/final_net=0/realized=200・`leaked==0`・clean `PythonEngine.Shutdown`・exit 0・新規 crash dump
 無しを確認する。`KernelTeardownProbe`（Replay のみ）の Live 拡張。

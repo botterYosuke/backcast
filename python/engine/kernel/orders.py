@@ -140,6 +140,16 @@ class OrderEngine:
         self._seq += 1
         return f"{self._venue}-{self._seq:03d}"
 
+    @property
+    def requires_reference_price(self) -> bool:
+        """True if a notional-dependent pre-trade rail is configured (delegates to RiskEngine).
+
+        When such a rail is set but the order's reference price is unknown (e.g. an `on_start`
+        order before any market data), the caller must DENY rather than pass through a 0-JPY
+        notional that silently bypasses the cap (#25 review finding 1).
+        """
+        return self._risk.requires_reference_price
+
     def precheck(
         self,
         order: Order,

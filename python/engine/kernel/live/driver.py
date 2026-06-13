@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -30,10 +31,18 @@ from engine.kernel.orders import (
 from engine.kernel.portfolio import Portfolio
 from engine.kernel.strategy import Strategy
 from engine.live.adapter import KlineUpdate, TradesUpdate
-from engine.live.safety_rails import KIND_MAX_ORDERS_PER_MINUTE, RailViolation
+from engine.live.safety_rails import (
+    KIND_MAX_ORDERS_PER_MINUTE,
+    KIND_NO_REFERENCE_PRICE,
+    RailViolation,
+)
 from engine.live.strategy_log import StrategyLogRecord
 
 log = logging.getLogger(__name__)
+
+# 不正数量（非有限 / 非正）の deny kind。安全rail違反ではなく注文の形式不正なので
+# on_safety_violation には乗せず、OrderDenied で戦略へ返すだけ（手動経路の order_facade と同じ規約）。
+KIND_INVALID_QTY = "INVALID_QTY"
 
 _OPEN_STATES = frozenset(
     {
@@ -281,17 +290,34 @@ class KernelLiveDriver:
         )
         self._orders[order.client_order_id] = order
 
+        # 数量検証: 有限かつ正数。precheck 前に弾き、不正数量を venue へ送らせない（#25 review finding 2）。
+        # `<= 0` だけでは NaN を取りこぼす（NaN との比較は常に False）ため isfinite を明示する
+        # （手動経路 order_facade._place と同じ規約）。形式不正は safety rail 違反ではないので toast しない。
+        if not math.isfinite(intent.quantity) or intent.quantity <= 0:
+            self._deny(order, KIND_INVALID_QTY,
+                       f"order quantity {intent.quantity!r} is not a finite positive number")
+            return
+
         # PAUSE / run gate は venue 送信前（precheck 前）に判定する（D8）。
         if self._is_run_gated is not None and self._is_run_gated():
-            order.status = OrderStatus.DENIED
-            order.denied_reason = "STRATEGY_PAUSED"
-            self._deliver(order, self._denied(order, "STRATEGY_PAUSED", "run is PAUSED; new orders gated"))
+            self._deny(order, "STRATEGY_PAUSED", "run is PAUSED; new orders gated")
             return
 
         # 独自 pre-trade（allowlist / max_position_size / max_order_value / 規制）。MARKET の概算約定金額は
-        # 直近価格 × 数量（last_prices は当該 bar の close で更新済み）。価格未取得時のみ 0（§8 Open Risk・
-        # Nautilus native も market data 前は notional 評価不可と同じ・#25 finding 1）。
-        notional = self.last_prices.get(intent.instrument_id, 0.0) * intent.quantity
+        # 直近価格 × 数量（last_prices は当該 bar の close / tick price で更新済み）。
+        # 参照価格が未取得（market data 受信前の on_start 発注等）で、かつ金額rail（order value /
+        # position size）が有効なら、notional を 0 円扱いで素通しすると cap を回避して venue に到達する。
+        # bypass せず明示 deny する（#25 review finding 1）。金額rail 無効時のみ 0 で precheck を通す。
+        price = self.last_prices.get(intent.instrument_id)
+        if price is None and self._order_engine.requires_reference_price:
+            self._deny(
+                order, KIND_NO_REFERENCE_PRICE,
+                f"no reference price for {intent.instrument_id}; "
+                f"cannot evaluate notional rails before market data",
+                as_safety_violation=True,
+            )
+            return
+        notional = (price if price is not None else 0.0) * intent.quantity
         violation = self._order_engine.precheck(
             order,
             net_signed_qty=self._portfolio.net_signed_qty(intent.instrument_id),
@@ -299,9 +325,7 @@ class KernelLiveDriver:
             order_notional_jpy=notional,
         )
         if violation is not None:
-            self._deliver(order, self._denied(order, violation.kind, violation.detail))
-            if self._on_safety_violation is not None:
-                self._on_safety_violation(violation)
+            self._deny(order, violation.kind, violation.detail, as_safety_violation=True)
             return
 
         # max_orders_per_minute（旧 native rate rail）は **他の pre-trade rail を通過した後・venue 送信の
@@ -310,14 +334,24 @@ class KernelLiveDriver:
         # ・#25 review finding 2）。
         rate_violation = self._check_rate_limit()
         if rate_violation is not None:
-            self._deliver(order, self._denied(order, rate_violation.kind, rate_violation.detail))
-            if self._on_safety_violation is not None:
-                self._on_safety_violation(rate_violation)
+            self._deny(order, rate_violation.kind, rate_violation.detail, as_safety_violation=True)
             return
 
         events = await self._broker.submit(order)
         for ev in events:
             self._deliver(order, ev)
+
+    def _deny(
+        self, order: Order, kind: str, detail: str, *, as_safety_violation: bool = False
+    ) -> None:
+        """注文を DENIED 終端し OrderDenied を配る。`as_safety_violation` なら safety rail 違反として
+        `on_safety_violation`（UI トースト）にも乗せる。kind は OrderDenied に載るので denied_reason には
+        人間可読な detail だけを置く（kind の二重化を避ける）。"""
+        order.status = OrderStatus.DENIED
+        order.denied_reason = detail
+        self._deliver(order, self._denied(order, kind, detail))
+        if as_safety_violation and self._on_safety_violation is not None:
+            self._on_safety_violation(RailViolation(kind, detail))
 
     def _check_rate_limit(self) -> Optional[RailViolation]:
         """max_orders_per_minute（旧 Nautilus native rate rail）の kernel 実装。0 は無効。

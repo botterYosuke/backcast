@@ -61,6 +61,9 @@ KIND_REGULATION = "REGULATION"
 # 旧 native だった max_order_value / max_orders_per_minute も pre-trade rail として明示する。
 KIND_MAX_ORDER_VALUE = "MAX_ORDER_VALUE"
 KIND_MAX_ORDERS_PER_MINUTE = "MAX_ORDERS_PER_MINUTE"
+# #25 review finding 1: 金額rail（max_order_value / max_position_size）有効時に参照価格が無いと
+# 概算約定金額を評価できない。0 円扱いで素通しすると cap を回避するため、deny として閉じる。
+KIND_NO_REFERENCE_PRICE = "NO_REFERENCE_PRICE"
 
 
 def order_increases_exposure(

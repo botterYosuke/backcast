@@ -130,10 +130,13 @@ public static class LayoutStore
         return doc;
     }
 
-    // Drop entries that would break the binder (null entries, null id, null rect).
-    // Best-effort: a partially-bad file still yields its good panels.
+    // Drop entries that would break the binder (null entries, null id, null rect), and
+    // NORMALIZE the additive canvasView (issue #13). Best-effort: a partially-bad file
+    // still yields its good panels and a usable view.
     static void Sanitize(LayoutDocument doc)
     {
+        NormalizeCanvasView(doc);
+
         if (doc.panels == null)
         {
             doc.panels = new System.Collections.Generic.List<PanelLayout>();
@@ -141,4 +144,25 @@ public static class LayoutStore
         }
         doc.panels.RemoveAll(p => p == null || string.IsNullOrEmpty(p.id) || p.rect == null);
     }
+
+    // canvasView normalization (issue #13, findings 0006 §3) — the AUTHORITATIVE place
+    // (the binder/math never sanitize). An old #12 sidecar (no canvasView) or a hand-
+    // corrupted view must never yield a degenerate transform: missing/null -> identity,
+    // non-finite pan -> 0 per axis, non-finite or <=0 zoom -> 1, then clamp [0.2,5.0].
+    // `internal`-equivalent visibility via public so the AFK probe can drive non-finite
+    // cases DIRECTLY on a CanvasView (NaN isn't valid JSON, so it can't be reached through
+    // LoadFromJson without tripping the whole-document parse fallback instead).
+    public static void NormalizeCanvasView(LayoutDocument doc)
+    {
+        if (doc == null) return;
+        if (doc.canvasView == null) { doc.canvasView = CanvasView.Identity(); return; }
+
+        var v = doc.canvasView;
+        if (!IsFinite(v.panX)) v.panX = 0f;
+        if (!IsFinite(v.panY)) v.panY = 0f;
+        if (!IsFinite(v.zoom) || v.zoom <= 0f) v.zoom = 1f;
+        v.zoom = Mathf.Clamp(v.zoom, CanvasView.MIN_ZOOM, CanvasView.MAX_ZOOM);
+    }
+
+    static bool IsFinite(float f) => !float.IsNaN(f) && !float.IsInfinity(f);
 }

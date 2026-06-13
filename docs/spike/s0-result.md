@@ -141,6 +141,17 @@ owner 指示の決定ゲート：per-run でスレッドを終了させず、S2-
 
 **証跡**: `C:/tmp/s0_longthread1_*.log`（bypass・run 中 crash）, `C:/tmp/s0_longconfound_*.log`（error・run 完走→exit crash）, crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
 
+### 1.4 native crash-dump 解析（owner 指示・dump 1 件・cdbX64・2026-06-13）
+
+`Unity.exe.10148.dmp`（§1.3 confound run）を cdbX64 で解析（詳細・loaded modules は **ADR-0004 §native crash-dump 解析**）:
+
+- **exception** `c0000005` AV at `ntdll!RtlFlsSetValue+0xb4`（解放済 FLS スロットへの書込）。
+- **無限再帰 → stack overflow**: `RtlFlsSetValue`(AV) → `_CxxFrameHandler3`(その AV の C++ 例外ハンドラ) → `_vcrt_getptd`/`FlsSetValue` → 再び `RtlFlsSetValue`(AV) → ∞。
+- **faulting module = ntdll/ucrtbase（Windows CRT の thread-local/FLS teardown）**。python313/mono/nautilus の自前コードではない。
+- **多重 CRT 確認**: `nautilus_pyo3_cp313_win_amd64`（Rust・自前 CRT）+ `python313` + `ucrtbase`/`VCRUNTIME140(_1)` + side-by-side `msvcp140_<hash>` 複数 + `msvcp100`。
+- **機構**: thread/process 終了時、複数 CRT が登録した FLS callback が別 CRT 解放済の per-thread data を deref → AV → 例外処理自身が FLS 再入 → 無限再帰。§1.1/§1.2/§1.3 が同一根（多重 CRT thread-local destructor 競合）と確定。
+- **判定**: owner 基準の「Rust/CPython/Mono 間の終了順・thread-local destructor → 根治性を示せない場合は案 B」に**該当**。局所的・保守可能な 1 点修正は無し → **案 B（別プロセス）支持**。最終確定は owner（ADR-0004 へ）。
+
 ---
 
 ## 2. 検証した本番 pin（16-byte → 8-byte 訂正の経緯）

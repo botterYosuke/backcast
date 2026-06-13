@@ -179,6 +179,40 @@ public class FloatingWindowLayout
     }
 }
 
+// StrategyEditorState — a Strategy Editor window's persisted CONTENT state (issue #16), the
+// ADDITIVE capability-surface item ADR-0003 decision 2 named as "(後で) Strategy Editor の
+// 開いていたファイル等". A SEPARATE DIMENSION from floatingWindows (findings 0010 §7, owner-
+// locked): FloatingWindowLayout stays kind-agnostic (it owns geometry/z/visibility), so the
+// content-specific open-file does NOT pollute it. Matched to its window by `id`.
+//   id       = the strategy_editor window id this state belongs to (e.g. "strategy_editor:region_001").
+//   filePath = the canonical absolute .py the editor had open. PERSISTED VERBATIM — LayoutStore
+//              does NOT verify existence or canonicalize; an orphan id or a missing path is KEPT
+//              (forward-evolution tolerance) and the restore controller decides what to do.
+// Only the PATH is persisted (findings 0010 §7) — never the unsaved buffer, dirty, history, caret,
+// selection, or scroll. UnityEngine-free POCO (JsonUtility binds by verbatim field name).
+[Serializable]
+public class StrategyEditorState
+{
+    public string id;
+    public string filePath;
+
+    public StrategyEditorState() { }
+
+    public StrategyEditorState(string id, string filePath)
+    {
+        this.id = id;
+        this.filePath = filePath;
+    }
+
+    public StrategyEditorState Clone() => new StrategyEditorState(id, filePath);
+
+    public static bool Equal(StrategyEditorState a, StrategyEditorState b)
+    {
+        if (a == null || b == null) return a == b;
+        return a.id == b.id && a.filePath == b.filePath;
+    }
+}
+
 [Serializable]
 public class LayoutDocument
 {
@@ -200,6 +234,13 @@ public class LayoutDocument
     // to an EMPTY list by LayoutStore.Sanitize(). A separate dimension from panels (tiles are
     // grid slots; windows are free placement in canvas-logical space, findings 0008 §3).
     public List<FloatingWindowLayout> floatingWindows;
+
+    // Strategy Editor open-file content state (issue #16). ADDITIVE: an old #12/#13/#15 sidecar
+    // lacking this field loads with panels/canvasView/floatingWindows intact and strategyEditors
+    // normalized to an EMPTY list by LayoutStore.Sanitize(). A separate dimension from
+    // floatingWindows (geometry vs. content; findings 0010 §7). NOT a version bump (additive,
+    // identity-defaulting — the same forward-evolution tolerance as canvasView/floatingWindows).
+    public List<StrategyEditorState> strategyEditors;
 
     // Default ctor leaves version at the UNSET SENTINEL 0 (NOT CURRENT_VERSION) on
     // purpose: JsonUtility's treatment of a JSON-absent field (keep ctor value vs.
@@ -240,6 +281,7 @@ public class LayoutDocument
         };
         doc.canvasView = CanvasView.Identity();   // no pan, 100% (findings 0006 §3)
         doc.floatingWindows = new List<FloatingWindowLayout>();   // none open by default (findings 0008 §3)
+        doc.strategyEditors = new List<StrategyEditorState>();    // no editor state by default (findings 0010 §7)
         return doc;
     }
 
@@ -255,6 +297,12 @@ public class LayoutDocument
             doc.floatingWindows = new List<FloatingWindowLayout>(floatingWindows.Count);
             foreach (var w in floatingWindows)
                 if (w != null) doc.floatingWindows.Add(w.Clone());
+        }
+        if (strategyEditors != null)
+        {
+            doc.strategyEditors = new List<StrategyEditorState>(strategyEditors.Count);
+            foreach (var s in strategyEditors)
+                if (s != null) doc.strategyEditors.Add(s.Clone());
         }
         return doc;
     }
@@ -272,6 +320,14 @@ public class LayoutDocument
         if (floatingWindows == null || id == null) return null;
         for (int i = 0; i < floatingWindows.Count; i++)
             if (floatingWindows[i] != null && floatingWindows[i].id == id) return floatingWindows[i];
+        return null;
+    }
+
+    public StrategyEditorState FindStrategyEditor(string id)
+    {
+        if (strategyEditors == null || id == null) return null;
+        for (int i = 0; i < strategyEditors.Count; i++)
+            if (strategyEditors[i] != null && strategyEditors[i].id == id) return strategyEditors[i];
         return null;
     }
 
@@ -302,6 +358,23 @@ public class LayoutDocument
                 var fb = b.FindWindow(fa.id);
                 if (fb == null) return false;
                 if (!FloatingWindowLayout.Approx(fa, fb, eps)) return false;
+            }
+        }
+
+        // strategyEditors matched BY id (list order incidental). A null list and an empty list
+        // are the SAME state (no editor content): Default() carries empty, a missing field can
+        // land as null. Coalesce counts, then match each by id (findings 0010 §7).
+        int sa = a.strategyEditors?.Count ?? 0;
+        int sb = b.strategyEditors?.Count ?? 0;
+        if (sa != sb) return false;
+        if (sa > 0)
+        {
+            foreach (var ea in a.strategyEditors)
+            {
+                if (ea == null) return false;
+                var eb = b.FindStrategyEditor(ea.id);
+                if (eb == null) return false;
+                if (!StrategyEditorState.Equal(ea, eb)) return false;
             }
         }
 

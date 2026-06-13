@@ -48,6 +48,11 @@ public static class LiveAdapterTracerProbe
     static volatile bool   _driveDone;
     static volatile string _runId;
 
+    // Medium-1: stop_live_strategy is a GATED assertion, not fire-and-forget.
+    static volatile bool   _stopAcked;   // stop returned an ACK (no exception)
+    static volatile bool   _stopAckOk;   // that ACK had success=true
+    static volatile string _stopError;   // ACK failure / exception detail
+
     static volatile bool   _stopPolling;
     static volatile bool   _pollStopped;
     static volatile string _pollError;
@@ -83,13 +88,20 @@ public static class LiveAdapterTracerProbe
 
             long maxStall = HeartbeatUntil(() => _driveDone, 120000);
 
-            bool dj = drive.Join(120000);
+            // Medium-2: HeartbeatUntil returns either because the drive worker finished
+            // (_driveDone) OR because its 120s budget expired. A blocking Join AFTER budget
+            // expiry would stall main OUTSIDE the measured heartbeat and hide that stall from
+            // maxStall. So: treat budget-expiry as FAIL, and keep BOTH joins short/non-blocking
+            // (when _driveDone is set the worker is already at its last line -> joins return at
+            // once; all real waiting stayed inside the measured heartbeat loop).
+            bool heartbeatTimedOut = !_driveDone;
+            bool dj = drive.Join(heartbeatTimedOut ? 0 : 2000);
             _stopPolling = true;
-            bool pj = poll.Join(30000);
+            bool pj = poll.Join(heartbeatTimedOut ? 0 : 5000);
 
             Pump();   // final tail drain + state decode (GIL-free)
 
-            string why = Validate(dj, pj, maxStall);
+            string why = Validate(dj, pj, maxStall, heartbeatTimedOut);
             if (why != null)
             {
                 Debug.LogError("[LIVE ADAPTER TRACER FAIL] " + why);
@@ -227,7 +239,23 @@ public static class LiveAdapterTracerProbe
                 {
                     using (Py.GIL())
                     {
-                        if (_runId != null) { try { _server.InvokeMethod("stop_live_strategy", new PyString(_runId)).Dispose(); } catch {} }
+                        // Medium-1: capture stop's ACK success + any exception so Validate() can
+                        // require a real STOPPED (run reached STOPPED + run_id match). Re-marshalling
+                        // stop back to fire-and-forget must now FAIL the gate, not silently pass.
+                        if (_runId != null)
+                        {
+                            try
+                            {
+                                using (PyObject stop = _server.InvokeMethod("stop_live_strategy", new PyString(_runId)))
+                                {
+                                    _stopAcked = true;
+                                    _stopAckOk = stop["success"].As<bool>();
+                                    if (!_stopAckOk) _stopError = "stop_live_strategy ACK success=false: " + stop.ToString();
+                                }
+                            }
+                            catch (Exception e) { _stopError = "stop_live_strategy threw: " + e; }
+                        }
+                        else { _stopError = "no run_id captured before teardown; stop_live_strategy not called"; }
                         try { _server.InvokeMethod("set_execution_mode", new PyString("Replay")).Dispose(); } catch {}
                         try { _server.InvokeMethod("venue_logout").Dispose(); } catch {}
                         try { _server.InvokeMethod("close").Dispose(); } catch {}
@@ -344,9 +372,12 @@ public static class LiveAdapterTracerProbe
         return false;
     }
 
-    static string Validate(bool driveJoined, bool pollJoined, long maxStall)
+    static string Validate(bool driveJoined, bool pollJoined, long maxStall, bool heartbeatTimedOut)
     {
         if (_driveError != null) return _driveError;
+        if (heartbeatTimedOut)
+            return $"heartbeat budget (120s) expired before the drive worker completed — main-stall " +
+                   $"window closed (maxStall so far={maxStall}ms); refusing to hide a stall in a blocking join";
         if (!driveJoined)        return "drive worker did not join within budget";
         if (_vm.FilledOrderCount < 2) return $"FilledOrderCount={_vm.FilledOrderCount} < 2";
         if (!_vm.HasOrder || _vm.LatestOrder.Status != "FILLED")
@@ -363,6 +394,15 @@ public static class LiveAdapterTracerProbe
             return $"telemetry fill_count={_vm.LatestTelemetry.FillCount} != 2";
         if (!_vm.HasLifecycle || _vm.LifecycleCount < 1)
             return $"no LiveStrategyEvent lifecycle decoded (count={_vm.LifecycleCount})";
+        // Medium-1: stop must be DRIVEN + ACKed, and the run must actually reach STOPPED (final
+        // lifecycle event via backend_events) with the run_id matching the started run. A gate
+        // that only checks start-time events would pass even if C# stopped marshalling stop.
+        if (!_stopAcked) return "stop_live_strategy returned no ACK (exception or skipped): " + (_stopError ?? "unknown");
+        if (!_stopAckOk) return _stopError ?? "stop_live_strategy ACK success=false";
+        if (_vm.LatestLifecycle.Status != "STOPPED")
+            return $"final lifecycle status='{_vm.LatestLifecycle.Status}' != STOPPED (stop not reflected through backend_events)";
+        if (_vm.LatestLifecycle.RunId != _runId)
+            return $"final lifecycle run_id='{_vm.LatestLifecycle.RunId}' != started run_id '{_runId}'";
         if (!_depthSeen)
             return "market-state poll never yielded price+bid+ask (pollError=" + (_pollError ?? "none") + ")";
         if (Math.Abs(_msPrice - 10.0) > EPS) return $"market-state last_price={_msPrice} != 10.0 (kline-derived)";

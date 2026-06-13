@@ -185,4 +185,10 @@ AC 達成の証跡:
 - **AC3（pan/zoom 状態が #12 スキーマへ persist・capability surface 追加）**: AFK = `CanvasView` の非空転 disk
   round-trip（mutated≠default・on-disk テキストに値実在）＋ 旧 v1 後方互換 + sanitize（§5 S5-S6）。
 
-HITL（owner 目視）は menu 起動で次回 Play 時に確認（AFK は Python 不要・render 不要の純算術/serialization のみ）。
+**HITL（owner 目視）GREEN（2026-06-13）**: `Tools > Backcast > Infinite Canvas HITL` を Play 中に spawn し、
+findings §5 のチェックリスト全項目を確認（drag=pan / wheel=zoom@cursor＝カーソル直下不動 / demo panel 追従 /
+HUD バー不動 / zoom 0.2–5.0 停止 / `Reset View`）。**Save→変更→Load の view 復元も実 round-trip で確認**:
+`saved view -126.7,163.0,0.261 → loaded -126.7,163.0,0.261`（完全一致・zoom 0.261 は clamp 範囲内、
+`persistentDataPath/infinite_canvas_hitl.json` 経由）。本番入力経路
+（`InputSystemUIInputModule → InfiniteCanvasInputSurface → InfiniteCanvasController → CanvasViewMath → Content`）が
+実機で機能することを実証。これで **AFK ゲート ＋ HITL 目視の両方 GREEN**＝#13 の release gate 完全達成。

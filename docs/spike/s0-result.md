@@ -63,13 +63,28 @@ nautilus 初ロードが重く、その完走時点で main が既に 300 フレ
 
 **ruled out**: worker thread の stack 枯渇（明示 64 MiB stack でも同一段階で crash）。
 
-**証跡**: `C:/tmp/s0_win{,2,3,4}_*.log`（4 回、うち 3 回は段階マーカー付き）、crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
+**証跡**: `C:/tmp/s0_win{,2,3,4}_*.log` / `s0_diag{A1,A2,A3,B1,B2,C}_*.log`、crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
 
-**含意（owner 判断事項・先回り設計しない＝ADR-0001 方針）**:
-- これは ADR-0001「Nautilus が Mono を拒んだ場合 → その場で分かった事実に基づいて考え直す」に該当。**対策（別プロセス化 / サブインタプリタ / engine 差し替え等）は先回り設計しない**。
-- **ADR-0001 は `accepted` に昇格できない**（昇格条件＝S0 Windows AC① 合格が FAIL）。`proposed` 据え置き。
-- **#18 / #4 は本 RED が解けるまで前進不可**（Live は backtest より重い Rust 実行 = live run loop を Windows-Mono で回すため、backtest が落ちる現状では live も通らない公算が高い）。
-- 次アクションは owner 判断で決める（候補の例: ① main-thread 実行や GC/thread 登録など crash 条件をさらに切り分ける追加診断、② nautilus 側 build flag / Mono 設定の調査、③ 別機構の検討 → **新規 superseding ADR**。ADR-0001 は self-protected のため edit しない）。
+### 診断ラダー（owner 指定の 3 実験・2026-06-13）— 原因を C# background-thread context に切り分け
+
+owner 確定の安価・高識別 3 変数を順に除外（闇雲な Mono 設定変更 / nautilus 再ビルドには広げない）:
+
+| # | 除外した変数 | 設定 | 結果 |
+|---|---|---|---|
+| A | logging（`bypass_logging` vs Live 同等） | `LoggingConfig(log_level="ERROR", log_level_file="OFF")`、Mono 3 回 | **RED** → logging init / native→Python log callback **除外** |
+| B1 | Python strategy callback（`on_bar`） | `S0_NO_STRATEGY=1`（catalog data・strategy なし） | **RED** → strategy callback **除外** |
+| B2 | catalog / parquet / data marshal | `S0_SYNTHETIC=1 S0_NO_STRATEGY=1`（in-memory bars・catalog なし・strategy なし） | **RED** → data 経路 **除外**（pure Rust run） |
+| C | **実行スレッド context** | `S0_MAIN_THREAD=1`（C# background worker ではなく **main thread** で run） | **🟢 GREEN** `[S0 PROBE PASS] bars=204` |
+
+**verdict**: segfault は **「C# background worker thread 上で nautilus の Rust run-loop を回す」context 固有**。同一 backtest は (i) standalone Windows-CPython、(ii) Mac-Mono の background worker、(iii) **Windows-Mono の main thread** で完走する。落ちるのは **Windows-Mono + pythonnet で foreign（C# background）thread に GIL state を載せて Rust run-loop を駆動する**組合せのみ。owner 決定表の「worker のみ RED / main GREEN ＝ **pythonnet thread-state/GIL 登録との相互作用**」に一致。**stack 枯渇は除外**（64 MiB でも RED）。
+
+### 含意（owner 判断事項・先回り設計しない＝ADR-0001 方針）
+
+- **Windows-Mono 埋め込み自体の非互換ではない**（main thread で nautilus load + 実 backtest 完走）。「全条件 RED → 新規 superseding ADR」には**該当しない**。
+- ただし **ADR-0001 decision 4 の脅威**：decision 4 は「重い Python 計算を C# サブスレッドで実行し main を GIL から守る」を前提とする。Windows-Mono ではその **background-thread 実行経路**が現状 segfault する。S0 AC① は「**main は GIL 非取得**で background が回る」を要求するため、main-thread GREEN は **AC① 充足ではない**（threading 規律を満たさない）。
+- **ADR-0001 は `accepted` に昇格できない**（昇格条件＝S0 Windows AC①＝background-worker で GREEN が未達）。`proposed` 据え置き。
+- **#18 / #4 は本件が解けるまで前進不可**（Live も同じ background asyncio-loop thread で Rust を回すため同根のはず。ただし S2-spike の seam model は nautilus 非依存だったため GREEN だった ＝ nautilus Rust run-loop を background で回す live exec が本丸）。
+- 次アクションは owner 判断（pythonnet が C# background thread を Mono ランタイムへ attach する経路 / `PyGILState` 登録 / Mono thread attach の調査）。**対策は先回り設計せず**、診断はこの 3 実験で打ち切り（owner 指定）。
 
 ---
 

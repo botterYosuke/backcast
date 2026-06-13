@@ -51,17 +51,31 @@ public static class S0EditorProbe
             engineStarted = true;
             Debug.Log("[S0 PROBE MARK] PythonEngine.Initialize OK");
 
-            // Main releases the GIL Initialize() holds; main NEVER reacquires it
-            // until after the worker has stopped (mirrors the harness).
-            ts = PythonEngine.BeginAllowThreads();
-            Debug.Log("[S0 PROBE MARK] BeginAllowThreads OK; starting worker");
+            // #18 Windows-leg diagnostic C: S0_MAIN_THREAD=1 runs the backtest on
+            // the Unity MAIN thread (no background worker, GIL held from Initialize)
+            // to isolate whether the segfault is tied to the C# background-worker
+            // thread context (pythonnet thread-state/GIL registration) vs the core
+            // run itself. The production design keeps engine work OFF main; this is
+            // a diagnostic only.
+            if (Environment.GetEnvironmentVariable("S0_MAIN_THREAD") == "1")
+            {
+                Debug.Log("[S0 PROBE MARK] main-thread mode: running backtest on main thread");
+                Worker();   // main holds the GIL from Initialize; Py.GIL() nests safely
+                workerStopped = true;
+            }
+            else
+            {
+                // Main releases the GIL Initialize() holds; main NEVER reacquires it
+                // until after the worker has stopped (mirrors the harness).
+                ts = PythonEngine.BeginAllowThreads();
+                Debug.Log("[S0 PROBE MARK] BeginAllowThreads OK; starting worker");
 
-            // #18 Windows-leg diagnostic: a 64 MiB explicit stack does NOT prevent
-            // the segfault inside BacktestEngine.run under Windows-Mono (ruled out
-            // thread-stack exhaustion as the cause). Kept large but immaterial.
-            var worker = new Thread(Worker, 64 * 1024 * 1024) { IsBackground = true, Name = "S0ProbeWorker" };
-            worker.Start();
-            workerStopped = worker.Join(60000);   // main only waits; it does NOT take the GIL
+                // 64 MiB explicit stack does NOT prevent the segfault under
+                // Windows-Mono (thread-stack exhaustion ruled out). Kept but immaterial.
+                var worker = new Thread(Worker, 64 * 1024 * 1024) { IsBackground = true, Name = "S0ProbeWorker" };
+                worker.Start();
+                workerStopped = worker.Join(60000);   // main only waits; it does NOT take the GIL
+            }
 
             string err = Volatile.Read(ref _error);
             if (!workerStopped)

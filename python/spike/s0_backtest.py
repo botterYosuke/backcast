@@ -198,6 +198,34 @@ def _make_counting_strategy_cls():
 # ---------------------------------------------------------------------------
 
 
+def _make_synthetic_bars(bt_str: str, n: int = 64) -> list:
+    """In-memory bars (no catalog/parquet) for the #18 Windows-leg synthetic diag.
+    Matches the equity instrument precision (price precision=1, volume precision=0)."""
+    from nautilus_trader.model.data import Bar, BarType
+    from nautilus_trader.model.objects import Price, Quantity
+
+    bar_type = BarType.from_str(bt_str)
+    day_ns = 86_400_000_000_000
+    base_ts = 1_700_000_000_000_000_000
+    bars = []
+    for i in range(n):
+        px = Price(100.0 + i * 0.1, precision=1)
+        ts = base_ts + i * day_ns
+        bars.append(
+            Bar(
+                bar_type=bar_type,
+                open=px,
+                high=px,
+                low=px,
+                close=px,
+                volume=Quantity(100, precision=0),
+                ts_event=ts,
+                ts_init=ts,
+            )
+        )
+    return bars
+
+
 def run_backtest() -> dict:
     """Query the staged catalog and run one BacktestEngine pass.
 
@@ -213,20 +241,38 @@ def run_backtest() -> dict:
     from nautilus_trader.model.objects import Money
     from nautilus_trader.persistence.catalog import ParquetDataCatalog
 
-    catalog = ParquetDataCatalog(str(FIXTURE_ROOT))
+    # #18 Windows-leg diagnostic B (stepwise exclusion via env, no C# change):
+    #   S0_SYNTHETIC=1   -> build bars in-memory, skip catalog/parquet entirely
+    #   S0_NO_STRATEGY=1 -> run engine with data but NO Python strategy (no on_bar
+    #                       Rust->Python callback). Narrows whether the segfault is
+    #                       the strategy callback vs data marshal vs core run.
+    import os as _os
+    synthetic   = _os.environ.get("S0_SYNTHETIC") == "1"
+    no_strategy = _os.environ.get("S0_NO_STRATEGY") == "1"
 
     all_bars: list = []
     bar_types: list = []
-    for symbol in SYMBOLS:
-        bt_str = bar_type_str(symbol)
-        bars = catalog.query(data_cls=Bar, identifiers=[bt_str])
-        all_bars.extend(bars)
-        bar_types.append(BarType.from_str(bt_str))
+    if synthetic:
+        for symbol in SYMBOLS:
+            bt_str = bar_type_str(symbol)
+            bar_types.append(BarType.from_str(bt_str))
+            all_bars.extend(_make_synthetic_bars(bt_str, n=64))
+    else:
+        catalog = ParquetDataCatalog(str(FIXTURE_ROOT))
+        for symbol in SYMBOLS:
+            bt_str = bar_type_str(symbol)
+            bars = catalog.query(data_cls=Bar, identifiers=[bt_str])
+            all_bars.extend(bars)
+            bar_types.append(BarType.from_str(bt_str))
     all_bars.sort(key=lambda b: b.ts_init)
 
     cfg = BacktestEngineConfig(
         trader_id="S0SPIKE-001",
-        logging=LoggingConfig(bypass_logging=True),
+        # #18 Windows-leg diagnostic A: match the production Live logging config
+        # (log_level=ERROR console, log_level_file=OFF) instead of
+        # bypass_logging=True. Probes whether the logging init / native->Python
+        # log callback path is what segfaults BacktestEngine.run under Win-Mono.
+        logging=LoggingConfig(log_level="ERROR", log_level_file="OFF"),
     )
     engine = BacktestEngine(config=cfg)
 
@@ -244,8 +290,10 @@ def run_backtest() -> dict:
 
         engine.kernel.msgbus.subscribe(topic="events.fills.*", handler=fills.append)
 
-        strategy = _make_counting_strategy_cls()(bar_types)
-        engine.add_strategy(strategy)
+        strategy = None
+        if not no_strategy:
+            strategy = _make_counting_strategy_cls()(bar_types)
+            engine.add_strategy(strategy)
         engine.add_data(all_bars)
         engine.run()
 
@@ -261,7 +309,7 @@ def run_backtest() -> dict:
             final_equity = float(INITIAL_CASH_JPY)
 
         return {
-            "bars": int(strategy.n_bars),
+            "bars": int(strategy.n_bars) if strategy is not None else len(all_bars),
             "fills": len(fills),
             "final_equity": final_equity,
         }

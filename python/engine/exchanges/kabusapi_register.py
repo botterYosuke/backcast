@@ -15,7 +15,7 @@ from typing import Callable
 
 from engine.exchanges.kabusapi_auth import KabuRegisterFullError
 
-# PUSH 銘柄数の上限 (comparison.md §7 が数値の一次ソース, INV-K1-CAP)
+# PUSH 銘柄数の上限 (kabusapi skill R6 / docs/findings/0009 INV-K1-CAP が一次ソース)
 MAX_SYMBOLS: int = 50
 
 
@@ -48,7 +48,7 @@ class RegisterSet:
             self.touch(symbol, exchange)
             return
         if len(self._symbols) >= self._max:
-            raise KabuRegisterFullError(4002001, f"Register full ({self._max} symbols)")
+            raise KabuRegisterFullError(4002006, f"Register full ({self._max} symbols)")
         self._symbols[key] = None
 
     def unregister(self, symbol: str, exchange: int) -> bool:

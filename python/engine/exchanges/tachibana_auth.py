@@ -247,6 +247,13 @@ async def login(
             the upstream p_errno / sResultCode string, '-62'
             (service hours), 'transport_error', or 'login_failed'.
     """
+    # R10 / INV-T3-SECRET: この auth login は adapter を経由しない経路 (login dialog
+    # subprocess の tachibana_login_flow._run_auth) からも直接呼ばれる。sUserId/sPassword
+    # は R2 により URL に乗るため、request を投げる前に httpx/httpcore の request ログを
+    # 沈黙させる。adapter.__init__ の抑制だけでは dialog 経路を覆えない (#19 / findings 0009)。
+    from engine.live.logging import suppress_third_party_http_logs
+    suppress_third_party_http_logs()
+
     base = BASE_URL_DEMO if is_demo else BASE_URL_PROD
     payload: dict[str, Any] = {
         "p_no": str(p_no_counter.next()),

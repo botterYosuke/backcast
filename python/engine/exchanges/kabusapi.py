@@ -31,6 +31,7 @@ from engine.live.adapter import (
     TradesUpdate,
     VenueCredentials,
 )
+from engine.live.logging import suppress_third_party_http_logs
 from engine.live.order_types import (
     AccountPositionData,
     AccountSnapshot,
@@ -69,6 +70,9 @@ class KabuStationAdapter:
     ):
         if environment not in ("prod", "verify"):
             raise ValueError("environment must be 'prod' or 'verify'")
+        # R10 / INV-T3-SECRET: kabu に第二暗証番号は無いが、X-API-KEY token は秘密。
+        # httpx/httpcore の request ログ沈黙を全 venue 共通で効かせる (#19, findings/0009)。
+        suppress_third_party_http_logs()
         self._env = environment
         self._token: str | None = None
         self._client: httpx.AsyncClient = httpx.AsyncClient()

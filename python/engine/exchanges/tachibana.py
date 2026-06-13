@@ -26,6 +26,7 @@ from engine.live.adapter import (
     TradesUpdate,
     VenueCredentials,
 )
+from engine.live.logging import suppress_third_party_http_logs
 from engine.live.order_types import (
     AccountPositionData,
     AccountSnapshot,
@@ -110,6 +111,9 @@ class TachibanaAdapter:
     def __init__(self, environment: Literal["demo", "prod"] = "demo"):
         if environment not in ("demo", "prod"):
             raise ValueError("environment must be 'demo' or 'prod'")
+        # R10 / INV-T3-SECRET: secret-bearing request (login の仮想 URL・発注の
+        # sSecondPassword) を投げる前に httpx/httpcore の request ログを沈黙させる。
+        suppress_third_party_http_logs()
         self._env = environment
         # R4: PNoCounter は adapter で 1 個保持し、retry / re-login で共有する。
         self._p_no_counter = PNoCounter()

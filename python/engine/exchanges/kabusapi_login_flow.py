@@ -47,8 +47,9 @@ def _map_exception(exc: BaseException) -> str:
         code = getattr(exc, "code", None)
         if code in (4001003, "4001003"):
             return KABU_API_DISABLED
-        if code in (4001005, "4001005"):
-            return KABU_TOKEN_EXPIRED
+        # 4001005 = パラメータ変換エラー (R7:231)。token-expired ではないので
+        # AUTH_FAILED に落とす (再認証を誘発しない)。token 失効は HTTP 401 →
+        # KabuTokenExpiredError として上の isinstance 分岐で処理 (findings/0009)。
         return AUTH_FAILED
     return AUTH_FAILED
 

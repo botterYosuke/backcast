@@ -31,11 +31,21 @@ class KabuApiError(KabuError):
 
 
 class KabuTokenExpiredError(KabuApiError):
-    """Code 4001005 — token expired, caller must re-auth."""
+    """HTTP 401 — token 失効 / 未認証 (R7:230)、caller must re-auth。
+
+    token 期限切れ・未認証は body Code ではなく **HTTP 401** で返る (kabusapi skill
+    R7, ptal/error.html 2026-05-20)。INV-K5-ERRCODE / findings/0009。
+    (移植元は body 4001005 を token-expired と誤分類していたが、4001005 は
+    「パラメータ変換エラー」であり再認証対象ではない。一次資料に基づき 401 へ訂正。)
+    """
 
 
 class KabuRateLimitError(KabuApiError):
-    """Code 4002006 — rate limit exceeded."""
+    """HTTP 429 — スロットリング (流量超過、R5/R7)。
+
+    流量超過は body Code ではなく **HTTP 429** で返る (kabusapi skill R7,
+    ptal/error.html 2026-05-20 検証)。INV-K5-ERRCODE / findings/0009。
+    """
 
 
 class KabuConnectionError(KabuError):
@@ -43,19 +53,36 @@ class KabuConnectionError(KabuError):
 
 
 class KabuRegisterFullError(KabuApiError):
-    """Code 4002001 — PUSH register full (R6: 50 symbols, Q-K5: no implicit evict)."""
+    """Code 4002006 — レジスト数エラー (登録銘柄 50 上限超過、R6/R7)。
+
+    Q-K5: 暗黙 evict は行わない。INV-K1-CAP / INV-K5-ERRCODE / findings/0009。
+    (移植元は 4002001 を誤用していた。一次資料に基づき 4002006 へ訂正。)
+    """
 
 
 def check_response(payload: dict, http_status: int) -> None:
-    """Two-stage response validation per kabu skill R7.
+    """Two-stage response validation per kabu skill R7 (INV-K5-ERRCODE).
 
-    1. HTTP >= 400 → KabuApiError (attach Code/Message if present in payload).
-    2. HTTP 2xx but payload Code != 0 → specialized subclass for known codes,
+    1. HTTP 401 → KabuTokenExpiredError (token 失効/未認証は HTTP status で来る)。
+    2. HTTP 429 → KabuRateLimitError (流量超過も body Code ではなく HTTP status)。
+    3. HTTP >= 400 (401/429 以外) → generic KabuApiError (attach Code/Message if present)。
+    4. HTTP 2xx but payload Code != 0 → specialized subclass for known codes,
        otherwise generic KabuApiError.
+
+    一次資料 (ptal/error.html 2026-05-20): 4002006=レジスト数エラー(50上限),
+    4002001=銘柄が見つからない, 4001005=パラメータ変換エラー, 流量超過=HTTP 429,
+    token 失効/未認証=HTTP 401。移植元の取り違え (4002006↔4002001 / 流量を body
+    Code 扱い / 4001005 を token-expired 扱い) を訂正済み (findings/0009)。
     """
     if http_status >= 400:
         code = payload.get("Code", http_status) if isinstance(payload, dict) else http_status
         message = payload.get("Message", f"HTTP {http_status}") if isinstance(payload, dict) else f"HTTP {http_status}"
+        # token 失効/未認証 (401)・流量超過 (429) の分類子は HTTP status。body に Code が
+        # 混じっても .code は決定的に status とし（docstring 契約）、詳細は message に残す。
+        if http_status == 401:
+            raise KabuTokenExpiredError(401, message)
+        if http_status == 429:
+            raise KabuRateLimitError(429, message)
         raise KabuApiError(code, message)
 
     if not isinstance(payload, dict):
@@ -66,12 +93,10 @@ def check_response(payload: dict, http_status: int) -> None:
         return
 
     message = payload.get("Message", "")
-    if code == 4001005:
-        raise KabuTokenExpiredError(code, message)
     if code == 4002006:
-        raise KabuRateLimitError(code, message)
-    if code == 4002001:
         raise KabuRegisterFullError(code, message)
+    # 4001005 (パラメータ変換エラー) / 4002001 (銘柄が見つからない) ほかは generic に落とす。
+    # token 失効は body Code ではなく HTTP 401 (上の分岐) で来る。
     raise KabuApiError(code, message)
 
 
@@ -111,7 +136,7 @@ async def fetch_token(api_password: str, *, env: Env) -> str:
         ) from exc
 
     # /token uses ResultCode (OpenAPI TokenSuccess) where other endpoints use Code.
-    # Normalize so check_response's error mapping (4001005 / 4002006 / generic)
+    # Normalize so check_response's error mapping (token-expired / generic + HTTP 401/429)
     # applies uniformly and auth failures are not misclassified as KabuConnectionError.
     if isinstance(body, dict) and "Code" not in body and "ResultCode" in body:
         body = {**body, "Code": body["ResultCode"]}

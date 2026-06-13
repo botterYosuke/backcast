@@ -100,10 +100,20 @@ public class LayoutDocument
         panels = new List<PanelLayout>();
     }
 
-    // The canonical default layout = the current UI's hardcoded arrangement
-    // (ReplayPanelsHarness: chart left [0..0.62], four panels stacked in the right
-    // column quarters). Returned by LayoutStore on a missing/invalid sidecar, and
-    // the baseline the round-trip gate proves it can DEVIATE from (loaded != default).
+    // The canonical default layout = the REAL default UI's panel layout, as NORMALIZED
+    // DISPLAY rects (findings §3: LayoutRect is a display rect, NOT a raw Unity anchor).
+    // ReplayPanelsHarness builds its OUTER panels (the persisted-layout targets) at these
+    // exact boxes with offsets ZERO (chart left [0..0.62], four panels stacked in the
+    // right-column quarters): the chart's axis-label gutter and the panels' padding are
+    // NOT on these panels — they live in CHILD insets (PlotArea / Text), i.e. widget
+    // chrome the layout seam never persists. Because the persisted panels carry NO pixel
+    // offsets, there is nothing for the binder to fold into the normalized rect, so this
+    // default is resolution-independent and, on a missing/corrupt sidecar, Apply
+    // reproduces the SAME displayed boxes as the live default at ALL resolutions (no
+    // dropped gutter — the divergence the Medium-2 review caught). The invariant
+    // Default() == the harness's offset-zero panel layout is machine-locked by
+    // ReplayLayoutProbe Section 7. Returned by LayoutStore on a missing/invalid sidecar,
+    // and the baseline the round-trip gate proves it can DEVIATE from (loaded != default).
     public static LayoutDocument Default()
     {
         var doc = new LayoutDocument();

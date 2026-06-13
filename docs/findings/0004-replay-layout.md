@@ -181,6 +181,36 @@ AC 達成の証跡:
 非空転の証跡: S1 が `loaded!=default` ＆ on-disk JSON が default の逐語 JSON と非一致 ＆ `"false"`（hide mutation）が
 テキストに実在、を構造 assert（vacuous round-trip kill）。
 
+### #9-12 レビュー指摘 Medium-2（default が正規化表示矩形でなく raw anchor, fixed 2026-06-13）
+
+レビュー指摘: `LayoutDocument.Default()` の rect は §3 が定める **正規化表示矩形**ではなく、
+`ReplayPanelsHarness` が実 UI の **外側 panel** に設定する pixel offset（chart `(60,40)/(-10,-20)`・
+panel `(4,4)/(-8,-4)`）を無視した **raw anchor 値**だった。`LayoutBinder.ToNormalizedRect` は
+offset を正規化 rect に**畳み込んで表示矩形を保存**する設計（Capture→Apply で同じ表示矩形を
+anchor として再現）なので、実 UI を Capture すると gutter 込みの box になる一方、`Default()` は
+gutter 抜きの box。→ missing/corrupt fallback が現行 default UI と**異なる配置**になる。
+
+**初回の誤修正（Option (b)）**: 「`Default()` の意味を canonical offset-zero と確定し doc を正直化」
+だけでは、**divergence を意図的仕様として固定しただけ**で UI 不一致は残る（再レビューで指摘）。
+
+**確定修正（Option 1: harness の外側 panel を offset-zero 化, owner 確定 2026-06-13）**:
+永続化対象である**外側 panel の offset をゼロ**にし、chart 軸ラベル gutter `(60,40)/(-10,-20)` は
+chart panel の **子 `PlotArea`** へ、panel padding は **子 `Text`** inset へ移した（= widget 内部
+chrome で seam は永続化しない）。これで **実 default の panel 配置 == `Default()`** が全解像度で成立し、
+fallback は live default を正確に再現する（畳み込まれて失われる gutter が無い）。candle サイズ算出は
+`_chartArea.rect` → `_plotArea.rect` に変更。
+
+不変条件を probe **Section 7** で両方向に機械固定: (a) harness の offset-zero panel anchor を
+Capture したものが `Default()` と構造一致（doc が UI を反映）、(b) `Apply(Default())` を fresh target
+へ適用すると anchor == live default の box・offset == 0（fallback が live default を canonical/解像度
+非依存に再現）。`ReplayLayoutProbe` 再ゲート `UNITY_EXIT=0` / CS エラー 0:
+```
+[REPLAY LAYOUT PASS] non-vacuous doc<->disk round-trip + version/unknown tolerance + Capture/Apply conversion + fresh-target restore + corrupt/missing fallback + Default()==live-default panel layout (Unity-owned versioned schema, ADR-0003 capability parity, under Unity Mono)
+```
+harness の panel 構造（offset-zero + `PlotArea` 子）は batchmode compile GREEN（CS エラー 0）。実描画
+（panel が隣接・chart gutter が PlotArea 経由で従来通り）は HITL 目視が owner 待ち（AFK は Python 不要の
+layout probe のみ。harness playmode は #11 §11 手順で次回 Play 時に確認）。
+
 ### 射程逸脱（設計から実装で 1 点変更）
 `LayoutBinder.Apply` は当初案の `SetSiblingIndex(slot)` を**外した**。現行の非重複 stacked panel では sibling index
 は視覚的に無意味で、逐次 `SetSiblingIndex` の最終 index が脆い assert になるため。slot は「論理並び順専用」（§3）

@@ -19,13 +19,14 @@
 // the mutation reached the on-disk JSON TEXT (catches an in-memory-only round-trip
 // that never actually persists).
 //
-// FIVE FAILURE SECTIONS (findings §5), each returns null on pass or a reason string:
+// SEVEN FAILURE SECTIONS (findings §5), each returns null on pass or a reason string:
 //   1. document mutation / non-vacuous proof (doc<->disk)
 //   2. save / load / version / unknown-field tolerance
 //   3. Capture conversion (live anchor+offset -> normalized rect)
 //   4. Apply conversion (document -> live) + id tolerance
 //   5. fresh-target restore (disk -> load -> Apply to brand-new targets)
 //   6. fallback: corrupt JSON AND missing file both -> default
+//   7. Default() == the harness's REAL offset-zero default panel layout (Medium-2)
 //
 // Guarded by Application.isBatchMode is NOT needed (no Python/render); but it lives
 // in Assets/Editor and Exit()s the process, so it only runs under -executeMethod.
@@ -58,7 +59,8 @@ public static class ReplayLayoutProbe
                 ?? Section3_Capture(spawned)
                 ?? Section4_ApplyAndIdTolerance(spawned)
                 ?? Section5_FreshRestore(spawned)
-                ?? Section6_FallbackPaths();
+                ?? Section6_FallbackPaths()
+                ?? Section7_DefaultMatchesHarnessDefault(spawned);
         }
         catch (Exception e)
         {
@@ -74,6 +76,7 @@ public static class ReplayLayoutProbe
         {
             Debug.Log("[REPLAY LAYOUT PASS] non-vacuous doc<->disk round-trip + version/unknown tolerance " +
                       "+ Capture/Apply conversion + fresh-target restore + corrupt/missing fallback " +
+                      "+ Default()==live-default panel layout " +
                       "(Unity-owned versioned schema, ADR-0003 capability parity, under Unity Mono)");
             EditorApplication.Exit(0);
         }
@@ -307,6 +310,70 @@ public static class ReplayLayoutProbe
         LayoutDocument fromMissing = LayoutStore.Load(missing);
         if (!LayoutDocument.StructurallyEqual(fromMissing, LayoutDocument.Default(), EPS))
             return "S6: missing file did NOT fall back to default";
+
+        return null;
+    }
+
+    // ---- 7. Default() == the harness's REAL default panel layout (Medium-2 review) ----
+    // The finding (and its follow-up): LayoutBinder FOLDS pixel offsets into the
+    // normalized rect, so Capture->Apply PRESERVES a panel's displayed box. The bug was
+    // that the harness baked the chart axis gutter / panel padding into the PANEL offsets,
+    // so the live default carried that folded-in gutter while Default() did not — making
+    // the missing/corrupt fallback diverge from the live default UI.
+    //
+    // The fix moves that chrome to CHILD insets (PlotArea / Text), leaving the harness's
+    // OUTER panels (the persisted-layout targets) at offset-ZERO anchors. Now the live
+    // default panel layout EQUALS Default() and the fallback reproduces it at ALL
+    // resolutions (nothing folded into the rect to lose). Lock BOTH directions:
+    //   (a) Capture(<harness offset-zero panel anchors>) == Default()  -- doc mirrors UI
+    //   (b) Apply(Default()) to fresh targets -> anchors == those boxes, offsets 0
+    //       -- the fallback reproduces the live default exactly (canonical, resolution-free)
+    static string Section7_DefaultMatchesHarnessDefault(List<GameObject> spawned)
+    {
+        const float PW = 1000f, PH = 800f;
+
+        // ReplayPanelsHarness's hardcoded OUTER-panel anchors (mirror of BuildChartArea/
+        // BuildPanels). Offsets are ZERO on these panels now — the gutter/padding live in
+        // child insets — so these anchors ARE the persisted display boxes. Keep in sync if
+        // the harness panel layout changes.
+        var harness = new (string id, int slot, Vector2 aMin, Vector2 aMax)[]
+        {
+            ("chart",      0, new Vector2(0.00f, 0.00f), new Vector2(0.62f, 1.00f)),
+            ("status",     1, new Vector2(0.63f, 0.75f), new Vector2(1.00f, 1.00f)),
+            ("positions",  2, new Vector2(0.63f, 0.50f), new Vector2(1.00f, 0.75f)),
+            ("orders",     3, new Vector2(0.63f, 0.25f), new Vector2(1.00f, 0.50f)),
+            ("run_result", 4, new Vector2(0.63f, 0.00f), new Vector2(1.00f, 0.25f)),
+        };
+
+        var parent = NewRect("S7Parent", null, spawned);
+
+        // (a) Capture the harness's offset-zero panel anchors -> must equal Default().
+        var bindings = new List<LayoutBinder.PanelBinding>();
+        foreach (var h in harness)
+        {
+            var rt = NewRect(h.id, parent, spawned, anchorMin: h.aMin, anchorMax: h.aMax); // NewRect zeroes offsets
+            bindings.Add(new LayoutBinder.PanelBinding(h.id, h.slot, true, rt));
+        }
+        LayoutDocument captured = LayoutBinder.Capture(PW, PH, bindings);
+        if (!LayoutDocument.StructurallyEqual(captured, LayoutDocument.Default(), EPS))
+            return "S7(a): Default() != the harness's offset-zero panel layout " +
+                   "(missing/corrupt fallback would diverge from the live default UI)";
+
+        // (b) Apply(Default()) to FRESH targets must reproduce those exact boxes:
+        // anchors == the live default corners, offsets == 0 (canonical, resolution-free).
+        var fresh = new Dictionary<string, RectTransform>();
+        foreach (var h in harness)
+            fresh[h.id] = NewRect(h.id, parent, spawned, anchorMin: Vector2.zero, anchorMax: Vector2.one);
+        LayoutBinder.Apply(LayoutDocument.Default(), fresh);
+        foreach (var h in harness)
+        {
+            RectTransform rt = fresh[h.id];
+            if (!Approx(rt.anchorMin, h.aMin) || !Approx(rt.anchorMax, h.aMax))
+                return $"S7(b): Apply(Default()) did not reproduce the live default box for '{h.id}' " +
+                       $"(got {rt.anchorMin}/{rt.anchorMax}, expected {h.aMin}/{h.aMax})";
+            if (!Approx(rt.offsetMin, Vector2.zero) || !Approx(rt.offsetMax, Vector2.zero))
+                return $"S7(b): Apply(Default()) left non-zero offsets on '{h.id}' (not canonical)";
+        }
 
         return null;
     }

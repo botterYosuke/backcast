@@ -209,7 +209,14 @@ class GuiBridgeActor:
                         buying_power = 0.0
                         equity = 0.0
 
-                    raw_positions = cache.positions() if hasattr(cache, "positions") else []
+                    # positions_open() — NOT positions(): the latter also returns
+                    # CLOSED positions (qty=0), which would leave a phantom flat
+                    # row in the positions panel after a SELL closes out (the
+                    # 8918.TSE qty=0 HITL-log bug). A closed position must drop
+                    # out so the terminal snapshot is FLAT.
+                    raw_positions = (
+                        cache.positions_open() if hasattr(cache, "positions_open") else []
+                    )
                     positions = [
                         {
                             "symbol": str(p.instrument_id),

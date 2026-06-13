@@ -143,7 +143,8 @@ public class ReplayPanelsHarness : MonoBehaviour
     int       _renderedPollSamples = -1;
 
     // runtime uGUI
-    RectTransform _chartArea;
+    RectTransform _chartArea;   // persisted-layout PANEL (offset-zero; box == Default chart rect)
+    RectTransform _plotArea;    // CHILD inset = axis-label gutter (widget chrome; NOT persisted)
     RectTransform _candleRoot;
     Text _statusText;
     Text _positionsText;
@@ -431,12 +432,28 @@ public class ReplayPanelsHarness : MonoBehaviour
         if (!_haveRunResult) return;                          // run_result decoded
         if (Interlocked.Read(ref _pollSamples) <= 0) return;  // AC4 poll really ran
 
+        // Medium-1 regression gate (#9-12 review): the spike SELL at bar 40 closes
+        // 8918.TSE, so the LATEST positions snapshot must be FLAT. A leftover row
+        // here means the actor regressed to cache.positions() (closed qty=0 phantom).
+        int openPositions = _portfolio.Positions?.Count ?? 0;
+        if (openPositions > 0)
+        {
+            if (!_errLogged)
+            {
+                Debug.LogError($"REPLAY PANELS FAIL: positions panel not flat at completion — " +
+                               $"{openPositions} position(s) remain ({_portfolio.Positions[0].symbol} " +
+                               $"qty={_portfolio.Positions[0].qty:0.##}); a closed position leaked into the snapshot");
+                _errLogged = true;
+            }
+            return;
+        }
+
         _passLogged = true;
         long samples = Interlocked.Read(ref _pollSamples);
         if (_hitchFrames <= MAX_HITCHES)
         {
             Debug.Log($"REPLAY PANELS PASS: frames={_frameCount} bars={_renderedCount} " +
-                      $"orders={_orderRows.Count} portfolios={_portfoliosDecoded} fills={_runResult.FillsCount} " +
+                      $"orders={_orderRows.Count} portfolios={_portfoliosDecoded} positions=flat fills={_runResult.FillsCount} " +
                       $"pollSamples={samples} hitches={_hitchFrames} maxDt={_maxDtAfterWarmup:0.000}s " +
                       $"mode={_executionMode} venue={_venueState} " +
                       "(chart + 4 panels + AC4 non-stall GIL-marshaled poll all GREEN under Unity Mono)");
@@ -469,20 +486,37 @@ public class ReplayPanelsHarness : MonoBehaviour
 
     void BuildChartArea(Transform parent)
     {
+        // Chart PANEL = the persisted-layout target: offset-ZERO so its box equals the
+        // NORMALIZED rect LayoutDocument.Default() carries (chart [0..0.62]). The axis-
+        // label gutter is NOT on this panel — it moved to the PlotArea CHILD below, i.e.
+        // widget-internal chrome the layout seam never persists (Medium-2 review: this is
+        // what makes the missing/corrupt fallback reproduce the live default at ALL
+        // resolutions instead of dropping a folded-in pixel gutter).
         var areaGo = new GameObject("ChartArea", typeof(RectTransform), typeof(Image));
         areaGo.transform.SetParent(parent, false);
         _chartArea = areaGo.GetComponent<RectTransform>();
         _chartArea.anchorMin = new Vector2(0f, 0f);
         _chartArea.anchorMax = new Vector2(0.62f, 1f);
-        _chartArea.offsetMin = new Vector2(60f, 40f);
-        _chartArea.offsetMax = new Vector2(-10f, -20f);
+        _chartArea.offsetMin = Vector2.zero;
+        _chartArea.offsetMax = Vector2.zero;
         areaGo.GetComponent<Image>().color = BG_COLOR;
 
-        AddAxis(_chartArea, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), new Vector2(2f, 0f)); // y
-        AddAxis(_chartArea, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 2f)); // x
+        // PlotArea: the axis-label gutter, now a CHILD inset of the chart panel (the old
+        // (60,40)/(-10,-20) ChartArea offsets). Axes + candles live here, so candle sizing
+        // uses _plotArea.rect (not the full panel).
+        var plotGo = new GameObject("PlotArea", typeof(RectTransform));
+        plotGo.transform.SetParent(_chartArea, false);
+        _plotArea = plotGo.GetComponent<RectTransform>();
+        _plotArea.anchorMin = new Vector2(0f, 0f);
+        _plotArea.anchorMax = new Vector2(1f, 1f);
+        _plotArea.offsetMin = new Vector2(60f, 40f);
+        _plotArea.offsetMax = new Vector2(-10f, -20f);
+
+        AddAxis(_plotArea, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), new Vector2(2f, 0f)); // y
+        AddAxis(_plotArea, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 2f)); // x
 
         var rootGo = new GameObject("Candles", typeof(RectTransform));
-        rootGo.transform.SetParent(_chartArea, false);
+        rootGo.transform.SetParent(_plotArea, false);
         _candleRoot = rootGo.GetComponent<RectTransform>();
         _candleRoot.anchorMin = new Vector2(0f, 0f);
         _candleRoot.anchorMax = new Vector2(1f, 1f);
@@ -518,10 +552,13 @@ public class ReplayPanelsHarness : MonoBehaviour
         var panelGo = new GameObject(name, typeof(RectTransform), typeof(Image));
         panelGo.transform.SetParent(parent, false);
         var prt = panelGo.GetComponent<RectTransform>();
+        // This PANEL is the persisted-layout target: offset-ZERO so its box equals the
+        // normalized rect LayoutDocument.Default() carries. The visual padding lives in
+        // the Text CHILD inset below (widget chrome, not persisted) (Medium-2 review).
         prt.anchorMin = new Vector2(0.63f, yMin);
         prt.anchorMax = new Vector2(1.00f, yMax);
-        prt.offsetMin = new Vector2(4f, 4f);
-        prt.offsetMax = new Vector2(-8f, -4f);
+        prt.offsetMin = Vector2.zero;
+        prt.offsetMax = Vector2.zero;
         panelGo.GetComponent<Image>().color = PANEL_BG;
 
         var textGo = new GameObject("Text", typeof(RectTransform), typeof(Text));
@@ -625,8 +662,8 @@ public class ReplayPanelsHarness : MonoBehaviour
         if (priceRange <= 0) priceRange = 1.0; // flat series guard
         long timeRange = maxT - minT;
 
-        float w = _chartArea.rect.width;
-        float h = _chartArea.rect.height;
+        float w = _plotArea.rect.width;   // candles fill the PlotArea (gutter-inset child), not the full panel
+        float h = _plotArea.rect.height;
         float bodyW = Mathf.Max(1f, (w / n) * 0.6f);
 
         for (int i = 0; i < n; i++)

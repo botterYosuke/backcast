@@ -1,0 +1,144 @@
+{
+  "contract": {
+    "bar_count": 68,
+    "fills": [
+      {
+        "price": 8.0,
+        "qty": 100.0,
+        "side": "BUY",
+        "symbol": "8918.TSE",
+        "timestamp_ms": 1727937000000
+      },
+      {
+        "price": 8.0,
+        "qty": 100.0,
+        "side": "SELL",
+        "symbol": "8918.TSE",
+        "timestamp_ms": 1732689000000
+      }
+    ],
+    "final_account": {
+      "cash": 10000000.0,
+      "equity": 10000000.0
+    },
+    "order_states": [
+      {
+        "side": "BUY",
+        "status": "FILLED"
+      },
+      {
+        "side": "SELL",
+        "status": "FILLED"
+      }
+    ],
+    "portfolio_snapshots": [
+      {
+        "buying_power": 9999200.0,
+        "equity": 9999200.0,
+        "positions": [
+          {
+            "avg_price": 8.0,
+            "qty": 100.0,
+            "symbol": "8918.TSE"
+          }
+        ]
+      },
+      {
+        "buying_power": 10000000.0,
+        "equity": 10000000.0,
+        "positions": []
+      }
+    ],
+    "realized_pnl": 0.0,
+    "run_summary": {
+      "equity_points": 68,
+      "fills_count": 2,
+      "max_drawdown": 800.0,
+      "sharpe": 0.000109712,
+      "sortino": 1.8956e-05
+    },
+    "sink_event_sequence": [
+      "bar",
+      "bar",
+      "bar",
+      "order",
+      "portfolio",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "order",
+      "portfolio",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "bar",
+      "run_complete"
+    ]
+  },
+  "provenance": {
+    "catalog_sha256": "1f5671e9f7152cc97daee0942af084766017a693e7fa62a95c89ff73a3e2dd3c",
+    "nautilus_version": "1.226.0",
+    "precision_bytes": 8,
+    "scenario_sha256": "017bef0eaf41dc59b00eb98d86d2758c26b243f90569eaf7fc224898c72867ae",
+    "strategy_sha256": "08d649e958b51afe26af50484248c8eed979605bf2668065aa458f4c9d46257e"
+  },
+  "schema_version": 1
+}

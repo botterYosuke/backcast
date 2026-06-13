@@ -209,6 +209,7 @@ class NautilusLiveEngineController:
         from engine.live.bar_supply import live_bar_type
         from engine.live.nautilus_data_client import NautilusVenueDataClient
         from engine.live.nautilus_exec_client import NautilusVenueExecClient
+        from engine.live.nautilus_risk_config import build_live_risk_engine_config
         from engine.live.safety_rails import SafetyLimits, SafetyRails
         from engine.strategy_runtime.catalog_data_loader import normalize_granularity
         from engine.strategy_runtime.instrument_factory import make_equity_instrument
@@ -221,7 +222,9 @@ class NautilusLiveEngineController:
             primary_instrument_id=instrument_id,
             scenario=scenario,
         )
-        risk_cfg: LiveRiskEngineConfig = rails.to_live_risk_engine_config(live_instrument_ids)
+        risk_cfg: LiveRiskEngineConfig = build_live_risk_engine_config(
+            rails.limits, live_instrument_ids
+        )
         cfg = TradingNodeConfig(
             trader_id=self._trader_id,
             # log_level_file="OFF": live は bypass_logging を許さないが、ファイル出力は止める

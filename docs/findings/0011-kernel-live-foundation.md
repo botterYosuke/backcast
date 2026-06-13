@@ -290,6 +290,62 @@ Safety Rails 退行ほか 3 件（High）を修正:
   `start_run` の前に解決（`_resolve_post_trade_baseline_snapshot`・last_snapshot 優先／None なら明示 fetch）し
   run_id 採番後に設定。on_start 即時約定後 snapshot を baseline にして初回損失を見逃すのを防ぐ。
 
+### code-review 反映 round 3（#25 codex review・2026-06-13・GREEN 103 passed）
+
+attach 失敗時の注文漏れと post-trade 取りこぼし 2 件（High）を修正。検証面はこの repo では Rust e2e/
+FLOWS.md が無く Python pytest（`uv run pytest -q`）。各 fix は RED→GREEN の回帰ガードを伴う:
+
+- **finding 1: attach 失敗（on_start 例外）でも注文が venue に送られる** — `driver.run_on_start` が
+  `finally: await self._drain()` で on_start 例外後もキュー済み intent を drain していた。**成功時のみ drain し、
+  例外時は `self._intents.clear()` して再送出**する形に変更（`driver.py:run_on_start`）。fail-loud な戦略
+  （artifact 不足で on_start raise）が attach 失敗するのに注文だけ venue 到達する穴を塞ぐ。
+  RED→GREEN test: `test_kernel_live_step5_afk.py::test_mock_live_no_send_when_on_start_raises_after_queueing`
+  （on_start で submit 後 raise → `submit_order_call_count == 0` ＆ attach は例外）。
+- **finding 2: rails 登録前の post-trade 評価が初回損失を取りこぼす** — rails+baseline の登録が `start_run` の
+  **後**だったため、start window 内で走る post-trade 評価（on_start 約定の force_resync 等）が rails 未登録で
+  スキップされていた。**登録直後に最新 snapshot を即時 fetch して `_evaluate_post_trade_loss` で必ず再評価**する
+  （`live_orchestrator.start_live_strategy` ＋新ヘルパ `_fetch_account_snapshot`。cached `last_snapshot` は
+  AccountSync callback 後にしか更新されないため fresh fetch）。違反確定で rails を外すので後続 callback と二重
+  発火しない（冪等）。**RUNNING/STARTED を publish した後に再評価**する（共有 record の状態を lazy 読みする
+  publish より先に STOPPED 遷移が走ると STARTED が出ず `ERROR→STOPPED` になるため）。
+  RED→GREEN test:
+  `test_kernel_live_post_trade_live.py::test_post_trade_fires_on_loss_at_run_start_without_extra_snapshot`
+  （baseline=10,000,000 確定後 venue equity が損失へ → 追加 force_account_snapshot 無しで STOPPED+違反、
+  かつ STARTED→STOPPED 順を assert）。
+  注: round 3 時点では on_start 約定は gate（READY）で起こせなかったが、round 4 で start_run が attach 前に
+  RUNNING へ遷移するようになり on_start 約定が full-path で起こる。本 fix はその on_start 約定損失も含め
+  「baseline 確定〜run 開始の間に venue equity が損失へ動いた」状態を塞ぐ防御線。
+
+### code-review 反映 round 4（#25 codex + 自前 code-review・2026-06-13・GREEN 113 passed）
+
+review 指摘 2 件（High/Medium）＋ 自前 high-effort code-review の指摘 6 件を修正。各 fix は RED→GREEN ガード付き:
+
+- **on_start 発注が full-path で必ず DENIED（High・review finding 1）** — `start_run` が `READY` のまま attach し、
+  on_start drain 時に run gate（`is_running` が False）が新規発注を `STRATEGY_PAUSED` で弾いていた（`venue_calls=0`）。
+  **attach の前に `sm.transition_to(RUNNING)`** へ移動（D8「on_start から発注可能」）。attach 失敗は RUNNING→ERROR。
+  test: `test_on_start_order_reaches_venue_full_path`。
+- **pre-trade DENIED 注文が rate-limit 枠を消費（Medium・review finding 2）** — `driver._process_intent` の rate check が
+  precheck より前で、`MAX_ORDER_VALUE` 等で拒否される注文も枠を食い後続の正常注文を誤 deny。**rate check を precheck
+  後・venue 送信直前へ移動**。test: `test_mock_live_pretrade_denied_order_does_not_consume_rate_limit`。
+- **attach タイムアウトで孤児 driver が fail-open 発注（High・自前 #1）** — boundary の `fut.result(timeout)` 超過でも
+  `_do_attach` が走り続け self._driver を commit、run は unregister 済みで gate が開きガバナンス無し発注。**`asyncio.wait_for`
+  で attach 本体を live loop 上で時間制限**し、超過時 cancel→rollback（`except BaseException`）で teardown（fail-closed）。
+  test: `test_attach_timeout_does_not_leave_orphan_driver`。
+- **戦略例外 terminal で rails/baseline がリーク（Medium・自前 #2）** — `_fail_run_for_strategy_error` が release 漏れ。
+  loss 経路・`_control_run` と対称に `_release_run_rails_locked` を追加。test: `test_strategy_error_releases_run_rails`。
+- **cancel 競合の約定を握り潰す（Medium・自前 #3）** — `broker.cancel` が拒否以外を無条件 CANCELED 化し、競合約定を捨て
+  venue と desync。**拒否以外は `apply_venue_update` に通す**。test: `test_cancel_race_fill_is_not_discarded`。
+- **max_position_size が決済注文を誤 deny（Medium・自前 #4）** — `|建玉|+|注文|` で方向無視。`order_increases_exposure`
+  で **建て増し注文にのみ cap 適用**（返済は常に許可）。test: `test_mock_live_position_cap_allows_reducing_order`。
+- **REJECTED が PARTIALLY_FILLED を上書き（Medium・自前 #5）** — 部分約定済みに後着の REJECTED が来ると既約定を捨てて
+  全体 REJECTED 化。**約定済みなら CANCELED で終端**し fill を保持。test: `test_reject_after_partial_fill_terminates_as_canceled`。
+- **loss 確定後 fail_run 失敗で違反 toast が消える（Medium・自前 #6）** — `_fail_run_for_loss` が `LiveStrategyHostError` で
+  違反 publish 前に return。**違反を先に publish**してから stop。test: `test_loss_violation_published_even_if_fail_run_errors`。
+- **bus 購読が rollback で leak（Low・自前 #7）** — consumer 未起動の rollback で生成器 finally が走らず queue が残留。
+  `MarketDataBus` を closable `_Subscription` 化し `driver.stop` で明示 close。test: `test_market_data_bus_subscription_close_unsubscribes_without_iteration`。
+- **instrument_id 検証が末尾改行を許容（Low・自前 #8）** — `re.match(r"...$")` が末尾 `\n` 直前で一致。`re.fullmatch` に変更。
+  test: `test_instrument_id_rejects_trailing_newline`。
+
 > 注: 本 findings は #16（Strategy Editor）が `docs/findings/0010-strategy-editor.md` を採番したため
 > **0010 → 0011 にリネーム**（番号衝突回避）。
 

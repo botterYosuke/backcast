@@ -11,9 +11,11 @@ from __future__ import annotations
 import re
 
 # SYMBOL.VENUE: 一つのドット・前後とも非空・空白なし（Nautilus InstrumentId.from_str の最低条件）。
-_INSTRUMENT_ID_RE = re.compile(r"^[^.\s]+\.[^.\s]+$")
+# `fullmatch` で文字列全体に一致させる。`re.match(r"...$")` は末尾 `\n` の直前でも `$` が一致するため
+# "7203.TSE\n" を誤って許容する（#25 review finding 8）。
+_INSTRUMENT_ID_RE = re.compile(r"[^.\s]+\.[^.\s]+")
 
 
 def is_valid_instrument_id(value: str) -> bool:
-    """`SYMBOL.VENUE` 形式なら True。空・venue サフィックス欠落・空白混入は False。"""
-    return isinstance(value, str) and bool(_INSTRUMENT_ID_RE.match(value))
+    """`SYMBOL.VENUE` 形式なら True。空・venue サフィックス欠落・空白混入（末尾改行含む）は False。"""
+    return isinstance(value, str) and bool(_INSTRUMENT_ID_RE.fullmatch(value))

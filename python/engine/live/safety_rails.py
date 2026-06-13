@@ -141,6 +141,7 @@ class SafetyRails:
         instrument_id: str,
         order_notional_jpy: float,
         current_position_value_jpy: float,
+        increases_exposure: bool = True,
     ) -> RailViolation | None:
         """独自 pre-trade rail を評価する。違反なら `RailViolation`、OK なら `None`。
 
@@ -149,8 +150,10 @@ class SafetyRails:
 
         - `allowed_instruments`: 空なら制限なし（起動時 instrument のみは gRPC 層が別途強制）。
           非空かつ instrument_id が含まれなければ違反。
-        - `max_position_size_jpy`: |既存ポジション金額| + 新規注文金額 が上限超過なら違反
-          （0 は無効）。建玉を増やす方向の保守的評価（§8 Open Risk 2、保守側に倒す）。
+        - `max_order_value_jpy`: 1 注文の概算約定金額が上限超過なら違反（方向非依存、0 は無効）。
+        - `max_position_size_jpy`: |既存ポジション金額| + 新規注文金額 が上限超過なら違反（0 は無効）。
+          **建玉を増やす注文（`increases_exposure=True`）にのみ適用**する。返済/手仕舞いはエクスポージャを
+          減らすので cap で止めない（決済を弾くとリスクを下げる注文を阻害＝保守の向きが逆になる・#25 review）。
         """
         allowed = self._limits.allowed_instruments
         if allowed and instrument_id not in allowed:
@@ -169,7 +172,7 @@ class SafetyRails:
             )
 
         cap = self._limits.max_position_size_jpy
-        if cap > 0:
+        if cap > 0 and increases_exposure:
             projected = abs(current_position_value_jpy) + abs(order_notional_jpy)
             if projected > cap:
                 return RailViolation(

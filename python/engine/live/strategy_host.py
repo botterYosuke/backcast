@@ -211,7 +211,14 @@ class LiveStrategyHost:
             sm.error("DUPLICATE_STRATEGY_INSTRUMENT")
             raise LiveStrategyHostError("DUPLICATE_STRATEGY_INSTRUMENT") from exc
 
-        # (4) Nautilus engine に attach（seam）。失敗したら登録を巻き戻して ERROR。
+        # (4) RUNNING へ **attach の前** に遷移する。on_start は attach 中に呼ばれ、戦略は on_start で
+        # 発注し得る（D8「on_start から発注可能」）。run gate（orchestrator._is_run_gated）は state machine が
+        # RUNNING でない間は新規発注を deny するため、READY のまま attach すると on_start 発注が必ず
+        # STRATEGY_PAUSED で DENIED になり venue に届かない（#25 review）。RUNNING にしてから attach すれば
+        # on_start 発注が gate を通る。attach 失敗時は RUNNING→ERROR に落とす（許容遷移）。
+        sm.transition_to(RUNNING)
+
+        # (5) Nautilus engine に attach（seam）。失敗したら登録を巻き戻して ERROR。
         try:
             self._controller.attach(
                 strategy_cls=strategy_cls,
@@ -229,8 +236,6 @@ class LiveStrategyHost:
             sm.error("STRATEGY_ATTACH_FAILED")
             raise LiveStrategyHostError("STRATEGY_ATTACH_FAILED") from exc
 
-        # (5) RUNNING へ。Strategy の on_start は Nautilus が attach 時に呼ぶ。
-        sm.transition_to(RUNNING)
         return record
 
     def pause_run(self, run_id: str) -> RunRecord:

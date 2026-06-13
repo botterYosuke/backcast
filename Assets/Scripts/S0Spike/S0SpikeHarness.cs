@@ -65,6 +65,20 @@ public class S0SpikeHarness : MonoBehaviour
     bool   _engineStarted;
     bool   _resultLogged;
 
+    // DISABLED 2026-06 (Replay chart #10): superseded as the DEFAULT Play gate by
+    // the Replay chart harness. Two unguarded auto-bootstraps would both call
+    // PythonEngine.Initialize() in one playmode and race (double-init / GIL
+    // contention), so only ONE may own Play — that is now the Replay chart harness.
+    //
+    // We DO NOT delete this file: #2 is closed but GREEN on the MAC leg ONLY, and
+    // ADR-0001 (Consequences: "S0 は最終的に Windows で通す") + findings/0001 §6
+    // ("Windows leg (#2 から継続)") record an OUTSTANDING Windows S0 re-run. The
+    // ≥300fps render assertion lives in THIS playmode harness (Update's frame
+    // count), not in the headless S0EditorProbe — so this is the turnkey artifact
+    // the Windows leg needs. Flip AutoBootstrapEnabled back to true to resurrect
+    // the S0 playmode gate for that re-run.
+    const bool AutoBootstrapEnabled = false;
+
     // TURNKEY auto-bootstrap (改修A): spawn this harness automatically on play so
     // the owner only has to press Play. Runs in player & playmode (incl. batchmode
     // -nographics playmode). Does NOT fire under `-executeMethod` (no playmode is
@@ -72,6 +86,8 @@ public class S0SpikeHarness : MonoBehaviour
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
     {
+        if (!AutoBootstrapEnabled) return;   // see DISABLED note above (Replay chart #10 owns Play)
+
         var go = new GameObject("S0Spike");
         DontDestroyOnLoad(go);
         go.AddComponent<S0SpikeHarness>();

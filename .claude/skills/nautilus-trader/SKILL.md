@@ -224,6 +224,15 @@ These bite people repeatedly. Worth holding in working memory rather than redisc
   breaks backtest determinism.
 - **Order submission is async even in backtest.** `self.submit_order(order)` enqueues; the
   matching engine processes it on the next event. Don't read fill state in the same callback.
+- **MARKET-on-bar fill model = SAME-bar CLOSE, not next-bar open — verify empirically, don't trust
+  comments.** With a `...-LAST-EXTERNAL` `BarType` and the default `FillModel` (no `fill_model=`, no
+  adaptive ordering on `add_venue`), a `MARKET` order submitted in `on_bar(N)` fills **immediately at
+  bar N's CLOSE** (the LAST price), in full, slippage 0, with `OrderFilled.ts_event = bar N.ts_event`
+  — NOT at bar N+1's open. Discriminate open-vs-close and same-vs-next-bar by the **fill ts** (it
+  equals the *submit* bar's ts), since OHLC can coincide (penny stocks with O==C). A fixture docstring
+  claiming "fills next bar open" was empirically WRONG (#24 spike_buy_sell). When building a parity
+  oracle/golden, **record the fill semantics from an actual run** (capture `ts`+`price`), never from a
+  comment or a hand-derived assumption.
 - **Logging.** Use `self.log.info(...)` etc. from inside an Actor/Strategy; never `print` or
   `logging` directly — those bypass the structured log and the in-memory log buffer used by
   tests.

@@ -155,6 +155,26 @@ _Avoid_: chart を floating window と呼ぶこと（Hakoniwa tile が正）／z
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
 resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）
 
+**Strategy Editor（code buffer）**:
+floating window kind `strategy_editor` の**実 content**。strategy `.py` を編集する code buffer（Python の lexical
+syntax highlight / undo-redo）。#15 は generic な window frame（spawn/move/z-order/persist）だけ立て、実 content を
+deferred した — その content がこれ（#16）。編集対象は**実在する `.py`**（新規作成・ピッカーは射程外）で、編集は
+buffer 上で行い save でディスクへ書き戻す。highlight は**意味解析ではなく lexical**（builtin を固定リストで着色しない＝
+shadow 可能なので構文ではない）。LSP / autocomplete / Python parser / 実行検証は射程外。実装は #16。
+_Avoid_: chart/order と混同すること（別 kind）／#15 の汎用 floating window system に content を混ぜること（content は
+caller の window factory が `kind=="strategy_editor"` のとき合成・controller 境界は不変）／「Python parser を載せた」と
+表現すること（lexical tokenizer であって parser ではない）
+
+**strategy file provider（供給 seam）**:
+編集・保存済みの strategy `.py` の**パス**を Replay/Live に `strategy_file` として渡す durable な境界（#16）。engine は
+パス（≠ ソース文字列）を消費し `_load_strategy` がディスクから開くため、供給するのはソースではなく**保存済みパス**。
+「**供給可能**」= path バインド済み ∧ not dirty ∧ 直近 Open/Save 成功 ∧ canonical absolute `.py` ∧ 呼出時点で実在、の
+すべてを満たすときに限る（dirty 時は stale パスを返さず拒否＝「provider が返すパス = ディスク内容が buffer と一致」を保証）。
+**active/current/default strategy の選択も run lifecycle も持たない**（run-UI / 別 slice の責務）。multi-instance（#15 の
+`strategy_editor:region_001` 等）は window id → provider の registry で lookup/列挙する（active 選択はしない）。
+_Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用の予約語）／run trigger・`start_nautilus_replay`
+呼出・active 選択を #16 / provider に含めること／ソース文字列を供給すると解釈すること（パスが正）
+
 ## Flagged ambiguities
 
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が

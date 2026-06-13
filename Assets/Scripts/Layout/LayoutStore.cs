@@ -137,6 +137,7 @@ public static class LayoutStore
     {
         NormalizeCanvasView(doc);
         NormalizeFloatingWindows(doc);
+        NormalizeStrategyEditors(doc);
 
         if (doc.panels == null)
         {
@@ -177,6 +178,35 @@ public static class LayoutStore
             kept.Add(w);
         }
         doc.floatingWindows = kept;
+    }
+
+    // strategyEditors normalization (issue #16, findings 0010 §7) — the persistence-boundary
+    // half. Drop entries that can't be associated: null, null/empty id, OR null/empty filePath
+    // (a content state with no path is meaningless — restore would reset it to unbound-empty
+    // anyway). DUPLICATE id -> keep the FIRST, drop the rest (id is document-unique). An ORPHAN
+    // id (no matching floatingWindows entry) and a MISSING/non-existent path are KEPT VERBATIM:
+    // LayoutStore does NO filesystem check and NO canonicalization (findings 0010 §7) — existence
+    // is the restore controller's concern (Open may fail and leave the window unbound-empty).
+    // Old #12/#13/#15 sidecar (no strategyEditors) -> empty list.
+    public static void NormalizeStrategyEditors(LayoutDocument doc)
+    {
+        if (doc == null) return;
+        if (doc.strategyEditors == null)
+        {
+            doc.strategyEditors = new System.Collections.Generic.List<StrategyEditorState>();
+            return;
+        }
+
+        var seen = new System.Collections.Generic.HashSet<string>();
+        var kept = new System.Collections.Generic.List<StrategyEditorState>(doc.strategyEditors.Count);
+        foreach (var s in doc.strategyEditors)
+        {
+            if (s == null) continue;
+            if (string.IsNullOrEmpty(s.id) || string.IsNullOrEmpty(s.filePath)) continue;
+            if (!seen.Add(s.id)) continue;   // duplicate id -> keep first
+            kept.Add(s);
+        }
+        doc.strategyEditors = kept;
     }
 
     // canvasView normalization (issue #13, findings 0006 §3) — the AUTHORITATIVE place

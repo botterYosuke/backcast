@@ -4,9 +4,14 @@ status: accepted
 
 # 埋め込み Python ランタイム（CPython + venv）の物理配置と解決方式
 
-Step 1（#3 / ADR-0001 decision 7・8）で、Unity に埋め込む CPython 3.13.13 ランタイム＋venv を
+Step 1（#3 / ADR-0001 decision 7・8）で、Unity に埋め込む CPython 3.13.11 ランタイム＋venv を
 **どこに置き、Editor（dev）と standalone build（deploy）の両方でどう resolve するか**を確定する。
-`grill-with-docs`（2026-06-12）で導出。S0 spike（#2）が絶対パス hardcode で残した
+`grill-with-docs`（2026-06-12）で導出。
+
+> **訂正注記（#8 grill 2026-06-13・事実訂正のみ／decision 不変）**: 本文の interpreter patch を
+> `3.13.13` → `3.13.11` に訂正。`3.13.13` は uv index に存在しない phantom pin の誤記で、**Mac S0 先行実験**は
+> `3.13.13` で走ったが、**Windows production runtime は `3.13.11 win_amd64`**（TTWR `.venv` 実測）。canonical pin は
+> ADR-0001 decision 7。本訂正は自己保護条項（下記）が禁ずる「decision の反転」ではなく Context 前文の事実誤記訂正。S0 spike（#2）が絶対パス hardcode で残した
 「StreamingAssets で relativize」TODO（`Assets/Scripts/S0Spike/S0SpikeHarness.cs` / `Assets/Editor/S0EditorProbe.cs`）の
 正式な解。
 

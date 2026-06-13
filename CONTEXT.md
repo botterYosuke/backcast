@@ -77,6 +77,17 @@ _Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が
   担い得る。「本番フロント」=backcast（going-forward）、「現 live 実行系」=TTWR（fallback）と区別する。
 
+- **「≥300fps」（seam ゲート AC の言い回し）**: S0（#2）・viz-spike（#8）の AC が言う「≥300fps」は
+  **毎秒 300 フレーム（throughput）ではなく、worker が連続で backtest 実行 / ndarray upload する間に
+  main が描画を止めずに ≥300 フレーム継続する**こと＝ main が GIL/upload に一度もブロックされない証明。
+  VSync 環境で 300 FPS の throughput を要求するものではない。findings には `frames >= 300` と
+  実測 `maxDt`／hitch を記録する。
+
+- **「interpreter pin（CPython patch version）」**: production pin は **`3.13.11 win_amd64`**（deploy=Windows=
+  TTWR `.venv` 実測）。docs に一時期 `3.13.13` とあったのは uv index に存在しない phantom pin の誤記で、
+  **Mac S0 先行実験のみ** `3.13.13` で走った（patch-version drift・#8 grill 2026-06-13 訂正）。canonical は
+  ADR-0001 decision 7。
+
 ## Example dialogue
 
 > **Dev:** Live を Unity 側に出すのはいつ？

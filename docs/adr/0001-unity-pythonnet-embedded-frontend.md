@@ -60,9 +60,12 @@ ADR-0019（In-proc only backend transport）, ADR-0026（Nautilus catalog precis
    submodule 参照・pinned-package-from-TTWR は採らない（TTWR は #5 で**廃止**するため）。
    engine は host 非依存を保ち（host 結合は **sink 注入点・`engine.core`/`engine.inproc_server` の 2 入口・
    dict 境界**に既に局所化済み）、Unity(C#) は decision 8 の adapter でこれを駆動する。
-   pin（**CPython 3.13.13 / nautilus-trader 1.226.0 / PRECISION_BYTES=8 standard**。Intel Mac は PyPI に
+   pin（**CPython 3.13.11 / nautilus-trader 1.226.0 / PRECISION_BYTES=8 standard**。Intel Mac は PyPI に
    standard wheel 不在のため sdist を `HIGH_PRECISION=false` で再ビルド必須・共有 catalog も 8）は移植時に
    TTWR `uv.lock` から確定し、以後 backcast の `pyproject`／埋め込み venv に住む。
+   （**interpreter patch pin = 3.13.11**：本番＝Windows＝TTWR `.venv` 実測値。Mac S0 先行実験は
+   `3.13.13` で走ったが production pin とは patch-version drift があり、production の唯一の真は
+   **3.13.11 win_amd64**。`3.13.13` は uv index に存在せず誤記だった。#8 viz-spike で Windows 実測確定。）
 8. **C#↔Python は単一 adapter 層**：呼び出し面を 1 つの adapter に集約し、C# 製 sink を engine の
    sink 口へ差す。worker→main は **GIL なしで読める C#/native バッファ**で受け渡す（main thread は
    GIL を取得しない＝render loop を GIL 競合から守る）。IPC seam や別プロセス起動は今は作らない。
@@ -108,7 +111,7 @@ Unity の Mono+pythonnet 上で load できるか**」。これを **S0 spike** 
   （S2-spike を S0 から分けたのと同じ規律）。②が落ちても near-term は進み、後日 IPC 一括 or C# 計算で代替。
 - **crash で Unity ごと落ちる**：Python/native の crash は同一プロセスの Unity を巻き込む。これは
   「UI が死ねば執行も死ぬ」という owner 要件と方向が一致しており、許容する。
-- **配布**：Unity ビルドに CPython 3.13.13 ランタイム＋venv（nautilus-trader 1.226.0／numpy/torch 等の
+- **配布**：Unity ビルドに CPython 3.13.11 ランタイム＋venv（nautilus-trader 1.226.0／numpy/torch 等の
   wheel）を同梱する必要がある。wheel は **OS 別**（`macosx_*` / `win_amd64`）で native ローダ（Rust core）が
   別物のため、venv は **deploy OS ごとにビルド**する。
 - **deploy target = Windows（first-class）**：live の kabuステーションが Windows 専用のため、本番 deploy は

@@ -4,6 +4,9 @@
 - 関連 ADR: [ADR-0001 — Unity + pythonnet embedded frontend](../adr/0001-unity-pythonnet-embedded-frontend.md)（status: **proposed** のまま）
 - 実行環境: Intel x86_64 / macOS 13.7.8 / Unity 6000.4.11f1 (apiCompat=6, standalone=Mono)
 - nautilus_trader 1.226.0（`HIGH_PRECISION=false` で sdist 再ビルド）, Python 3.13.13, venv `python/.venv`（uv 構成）
+  - **interpreter patch drift（#8 grill 2026-06-13）**: この Mac leg は実測 `3.13.13` で走ったが、これは Mac 先行実験の値。
+    **Windows production pin は `3.13.11`**（＝TTWR `.venv` 実測・deploy 本番値。`3.13.13` は uv index に存在せず誤記だった）。
+    Mac-green の事実は保存するが、production の唯一の真は `3.13.11 win_amd64`。詳細は ADR-0001 decision 7 / #8 findings。
 
 ---
 

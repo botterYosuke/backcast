@@ -320,6 +320,76 @@ def run_backtest() -> dict:
             pass
 
 
+class S0EngineSeam:
+    """#18 Windows-leg spike: run the S0 backtest on a PYTHON-OWNED thread.
+
+    Root cause isolated by the #18 diagnostic ladder: BacktestEngine.run segfaults
+    when driven on a C#-created (`new Thread`) host thread under Windows-Mono +
+    pythonnet (the foreign thread's state is mishandled), but runs fine on the
+    Unity main thread and under Mac-Mono. This seam runs the *identical* existing
+    backtest on a CPython-owned ``threading.Thread`` instead — the same ownership
+    model S2-spike's engine-owned asyncio loop uses (GREEN on Windows-Mono).
+
+    The host (a C# worker under ``Py.GIL()``) calls ``start()`` then ``join()``;
+    ``threading.Thread.join`` releases the GIL while blocking, so the engine thread
+    acquires it and runs Nautilus while the Unity MAIN thread stays GIL-free.
+    Results cross back as C# primitives only (no PyObject escapes the boundary).
+    """
+
+    def __init__(self) -> None:
+        self._thread = None
+        self._ok = False
+        self._bars = 0
+        self._fills = 0
+        self._equity = 0.0
+        self._error = ""
+
+    def start(self) -> None:
+        import threading
+
+        def _run() -> None:
+            print("[S0 PYTHREAD] python-owned engine thread: nautilus run start", flush=True)
+            try:
+                r = run_backtest()
+                self._bars = int(r["bars"])
+                self._fills = int(r["fills"])
+                self._equity = float(r["final_equity"])
+                self._ok = True
+                print(f"[S0 PYTHREAD] python-owned engine thread: run done bars={self._bars}", flush=True)
+            except BaseException as e:  # noqa: BLE001 — surfaced to host as error()
+                self._error = repr(e)
+                print(f"[S0 PYTHREAD] python-owned engine thread: run ERROR {self._error}", flush=True)
+
+        self._thread = threading.Thread(target=_run, name="s0-py-engine-thread", daemon=True)
+        self._thread.start()
+        print("[S0 PYTHREAD] python-owned engine thread spawned (daemon)", flush=True)
+
+    def join(self, timeout: float = 90.0) -> bool:
+        """Join the engine thread; returns True iff it terminated within timeout.
+        ``join`` releases the GIL while waiting (host stays GIL-free / main renders)."""
+        if self._thread is None:
+            return False
+        self._thread.join(timeout)
+        terminated = not self._thread.is_alive()
+        print(f"[S0 PYTHREAD] engine thread join: terminated={terminated}", flush=True)
+        return terminated
+
+    def ok(self) -> bool:
+        return bool(self._ok)
+
+    def bars(self) -> int:
+        return int(self._bars)
+
+    def fills(self) -> int:
+        return int(self._fills)
+
+    def equity(self) -> float:
+        return float(self._equity)
+
+    def error(self) -> str:
+        return str(self._error)
+
+
 def run_gates() -> None:
     """Run both self-failing gates on the CURRENT interpreter (no sys.exit).
 

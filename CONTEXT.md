@@ -35,8 +35,15 @@ _Avoid_: 共有、依存（TTWR を生かしたまま参照する含意を避け
 **seam ゲート（S0 / S2-spike）**:
 threading の継ぎ目を段ごとに検証する throwaway spike。**S0**（#2）= threaded **backtest**
 （有界・1 回 run）、**S2-spike**（#7）= live **asyncio loop**（長時間・tokio・venue WS・polling）。
-前段の green は後段の保証にならない、を前提に分けて立てる。
-_Avoid_: spike をまとめて 1 つにすること
+前段の green は後段の保証にならない、を前提に分けて立てる。S2-spike の**核の未知数**は
+S0 が触れていない **cross-thread asyncio marshal**：host worker が live loop へ
+`run_coroutine_threadsafe(coro, loop).result(timeout)` 越しに仕事を投げ、`.result()` 内部の
+GIL 解放→loop スレッドが GIL 取得→coro 実行→worker 再取得、という **Mono 上の GIL 往復**が
+健全か。**green 判定は「ハングしない」ではなく「prompt completion」**（elapsed ≈ coro の固有コスト）：
+GIL starve でも `.result(timeout)` は無限ハングせず `TimeoutError` を投げるため、毎コール timeout
+する壊れた系も「ハングしない」を満たしてしまう。
+_Avoid_: spike をまとめて 1 つにすること／「no-hang＝green」と判定すること（prompt completion が正）／
+人間向け表記で裸の `S2`（`S2-spike` が正・`Step 2`=#4 と衝突）
 
 **S/Step/slice の呼称規律（命名衝突の回避）**:
 接頭辞 `S<n>` の素トークンは **spike 専用に予約**（`S0`=#2 / `S2-spike`=#7）。移行の段は **`Step <n>`**（Step 1=#3 / Step 2=#4 / Step 3=#5）。**Step 1 の子スライスは番号で呼ばず記述名**を使う:

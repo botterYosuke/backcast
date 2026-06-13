@@ -58,6 +58,51 @@ public class LayoutRect
     }
 }
 
+// CanvasView — the infinite-canvas pan/zoom state (issue #13), an ADDITIVE capability-
+// surface item on the layout schema (findings 0006 §3; ADR-0003 capability parity, the
+// "canvas pan/zoom" slot findings 0004 §10 parked for the shell slices). NOT a version
+// bump: an additive, identity-defaulting field is exactly what #12's forward-evolution
+// tolerance (findings 0004 §6) was designed for, so CURRENT_VERSION stays 1.
+//
+// SEMANTICS (findings 0006 §2, owner-locked): panX/panY are the canvas LOGICAL point at
+// the Viewport CENTRE (resolution-independent — NOT screen pixels, NOT zoom-scaled px),
+// zoom is a uniform scalar (localScale = (zoom,zoom,1)). Y is up-positive (uGUI local).
+// IDENTITY = (0, 0, 1) = no pan, 100%. zoom defaults to 1f so a freshly-minted CanvasView
+// is identity even before Sanitize; LayoutStore.Sanitize() is the authoritative normalizer
+// (null/missing -> identity, non-finite pan -> 0/axis, non-finite or <=0 zoom -> 1, then
+// clamp [0.2,5.0]). The binder/math never sanitize — that lives at the persistence boundary.
+[Serializable]
+public class CanvasView
+{
+    public const float MIN_ZOOM = 0.2f;
+    public const float MAX_ZOOM = 5.0f;
+
+    public float panX;
+    public float panY;
+    public float zoom = 1f;   // identity default (also re-asserted by Sanitize)
+
+    public CanvasView() { }
+
+    public CanvasView(float panX, float panY, float zoom)
+    {
+        this.panX = panX;
+        this.panY = panY;
+        this.zoom = zoom;
+    }
+
+    public static CanvasView Identity() => new CanvasView(0f, 0f, 1f);
+
+    public CanvasView Clone() => new CanvasView(panX, panY, zoom);
+
+    public static bool Approx(CanvasView a, CanvasView b, float eps)
+    {
+        if (a == null || b == null) return a == b;
+        return Math.Abs(a.panX - b.panX) <= eps
+            && Math.Abs(a.panY - b.panY) <= eps
+            && Math.Abs(a.zoom - b.zoom) <= eps;
+    }
+}
+
 [Serializable]
 public class PanelLayout
 {
@@ -88,6 +133,12 @@ public class LayoutDocument
 
     public int version;
     public List<PanelLayout> panels;
+
+    // Infinite-canvas pan/zoom state (issue #13). ADDITIVE: an old #12 sidecar lacking
+    // this field loads with panels intact and the view normalized to identity by
+    // LayoutStore.Sanitize(). NOT identified with any panel's LayoutRect (separate
+    // dimension, findings 0006 §3).
+    public CanvasView canvasView;
 
     // Default ctor leaves version at the UNSET SENTINEL 0 (NOT CURRENT_VERSION) on
     // purpose: JsonUtility's treatment of a JSON-absent field (keep ctor value vs.
@@ -126,6 +177,7 @@ public class LayoutDocument
             new PanelLayout("orders",     3, true, new LayoutRect(0.63f, 0.25f, 1.00f, 0.50f)),
             new PanelLayout("run_result", 4, true, new LayoutRect(0.63f, 0.00f, 1.00f, 0.25f)),
         };
+        doc.canvasView = CanvasView.Identity();   // no pan, 100% (findings 0006 §3)
         return doc;
     }
 
@@ -135,6 +187,7 @@ public class LayoutDocument
         if (panels != null)
             foreach (var p in panels)
                 if (p != null) doc.panels.Add(p.Clone());
+        doc.canvasView = canvasView?.Clone();
         return doc;
     }
 
@@ -154,6 +207,11 @@ public class LayoutDocument
     {
         if (a == null || b == null) return a == b;
         if (a.version != b.version) return false;
+        // A null canvasView and an identity view are the SAME state (no pan, 100%): a
+        // freshly-Captured doc carries null (the binder doesn't own the view) while
+        // Default() carries identity, and they must compare equal. Coalesce before Approx.
+        if (!CanvasView.Approx(a.canvasView ?? CanvasView.Identity(),
+                               b.canvasView ?? CanvasView.Identity(), eps)) return false;
         int ca = a.panels?.Count ?? 0;
         int cb = b.panels?.Count ?? 0;
         if (ca != cb) return false;

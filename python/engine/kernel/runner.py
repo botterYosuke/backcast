@@ -59,6 +59,9 @@ class _Context:
         self._client_seq = 0
         self.pending: list[Order] = []
         self.denials: list[OrderDenied] = []
+        # 現在 bar の参照価格（close）。on_bar 前に runner が更新し、submit_market が建玉上限の
+        # 約定後時価評価に使う（MARKET は当該 bar close で約定するため close が参照価格・#25 review）。
+        self.reference_price: float | None = None
 
     def submit_market(
         self, *, strategy_id: str, instrument_id: str, side: OrderSide, quantity: float
@@ -74,7 +77,7 @@ class _Context:
         violation: RailViolation | None = self._engine.submit(
             order,
             net_signed_qty=self._portfolio.net_signed_qty(instrument_id),
-            current_position_value_jpy=self._portfolio.position_value_jpy(instrument_id),
+            reference_price=self.reference_price,  # 当該 bar close（建玉上限の時価評価・#25 review）
             order_notional_jpy=0.0,  # MARKET: price unknown at submit (matches live path)
         )
         if violation is not None:
@@ -151,6 +154,8 @@ class KernelRunner:
         for bar in bars:
             self._sink.push_bar(bar)
 
+            # MARKET は当該 bar close で約定するので、submit 時の参照価格 = この bar の close。
+            self._ctx.reference_price = bar.close
             self._strategy.on_bar(bar)
 
             # Risk-denied orders surface to on_order but never fill or touch the sink.

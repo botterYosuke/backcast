@@ -321,7 +321,7 @@ class KernelLiveDriver:
         violation = self._order_engine.precheck(
             order,
             net_signed_qty=self._portfolio.net_signed_qty(intent.instrument_id),
-            current_position_value_jpy=self._portfolio.position_value_jpy(intent.instrument_id),
+            reference_price=price,  # 約定後建玉の時価評価に使う直近値（#25 review findings 2/3）
             order_notional_jpy=notional,
         )
         if violation is not None:

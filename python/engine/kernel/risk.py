@@ -65,7 +65,7 @@ class RiskEngine:
         is_buy: bool,
         qty: float,
         net_signed_qty: float,
-        current_position_value_jpy: float,
+        reference_price: float | None,
         order_notional_jpy: float = 0.0,
     ) -> RailViolation | None:
         return evaluate_pre_trade(
@@ -73,7 +73,7 @@ class RiskEngine:
             is_buy=is_buy,
             qty=qty,
             order_notional_jpy=order_notional_jpy,
-            current_position_value_jpy=current_position_value_jpy,
+            reference_price=reference_price,
             net_signed_qty=net_signed_qty,
             rails=self._rails,
             regulation_provider=self._regulation_provider,

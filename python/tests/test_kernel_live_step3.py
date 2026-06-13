@@ -35,9 +35,10 @@ def _types(events):
     return [type(e) for e in events]
 
 
-async def test_submit_default_fills_fully():
+async def test_submit_priced_fill_books_fully():
     a = MockVenueAdapter()
     await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
     broker = LiveBroker(adapter=a, venue="MOCK")
     order = _order()
     events = await broker.submit(order)
@@ -47,7 +48,46 @@ async def test_submit_default_fills_fully():
     assert order.filled_qty == 100.0
     fill = events[1]
     assert fill.last_qty == 100.0
+    assert fill.last_px == 8.0
     assert fill.cumulative_filled_qty == 100.0
+
+
+async def test_submit_unpriced_fill_is_rejected():
+    """価格を伴わない fill は 0 円で会計せず fail-closed で REJECTED（#25 review finding 1）。
+
+    MockVenueAdapter の既定 MARKET 約定は avg_price=None を返す。旧実装はこれを order.avg_px
+    （初回は 0）で会計し `FILLED qty=100 avg_px=0` と建玉/cash を破損させた。正価格を伴わない
+    fill は適用せず注文を REJECTED 終端する（実 venue は必ず価格を報告する・mock 既定は degenerate）。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order()
+    events = await broker.submit(order)  # 既定 = avg_price 無しの FILLED
+    assert _types(events) == [OrderAccepted, OrderRejected]
+    assert order.status is OrderStatus.REJECTED
+    assert order.filled_qty == 0.0  # 0 円約定は会計されない
+    assert "FILL_WITHOUT_PRICE" in events[1].reason
+
+
+async def test_unpriced_increment_after_partial_is_dropped():
+    """正価格で部分約定済みの後に来た価格欠落の増分は捨て、確定済み fill を保持する（finding 1）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="PARTIALLY_FILLED", filled_qty=50.0, avg_price=8.0)
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    assert order.filled_qty == 50.0 and order.status is OrderStatus.PARTIALLY_FILLED
+
+    more = broker.apply_venue_update(
+        order,
+        OrderResult(status="FILLED", filled_qty=100.0, avg_price=None, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert more == []  # 価格無しの増分は適用しない
+    assert order.filled_qty == 50.0  # 既約定 50@8 を保持
+    assert order.status is OrderStatus.PARTIALLY_FILLED  # 注文は live のまま
 
 
 async def test_submit_reject_does_not_pass_accepted():
@@ -131,6 +171,7 @@ async def test_partial_then_full_incremental_price_from_cumulative_notional():
 async def test_cumulative_dedup_ignores_repeated_fill():
     a = MockVenueAdapter()
     await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
     broker = LiveBroker(adapter=a, venue="MOCK")
     order = _order(qty=100.0)
     await broker.submit(order)  # → FILLED, cumulative 100

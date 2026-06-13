@@ -239,15 +239,32 @@ class LiveBroker:
         delta = incoming_cumulative - order.filled_qty
         if delta <= 0:
             return []  # duplicate / stale（受信イベント数ではなく累積数量で判定・D1）
-        if res.avg_price is not None:
-            new_cum_avg = float(res.avg_price)
-            # この増分の約定代金 = 新累積代金 − 旧累積代金。delta>0 なので 0 除算しない。
-            increment_notional = incoming_cumulative * new_cum_avg - order.filled_qty * order.avg_px
-            increment_px = increment_notional / delta
-            order.avg_px = new_cum_avg  # venue 報告の累積平均を保持
-        else:
-            # venue が約定価格を報告しない degenerate ケース（実 venue は報告する・mock は常に設定）。
-            increment_px = order.avg_px
+        # fail-closed: 増分 fill は **正の有限な約定価格**を必ず伴わねばならない。旧実装の
+        # `increment_px = order.avg_px` fallback は初回 fill を 0 円（avg_px の既定値）で会計し、
+        # cash / 建玉を黙って破損させた（#25 review finding 1）。実 venue は必ず価格を報告するので、
+        # 価格欠落/不正は venue 契約違反として **その fill を適用せず** 閉じる:
+        #   - 未約定（filled_qty==0）からの不正価格 fill: 注文を REJECTED 終端（0 円会計を防ぐ）。
+        #   - 既に正価格で部分約定済みなら: 不正な増分だけ捨て、確定済み fill は live のまま保持する。
+        if res.avg_price is None or not math.isfinite(res.avg_price) or res.avg_price <= 0:
+            if order.filled_qty > 0:
+                return []  # 確定済みの正価格 fill を保持し、価格無しの増分のみ捨てる
+            order.status = OrderStatus.REJECTED
+            order.denied_reason = "FILL_WITHOUT_PRICE"
+            return [
+                OrderRejected(
+                    client_order_id=order.client_order_id,
+                    strategy_id=order.strategy_id,
+                    instrument_id=order.instrument_id,
+                    side=order.side,
+                    reason="FILL_WITHOUT_PRICE: venue reported a fill without an execution price",
+                    ts_event_ns=order.ts_last_ns,
+                )
+            ]
+        new_cum_avg = float(res.avg_price)
+        # この増分の約定代金 = 新累積代金 − 旧累積代金。delta>0 なので 0 除算しない。
+        increment_notional = incoming_cumulative * new_cum_avg - order.filled_qty * order.avg_px
+        increment_px = increment_notional / delta
+        order.avg_px = new_cum_avg  # venue 報告の累積平均を保持
         order.filled_qty = incoming_cumulative
         order.venue_order_id = order.venue_order_id or order.client_order_id
         order.status = (

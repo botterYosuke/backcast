@@ -161,6 +161,46 @@ GIL-free に drain して Unity panel へ反映」する縦スライスを通す
 - **durable 成果物**: `Assets/Scripts/Live/LiveBackendEventSink.cs` / `LiveBackendEventDecoder.cs` / `LivePanelViewModel.cs`。
   **throwaway**: `Assets/Editor/LiveAdapterTracerProbe.cs` + `python/spike/live_adapter/{__init__,mock_inject,run_tracer_smoke}.py`。
 
+### レビュー対応（2026-06-14・false-green hardening / Human review 3 件）
+
+owner レビューが AFK ゲートの false-green 経路を 3 件指摘。いずれも「回帰してもゲートが PASS し得る」穴で、
+**構造的に潰す**修正を入れた（durable C# decoder/sink/view-model と生産 engine は無改修）。
+
+- **Medium-1（stop が gated でない）**: `LiveAdapterTracerProbe.cs` の teardown が `stop_live_strategy` の
+  応答・例外を捨てていたため、「C# が stop を marshal 駆動」を回帰させても開始時イベントだけで PASS し得た。
+  → stop の ACK success を捕捉し、`Validate` で **(a) stop ACK success==true・(b) 最終 lifecycle status==STOPPED・
+  (c) lifecycle run_id == start の run_id** を必須 assert 化。STOPPED の権威は **lifecycle event（D1 生産経路の
+  `LiveStrategyEvent`）** を採用（`_control_run`→`_publish_live_strategy_event` が `status=record.state_machine.current`
+  ＝STOPPED・`run_id=record.run_id` を生産経路で emit。get_state_json の replay_state は IDLE 固定の misinfo で
+  run status の権威にならない）。stop は façade 内部で `run_coroutine_threadsafe(...).result()` の blocking marshal
+  なので、C# に制御が返る時点で STOPPED イベントは sink queue 着弾済み → tail `Pump()` で確実に drain。
+  - **assert が効くことを実証**: stop を skip した throwaway 版で probe が **UNITY_EXIT=1 / FAIL** に落ちることを確認
+    （`[LIVE ADAPTER TRACER FAIL] stop_live_strategy returned no ACK (exception or skipped): …`）。確認後に名指し
+    Edit で復元。
+
+- **Medium-2（heartbeat 後の blocking join が計測外）**: heartbeat が 120s budget を使い切って戻った後の
+  `drive.Join(120000)` が main を計測窓の外で長時間 block し得て、その stall が maxStall に入らず PASS し得た。
+  → heartbeat 復帰時に `heartbeatTimedOut = !_driveDone` を判定し、**budget 切れ（drive 未完了）は即 FAIL**。
+  さらに join を **非 blocking 化**（`_driveDone` 確定後は worker が最終行に到達済みなので join は即時復帰。
+  全待機を計測済み heartbeat 内に収める）。両対策で「長時間 main stall を join に隠す」経路を二重に封鎖。
+
+- **Medium-3（HITL harness の Play 単一所有が未強制）**: `LiveAdapterTracerHitlHarness.Start()` が無条件に
+  `PythonEngine.Initialize()` していたため、Replay harness 等が既に interpreter を所有していても double-init し得た。
+  → `PythonEngine.IsInitialized` を検査して foreign bootstrap を **明示 FAIL**（ReplayPanelsHarness §4 と同型ガード）。
+  本 harness は clean teardown で `PythonEngine.Shutdown()` するため、ReplayPanelsHarness の `s_pythonBootstrapped`
+  reuse 分岐は持たない（Shutdown 後の dead interpreter を reuse して crash するのを避ける）。IsInitialized FAIL
+  guard のみ移植。
+
+**再走（2026-06-14・Mac leg・修正後・GREEN）**:
+```
+<Unity> -batchmode -nographics -projectPath /Users/sasac/backcast \
+        -executeMethod LiveAdapterTracerProbe.Run -logFile <Temp 外のパス>
+→ UNITY_EXIT=0
+[LIVE ADAPTER TRACER PASS] fills=2 acct=8918x100 telem(realized=200,fills=2) lifecycle=2 state(price=10,bid=9.9,ask=10.1) maxStall=9ms — …
+error CS=0 / Exception=0 / [LIVE ADAPTER TRACER MARK] PythonEngine.Shutdown OK (clean teardown)
+```
+（⚠️ `-logFile` は Unity scratch の `Temp/` 配下に置かない——起動時に消去される。）
+
 ## ADR の扱い
 
 - 新規 ADR は起こさない。本件は ADR-0001 d8（単一 adapter 層/sink）・ADR-0004 案 C（kernel）・ADR-0018 A2

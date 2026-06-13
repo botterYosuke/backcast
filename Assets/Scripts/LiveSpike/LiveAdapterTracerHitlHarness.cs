@@ -54,6 +54,23 @@ public class LiveAdapterTracerHitlHarness : MonoBehaviour
     {
         try
         {
+            // Medium-3: SINGLE PLAY-OWNER guard (mirrors ReplayPanelsHarness §4). The menu only
+            // prevents a SECOND harness of this type in the same Play; it does NOT stop a foreign
+            // bootstrap (e.g. ReplayPanelsHarness, or a prior harness that left the interpreter up)
+            // from already owning the interpreter. A second PythonEngine.Initialize() on top of that
+            // double-inits / contends the GIL. So if Python is already initialized, FAIL LOUDLY
+            // instead of silently piling on. (Unlike ReplayPanelsHarness this harness Shuts the
+            // interpreter down on clean teardown, so it expects to be the sole owner each run and
+            // needs no s_pythonBootstrapped reuse branch.)
+            if (PythonEngine.IsInitialized)
+            {
+                _driveError = "double-init: PythonEngine already initialized by another bootstrap " +
+                              "(only one Play-owner allowed; is ReplayPanelsHarness or another harness running?)";
+                _status = "ERROR: " + _driveError;
+                Debug.LogError("[LIVE ADAPTER TRACER HITL FAIL] " + _driveError);
+                return;
+            }
+
             PythonRuntimeLocator.ConfigureBeforeInitialize();
             PythonEngine.Initialize();
             _engineStarted = true;

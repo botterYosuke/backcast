@@ -71,6 +71,18 @@ Unity(C#) 側で pythonnet を介し engine を駆動する単一の境界。eng
 差し、結果を GIL なしで読める C#/native バッファへ渡す。engine を host 非依存に保つための seam。
 _Avoid_: bridge、wrapper
 
+**live event sink（C# `LiveBackendEventSink`）**:
+Live 経路で engine が押し出す **backend_events**（`OrderEvent`/`AccountEvent`/`LiveStrategyEvent`/
+`LiveStrategyTelemetry`/…）を受ける C# 製 sink。`engine.core.set_rust_event_sink(...)` で差し込み、
+`push_json(bytes)` を実装して GIL-free な `ConcurrentQueue<string>` に積む。engine 側は
+`DataEngineBackend.publish_backend_event` → `_backend_event_to_wire_dict`（ADR-0018 A2 の**外部タグ付き**
+wire・例 `{"OrderEvent": {...}}`） → `sink.push_json` の生産経路をそのまま通る。TTWR の Rust sink の役割を
+置換する C# 実体（記録: #20・findings 0011）。**Replay の `ReplayEventSink.push_bar` とも `EventSink.push_*`
+（kernel 内部 serializer・AC④ projection 互換ゲート専用）とも別物**：前者は market-data bar、後者は kernel→
+ReplayPanel JSON projection で **Live 配送路ではない**（D2）。Live UI 配送の権威は本 sink が受ける backend_events。
+_Avoid_: `EventSink`/`ReplayEventSink` と同一視すること／#20 コメントの「Replay sink 契約と同型」を Live 配送路の
+指定と読むこと（あれは #24/#25 の **projection 互換**を指す。Live sink wire は外部タグ付き BackendEvent）
+
 **移植（port）**:
 engine のソースを TTWR から backcast へ移し、backcast を唯一の home にすること。
 submodule 参照でも pinned-package-from-TTWR でもない（TTWR は廃止されるため）。

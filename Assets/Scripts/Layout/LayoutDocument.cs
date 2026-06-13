@@ -124,6 +124,61 @@ public class PanelLayout
     public PanelLayout Clone() => new PanelLayout(id, slot, visible, rect?.Clone());
 }
 
+// FloatingWindowLayout — a free-floating window's persisted state (issue #15), the ADDITIVE
+// capability-surface item ADR-0003 reserved as "floating window の rect / z-order". Unlike a
+// PanelLayout/Hakoniwa tile (a 0..1 normalized display rect inside a bounded parent), a
+// floating window lives on the UNBOUNDED infinite canvas, so it persists ABSOLUTE CANVAS-
+// LOGICAL coordinates (findings 0008 §3, owner-locked):
+//   x,y  = the window's TOP-LEFT-pivot anchoredPosition in Content canvas-logical space
+//          (x right-positive, y up-positive; FloatingWindowLayer is identity under Content).
+//   w,h  = size in canvas-logical px (w,h > 0; LayoutStore drops an entry with non-finite/<=0).
+//   zOrder = front/back order, 0 = BACKMOST. Persisted VERBATIM (never normalized at load, so a
+//          hand-authored non-contiguous z survives the round-trip); the restore controller
+//          stable-normalizes it to a contiguous sibling index at Apply time.
+//   kind = the spec key the catalog re-spawns from (e.g. "strategy_editor"); kept DISTINCT from
+//          `id` so multiple instances share a kind (id="strategy_editor:region_001"). An unknown
+//          kind is PRESERVED here (LayoutStore never drops it); the controller skips its spawn.
+//   id   = unique within the document (LayoutStore keeps the FIRST on a duplicate, drops the rest).
+// zOrder is the field findings 0004 §3 reserved as separate from PanelLayout.slot — they are NOT
+// the same dimension. UnityEngine-free POCO (JsonUtility binds by verbatim field name).
+[Serializable]
+public class FloatingWindowLayout
+{
+    public string id;
+    public string kind;
+    public float x;
+    public float y;
+    public float w;
+    public float h;
+    public int zOrder;
+    public bool visible;
+
+    public FloatingWindowLayout() { }
+
+    public FloatingWindowLayout(string id, string kind, float x, float y, float w, float h, int zOrder, bool visible)
+    {
+        this.id = id;
+        this.kind = kind;
+        this.x = x;
+        this.y = y;
+        this.w = w;
+        this.h = h;
+        this.zOrder = zOrder;
+        this.visible = visible;
+    }
+
+    public FloatingWindowLayout Clone() => new FloatingWindowLayout(id, kind, x, y, w, h, zOrder, visible);
+
+    public static bool Approx(FloatingWindowLayout a, FloatingWindowLayout b, float eps)
+    {
+        if (a == null || b == null) return a == b;
+        return a.id == b.id && a.kind == b.kind
+            && Math.Abs(a.x - b.x) <= eps && Math.Abs(a.y - b.y) <= eps
+            && Math.Abs(a.w - b.w) <= eps && Math.Abs(a.h - b.h) <= eps
+            && a.zOrder == b.zOrder && a.visible == b.visible;
+    }
+}
+
 [Serializable]
 public class LayoutDocument
 {
@@ -139,6 +194,12 @@ public class LayoutDocument
     // LayoutStore.Sanitize(). NOT identified with any panel's LayoutRect (separate
     // dimension, findings 0006 §3).
     public CanvasView canvasView;
+
+    // Floating windows on the infinite canvas (issue #15). ADDITIVE: an old #12/#13 sidecar
+    // lacking this field loads with panels/canvasView intact and floatingWindows normalized
+    // to an EMPTY list by LayoutStore.Sanitize(). A separate dimension from panels (tiles are
+    // grid slots; windows are free placement in canvas-logical space, findings 0008 §3).
+    public List<FloatingWindowLayout> floatingWindows;
 
     // Default ctor leaves version at the UNSET SENTINEL 0 (NOT CURRENT_VERSION) on
     // purpose: JsonUtility's treatment of a JSON-absent field (keep ctor value vs.
@@ -178,6 +239,7 @@ public class LayoutDocument
             new PanelLayout("run_result", 4, true, new LayoutRect(0.63f, 0.00f, 1.00f, 0.25f)),
         };
         doc.canvasView = CanvasView.Identity();   // no pan, 100% (findings 0006 §3)
+        doc.floatingWindows = new List<FloatingWindowLayout>();   // none open by default (findings 0008 §3)
         return doc;
     }
 
@@ -188,6 +250,12 @@ public class LayoutDocument
             foreach (var p in panels)
                 if (p != null) doc.panels.Add(p.Clone());
         doc.canvasView = canvasView?.Clone();
+        if (floatingWindows != null)
+        {
+            doc.floatingWindows = new List<FloatingWindowLayout>(floatingWindows.Count);
+            foreach (var w in floatingWindows)
+                if (w != null) doc.floatingWindows.Add(w.Clone());
+        }
         return doc;
     }
 
@@ -196,6 +264,14 @@ public class LayoutDocument
         if (panels == null || id == null) return null;
         for (int i = 0; i < panels.Count; i++)
             if (panels[i] != null && panels[i].id == id) return panels[i];
+        return null;
+    }
+
+    public FloatingWindowLayout FindWindow(string id)
+    {
+        if (floatingWindows == null || id == null) return null;
+        for (int i = 0; i < floatingWindows.Count; i++)
+            if (floatingWindows[i] != null && floatingWindows[i].id == id) return floatingWindows[i];
         return null;
     }
 
@@ -212,6 +288,23 @@ public class LayoutDocument
         // Default() carries identity, and they must compare equal. Coalesce before Approx.
         if (!CanvasView.Approx(a.canvasView ?? CanvasView.Identity(),
                                b.canvasView ?? CanvasView.Identity(), eps)) return false;
+        // floatingWindows matched BY id (list order incidental, like panels). A null list and
+        // an empty list are the SAME state (no windows): a freshly-Captured doc with no windows
+        // and Default() both carry empty, but a missing field can land as null. Coalesce counts.
+        int wa = a.floatingWindows?.Count ?? 0;
+        int wb = b.floatingWindows?.Count ?? 0;
+        if (wa != wb) return false;
+        if (wa > 0)
+        {
+            foreach (var fa in a.floatingWindows)
+            {
+                if (fa == null) return false;
+                var fb = b.FindWindow(fa.id);
+                if (fb == null) return false;
+                if (!FloatingWindowLayout.Approx(fa, fb, eps)) return false;
+            }
+        }
+
         int ca = a.panels?.Count ?? 0;
         int cb = b.panels?.Count ?? 0;
         if (ca != cb) return false;

@@ -136,6 +136,7 @@ public static class LayoutStore
     static void Sanitize(LayoutDocument doc)
     {
         NormalizeCanvasView(doc);
+        NormalizeFloatingWindows(doc);
 
         if (doc.panels == null)
         {
@@ -143,6 +144,39 @@ public static class LayoutStore
             return;
         }
         doc.panels.RemoveAll(p => p == null || string.IsNullOrEmpty(p.id) || p.rect == null);
+    }
+
+    // floatingWindows normalization (issue #15, findings 0008 §3) — the persistence-boundary
+    // half of the contract. Drop entries the restore controller can't place: null, null/empty
+    // id OR kind, and non-finite/<=0 w/h (a degenerate size — and the spec-catalog minimum
+    // clamp is the SPAWN boundary's job, NOT a generic fallback here). Non-finite x/y -> 0 per
+    // axis (a recoverable position, not a drop). DUPLICATE id -> keep the FIRST, drop the rest
+    // (id is document-unique). An UNKNOWN kind is PRESERVED (the store has no catalog; the
+    // controller skips its spawn — forward-evolution discipline). zOrder is kept VERBATIM (the
+    // 0..n-1 contiguous normalization is the controller's Apply, so a non-contiguous hand-
+    // authored z survives the round-trip the gate asserts). Old #12/#13 sidecar -> empty list.
+    public static void NormalizeFloatingWindows(LayoutDocument doc)
+    {
+        if (doc == null) return;
+        if (doc.floatingWindows == null)
+        {
+            doc.floatingWindows = new System.Collections.Generic.List<FloatingWindowLayout>();
+            return;
+        }
+
+        var seen = new System.Collections.Generic.HashSet<string>();
+        var kept = new System.Collections.Generic.List<FloatingWindowLayout>(doc.floatingWindows.Count);
+        foreach (var w in doc.floatingWindows)
+        {
+            if (w == null) continue;
+            if (string.IsNullOrEmpty(w.id) || string.IsNullOrEmpty(w.kind)) continue;
+            if (!IsFinite(w.w) || !IsFinite(w.h) || w.w <= 0f || w.h <= 0f) continue;  // degenerate size -> drop
+            if (!seen.Add(w.id)) continue;                                             // duplicate id -> keep first
+            if (!IsFinite(w.x)) w.x = 0f;
+            if (!IsFinite(w.y)) w.y = 0f;
+            kept.Add(w);
+        }
+        doc.floatingWindows = kept;
     }
 
     // canvasView normalization (issue #13, findings 0006 §3) — the AUTHORITATIVE place

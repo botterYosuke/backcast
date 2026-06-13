@@ -1,12 +1,12 @@
 // VizSpikeHarness.cs — issue #8 viz-spike (Phase 4)
 //
 // Proves the numpy -> GraphicsBuffer zero-copy -> GPU path under Windows / Unity Mono /
-// D3D11. A worker thread (the ONLY thread that ever takes the GIL) generates a fresh
+// D3D12. A worker thread (the ONLY thread that ever takes the GIL) generates a fresh
 // np.sin ndarray every iteration via spike.viz_source.VizSource, and publishes the raw
 // data pointer through a CAS 4-state, 3-slot, latest-wins handshake. The main thread
 // (GIL-FREE forever after BeginAllowThreads) wraps the live pointer in a NativeArray
 // (Allocator.None, AtomicSafetyHandle around SetData) and uploads it to a Structured
-// GraphicsBuffer with NO app-layer copy, then renders it with Graphics.RenderPrimitives
+// GraphicsBuffer with NO app-layer copy, then renders it via endCameraRendering + DrawProceduralNow
 // (LineStrip) + the VizSpike/SineLine StructuredBuffer shader.
 //
 // LIFETIME (most important): numpy memory is owned by Python; VizSource._slots keeps each
@@ -98,8 +98,11 @@ public class VizSpikeHarness : MonoBehaviour
     GraphicsBuffer _gpuBuffer;
     Material _material;
     int   _frameCount;
-    int   _renderedFrames;      // frames where the sine was actually drawn (assert 7 + GREEN gate)
+    int   _renderedFrames;      // draw-callback frames (assert 7 = draw continuity; main never stops drawing)
     int   _lastRenderedFrame = -1; // de-dupe rendered count if >1 game camera fires per frame
+    long  _lastUploadedGen;     // gen of the most recent successful upload (read by the draw hook)
+    long  _lastDrawnGen;        // last uploaded gen the draw hook has already counted as drawn
+    int   _distinctDrawn;       // distinct uploaded generations that reached a draw callback (GREEN gate)
     bool  _haveUploadedOnce;
     int   _hitchFrames;
     float _maxDtAfterStart;
@@ -111,8 +114,8 @@ public class VizSpikeHarness : MonoBehaviour
     // these baselines so generated/uploaded/rendered/hitches are all measured post-warmup.
     const int WARMUP_FRAMES = 30;
     bool _measureStarted;
-    long _genBaseline, _uploadedBaseline, _upGenBaseline, _bytesBaseline;
-    int  _renderedBaseline;
+    long _genBaseline, _uploadedBaseline, _upGenBaseline, _bytesBaseline, _droppedBaseline;
+    int  _renderedBaseline, _distinctDrawnBaseline;
 
     // TURNKEY auto-bootstrap — gated OFF + batchmode-guarded (see header). Phase 5 flips true.
     const bool AutoBootstrapEnabled = false;
@@ -307,11 +310,13 @@ public class VizSpikeHarness : MonoBehaviour
         // so reaching WARMUP_FRAMES proves drawing is live before measurement begins.
         if (!_measureStarted && _renderedFrames >= WARMUP_FRAMES)
         {
-            _genBaseline      = Interlocked.Read(ref _generated);
-            _uploadedBaseline = Interlocked.Read(ref _setDataCalls);
-            _upGenBaseline    = Interlocked.Read(ref _uploadedGenerations);
-            _bytesBaseline    = Interlocked.Read(ref _uploadedBytes);
-            _renderedBaseline = _renderedFrames;
+            _genBaseline           = Interlocked.Read(ref _generated);
+            _uploadedBaseline      = Interlocked.Read(ref _setDataCalls);
+            _upGenBaseline         = Interlocked.Read(ref _uploadedGenerations);
+            _bytesBaseline         = Interlocked.Read(ref _uploadedBytes);
+            _droppedBaseline       = Interlocked.Read(ref _dropped);
+            _renderedBaseline      = _renderedFrames;
+            _distinctDrawnBaseline = _distinctDrawn;
             _hitchFrames = 0; _maxDtAfterStart = 0f; _setDataMicros.Clear();
             _measureStarted = true;
         }
@@ -352,6 +357,13 @@ public class VizSpikeHarness : MonoBehaviour
         {
             DoUpload(ptr, len);
             Interlocked.Increment(ref _uploadedGenerations);   // success path only (skipped if DoUpload threw)
+            _lastUploadedGen = _gen[bestI];                    // record uploaded gen so the draw hook can count it distinct
+        }
+        catch (Exception e)
+        {
+            // A SetData / upload exception must LATCH FAIL — never be swallowed, or 300 later
+            // successes would produce a false PASS.
+            Fail("upload: " + e);
         }
         finally
         {
@@ -407,21 +419,25 @@ public class VizSpikeHarness : MonoBehaviour
         // been drawn for WARMUP_FRAMES frames). PASS therefore implies real rendering.
         if (!_measureStarted) return;
 
-        long generated = Interlocked.Read(ref _generated) - _genBaseline;
-        long uploaded  = Interlocked.Read(ref _setDataCalls) - _uploadedBaseline;
-        long rendered  = _renderedFrames - _renderedBaseline;
-        if (generated < TARGET_FRAMES || uploaded < TARGET_FRAMES || rendered < TARGET_FRAMES) return;
+        long generated     = Interlocked.Read(ref _generated) - _genBaseline;
+        long uploaded      = Interlocked.Read(ref _setDataCalls) - _uploadedBaseline;
+        long rendered      = _renderedFrames - _renderedBaseline;
+        long distinctDrawn = _distinctDrawn - _distinctDrawnBaseline;
+        if (generated < TARGET_FRAMES || uploaded < TARGET_FRAMES || rendered < TARGET_FRAMES ||
+            distinctDrawn < TARGET_FRAMES) return;
 
         long upGen = Interlocked.Read(ref _uploadedGenerations) - _upGenBaseline;
         long bytes = Interlocked.Read(ref _uploadedBytes) - _bytesBaseline;
 
         // final asserts 6, 7, 8 + D3D12 backend + non-stall + alias latch (all post-warmup deltas)
         if (uploaded != upGen) { LatchFail($"assert6 setDataCalls={uploaded} uploadedGenerations={upGen}"); return; }
-        // assert7: every uploaded gen must eventually be rendered, allowing ONE in-flight upload
-        // not yet drawn. ConsumeLatestReady increments setDataCalls in-frame during Update, but the
-        // matching OnEndCameraRendering fires AFTER Update, so at a boundary uploaded==rendered+1 for
-        // a single pipeline-depth frame. This is the in-flight allowance, NOT abandoning the
-        // uploaded<=rendered invariant — anything beyond +1 still fails.
+        // assert7 (draw-callback CONTINUITY, not per-upload draw proof): the main thread keeps issuing
+        // draw callbacks while uploads happen — renderedFrames must keep pace with setDataCalls, allowing
+        // ONE in-flight upload not yet drawn (ConsumeLatestReady bumps setDataCalls in-frame during Update,
+        // but the matching OnEndCameraRendering fires AFTER Update, so at a boundary uploaded==rendered+1
+        // for one pipeline-depth frame; anything beyond +1 means main stopped drawing -> fail).
+        // Proof that each UPLOADED generation actually reached a draw is carried by distinctDrawn below,
+        // NOT by this counter (renderedFrames also advances on identical-content redraws).
         if (uploaded > rendered + 1) { LatchFail($"assert7 setDataCalls={uploaded} renderedFrames={rendered}"); return; }
         long expectBytes = uploaded * (long)N_POINTS * STRIDE;
         if (bytes != expectBytes) { LatchFail($"assert8 bytes={bytes} expect={expectBytes}"); return; }
@@ -430,10 +446,11 @@ public class VizSpikeHarness : MonoBehaviour
         if (_hitchFrames != 0) { LatchFail($"hitches={_hitchFrames} maxDt={_maxDtAfterStart * 1000f:0.#}ms"); return; }
 
         Percentiles(out double p50, out double p95, out double max);
+        long dropped = Interlocked.Read(ref _dropped) - _droppedBaseline;   // post-warmup drops (same window as gen/uploaded/rendered)
 
         _passLogged = true;
         Debug.Log($"[VIZ SPIKE PASS] python={_pyVersion} numpy={_npVersion} points={N_POINTS}");
-        Debug.Log($"gen={generated} uploaded={uploaded} rendered={rendered} dropped={Interlocked.Read(ref _dropped)} frames={_frameCount}");
+        Debug.Log($"gen={generated} uploaded={uploaded} rendered={rendered} distinctDrawn={distinctDrawn} dropped={dropped} frames={_frameCount}");
         Debug.Log($"maxDt={_maxDtAfterStart * 1000f:0.#}ms hitches=0 uploadP50={p50:0}us uploadP95={p95:0}us uploadMax={max:0}us");
         Debug.Log($"ptrAlias=OK setDataCalls={uploaded} bytes={bytes} D3D12=OK");
     }
@@ -473,6 +490,14 @@ public class VizSpikeHarness : MonoBehaviour
         _material.SetPass(0);
         Graphics.DrawProceduralNow(MeshTopology.LineStrip, N_POINTS);
         if (_lastRenderedFrame != _frameCount) { _lastRenderedFrame = _frameCount; _renderedFrames++; }
+        // distinctDrawn: count each UPLOADED generation the first time it is the live buffer content at
+        // a draw callback. Unlike _renderedFrames (which also bumps on identical-content redraws), this
+        // proves each uploaded gen reached the GPU draw path. Both run on the main thread (no sync).
+        if (_lastUploadedGen != 0 && _lastUploadedGen != _lastDrawnGen)
+        {
+            _lastDrawnGen = _lastUploadedGen;
+            _distinctDrawn++;
+        }
     }
 
     void OnDestroy()

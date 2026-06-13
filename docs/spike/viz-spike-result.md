@@ -24,18 +24,21 @@
 
 **FINAL GREEN（Windows / Mono / D3D12）。**
 
-owner playmode 目視ゲート（2026-06-13）で **「画面に緑の sine が連続して動いた」** ことを確認。同時に Console で以下の latch ログを取得（verbatim）:
+owner playmode 目視ゲート（2026-06-13）で PASS 判定（owner verbatim: **「緑の曲線の動きが早すぎてわからなかったけど PASS」**）。sine は連続描画されたが波形アニメーションは速すぎて目視追跡は困難で、各 upload の draw 到達は下記 `distinctDrawn=300` が機構的に証明する（PASS は gate＝distinctDrawn＋assert 群で確定し、人間の目視追跡には依存しない）。同時に Console で以下の latch ログを取得（verbatim）:
 
 ```
 [VIZ SPIKE PASS] python=3.13.11 numpy=2.4.6 points=4096
-gen=486 uploaded=300 rendered=300 dropped=791 frames=332
-maxDt=22.4ms hitches=0 uploadP50=2us uploadP95=9us uploadMax=46us
+gen=482 uploaded=300 rendered=300 distinctDrawn=300 dropped=182 frames=332
+maxDt=22.7ms hitches=0 uploadP50=2us uploadP95=9us uploadMax=17us
 ptrAlias=OK setDataCalls=300 bytes=4915200 D3D12=OK
 ```
 
 - `bytes=4915200 = 300 × 4096 × 4`（assert⑧ 成立）。
 - `rendered=300`（実描画フレーム数）、`hitches=0`（warmup 後）、`OnDestroy` まで crash なし。
+- `distinctDrawn=300`: 300 個の distinct な uploaded 世代が、それぞれ draw callback 時点で live GraphicsBuffer の内容として実描画に到達したことの計測（owner レビュー #2 で assert⑦ の弱さを補強）。
 - = numpy ndarray から GPU までの interop seam が Windows / Mono / D3D12 上で機構的に成立。
+
+> **履歴**: owner レビュー（2026-06-13）で #1 upload 例外を FAIL ラッチ・#2 `distinctDrawn`（upload 済み世代が draw callback 時点で live buffer 内容だった distinct 数）を GREEN 条件 `≥300` に追加・#3 PASS 行 header 追加・#4 `dropped` を warmup 後デルタへ変更、を反映後の再走で上記 GREEN を確定した（数値は実測のみ・捏造なし）。
 
 ---
 
@@ -68,10 +71,12 @@ TTWR の参照 pin は numpy `2.4.4` だが、本 venv は pyproject の `numpy>
 4. ptr が非 zero かつ 4-byte aligned
 5. `NativeArray.GetUnsafePtr == numpy ptr`（ptr alias 実測）
 6. `setDataCalls == uploadedGenerations`
-7. `setDataCalls <= renderedFrames`
+7. `setDataCalls <= renderedFrames + 1` — **draw callback の継続性**（main が描画を止めず draw callback を出し続けている連続性。in-flight な 1 upload を許容）を示すもので、**「各 upload が実描画された」ことは保証しない**（`renderedFrames` は同一 GPU 内容の再描画でも増えるため）。各 upload が draw に到達した証跡は下記 `distinctDrawn` が担う。
 8. `uploadedBytes == setDataCalls × len × 4`
 
-console latch の `ptrAlias=OK` / `setDataCalls=300` / `bytes=4915200` がこれらの成立を示す。
+加えて **`distinctDrawn`**（upload 成功時に記録した世代が draw callback 時点で live buffer の内容だった **distinct な世代数**）を GREEN 条件 `≥ 300` に追加した。これが「**uploaded generation が draw に到達した**」ことの証跡であり、assert⑦ の連続性チェックと役割を分離している。なお **実画面への表示（緑の sine が動いて見えること）の最終証跡は owner の playmode 目視ゲート**であり、distinctDrawn は GPU draw 経路への到達までを機械的に立証する。
+
+console latch（§1）の `ptrAlias=OK` / `setDataCalls=300` / `bytes=4915200` が assert①〜⑧ の成立を示し、`distinctDrawn=300` が各 upload の draw 到達を立証する。
 
 ---
 
@@ -94,7 +99,7 @@ owner 確定の狭めた文言:
 ## 7. handshake 設計要点
 
 - **CAS 4-state**: `Free → Writing → Ready → Reading → Free` を CompareExchange で遷移。
-- **世代番号 + latest-wins drop**: 消費が追いつかない世代は drop（latch の `dropped=791`）。main は常に最新世代のみを読む。
+- **世代番号 + latest-wins drop**: 消費が追いつかない世代は drop（latch の `dropped=182`）。main は常に最新世代のみを読む。
 - **Python 参照解放は worker が GIL 下でのみ行う**。main スレッドは GIL を一切取らず、生 ptr のみを読む。
 - **AtomicSafetyHandle**: NativeArray ラップ毎に wrap し、Unity safety system と整合させる。
 - **描画**: URP の `endCameraRendering` で `DrawProceduralNow` を呼ぶ。即時の `RenderPrimitives` は URP のパイプラインに注入されなかったため不採用。
@@ -113,12 +118,12 @@ owner 確定の狭めた文言:
 
 | 指標 | 値 |
 |---|---|
-| maxDt | 22.4 ms |
+| maxDt | 22.7 ms |
 | upload P50 | 2 us |
 | upload P95 | 9 us |
-| upload Max | 46 us |
+| upload Max | 17 us |
 | hitches（warmup 後） | 0 |
-| generated / uploaded / rendered / dropped | 486 / 300 / 300 / 791 |
+| generated / uploaded / rendered / distinctDrawn / dropped | 482 / 300 / 300 / 300 / 182 |
 | frames | 332 |
 
 generated 後半の throughput は参考値（latch は warmup 後の measured 区間）。容量・throughput の本格評価は §5 のとおり別 issue。

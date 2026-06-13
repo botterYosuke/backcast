@@ -363,15 +363,16 @@ import-purity 権威ゲート PASS）:
   有限・正数検証を追加（不正値を venue へ送らず order 据え置き）。
   test: `test_mock_live_invalid_quantity_denied_before_venue` / `test_broker_modify_rejects_invalid_new_qty`。
 
-> **未確認事項（#25 完了判定の留保）**: 下記 **Unity-Mono full Live gate（D5 layer 3）は未実施**。CPython 全ゲート
-> （116 passed）と import-purity 権威ゲート（fresh subprocess full LiveAuto）は GREEN だが、Mono+pythonnet 上の
-> full Live teardown probe は owner が Windows で手動実行するまで **未検証**。最終完了サマリーではこのゲートを
-> 未確認として扱うこと。
+> **Unity-Mono full Live gate（D5 layer 3）実施済み・GREEN（2026-06-14）**: `KernelLiveProbe.Run` を Unity
+> 6000.4.11f1 batchmode（`-nographics -quit`）で実行し **exit 0 / PASS**。ログ（`C:\tmp\kernel_live_probe.log`）に
+> `[KERNEL LIVE PASS] full mock LiveAuto ran under Unity-Mono ... Rust core absent, Shutdown clean`、FAIL マーカー 0、
+> 新規 Unity crash dump 無し（実行前後で計 10 件のまま・最新は実行前日付）。これで CPython 全ゲート（116 passed）・
+> import-purity 権威ゲート・Mono full Live teardown の 3 層すべて GREEN となり、**#25 の残ゲートは解消**。
 
 > 注: 本 findings は #16（Strategy Editor）が `docs/findings/0010-strategy-editor.md` を採番したため
 > **0010 → 0011 にリネーム**（番号衝突回避）。
 
-**残 manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行・未実施）**:
+**manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行）— 実施済み GREEN（2026-06-14・exit 0）**:
 `Assets/Editor/KernelLiveProbe.cs`（`KernelTeardownProbe` 同型）。`run_mock_live.run()` を Mono+pythonnet で
 完走させ fills=2/final_net=0/realized=200・`leaked==0`・clean `PythonEngine.Shutdown`・exit 0・新規 crash dump
 無しを確認する。`KernelTeardownProbe`（Replay のみ）の Live 拡張。

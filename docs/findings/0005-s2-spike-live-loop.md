@@ -8,7 +8,8 @@
 - 実行環境（先行 slice と同一）: Intel x86_64 / macOS 13.7.8 / Unity 6000.4.11f1（standalone=Mono）/ CPython 3.13.13 / nautilus 非依存
 
 > **状態: AFK ゲート GREEN（Mac leg, 2026-06-13）。** 設計は `grill-with-docs` で確定、直接実装（Python seam model + C# Mono probe の 2 言語だが、grill で仕様完全ロック・単一契約・~4 ファイル）。`S2SpikeLiveLoopProbe.Run` が batchmode で `exit=0`、CS エラー 0、例外 0。CPython smoke も 3 連続 GREEN。実装結果は §8。
-> **未了（owner 手元）**: ① **playmode render leg**（実 Unity フレーム cadence）は default-disabled harness を owner が手動再走（§6）。② **Windows leg**（ADR-0001: deploy OS=Windows で最終的に通す。Mac-green は `win_amd64` を保証しない）。
+> **Windows headless leg も GREEN（2026-06-13、#18 / Step2 prereq）**: 本 win_amd64 マシン（CPython 3.13.11 / Unity 6000.4.11f1 Mono）で `S2SpikeLiveLoopProbe.Run` を batchmode 実行し PASS。`PythonRuntimeLocator` を OS 分岐させ Windows uv home を `pyvenv.cfg` の `home=` から導出（実測値は §8）。CPython smoke も Windows venv で PASS。
+> **未了（owner 手元）**: ① **playmode render leg**（実 Unity フレーム cadence）は default-disabled harness を owner が手動再走（§6）。② **S0 Windows leg**（#18・別ゲート）— S2-spike とは別物で、threaded Nautilus backtest を Windows で通す。**⛔ RED**: catalog を `S:/artifacts` から stage 後に実行したところ、nautilus import + pin 検査は通るが **`BacktestEngine.run()` で segfault**（Windows-Mono 固有・3 回再現・stack 枯渇は除外済）。詳細・三点測量は `docs/spike/s0-result.md §1.1`。**ADR-0001 は accepted 昇格不可、#18/#4 は本 RED が解けるまで前進不可**（owner 判断事項）。
 
 ---
 
@@ -84,6 +85,17 @@ owner 確定の assertion 設計・閾値（`python/spike/s2spike_live_loop.py` 
   `[S2-SPIKE LIVE LOOP PASS] calls=10 median=0.0611s band=[0.0604,0.1055]s order=ACK:1 orderElapsed=0.0837s ticks=92 maxStall=12ms cancel_ran=True resting=0 reverse_order_guarded runtime_finalized`
   ＋ `runtime finalized in order (graceful_stop -> join -> loop teardown -> EndAllowThreads + Shutdown) without deadlock`。
   → median ≪ 0.25s、全 call が band 内、**maxStall=12ms ≪ 200ms**（main は最後まで GIL-free）、tick=92（loop 非 starve）、decision-6 cancel が marshal を通って完走、**runtime finalize が全順序で deadlock せず完了**。
+
+### 8.1 Windows leg（win_amd64, 2026-06-13・#18 / Step2 prereq）
+
+- **環境**: Windows 11 / CPython **3.13.11** win_amd64（production pin）/ nautilus-trader 1.226.0 / Unity 6000.4.11f1（Mono）。
+- **CPython smoke**（`python/.venv/Scripts/python.exe python/spike/s2spike_live_loop.py`）:
+  `[S2-SPIKE LIVE LOOP PASS] calls=10 median=0.0644s band=[0.0602,0.0745]s ticks=106 order=ACK:1 cancel_ran=True resting=0 reverse_order_guarded` / `exit=0`。
+- **Mono headless probe**（batchmode `-executeMethod S2SpikeLiveLoopProbe.Run`、`UNITY_EXIT=0`、CS エラー 0、例外 0）:
+  `[S2-SPIKE LIVE LOOP PASS] calls=10 median=0.0621s band=[0.0602,0.0652]s order=ACK:1 orderElapsed=0.0687s ticks=103 maxStall=18ms cancel_ran=True resting=0 reverse_order_guarded runtime_finalized`
+  ＋ `runtime finalized in order (graceful_stop -> join -> loop teardown -> EndAllowThreads + Shutdown) without deadlock`。
+  → Mac leg と同水準（maxStall=18ms ≪ 200ms、median ≪ 0.25s、全順序 deadlock-free）。**deploy OS=Windows でも cross-thread asyncio marshal + shutdown 順序が健全**。
+- **runtime 解決の差分**（slice-level fact・ADR-0002「方針」参照のみ・ADR 非編集）: `PythonRuntimeLocator` を `Application.platform == WindowsEditor` で分岐。Windows は uv CPython home を `python/.venv/pyvenv.cfg` の `home=`（= `…\cpython-3.13.11-windows-x86_64-none`）から導出、libpython=`python313.dll`、venv site=`.venv\Lib\site-packages`。Mac 分岐（documented uv consts）は不変。
 
 ## 9. 判定
 

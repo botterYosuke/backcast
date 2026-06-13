@@ -33,6 +33,46 @@ nautilus 初ロードが重く、その完走時点で main が既に 300 フレ
 
 ---
 
+## 1.1 ⛔ Windows leg = RED（2026-06-13, #18 / Step2 prereq）— BacktestEngine.run が Windows-Mono で segfault
+
+**deploy OS（Windows）で S0 AC① が FAIL。** ADR-0001 が「唯一の非可逆コミットメントの前提」とした
+「Nautilus が Mono+pythonnet 上で load し**実 backtest を完走**できるか」が、**Windows-Mono では完走しない**。
+
+実行環境: Windows 11 / CPython **3.13.11** win_amd64（production pin）/ nautilus-trader 1.226.0 / Unity 6000.4.11f1（Mono）/ `S0EditorProbe.Run` batchmode。
+
+**正確な落下段階（段階マーカーで特定・3 回再現）**:
+
+```
+[S0 PROBE MARK] configured (python313.dll / Windows uv home / .venv\Lib\site-packages)  ✓
+[S0 PROBE MARK] PythonEngine.Initialize OK                                              ✓
+[S0 PROBE MARK] BeginAllowThreads OK; starting worker                                   ✓
+[S0 PROBE MARK] worker GIL acquired                                                     ✓
+[S0 PROBE MARK] sys.path set; importing spike.s0_backtest (loads nautilus_pyo3)         ✓
+[S0 PROBE MARK] nautilus import OK; running gates                                       ✓   ← nautilus_pyo3 は LOAD する
+[S0 PROBE MARK] gates OK; running backtest                                              ✓   ← pin/footer (PRECISION_BYTES=8) PASS
+→ Crash!!! (Segmentation fault, exit 139) — S0EditorProbe.cs:136 = m.InvokeMethod("run_backtest") の中
+```
+
+**つまり load 失敗ではない**。`import nautilus_trader` + 精度 pin 検査までは Windows-Mono で通り、**`BacktestEngine.run()` の実行中に native segfault**する。
+
+**三点測量（原因の切り分け）**:
+- standalone Windows-CPython（同一 `python/.venv`）で同じ backtest は完走 → `[S0 BACKTEST OK] bars=204`。**wheel/venv 自体は健全**。
+- Mac-Mono では同じ probe が full backtest 完走（§1, `bars=204` / playmode `frames=1233`）。**Mono+pythonnet 一般の問題ではなく Windows 固有**。
+- nautilus 非依存の S2-spike は同一 Windows-Mono で GREEN（findings 0005 §8.1）→ **pythonnet の cross-thread/GIL marshal 一般の問題でもない**。
+- → 切り分け結果: **「Windows-Mono + pythonnet + nautilus Rust-core の backtest 実行」の組み合わせ固有**。
+
+**ruled out**: worker thread の stack 枯渇（明示 64 MiB stack でも同一段階で crash）。
+
+**証跡**: `C:/tmp/s0_win{,2,3,4}_*.log`（4 回、うち 3 回は段階マーカー付き）、crash dump `%LOCALAPPDATA%\CrashDumps\Unity.exe.*.dmp`。
+
+**含意（owner 判断事項・先回り設計しない＝ADR-0001 方針）**:
+- これは ADR-0001「Nautilus が Mono を拒んだ場合 → その場で分かった事実に基づいて考え直す」に該当。**対策（別プロセス化 / サブインタプリタ / engine 差し替え等）は先回り設計しない**。
+- **ADR-0001 は `accepted` に昇格できない**（昇格条件＝S0 Windows AC① 合格が FAIL）。`proposed` 据え置き。
+- **#18 / #4 は本 RED が解けるまで前進不可**（Live は backtest より重い Rust 実行 = live run loop を Windows-Mono で回すため、backtest が落ちる現状では live も通らない公算が高い）。
+- 次アクションは owner 判断で決める（候補の例: ① main-thread 実行や GC/thread 登録など crash 条件をさらに切り分ける追加診断、② nautilus 側 build flag / Mono 設定の調査、③ 別機構の検討 → **新規 superseding ADR**。ADR-0001 は self-protected のため edit しない）。
+
+---
+
 ## 2. 検証した本番 pin（16-byte → 8-byte 訂正の経緯）
 
 issue #2 / ADR-0001 の元の pin は「16-byte (high-precision) stock wheel」を前提にしていたが、これは本番 catalog と矛盾していた:

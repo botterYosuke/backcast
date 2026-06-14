@@ -143,7 +143,7 @@ class SafetyRails:
         *,
         instrument_id: str,
         order_notional_jpy: float,
-        current_position_value_jpy: float,
+        projected_position_value_jpy: float | None,
         increases_exposure: bool = True,
     ) -> RailViolation | None:
         """独自 pre-trade rail を評価する。違反なら `RailViolation`、OK なら `None`。
@@ -154,9 +154,15 @@ class SafetyRails:
         - `allowed_instruments`: 空なら制限なし（起動時 instrument のみは gRPC 層が別途強制）。
           非空かつ instrument_id が含まれなければ違反。
         - `max_order_value_jpy`: 1 注文の概算約定金額が上限超過なら違反（方向非依存、0 は無効）。
-        - `max_position_size_jpy`: |既存ポジション金額| + 新規注文金額 が上限超過なら違反（0 は無効）。
-          **建玉を増やす注文（`increases_exposure=True`）にのみ適用**する。返済/手仕舞いはエクスポージャを
-          減らすので cap で止めない（決済を弾くとリスクを下げる注文を阻害＝保守の向きが逆になる・#25 review）。
+        - `max_position_size_jpy`: **約定後の建玉の時価評価額**が上限超過なら違反（0 は無効）。
+          評価額は呼び出し側が `abs(net_signed_qty + signed_order_qty) × reference_price` で算出して
+          `projected_position_value_jpy` に渡す（#25 review findings 2/3）。旧実装の
+          「取得原価 + 新規注文金額」は (a) 値上がり後に取得原価で判定するので上限を回避でき
+          （finding 2）、(b) flat を跨ぐ反対売買で最終建玉ではなく現建玉+注文額を二重計上して
+          過大拒否する（finding 3）ため誤り。**建玉を増やす注文（`increases_exposure=True`）にのみ
+          適用**する（返済/手仕舞いはエクスポージャを減らすので cap で止めない・#25 review finding 4）。
+          参照価格が無く評価額を算出できない（`None`）場合は評価不能としてこの rail を課さない
+          （kernel 経路は参照価格未取得時に上位で NO_REFERENCE_PRICE deny 済み・finding 1）。
         """
         allowed = self._limits.allowed_instruments
         if allowed and instrument_id not in allowed:
@@ -175,13 +181,16 @@ class SafetyRails:
             )
 
         cap = self._limits.max_position_size_jpy
-        if cap > 0 and increases_exposure:
-            projected = abs(current_position_value_jpy) + abs(order_notional_jpy)
-            if projected > cap:
-                return RailViolation(
-                    KIND_MAX_POSITION_SIZE,
-                    f"projected position {projected:.0f} JPY exceeds cap {cap} JPY",
-                )
+        if (
+            cap > 0
+            and increases_exposure
+            and projected_position_value_jpy is not None
+            and projected_position_value_jpy > cap
+        ):
+            return RailViolation(
+                KIND_MAX_POSITION_SIZE,
+                f"projected position {projected_position_value_jpy:.0f} JPY exceeds cap {cap} JPY",
+            )
         return None
 
     def check_post_trade(self, *, daily_pnl_jpy: float) -> RailViolation | None:

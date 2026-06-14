@@ -44,7 +44,7 @@ def _order(cid="O-1", side=OrderSide.BUY, qty=100.0, instrument="8918.TSE"):
 def test_precheck_pass_leaves_initialized():
     eng = _engine()
     order = _order()
-    violation = eng.precheck(order, net_signed_qty=0.0, current_position_value_jpy=0.0)
+    violation = eng.precheck(order, net_signed_qty=0.0, reference_price=0.0)
     assert violation is None
     # precheck は次の遷移を caller に委ねる（Live は SUBMITTED へ、Replay は submit() が ACCEPTED へ）。
     assert order.status is OrderStatus.INITIALIZED
@@ -53,7 +53,7 @@ def test_precheck_pass_leaves_initialized():
 def test_submit_pass_sets_accepted_replay_compat():
     eng = _engine()
     order = _order()
-    violation = eng.submit(order, net_signed_qty=0.0, current_position_value_jpy=0.0)
+    violation = eng.submit(order, net_signed_qty=0.0, reference_price=0.0)
     assert violation is None
     assert order.status is OrderStatus.ACCEPTED
 
@@ -62,7 +62,7 @@ def test_precheck_violation_denies():
     rails = SafetyRails(SafetyLimits(allowed_instruments=("7203.TSE",)))
     eng = _engine(rails=rails)
     order = _order(instrument="8918.TSE")  # not allowlisted
-    violation = eng.precheck(order, net_signed_qty=0.0, current_position_value_jpy=0.0)
+    violation = eng.precheck(order, net_signed_qty=0.0, reference_price=0.0)
     assert violation is not None
     assert order.status is OrderStatus.DENIED
     assert order.denied_reason
@@ -70,9 +70,9 @@ def test_precheck_violation_denies():
 
 def test_duplicate_client_order_id_raises():
     eng = _engine()
-    eng.precheck(_order(cid="DUP"), net_signed_qty=0.0, current_position_value_jpy=0.0)
+    eng.precheck(_order(cid="DUP"), net_signed_qty=0.0, reference_price=0.0)
     try:
-        eng.precheck(_order(cid="DUP"), net_signed_qty=0.0, current_position_value_jpy=0.0)
+        eng.precheck(_order(cid="DUP"), net_signed_qty=0.0, reference_price=0.0)
     except ValueError as exc:
         assert "DUP" in str(exc)
     else:  # pragma: no cover
@@ -86,7 +86,7 @@ def test_regulation_provider_denies_regulated_buy():
     # 規制中銘柄への建て増し（BUY）は deny。provider 経由で評価される（D6）。
     eng = _engine(regulation_provider=lambda: {"8918.TSE"})
     order = _order(side=OrderSide.BUY)
-    violation = eng.precheck(order, net_signed_qty=0.0, current_position_value_jpy=0.0)
+    violation = eng.precheck(order, net_signed_qty=0.0, reference_price=0.0)
     assert violation is not None
     assert order.status is OrderStatus.DENIED
 
@@ -97,14 +97,14 @@ def test_regulation_provider_failure_is_fail_closed():
 
     eng = _engine(regulation_provider=_boom)
     order = _order(side=OrderSide.BUY)
-    violation = eng.precheck(order, net_signed_qty=0.0, current_position_value_jpy=0.0)
+    violation = eng.precheck(order, net_signed_qty=0.0, reference_price=0.0)
     assert violation is not None  # fail-closed
 
 
 def test_no_regulation_provider_default_skips():
     eng = _engine()  # regulation_provider=None
     order = _order(side=OrderSide.BUY)
-    assert eng.precheck(order, net_signed_qty=0.0, current_position_value_jpy=0.0) is None
+    assert eng.precheck(order, net_signed_qty=0.0, reference_price=0.0) is None
 
 
 # ── Portfolio: seed + realized accrual ────────────────────────────────────────

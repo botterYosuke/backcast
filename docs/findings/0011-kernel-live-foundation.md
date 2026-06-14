@@ -363,15 +363,74 @@ import-purity 権威ゲート PASS）:
   有限・正数検証を追加（不正値を venue へ送らず order 据え置き）。
   test: `test_mock_live_invalid_quantity_denied_before_venue` / `test_broker_modify_rejects_invalid_new_qty`。
 
-> **未確認事項（#25 完了判定の留保）**: 下記 **Unity-Mono full Live gate（D5 layer 3）は未実施**。CPython 全ゲート
-> （116 passed）と import-purity 権威ゲート（fresh subprocess full LiveAuto）は GREEN だが、Mono+pythonnet 上の
-> full Live teardown probe は owner が Windows で手動実行するまで **未検証**。最終完了サマリーではこのゲートを
-> 未確認として扱うこと。
+### code-review 反映 round 6（#25 codex review・2026-06-14・GREEN 123 passed）
+
+会計を壊す High 2 件＋ Medium を修正。各 fix は RED→GREEN ガード付き（FLOWS.md は無く Python pytest）:
+
+- **建玉上限が取得原価で判定され値上がり後に回避できる（High・review finding 2）** — `max_position_size`
+  が `abs(取得原価) + 注文金額` で判定していたため、(a) 値上がり後は取得原価で上限を回避でき、(b) flat を跨ぐ
+  反対売買で最終建玉より過大評価して決済を過大拒否した（finding 3）。**約定後の符号付き建玉の時価評価
+  `abs(net_signed_qty + signed_order_qty) × reference_price` で判定**するよう `evaluate_pre_trade` が算出し
+  `SafetyRails.check_pre_trade` に `projected_position_value_jpy` を渡す。`reference_price` は driver（直近 close）
+  / runner（bar close）/ facade（指値）/ nautilus_exec_client（指値 or cache LAST）から供給。
+  test: `test_pre_trade_position_cap.py`（findings 2/3/4）/ `test_mock_live_position_cap_uses_market_value`。
+- **価格を伴わない fill を 0 円会計（High・review finding 1）** — `broker._apply_fill` の
+  `increment_px = order.avg_px` fallback が初回 fill を 0 円で会計し cash/建玉を破損。**正の有限な約定価格を伴わない
+  fill は会計せず fail-closed**（未約定からは REJECTED 終端、部分約定済みは不正増分のみ drop）。
+  test: `test_submit_unpriced_fill_is_rejected` / `test_unpriced_increment_after_partial_is_dropped`。
+
+### code-review 反映 round 7（#25 codex review・2026-06-14・GREEN 128 passed）
+
+会計を壊す High 2 件＋ FSM 通知不一致の Medium を修正。各 fix は RED→GREEN ガード付き（`uv run pytest -q`
+全 GREEN・full-chain purity PASS・`compileall` PASS）。findings 1/2 は round 6 の fail-closed fill 検証を
+`broker._fill_violation`（純粋判定）＋ `_invalid_fill_guard`（reject/drop 決定）に一般化して被覆:
+
+- **不正な累積約定数量で Portfolio が破損（High・review finding 1）** — `_apply_fill` が `filled_qty` の有限性と
+  注文数量上限を検証せず、`filled_qty=150`（order.quantity=100）で建玉 150、`filled_qty=inf` で `cash=NaN` /
+  `position=(inf, NaN)` を作った。**`0 < cumulative <= order.quantity` かつ有限の fail-closed 検証**を追加
+  （`FILL_NONFINITE_QTY` / `FILL_EXCEEDS_ORDER_QTY`）。
+  test: `test_nonfinite_cumulative_qty_is_rejected` / `test_overfill_cumulative_is_rejected`。
+- **正の累積平均でも増分価格が負になり得る（High・review finding 2）** — 50株@100 の後に累積 100株・平均@40 を
+  受けると増分価格 = (100×40 − 50×100)/50 = **-20**。負値が BUY fill として Portfolio に適用され現金が増える
+  誤会計になった。**増分価格に有限・正数検証**を追加（`FILL_NONPOSITIVE_INCREMENT_PRICE`、部分約定済みは drop）。
+  test: `test_negative_increment_price_is_dropped_after_partial`。
+- **EXPIRED が UI/strategy に CANCELED として通知（Medium・review finding 3）** — 内部 `order.status=EXPIRED`
+  なのに返す event が `OrderCanceled` のため projection が CANCELED に化け FSM と矛盾した。**`OrderExpired` を新設**し
+  broker が EXPIRED で emit、controller `_project_event` が `EXPIRED` を投影。
+  test: `test_expired_emits_order_expired_not_canceled` / `test_controller_projects_expired_as_expired`。
+
+### code-review 反映 round 8（#25 codex review・2026-06-14・GREEN 134 passed）
+
+会計を壊す High 2 件を修正。各 fix は RED→GREEN ガード付き（`uv run pytest -q` 全 GREEN・full-chain purity
+PASS・`compileall` PASS）:
+
+- **CANCELED/EXPIRED に embedded された約定を捨てる（High・review finding 1）** — terminal 判定が fill 適用より
+  先で、kabu modify が返す「取消中に部分約定・新規失敗」（`CANCELED, filled_qty=50, avg_price`・
+  `kabusapi_execution.py:441`）の約定が Portfolio に反映されず venue 建玉と desync した。terminal 結果でも
+  **累積数量 delta を先に会計してから** CANCELED/EXPIRED へ遷移する（`_apply_embedded_fill` ＝ fill ステータス非依存
+  の会計。malformed/増分無しは drop で terminal は維持）。`_fill_violation`/`_book_fill_increment` を `res.status`
+  非依存に一般化。test: `test_cancel_with_embedded_fill_is_accounted` / `test_expired_with_embedded_fill_is_accounted`
+  / `test_modify_cancel_with_embedded_fill_is_accounted`。
+- **数量訂正時に旧注文数量で FILLED 判定 / 既約定未満の縮小を受理（High・review finding 2）** — 100 株中 50 約定後
+  目標を 75 へ訂正し venue が `FILLED(75)` を返しても旧数量 100 と比較して PARTIALLY_FILLED に誤判定し、また
+  `new_qty=25`（既約定 50 未満）を受理して `quantity=25, filled_qty=50` の不整合を作った。**訂正前に
+  `new_qty >= filled_qty` を検証**して venue へ送らず据え置き、**約定成功時は新数量を `order.quantity` に反映**して
+  FSM 判定に使う。test: `test_modify_new_qty_drives_filled_determination` / `test_modify_new_qty_below_filled_is_rejected`。
+
+round 6/7/8 はいずれも純 Python の broker fill 検証・pre-trade rail・event 種別の変更で、C#/Mono teardown 経路や
+Rust-core 不在不変条件には触れないため、下記 Unity-Mono full Live gate（round 5 時点で GREEN 実行済み）は
+再実行不要（full-chain purity harness が Python 層で Rust-core 不在＋teardown を毎回再確認）。
+
+> **Unity-Mono full Live gate（D5 layer 3）実施済み・GREEN（2026-06-14）**: `KernelLiveProbe.Run` を Unity
+> 6000.4.11f1 batchmode（`-nographics -quit`）で実行し **exit 0 / PASS**。ログ（`C:\tmp\kernel_live_probe.log`）に
+> `[KERNEL LIVE PASS] full mock LiveAuto ran under Unity-Mono ... Rust core absent, Shutdown clean`、FAIL マーカー 0、
+> 新規 Unity crash dump 無し（実行前後で計 10 件のまま・最新は実行前日付）。これで CPython 全ゲート（116 passed）・
+> import-purity 権威ゲート・Mono full Live teardown の 3 層すべて GREEN となり、**#25 の残ゲートは解消**。
 
 > 注: 本 findings は #16（Strategy Editor）が `docs/findings/0010-strategy-editor.md` を採番したため
 > **0010 → 0011 にリネーム**（番号衝突回避）。
 
-**残 manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行・未実施）**:
+**manual gate（D5 layer 3・Unity-Mono full Live・owner が Windows で実行）— 実施済み GREEN（2026-06-14・exit 0）**:
 `Assets/Editor/KernelLiveProbe.cs`（`KernelTeardownProbe` 同型）。`run_mock_live.run()` を Mono+pythonnet で
 完走させ fills=2/final_net=0/realized=200・`leaked==0`・clean `PythonEngine.Shutdown`・exit 0・新規 crash dump
 無しを確認する。`KernelTeardownProbe`（Replay のみ）の Live 拡張。

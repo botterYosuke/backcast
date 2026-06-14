@@ -143,7 +143,6 @@ class ManualOrderFacade:
         second_secret: str | None = None,  # Step 2 では受理して無視（Step 5 で結線）
         buying_power: float | None = None,  # S4 #107: 余力（None=チェックしない）
         idempotency_key: str | None = None,  # S4 #107: 二重発注防止キー（None=従来通り）
-        current_position_value_jpy: float | None = None,  # #178: SafetyRails cap check
         regulated_instruments: list[str] | None = None,   # #178: 信用規制フィルター
         net_signed_qty: float | None = None,              # #178: 現在の符号付き建玉
     ) -> OrderEventData:
@@ -220,7 +219,9 @@ class ManualOrderFacade:
 
             # Pre-trade gate（rail 合成を evaluate_pre_trade に委譲 #199）。
             # 余力チェックは LIMIT caller 側の責務としてここより上で完結済み。
-            current_pos = current_position_value_jpy if current_position_value_jpy is not None else 0.0
+            # 建玉上限は約定後建玉の時価評価で判定する（#25 review findings 2/3）。参照価格は
+            # LIMIT の指値（effective_price）、MARKET は約定価格未確定なので None（cap 評価不能 →
+            # 不課・余力チェック同様 venue 任せ）。
             net_qty = net_signed_qty if net_signed_qty is not None else 0.0
             reg_provider = (lambda: regulated_instruments) if regulated_instruments is not None else None
             violation = evaluate_pre_trade(
@@ -228,7 +229,7 @@ class ManualOrderFacade:
                 is_buy=side_n == "BUY",
                 qty=qty,
                 order_notional_jpy=order_notional,
-                current_position_value_jpy=current_pos,
+                reference_price=effective_price,
                 net_signed_qty=net_qty,
                 rails=self._safety_rails,
                 regulation_provider=reg_provider,

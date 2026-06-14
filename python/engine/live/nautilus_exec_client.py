@@ -166,12 +166,13 @@ class NautilusVenueExecClient(LiveExecutionClient):
         # evaluate_pre_trade が合成順序を所有する（#199）:
         #   1. 信用規制（エクスポージャ増加のみ評価、fail-closed）
         #   2. allowlist + 建玉上限 (SafetyRails.check_pre_trade)
+        ref_price = self._reference_price(order)  # cache lookup を 1 回に集約（notional と共用）
         violation = evaluate_pre_trade(
             instrument_id=order.instrument_id.value,
             is_buy=order.side == OrderSide.BUY,
             qty=float(order.quantity),
-            order_notional_jpy=self._order_notional(order),
-            current_position_value_jpy=self._position_value(order.instrument_id),
+            order_notional_jpy=ref_price * float(order.quantity) if ref_price is not None else 0.0,
+            reference_price=ref_price,
             net_signed_qty=self._net_signed_qty(order.instrument_id),
             rails=self._rails,
             regulation_provider=self._regulation_provider,
@@ -396,22 +397,17 @@ class NautilusVenueExecClient(LiveExecutionClient):
         # から合成する（Step 5/6 で実 venue_order_id に差し替え）。
         return VenueOrderId(client_order_id.value)
 
-    def _order_notional(self, order) -> float:
-        """新規注文の概算約定金額（JPY）。price 不明（MARKET で market data 未供給）なら 0。"""
+    def _reference_price(self, order) -> float | None:
+        """約定後建玉の時価評価に使う参照価格（#25 review findings 2/3）。
+
+        指値があれば指値、無ければ cache の直近 LAST。どちらも無ければ `None`
+        （MARKET で market data 未供給 → 建玉上限は評価不能として不課）。
+        """
         if order.has_price:
-            return float(order.price) * float(order.quantity)
+            return float(order.price)
         instrument = self._cache.instrument(order.instrument_id)
         last = self._cache.price(order.instrument_id, _LAST) if instrument else None
-        if last is not None:
-            return float(last) * float(order.quantity)
-        return 0.0
-
-    def _position_value(self, instrument_id) -> float:
-        """当該 instrument の既存ポジション評価額（JPY、|qty|×avg_px）。無ければ 0。"""
-        total = 0.0
-        for pos in self._cache.positions_open(instrument_id=instrument_id):
-            total += abs(float(pos.quantity)) * float(pos.avg_px_open)
-        return total
+        return float(last) if last is not None else None
 
     def _net_signed_qty(self, instrument_id) -> float:
         """当該 instrument の符号付き建玉合計（long>0 / short<0 / flat=0）。

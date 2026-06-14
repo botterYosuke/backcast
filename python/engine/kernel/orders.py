@@ -109,6 +109,23 @@ class OrderCanceled:
 
 
 @dataclass
+class OrderExpired:
+    """Expiry confirmation (Live FSM → EXPIRED). Handed to Strategy.on_order.
+
+    Distinct from OrderCanceled so the external projection (UI / strategy.on_order) reports
+    EXPIRED, matching the internal `order.status` — collapsing it into OrderCanceled would make
+    the FSM state and the notified status disagree (#25 review finding 3).
+    """
+
+    client_order_id: str
+    venue_order_id: str
+    strategy_id: str
+    instrument_id: str
+    side: OrderSide
+    ts_event_ns: int
+
+
+@dataclass
 class OrderDenied:
     """Risk-denied event handed to Strategy.on_order (kind matches RailViolation.kind)."""
 
@@ -155,7 +172,7 @@ class OrderEngine:
         order: Order,
         *,
         net_signed_qty: float,
-        current_position_value_jpy: float,
+        reference_price: float | None,
         order_notional_jpy: float = 0.0,
     ) -> RailViolation | None:
         """Reserve the client_order_id (dup guard) + evaluate the pre-trade rail.
@@ -177,7 +194,7 @@ class OrderEngine:
             is_buy=order.side is OrderSide.BUY,
             qty=order.quantity,
             net_signed_qty=net_signed_qty,
-            current_position_value_jpy=current_position_value_jpy,
+            reference_price=reference_price,
             order_notional_jpy=order_notional_jpy,
         )
         if violation is not None:
@@ -190,7 +207,7 @@ class OrderEngine:
         order: Order,
         *,
         net_signed_qty: float,
-        current_position_value_jpy: float,
+        reference_price: float | None,
         order_notional_jpy: float = 0.0,
     ) -> RailViolation | None:
         """Replay submit: precheck + (on pass) transition to ACCEPTED.
@@ -202,7 +219,7 @@ class OrderEngine:
         violation = self.precheck(
             order,
             net_signed_qty=net_signed_qty,
-            current_position_value_jpy=current_position_value_jpy,
+            reference_price=reference_price,
             order_notional_jpy=order_notional_jpy,
         )
         if violation is None:

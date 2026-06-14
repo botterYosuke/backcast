@@ -27,6 +27,7 @@ from engine.kernel.orders import (
     OrderAccepted,
     OrderCanceled,
     OrderEngine,
+    OrderExpired,
     OrderFilled,
     OrderRejected,
     OrderStatus,
@@ -42,6 +43,15 @@ _TERMINAL_STATES = frozenset(
         OrderStatus.DENIED,
     }
 )
+
+
+def _is_finite_positive(value: float | None) -> bool:
+    """有限かつ正の数値か（`None` / NaN / inf / <=0 を弾く）。
+
+    価格・数量を venue へ送る／会計する前のガード。`> 0` 比較だけでは NaN を取りこぼす
+    （NaN との比較は常に False）ため isfinite を明示する。
+    """
+    return value is not None and math.isfinite(value) and value > 0
 
 
 class LiveBroker:
@@ -77,16 +87,7 @@ class LiveBroker:
             )
         except Exception as exc:  # noqa: BLE001 — adapter/venue 失敗は REJECTED に正規化
             order.status = OrderStatus.REJECTED
-            return [
-                OrderRejected(
-                    client_order_id=order.client_order_id,
-                    strategy_id=order.strategy_id,
-                    instrument_id=order.instrument_id,
-                    side=order.side,
-                    reason=f"ADAPTER_ERROR: {exc}",
-                    ts_event_ns=order.ts_last_ns,
-                )
-            ]
+            return [self._rejected(order, f"ADAPTER_ERROR: {exc}")]
         return self.apply_venue_update(order, res, source="submit_result")
 
     async def cancel(self, order: Order) -> list:
@@ -121,12 +122,16 @@ class LiveBroker:
 
         `new_qty` / `new_price` は **有限かつ正数**でなければ venue へ送らず order を据え置く（不正値を
         adapter に渡さない・#25 review finding 2）。`<= 0` だけでは NaN を取りこぼすため isfinite を明示。
+        `new_qty` が **既約定数量を下回る**訂正は不整合（`filled_qty > quantity`）になるので venue へ送らない
+        （#25 review round8 finding 2）。
         """
         if order.status in _TERMINAL_STATES:
             return []
-        if new_qty is not None and (not math.isfinite(new_qty) or new_qty <= 0):
+        if new_qty is not None and not _is_finite_positive(new_qty):
             return []
-        if new_price is not None and (not math.isfinite(new_price) or new_price <= 0):
+        if new_qty is not None and new_qty < order.filled_qty:
+            return []  # 既約定数量を下回る訂正は不整合・venue へ送らず据え置き（finding 2）
+        if new_price is not None and not _is_finite_positive(new_price):
             return []
         prior = order.status
         try:
@@ -140,9 +145,20 @@ class LiveBroker:
             order.status = prior
             return []
         if res.status == "CANCELED":
+            # 取消中の部分約定（kabu: 取消＋新規失敗を CANCELED+filled_qty で返す）を捨てず先に会計する
+            # （捨てると Portfolio が venue と desync・finding 1）。over-fill 判定が訂正後数量を使うよう
+            # is_filled 経路と同じく new_qty を先に反映する（数量増を伴う取消約定の取りこぼし防止）。
+            if new_qty is not None:
+                order.quantity = new_qty
+            fill_events = self._apply_embedded_fill(order, res, source="modify_result")
             order.status = OrderStatus.CANCELED
-            return [self._canceled(order)]
+            return [*fill_events, self._canceled(order)]
         if is_filled(res.status) and res.filled_qty > 0:
+            if new_qty is not None:
+                order.quantity = new_qty  # 訂正後数量で over-fill / FILLED 判定する（finding 2）
+            invalid = self._invalid_fill_guard(order, res)
+            if invalid is not None:
+                return invalid
             return self._apply_fill(order, res, source="modify_result")
         if is_terminal(res.status):
             # modify 拒否系 terminal（REJECTED/DENIED/EXPIRED 等）: 更新を適用せず元状態へ復帰
@@ -181,28 +197,31 @@ class LiveBroker:
                 return [self._canceled(order)]
             order.status = OrderStatus.REJECTED
             order.denied_reason = res.reject_reason or "REJECTED"
-            events.append(
-                OrderRejected(
-                    client_order_id=order.client_order_id,
-                    strategy_id=order.strategy_id,
-                    instrument_id=order.instrument_id,
-                    side=order.side,
-                    reason=order.denied_reason,
-                    ts_event_ns=order.ts_last_ns,
-                )
-            )
+            events.append(self._rejected(order, order.denied_reason))
             return events
 
         # 終端だが約定でも reject でもない（CANCELED / EXPIRED）: ACCEPTED へ進めず終端化する。
         # apply_venue_update は同期 OrderResult と非同期 EC イベントの**単一入口**なので、ここで
         # 取りこぼすと async EC（#23）が CANCELED/EXPIRED を運んだとき誤って ACCEPTED に化ける
-        # （codex review #25）。tracer では EXPIRED 専用 event を設けず OrderCanceled で終端通知する。
+        # （codex review #25）。EXPIRED は OrderExpired で終端通知する（status と外部通知を一致させる・
+        # finding 3。OrderCanceled で代用すると projection が CANCELED に化け FSM と矛盾する）。
+        # CANCELED/EXPIRED に embedded された約定（kabu: 取消中の部分約定）は捨てず**先に会計**してから
+        # 終端化する（捨てると Portfolio が venue 建玉と desync・#25 review round8 finding 1）。
         if res.status in ("CANCELED", "EXPIRED"):
-            order.status = (
-                OrderStatus.CANCELED if res.status == "CANCELED" else OrderStatus.EXPIRED
-            )
             order.venue_order_id = order.venue_order_id or order.client_order_id
-            return [self._canceled(order)]
+            fill_events = self._apply_embedded_fill(order, res, source=source)
+            if res.status == "CANCELED":
+                order.status = OrderStatus.CANCELED
+                return [*fill_events, self._canceled(order)]
+            order.status = OrderStatus.EXPIRED
+            return [*fill_events, self._expired(order)]
+
+        # fail-closed: malformed な増分 fill（価格欠落・非有限/範囲外の累積数量・非正の増分価格）は
+        # ACCEPTED emit より前に処理する。REJECTED は ACCEPTED を経由しない FSM 不変条件を保つため
+        # （findings 1/2。不正会計の防止は _invalid_fill_guard が担う）。
+        invalid = self._invalid_fill_guard(order, res)
+        if invalid is not None:
+            return invalid
 
         # venue ACK: 未 ACCEPTED（SUBMITTED）なら ACCEPTED を 1 回だけ emit。
         if order.status is OrderStatus.SUBMITTED:
@@ -224,7 +243,78 @@ class LiveBroker:
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
+    def _fill_violation(self, order: Order, res: OrderResult) -> str | None:
+        """増分 fill が venue 契約違反なら理由を返す。健全 or 増分無し / dedup なら `None`（findings 1/2）。
+
+        会計する前の純粋な fail-closed 検証。`res.status` には依存しない（terminal 結果 CANCELED/EXPIRED に
+        embedded された約定にも使う・round8 finding 1）。実 venue は **有限・正の累積数量（注文数量以内）と
+        正の約定価格** を報告するので、それ以外は契約違反として弾く:
+          - 非有限の累積数量（NaN / inf）→ `cash=NaN`・`position=(inf, NaN)` を防ぐ（finding 1）。
+          - 累積数量 > 注文数量 → over-fill（建玉が注文を超える）を防ぐ（finding 1）。
+          - 価格欠落 / 非正の約定価格 → 0 円・負値会計を防ぐ（前回 finding 1）。
+          - 増分価格が非正 → 累積平均が既約定分を下回ると increment_px が負になり、BUY fill が現金を
+            増やす誤会計になる（finding 2）。
+        """
+        cumulative = res.filled_qty
+        if cumulative is None or not math.isfinite(cumulative):
+            return f"FILL_NONFINITE_QTY: non-finite cumulative filled_qty {cumulative!r}"
+        delta = cumulative - order.filled_qty
+        if cumulative <= 0 or delta <= 0:
+            return None  # 増分無し / duplicate / stale（_book_fill_increment が dedup・契約違反ではない）
+        if cumulative > order.quantity:
+            return (
+                f"FILL_EXCEEDS_ORDER_QTY: cumulative {cumulative:g} exceeds order quantity "
+                f"{order.quantity:g}"
+            )
+        if not _is_finite_positive(res.avg_price):
+            return "FILL_WITHOUT_PRICE: venue reported a fill without an execution price"
+        increment_px = (cumulative * float(res.avg_price) - order.filled_qty * order.avg_px) / delta
+        if not _is_finite_positive(increment_px):
+            return (
+                f"FILL_NONPOSITIVE_INCREMENT_PRICE: increment price {increment_px:g} "
+                f"(cumulative average dropped below the already-booked fills)"
+            )
+        return None
+
+    def _invalid_fill_guard(self, order: Order, res: OrderResult) -> list | None:
+        """fill ステータス（FILLED / PARTIALLY_FILLED）の malformed な増分を fail-closed 処理する
+        （#25 review findings 1/2）。
+
+        `_fill_violation` が契約違反を検知したら **その fill を会計せず** 閉じる:
+          - 未約定（filled_qty==0）から → 注文を REJECTED 終端（0 円/不正会計を防ぐ）。
+          - 既に正常な部分約定済み → 不正な増分だけ捨て、確定済み fill は live のまま保持（`[]`）。
+        返り値 `None` は「健全 or 非 fill」で、呼び出し側は `_apply_fill` で通常会計する。
+        """
+        if not is_filled(res.status):
+            return None
+        reason = self._fill_violation(order, res)
+        if reason is None:
+            return None
+        if order.filled_qty > 0:
+            return []  # 確定済みの正常 fill を保持し、不正な増分のみ捨てる
+        order.status = OrderStatus.REJECTED
+        order.denied_reason = reason
+        return [self._rejected(order, reason)]
+
+    def _apply_embedded_fill(self, order: Order, res: OrderResult, *, source: str) -> list:
+        """terminal 結果（CANCELED / EXPIRED）に embedded された約定だけを会計する（finding 1）。
+
+        kabu の modify は「取消中に部分約定 → 新規失敗」を `CANCELED, filled_qty>0, avg_price` で返す。
+        この約定を捨てると Portfolio が venue 建玉と desync する。`res.status` は fill ステータスではない
+        ので `_apply_fill` の is_filled gate を通らない＝ここで直接会計する。健全な増分のみ会計し、
+        malformed / 増分無しは `[]`（terminal イベントが authority なので order は REJECTED にしない＝
+        `_invalid_fill_guard` との違い）。"""
+        if self._fill_violation(order, res) is not None:
+            return []
+        return self._book_fill_increment(order, res, source=source)
+
     def _apply_fill(self, order: Order, res: OrderResult, *, source: str) -> list:
+        """fill ステータス（FILLED / PARTIALLY_FILLED）の増分を会計する（健全性は呼び出し側が保証済み）。"""
+        if not is_filled(res.status):
+            return []
+        return self._book_fill_increment(order, res, source=source)
+
+    def _book_fill_increment(self, order: Order, res: OrderResult, *, source: str) -> list:
         """cumulative dedup を適用し、増分 fill があれば OrderFilled(last_qty=delta) を返す。
 
         venue は **累積**平均価格（`res.avg_price`）と累積数量（`res.filled_qty`）を報告する。Portfolio に
@@ -232,22 +322,22 @@ class LiveBroker:
             increment_px = (new_cum_qty×new_cum_avg − prev_cum_qty×prev_cum_avg) / delta_qty
         例: 50@8 の後に累積 100@9 が来たら後半 50 は @10。累積平均 9 を増分価格に使うと Portfolio が
         平均 8.5 になり誤る（codex review #25 finding 1）。`order.avg_px` は venue 累積平均を保持する。
+
+        数量・価格・増分価格の健全性は呼び出し側（`_invalid_fill_guard` / `_apply_embedded_fill`）が保証済み。
+        `res.status` には依存しない（terminal 結果 embedded fill にも使う）ので fill ステータスの判定は
+        呼び出し側が行う。
         """
-        if not (is_filled(res.status) and res.filled_qty and res.filled_qty > 0):
+        if res.filled_qty is None:
             return []
         incoming_cumulative = float(res.filled_qty)
         delta = incoming_cumulative - order.filled_qty
         if delta <= 0:
             return []  # duplicate / stale（受信イベント数ではなく累積数量で判定・D1）
-        if res.avg_price is not None:
-            new_cum_avg = float(res.avg_price)
-            # この増分の約定代金 = 新累積代金 − 旧累積代金。delta>0 なので 0 除算しない。
-            increment_notional = incoming_cumulative * new_cum_avg - order.filled_qty * order.avg_px
-            increment_px = increment_notional / delta
-            order.avg_px = new_cum_avg  # venue 報告の累積平均を保持
-        else:
-            # venue が約定価格を報告しない degenerate ケース（実 venue は報告する・mock は常に設定）。
-            increment_px = order.avg_px
+        new_cum_avg = float(res.avg_price)
+        # この増分の約定代金 = 新累積代金 − 旧累積代金。delta>0 なので 0 除算しない。
+        increment_notional = incoming_cumulative * new_cum_avg - order.filled_qty * order.avg_px
+        increment_px = increment_notional / delta
+        order.avg_px = new_cum_avg  # venue 報告の累積平均を保持
         order.filled_qty = incoming_cumulative
         order.venue_order_id = order.venue_order_id or order.client_order_id
         order.status = (
@@ -276,5 +366,25 @@ class LiveBroker:
             strategy_id=order.strategy_id,
             instrument_id=order.instrument_id,
             side=order.side,
+            ts_event_ns=order.ts_last_ns,
+        )
+
+    def _expired(self, order: Order) -> OrderExpired:
+        return OrderExpired(
+            client_order_id=order.client_order_id,
+            venue_order_id=order.venue_order_id or order.client_order_id,
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            side=order.side,
+            ts_event_ns=order.ts_last_ns,
+        )
+
+    def _rejected(self, order: Order, reason: str) -> OrderRejected:
+        return OrderRejected(
+            client_order_id=order.client_order_id,
+            strategy_id=order.strategy_id,
+            instrument_id=order.instrument_id,
+            side=order.side,
+            reason=reason,
             ts_event_ns=order.ts_last_ns,
         )

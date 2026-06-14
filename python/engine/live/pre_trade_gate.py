@@ -36,7 +36,7 @@ def evaluate_pre_trade(
     is_buy: bool,
     qty: float,
     order_notional_jpy: float,
-    current_position_value_jpy: float,
+    reference_price: float | None,
     net_signed_qty: float,
     rails: Optional[SafetyRails],
     regulation_provider: Optional[Callable[[], Iterable[str]]] = None,
@@ -45,15 +45,21 @@ def evaluate_pre_trade(
 
     Parameters
     ----------
-    instrument_id              : 発注銘柄 ID
-    is_buy                     : True = BUY、False = SELL
-    qty                        : 発注数量
-    order_notional_jpy         : 発注金額（MARKET は 0 = price 不明）
-    current_position_value_jpy : 現在の建玉評価額（JPY）
-    net_signed_qty             : 符号付き建玉数（long>0 / short<0 / flat=0）
-    rails                      : SafetyRails（allowlist + 建玉上限 config）、None = rails 無効
-    regulation_provider        : () -> Iterable[str]（規制銘柄集合、None = 規制フィルタ無し）
-                                 例外を投げたら fail-closed（規制状態不明 → deny）。
+    instrument_id      : 発注銘柄 ID
+    is_buy             : True = BUY、False = SELL
+    qty                : 発注数量
+    order_notional_jpy : 発注金額（MARKET は 0 = price 不明）
+    reference_price    : 約定建玉の時価評価に使う参照価格（直近値）。`None` = 参照価格未取得で
+                         建玉上限を評価できない（kernel 経路は上位で NO_REFERENCE_PRICE deny 済み）。
+    net_signed_qty     : 符号付き建玉数（long>0 / short<0 / flat=0）
+    rails              : SafetyRails（allowlist + 建玉上限 config）、None = rails 無効
+    regulation_provider: () -> Iterable[str]（規制銘柄集合、None = 規制フィルタ無し）
+                         例外を投げたら fail-closed（規制状態不明 → deny）。
+
+    建玉上限（max_position_size）は **約定後の符号付き建玉の時価評価額**
+    `abs(net_signed_qty + signed_order_qty) × reference_price` で判定する（#25 review findings 2/3）。
+    取得原価ベースの旧判定は値上がり後の上限回避（finding 2）と flat 跨ぎ反対売買の過大拒否
+    （finding 3）を起こすため、ここで参照価格から算出して `SafetyRails.check_pre_trade` に渡す。
 
     Returns
     -------
@@ -66,10 +72,16 @@ def evaluate_pre_trade(
             return reg
 
     if rails is not None:
+        signed_order_qty = qty if is_buy else -qty
+        projected_position_value_jpy = (
+            abs(net_signed_qty + signed_order_qty) * reference_price
+            if reference_price is not None
+            else None
+        )
         return rails.check_pre_trade(
             instrument_id=instrument_id,
             order_notional_jpy=order_notional_jpy,
-            current_position_value_jpy=current_position_value_jpy,
+            projected_position_value_jpy=projected_position_value_jpy,
             increases_exposure=increases,
         )
     log.debug("evaluate_pre_trade: rails=None, allowlist/position_cap checks skipped for %s", instrument_id)

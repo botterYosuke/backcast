@@ -363,6 +363,7 @@ def test_mock_live_no_send_of_queued_order_after_strategy_exception():
         on_strategy_error=lambda exc: errors.append(exc)
     )
     try:
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=100.0, avg_price=8.0)
         controller.attach(
             strategy_cls=_QueueThenRaise, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
             params={}, nautilus_strategy_id="LIVE-q0000001", session=object(),
@@ -517,6 +518,68 @@ def test_mock_live_position_cap_allows_reducing_order():
         thread.join(timeout=2.0)
 
 
+def test_mock_live_position_cap_uses_market_value():
+    """値上がり後の建て増しが時価で判定され上限を回避できない（#25 review finding 2、live 経路）。
+
+    既存 long 100株@取得10（原価1000）。現在値 20 に値上がり後 1株 BUY すると約定後建玉は
+    101株×20=2020。旧ロジックは取得原価 1000 + 注文 20 = 1020 ≤ 上限1500 で素通ししたが、
+    driver が参照価格（直近 close=20）を rail に渡すので 2020 > 1500 で MAX_POSITION_SIZE deny。
+    """
+    from engine.kernel.orders import OrderSide
+    from engine.kernel.strategy import Strategy as KernelStrategyBase
+
+    class _BuyOneMore(KernelStrategyBase):
+        def on_bar(self, bar):
+            self.submit_market(self.instrument_id, OrderSide.BUY, 1)  # 値上がり後の建て増し
+
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+
+    def run(coro, timeout=5.0):
+        return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout)
+
+    violations: list = []
+    adapter = MockVenueAdapter()
+    runner = LiveRunner(adapter, interval_ns=DAY_NS)
+    runner._loop = loop
+    controller = KernelLiveEngineController(
+        loop_provider=lambda: loop,
+        adapter_provider=lambda: adapter,
+        runner_provider=lambda: runner,
+        on_safety_violation=lambda v: violations.append(v),
+    )
+    rails = SafetyRails(SafetyLimits(max_position_size_jpy=1500))
+    try:
+        run(adapter.login(None))
+        adapter.set_account_snapshot(
+            cash=1_000_000.0,
+            buying_power=1_000_000.0,
+            positions=[AccountPositionData(symbol="8918", qty=100, avg_price=10.0, unrealized_pnl=0.0)],
+        )
+        run(runner.start())
+        adapter.set_next_order_outcome(status="FILLED", filled_qty=1.0, avg_price=20.0)
+        controller.attach(
+            strategy_cls=_BuyOneMore, scenario=SCENARIO, instrument_id=IID, venue="MOCK",
+            params={}, nautilus_strategy_id="LIVE-mktcap01", session=object(), safety_rails=rails,
+        )
+        loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 20.0))  # 現在値 20
+        deadline = time.time() + 5.0
+        while time.time() < deadline and not violations:
+            time.sleep(0.02)
+        assert violations, "market-value position cap did not fire"
+        assert violations[0].kind == "MAX_POSITION_SIZE", [v.kind for v in violations]
+        assert adapter.submit_order_call_count == 0  # venue 未到達
+        controller.detach(nautilus_strategy_id="LIVE-mktcap01")
+    finally:
+        try:
+            run(runner.aclose())
+        except Exception:
+            pass
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=2.0)
+
+
 def test_mock_live_seeded_position_in_pretrade():
     """venue 既存建玉が seed され pre-trade position cap に効く（D7）。"""
     loop = asyncio.new_event_loop()
@@ -551,7 +614,8 @@ def test_mock_live_seeded_position_in_pretrade():
         pf = controller._driver._portfolio
         # bare "8918" が "8918.TSE" に正規化されて pre-trade cap の lookup key と一致する。
         assert pf.net_signed_qty(IID) == 300.0
-        assert pf.position_value_jpy(IID) == 300 * 9.0
+        seeded = pf.open_positions()
+        assert len(seeded) == 1 and seeded[0].quantity == 300.0 and seeded[0].avg_px == 9.0
         controller.detach(nautilus_strategy_id="LIVE-seed0001")
     finally:
         try:
@@ -560,6 +624,25 @@ def test_mock_live_seeded_position_in_pretrade():
             pass
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2.0)
+
+
+def test_controller_projects_expired_as_expired():
+    """controller projection は OrderExpired を EXPIRED として外部通知する（#25 review finding 3）。
+
+    OrderCanceled に collapse すると CANCELED に化けて内部 order.status=EXPIRED と矛盾する。
+    """
+    from engine.kernel.orders import Order, OrderExpired, OrderSide, OrderStatus
+
+    order = Order(
+        client_order_id="O-1", strategy_id="LIVE-x", instrument_id=IID,
+        side=OrderSide.BUY, quantity=100.0, status=OrderStatus.EXPIRED,
+    )
+    event = OrderExpired(
+        client_order_id="O-1", venue_order_id="O-1", strategy_id="LIVE-x",
+        instrument_id=IID, side=OrderSide.BUY, ts_event_ns=0,
+    )
+    status, filled_qty, avg_price = KernelLiveEngineController._project_event(order, event)
+    assert status == "EXPIRED"
 
 
 def test_instrument_id_rejects_trailing_newline():

@@ -27,6 +27,7 @@ from engine.kernel.orders import (
     OrderCanceled,
     OrderDenied,
     OrderEngine,
+    OrderExpired,
     OrderFilled,
     OrderRejected,
 )
@@ -279,6 +280,8 @@ class KernelLiveEngineController:
             return "REJECTED", float(order.filled_qty), float(order.avg_px)
         if isinstance(event, OrderCanceled):
             return "CANCELED", float(order.filled_qty), float(order.avg_px)
+        if isinstance(event, OrderExpired):
+            return "EXPIRED", float(order.filled_qty), float(order.avg_px)
         if isinstance(event, OrderDenied):
             return "DENIED", 0.0, 0.0
         if isinstance(event, OrderFilled):

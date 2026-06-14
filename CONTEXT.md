@@ -56,6 +56,21 @@ _Avoid_: `ReplayBroker` と同一視すること（fill source・タイミング
 従来挙動を維持。記録: findings 0011・#25。
 _Avoid_: partial バーを strategy の `on_bar` に渡すこと／`is_closed` 無しで bus の `KlineUpdate` を strategy に流すこと
 
+**板 / depth（`DepthSnapshot`）**:
+ある銘柄の最新オーダーブック。買い板 `bids`（price 降順想定）と売り板 `asks`（price 昇順想定）の
+段（`DepthLevels`: `price`/`size`）の集合。**Live のみ**で `mock`/kabu/立花 adapter が `DepthUpdate` を
+emit → `DepthCache` が `DepthSnapshot` 化して保持 → `get_state_json()` が `per_instrument[id].depth` に合成する。
+**Replay では常に `None`**（過去再生は板を持たない）。順序は producer 側の「想定」契約であり `DepthCache`/models は
+sort を強制しない（受信順を忠実保持し、消費側は並べ替えない）。
+_Avoid_: 板を「価格履歴/チャート」と混同すること（depth は最新断面・時系列ではない）／Replay で板が出ると期待すること（Live 限定）
+
+**bid/ask ladder（C# depth 描画）**:
+`get_state_json()` の `per_instrument[id].depth`（`DepthSnapshot`）を C# 側 durable decoder が復元し、
+買い板/売り板を段組みで描画する Unity パネル。`per_instrument` は instrument-id キーの dict で `JsonUtility` が
+モデル化できないため、decoder は目的銘柄の `depth` オブジェクトだけを構造認識 locator で剥がして `JsonUtility` に渡す
+（`LiveBackendEventDecoder.PeelTag` と同型のハイブリッド）。decode は wire 順を忠実復元し、ladder は受信順のまま描く。
+_Avoid_: ladder を defensive sort すること（producer 契約違反を隠す）／`per_instrument` 全体を `JsonUtility` で読もうとすること（dict は非対応）
+
 **golden 契約（Backcast vs Nautilus oracle）**:
 kernel の正しさを担保するため、**NautilusTrader（standalone CPython）を比較 oracle として温存**し、その実出力を
 golden として固定する規律。golden は sink の生 JSON 文字列ではなく **parse・正規化した契約**（order 状態列 /

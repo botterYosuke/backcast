@@ -17,6 +17,8 @@ PASS = 2 fills・終端 FLAT・realized=200・nautilus 非ロード。FAIL は A
 """
 from __future__ import annotations
 
+import multiprocessing
+import os
 import sys
 import time
 from pathlib import Path
@@ -34,6 +36,9 @@ _NSID_PREFIX = "LIVE-"  # host issues "LIVE-{run_id[:8]}"
 
 _TWIN_PATH = str(
     Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_spike_buy_sell.py"
+)
+_REST_PATH = str(
+    Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_buy_and_rest.py"
 )
 
 
@@ -138,17 +143,147 @@ def run() -> dict:
     return result
 
 
+def run_shutdown_cancel() -> dict:
+    """resting order を残し、graceful 停止で best-effort 取消されることを full chain で実演 (#22 Gap1)。
+
+    mock を ACCEPTED(filled_qty=0.0) に仕込んで「取消すべき注文」を作り、stop_live_strategy の
+    graceful 経路（stop_run: STOPPING → cancel_inflight_orders → detach → STOPPED）で venue へ
+    cancel_order が届き order が CANCELED 終端することを確認する。同走で:
+      - orphan 不在の構造不変条件 (#22 Gap3): live loop が本プロセスの daemon thread 上で回り
+        out-of-process な order pump（multiprocessing child）が無い。
+      - stop_live_loop の clean-join 契約 (#22 Gap4 happy path): 正常停止で True を返す。
+    """
+    from engine.kernel.orders import OrderStatus
+
+    shared_mock = MockVenueAdapter()
+    shared_mock.set_account_snapshot(cash=10_000_000.0, buying_power=10_000_000.0, positions=())
+
+    events: list = []
+    data_engine = DataEngine()
+    venue_sm = VenueStateMachine()
+    data_engine.state_machine = venue_sm
+    mode_manager = ModeManager(venue_sm=venue_sm, replay_engine=data_engine)
+    data_engine.attach_mode_manager(mode_manager)
+
+    mgr = LiveLoopManager(
+        engine=data_engine,
+        mode_manager=mode_manager,
+        venue_sm=venue_sm,
+        live_adapter_factory=lambda env_hint=None: shared_mock,
+        live_venue_id="MOCK",
+        engine_controller=None,
+        publish_backend_event_callback=events.append,
+    )
+
+    run_id = None
+    result: dict = {}
+    loop_stopped_clean = None
+    children_before = len(multiprocessing.active_children())
+    try:
+        reg = mgr.register_live_strategy(strategy_file=_REST_PATH, original_path=_REST_PATH)
+        assert reg.success, f"register failed: {reg.error_code} {reg.error_message}"
+        login = mgr.venue_login("MOCK", "env", None)
+        assert login.success, f"venue_login failed: {login.error_code}"
+        mode = mgr.set_execution_mode("LiveAuto")
+        assert mode.success, f"set_execution_mode failed: {mode.error_code}"
+
+        # ACK only — 約定しない → venue に resting する注文を作る。
+        shared_mock.set_next_order_outcome(status="ACCEPTED", filled_qty=0.0, avg_price=8.0)
+        start = mgr.start_live_strategy(reg.strategy_id, IID, "MOCK")
+        assert start.success, f"start_live_strategy failed: {start.error_code} {start.error_message}"
+        run_id = start.run_id
+
+        for i in range(1, 4):
+            mgr._live_loop.call_soon_threadsafe(shared_mock.inject_tick, _kline(i, 8.0))
+        deadline = time.time() + 5.0
+        while time.time() < deadline and shared_mock.submit_order_call_count == 0:
+            time.sleep(0.02)
+
+        driver = mgr._strategy_host._controller._driver  # white-box: pre-stop kernel state
+        orders = list(driver._orders.values())
+        assert len(orders) == 1, f"expected exactly 1 resting order, got {len(orders)}"
+        resting = orders[0]
+
+        # orphan 不在の構造不変条件 (#22 Gap3): loop が生きている間に観測する。
+        loop_thread = mgr._live_thread
+        result["python_pid"] = os.getpid()
+        result["loop_daemon"] = bool(loop_thread is not None and loop_thread.daemon)
+        result["loop_alive"] = bool(loop_thread is not None and loop_thread.is_alive())
+        result["child_count"] = len(multiprocessing.active_children()) - children_before
+        result["resting_before_stop"] = resting.status.value
+        assert resting.status == OrderStatus.ACCEPTED, result["resting_before_stop"]
+        cancel_calls_before = shared_mock.cancel_order_call_count
+
+        # graceful 停止: cancel_inflight_orders → detach が走り、resting order を取消す。
+        stop = mgr.stop_live_strategy(run_id)
+        assert stop.success, f"stop_live_strategy failed: {stop.error_code}"
+        run_id = None  # 既に停止済み — finally の再停止を避ける。
+
+        result["cancel_calls"] = shared_mock.cancel_order_call_count - cancel_calls_before
+        result["resting_after_stop"] = resting.status.value
+    finally:
+        try:
+            if run_id:
+                mgr.stop_live_strategy(run_id)
+        except Exception:
+            pass
+        try:
+            mgr.set_execution_mode("Replay")
+            mgr.venue_logout()
+        except Exception:
+            pass
+        try:
+            loop_stopped_clean = mgr.stop_live_loop(timeout=3.0)
+        except Exception:
+            loop_stopped_clean = None
+
+    result["loop_stopped_clean"] = bool(loop_stopped_clean)
+
+    # purity 検査は teardown 後（このシナリオ単体で Mono probe が回せるよう self-contained に）。
+    from spike.kernel_golden.purity import leaked_nautilus_modules
+
+    result["leaked"] = list(leaked_nautilus_modules(sys.modules))
+    return result
+
+
+def run_all() -> dict:
+    """twin roundtrip（purity gate・#25 不変）と shutdown-cancel + orphan シナリオ（#22）を 1 本で通す。
+
+    Mono probe / CPython purity gate の単一エントリ。両シナリオ完走後に nautilus 非ロードを最終確認する。
+    """
+    merged = dict(run())            # fills/net_after_buy/final_net/realized/strategy_id/leaked
+    merged.update(run_shutdown_cancel())  # resting cancel + orphan + Gap4 happy path（キー衝突なし）
+
+    from spike.kernel_golden.purity import leaked_nautilus_modules
+
+    merged["leaked"] = list(leaked_nautilus_modules(sys.modules))
+    return merged
+
+
 def main() -> int:
-    r = run()
+    r = run_all()
+    # twin roundtrip（purity gate・#25 不変）
     assert r.get("net_after_buy") == 100.0, r
     assert r.get("final_net") == 0.0, r
     assert r.get("fills") == 2, r
     assert r.get("realized") == 200.0, r
     assert str(r.get("strategy_id", "")).startswith(_NSID_PREFIX), r  # run identity injected
     assert r.get("leaked") == [], f"nautilus leaked into the full LiveAuto chain: {r['leaked']}"
+    # #22 Gap1: resting order best-effort cancel（graceful 停止で CANCELED + venue 到達）
+    assert r.get("resting_before_stop") == "ACCEPTED", r
+    assert r.get("cancel_calls") == 1, r
+    assert r.get("resting_after_stop") == "CANCELED", r
+    # #22 Gap3: orphan 不在の構造不変条件
+    assert r.get("loop_daemon") is True, r
+    assert r.get("loop_alive") is True, r
+    assert r.get("child_count") == 0, r
+    # #22 Gap4: clean-join 契約（happy path で True）
+    assert r.get("loop_stopped_clean") is True, r
     print(
         "[KERNEL LIVE PURITY PASS] full-chain "
         f"fills={r['fills']} final_net={r['final_net']} realized={r['realized']} "
+        f"resting={r['resting_before_stop']}->{r['resting_after_stop']} cancel_calls={r['cancel_calls']} "
+        f"loop_daemon={r['loop_daemon']} child_count={r['child_count']} loop_clean={r['loop_stopped_clean']} "
         "nautilus_leaked=0"
     )
     return 0

@@ -46,11 +46,18 @@ class MockVenueAdapter:
         # テスト専用: submit_order が venue に到達した回数（余力超過/dedup の「約定しない」
         # = venue 未到達 を検証する。logout_call_count と同じ流儀の観測点）。
         self.submit_order_call_count: int = 0
+        # テスト専用: cancel_order が venue に到達した回数（#22 Gap1: 正常終了時の
+        # resting order best-effort 取消が実際に venue へ届いたことを検証する観測点）。
+        self.cancel_order_call_count: int = 0
         self._subscribed: dict[InstrumentId, set[Channel]] = {}
         self._queue: asyncio.Queue[LiveEvent] = asyncio.Queue()
         self._next_order_outcome: dict | None = None
         self._next_cancel_outcome: dict | None = None
         self._next_modify_outcome: dict | None = None
+        # テスト専用: check_health の戻り値。既定は healthy。set_health(False) で
+        # 本体ログアウトを擬似し、VenueHealthWatchdog の logout 検知を駆動する
+        # (#22 Gap2・set_next_order_outcome と同流儀の test-only plumbing)。
+        self._healthy: bool = True
         # 既定の口座スナップショット（set_account_snapshot 未呼び出し時）。
         self._account_snapshot: AccountSnapshot = AccountSnapshot(
             cash=0.0, buying_power=0.0, positions=()
@@ -249,6 +256,7 @@ class MockVenueAdapter:
         mock は 0 / None を返す（facade 側が track 済みの約定量とマージする）。
         """
         self._require_login()
+        self.cancel_order_call_count += 1
 
         outcome = self._next_cancel_outcome
         self._next_cancel_outcome = None
@@ -372,6 +380,15 @@ class MockVenueAdapter:
     ) -> None:
         """Protocol 適合用 no-op。mock は hook を使わず inject_tick で event を注入する。"""
 
+    def set_health(self, healthy: bool) -> None:
+        """テスト専用: 次回以降の check_health の戻り値を切り替える (#22 Gap2)。
+
+        False で本体ログアウト (kabu 4001007/4001017 相当) を擬似し、
+        VenueHealthWatchdog の logout 検知 → VenueLogoutDetected を駆動する。
+        True に戻すと watchdog の debounce が解除され再検知できる。
+        """
+        self._healthy = healthy
+
     async def check_health(self) -> bool:
-        """Protocol 適合用 no-op。Mock は常に接続中とみなす。"""
-        return True
+        """Mock の接続状態を返す。既定 healthy、set_health で切替 (#22 Gap2)。"""
+        return self._healthy

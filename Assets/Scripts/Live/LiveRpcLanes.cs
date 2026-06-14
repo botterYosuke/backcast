@@ -75,13 +75,19 @@ public class LiveRpcLanes
     public void SubmitPlaceOrder(string venue, string iid, string side, double qty,
                                  double? price, string orderType, string tif,
                                  Action<OrderRpcResult> onResult)
+        => EnqueueWrite(() => CallPlace(venue, iid, side, qty, price, orderType, tif), onResult);
+
+    // Shared write-lane scaffold: enqueue (or Stopped() after teardown), coord book-keeping,
+    // exception → LANE_EXC, deliver. `call` does its OWN Py.GIL() marshaling — never hoist
+    // PyObject construction out here (the pre-GIL hoist was the cancel-lane segfault).
+    void EnqueueWrite(Func<OrderRpcResult> call, Action<OrderRpcResult> onResult)
     {
         if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
         _writeQueue.Add(() =>
         {
             _coord.BeginWrite();
             OrderRpcResult r;
-            try { r = CallPlace(venue, iid, side, qty, price, orderType, tif); }
+            try { r = call(); }
             catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
             finally { _coord.EndWrite(); }
             onResult?.Invoke(r);
@@ -143,66 +149,42 @@ public class LiveRpcLanes
     // cancel/modify share the SAME order-write lane (D2): serialized with place, and
     // (on tachibana) they also trigger SecretRequired, handled by the urgent-secret lane.
     public void SubmitCancelOrder(string venue, string orderId, Action<OrderRpcResult> onResult)
+        => EnqueueWrite(() => CallCancel(venue, orderId), onResult);
+
+    OrderRpcResult CallCancel(string venue, string orderId)
     {
-        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
-        _writeQueue.Add(() =>
-        {
-            _coord.BeginWrite();
-            OrderRpcResult r;
-            try { r = CallWrite("cancel_order", new PyString(venue), new PyString(orderId), _pyNone); }
-            catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
-            finally { _coord.EndWrite(); }
-            onResult?.Invoke(r);
-        });
+        // PyString construction calls PyUnicode_DecodeUTF16 → must hold the GIL. Build the args
+        // INSIDE Py.GIL() like CallPlace/CallModify; hoisting them before the lock segfaults the
+        // allocator (the bug this guards).
+        using (Py.GIL())
+        using (var pv = new PyString(venue))
+        using (var po = new PyString(orderId))
+        using (PyObject res = _server.InvokeMethod("cancel_order", pv, po, _pyNone))
+            return ParseOrderResult(res);
     }
 
     public void SubmitModifyOrder(string venue, string orderId, double? newQty, double? newPrice,
                                   Action<OrderRpcResult> onResult)
-    {
-        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
-        _writeQueue.Add(() =>
-        {
-            _coord.BeginWrite();
-            OrderRpcResult r;
-            try
-            {
-                using (Py.GIL())
-                {
-                    PyObject qtyArg = newQty.HasValue ? (PyObject)new PyFloat(newQty.Value) : _pyNone;
-                    PyObject priceArg = newPrice.HasValue ? (PyObject)new PyFloat(newPrice.Value) : _pyNone;
-                    try
-                    {
-                        using (var pv = new PyString(venue))
-                        using (var po = new PyString(orderId))
-                        using (PyObject res = _server.InvokeMethod("modify_order", pv, po, qtyArg, priceArg, _pyNone))
-                            r = ParseOrderResult(res);
-                    }
-                    finally
-                    {
-                        if (newQty.HasValue) qtyArg.Dispose();
-                        if (newPrice.HasValue) priceArg.Dispose();
-                    }
-                }
-            }
-            catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
-            finally { _coord.EndWrite(); }
-            onResult?.Invoke(r);
-        });
-    }
+        => EnqueueWrite(() => CallModify(venue, orderId, newQty, newPrice), onResult);
 
-    // Generic single-call write helper (cancel_order takes positional string args only).
-    OrderRpcResult CallWrite(string method, params PyObject[] args)
+    OrderRpcResult CallModify(string venue, string orderId, double? newQty, double? newPrice)
     {
         using (Py.GIL())
         {
-            var disposables = new System.Collections.Generic.List<PyObject>();
-            foreach (var a in args) if (a != _pyNone) disposables.Add(a);
+            PyObject qtyArg = newQty.HasValue ? (PyObject)new PyFloat(newQty.Value) : _pyNone;
+            PyObject priceArg = newPrice.HasValue ? (PyObject)new PyFloat(newPrice.Value) : _pyNone;
             try
             {
-                using (PyObject res = _server.InvokeMethod(method, args))
+                using (var pv = new PyString(venue))
+                using (var po = new PyString(orderId))
+                using (PyObject res = _server.InvokeMethod("modify_order", pv, po, qtyArg, priceArg, _pyNone))
                     return ParseOrderResult(res);
             }
-            finally { foreach (var d in disposables) d.Dispose(); }
+            finally
+            {
+                if (newQty.HasValue) qtyArg.Dispose();
+                if (newPrice.HasValue) priceArg.Dispose();
+            }
         }
     }
 

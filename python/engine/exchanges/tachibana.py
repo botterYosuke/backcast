@@ -26,6 +26,7 @@ from engine.live.adapter import (
     TradesUpdate,
     VenueCredentials,
 )
+from engine.live.instrument_mapping import tachibana_market_to_suffix
 from engine.live.logging import suppress_third_party_http_logs
 from engine.live.order_types import (
     AccountPositionData,
@@ -69,9 +70,20 @@ log = logging.getLogger(__name__)
 # REQUEST I/F (発注・余力・保有) は master DL より軽量。read 30s で十分。
 _REQUEST_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
 
-# Tachibana sSizyouC → Nautilus InstrumentId suffix (order_params.md: "00"=東証)。
-# 名証/福証/札証は Phase 9 非対象。未知コードは suffix 無しでフォールバック。
-_SIZYOU_TO_SUFFIX: dict[str, str] = {"00": "TSE"}
+# Tachibana 市場コード → Nautilus InstrumentId suffix の正本は
+# instrument_mapping.tachibana_market_to_suffix（Issue #36 で canonical 化）。
+# 未知コードは ValueError を投げるので、feed を止めたくない経路は
+# catch して suffix 無しシンボルにフォールバックする。
+def _suffix_or_symbol(issue_code: str, market: str) -> str:
+    """``{issue_code}.{suffix}`` を返す。未知市場は suffix 無しの裸シンボル。
+
+    CLMOrderList の working-orders 取得など feed を止めたくない経路で使う
+    （未知市場で例外を投げると order-list 取得自体が落ちるのを避ける）。
+    """
+    try:
+        return f"{issue_code}.{tachibana_market_to_suffix(market)}"
+    except ValueError:
+        return issue_code
 
 
 
@@ -687,8 +699,7 @@ class TachibanaAdapter:
         rows = _orders.parse_order_list_response(resp)
         result: list[OrderEventData] = []
         for row in rows:
-            suffix = _SIZYOU_TO_SUFFIX.get(row.sizyou_c)
-            symbol = f"{row.issue_code}.{suffix}" if suffix else row.issue_code
+            symbol = _suffix_or_symbol(row.issue_code, row.sizyou_c)
             result.append(OrderEventData(
                 order_id=row.venue_order_id,
                 venue_order_id=row.venue_order_id,

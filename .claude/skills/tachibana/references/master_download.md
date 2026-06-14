@@ -27,3 +27,25 @@
 - `CLMIssueMstOther` 日経平均・為替など
 - `CLMOrderErrReason` 取引所エラー理由コード
 - `CLMDateZyouhou` 日付情報
+
+## 株式銘柄ビルドの field 名（⚠️ order 系と別名・#36 で実バグ確認）
+
+`build_instruments_from_master_records`（`tachibana_master.py`）が読む master
+record の field 名は、order/余力系の field 名と **違う**。混同すると 1 銘柄も
+ビルドされず `fetch_instruments()` が実質 `[]` を返す（manual
+`mfds_json_api_ref_text.html` のレコード定義で確認 / #36）:
+
+| 欲しい値 | 正しい field | どの record | 注意 |
+| :--- | :--- | :--- | :--- |
+| 上場市場 | `sZyouzyouSizyou` | `CLMIssueSizyouMstKabu` | `00`=東証（現状これのみ）。`market_to_suffix` で suffix 化 |
+| 売買単位（既定） | `sBaibaiTani` | **`CLMIssueMstKabu`** | 正本はこちら（issue 単位、例 `"100"`） |
+| 売買単位（市場別上書き） | `sSizyoubetuBaibaiTani` | `CLMIssueSizyouMstKabu` | **サンプルは空 `""`** が多い。非空のときだけ上書き |
+| 呼値コード | `sYobineTaniNumber` | `CLMIssueSizyouMstKabu` | CLMYobine テーブル参照キー |
+| 銘柄名 | `sIssueName` | `CLMIssueMstKabu` | |
+
+**落とし穴**: `sSizyouC`（市場）/ `sBaibaiTaniNumber`（売買単位）は **order 系
+record（`CLMKabuNewOrder` / `CLMZanKaiKanougaku` / `CLMOrderList` 等）にしか
+存在せず**、株式 master record には無い。`sBaibaiTaniNumber` は manual 全体に
+1 箇所も無い。移植元 The-Trader-Was-Replaced も同じ誤読を運んでいたので、master
+build を触るときは必ずこの表で field 名を裏取りすること。売買単位は文字列で来る
+ため `"0"` / 負値 / 非数値は無効として弾く（0 単位は下流で除算 0 を起こす）。

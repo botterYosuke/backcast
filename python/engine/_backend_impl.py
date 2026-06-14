@@ -240,8 +240,24 @@ def _login_subprocess_env() -> dict[str, str]:
     """
     env = os.environ.copy()
     src_root = str(PYTHON_SRC_ROOT)  # `<repo>/python` — must be importable for `import engine`
+    # Propagate the venv site-packages too (#23 Windows HITL fix). Under embedded Python
+    # (Unity/pythonnet) `_resolve_python_executable()` returns the BASE CPython — `sys.executable`
+    # is the host exe — which lacks the venv's third-party deps (httpx, …). Those live on the
+    # embedded interpreter's `sys.path` (host-injected VenvSite) but do NOT propagate to children,
+    # so the dialog subprocess crashes with `ModuleNotFoundError: httpx` → LOGIN_SUBPROCESS_CRASHED
+    # (tachibana_login_flow → tachibana_auth imports httpx). Mirror the parent's site-packages onto
+    # PYTHONPATH so any resolved interpreter can import them. Harmless when the resolved python
+    # already owns them (venv-activated / PyO3 in-proc).
+    site_dirs = [
+        p for p in sys.path if p and ("site-packages" in p or "dist-packages" in p)
+    ]
     existing = env.get("PYTHONPATH", "")
-    parts = [src_root] + [p for p in existing.split(os.pathsep) if p and p != src_root]
+    seen: set[str] = set()
+    parts: list[str] = []
+    for p in [src_root, *site_dirs, *existing.split(os.pathsep)]:
+        if p and p not in seen:
+            seen.add(p)
+            parts.append(p)
     env["PYTHONPATH"] = os.pathsep.join(parts)
     return env
 

@@ -55,6 +55,14 @@ def is_market_open(now_jst: datetime) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _is_finite_quote(v: str) -> bool:
+    """有限な数値文字列なら True。空欄・非数値・NaN/Inf は False。"""
+    try:
+        return Decimal(v).is_finite()
+    except InvalidOperation:
+        return False
+
+
 @dataclass
 class FdFrameProcessor:
     """Convert FD (time-and-sales) event frames into trade + depth dicts.
@@ -200,9 +208,13 @@ class FdFrameProcessor:
             bv = fields.get(f"p_{row}_GBV{i}", "")
             ap = fields.get(f"p_{row}_GAP{i}", "")
             av = fields.get(f"p_{row}_GAV{i}", "")
-            if bp and bv:
+            # 空欄・非数値・非有限 (特別気配マーカ等) の段は当該段を落とす。これらを
+            # 通すと adapter (_cb) の float() が ValueError を投げ、tachibana_ws の recv
+            # loop は callback を try で包まないため接続断する。不正段は段ごと skip して
+            # feed を止めない (#27)。price<=0 の弾きは DepthCache の gt=0 が担う二段防御。
+            if _is_finite_quote(bp) and _is_finite_quote(bv):
                 bids.append({"price": bp, "size": bv})
-            if ap and av:
+            if _is_finite_quote(ap) and _is_finite_quote(av):
                 asks.append({"price": ap, "size": av})
 
         if not bids and not asks:

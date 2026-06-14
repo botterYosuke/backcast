@@ -252,6 +252,18 @@ caller の window factory が `kind=="strategy_editor"` のとき合成・contro
 _Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用の予約語）／run trigger・`start_nautilus_replay`
 呼出・active 選択を #16 / provider に含めること／ソース文字列を供給すると解釈すること（パスが正）
 
+**orphan-absence invariant（orphan 不在の構造不変条件）**:
+「アプリが見かけ上死んでも裏でプロセスだけが実弾を出し続ける」状態が**構造的に在り得ない**こと
+（ADR-0001 decision 3）。Python は pythonnet で Unity プロセスに埋め込まれ（同一 PID）、執行を担う
+order pump（live loop）は **daemon thread** 上に居り、IPC も execution subprocess も持たない。ゆえに
+Unity が死ねば執行も即死する。検証は**「Unity を kill して両方死ぬのを観測する」非決定的テストではなく**、
+構造不変条件の assert で行う: ①Python `os.getpid()` == host process id（同一プロセス）②live loop thread
+`daemon==True`（プロセスを延命しない）③`multiprocessing.active_children()==[]` ＋ venue adapter が in-proc
+（out-of-process な order pump 不在）。記録: findings 0013・#22。
+_Avoid_: 「Unity kill → 両方死ぬ」の literal kill テストで証明しようとすること（両方死ぬので観測不能・
+非決定的）／orphan 防止に Job Object / heartbeat / dead-man's-switch を足すこと（同一プロセス埋め込みで
+自動成立済み・ADR-0001 decision 3 が「不要」と明記）
+
 ## Flagged ambiguities
 
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が

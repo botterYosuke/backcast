@@ -447,13 +447,24 @@ class LiveLoopManager:
         if self.venue_sm is not None and self.venue_sm.current != "DISCONNECTED":
             self.venue_sm.reset()
 
-    def stop_live_loop(self, timeout: float | None = None) -> None:
+    def stop_live_loop(self, timeout: float | None = None) -> bool:
         """Stop the live asyncio loop thread spawned by _ensure_live_loop().
 
         issue #64 finding #6: _teardown_live_components() stops runner/bridge/
         account-sync but leaves the loop thread in run_forever(). On InProc
         worker shutdown the thread would otherwise leak. Safe to call when the
         loop was never started (None guard).
+
+        Returns ``True`` when the loop thread joined cleanly (or was never
+        started), ``False`` when ``join(timeout)`` elapsed and the thread is
+        still alive. #22 (Gap4, ADR-0001 decision 6 / S2-spike AC(b)): a hung
+        loop thread may still hold the GIL, so finalizing the Python runtime
+        (C# ``PythonEngine.Shutdown``) on top of it would deadlock. The bool is
+        the contract the C# finalize gate consumes (parallels
+        ``KernelLiveProbe.workerStopped``): on ``False`` the caller must **not**
+        finalize. We also keep ``_live_thread`` referenced (do not null it) so
+        the unsafe state stays observable for diagnostics; only the clean path
+        clears the handles.
         """
         loop = self._live_loop
         thread = self._live_thread
@@ -467,8 +478,19 @@ class LiveLoopManager:
                 thread.join(timeout=timeout if timeout is not None else self._live_timeout_s)
             except Exception:
                 logging.exception("stop_live_loop: failed to join loop thread")
+            if thread.is_alive():
+                # fail-closed: leave handles in place and report unsafe so the
+                # host gates out the runtime finalize (don't finalize on a
+                # thread that may hold the GIL).
+                logging.error(
+                    "stop_live_loop: loop thread did not stop within %ss; "
+                    "unsafe to finalize the Python runtime",
+                    timeout if timeout is not None else self._live_timeout_s,
+                )
+                return False
         self._live_loop = None
         self._live_thread = None
+        return True
 
     def _resolve_live_last_error(self) -> Optional[BaseException]:
         sess = self._session

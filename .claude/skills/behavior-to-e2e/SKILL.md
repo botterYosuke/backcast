@@ -489,6 +489,14 @@ backend→ECS seam だけでは十分条件にならない。
   ⚠️ **同じ primitive でも取りこぼしパターンは複数**: 「embedded fill を捨てる」だけでなく「fill status の 0・負の累積数量を
   `cumulative<=0` で一律 duplicate 扱いして素通り（FILLED/-1 が OrderAccepted で通る）」も同じ `_fill_violation` の穴だった。
   1 つの primitive に対し「捨てる／重複扱い／over-fill／非正/非有限／status-event 不整合」を網羅的に想定する。
+  ⚠️ **sweep は「同一クラス内の sibling 経路」だけでなく「変更した *共有 contract* の全 consumer」まで広げる（別 subsystem を含む）**:
+  fix が venue adapter の返り値 (`OrderResult.status` 等) や seam の契約を変えるなら、その method を `grep -rn '\.<method>(' engine/` して
+  **すべての呼び出し元**を列挙し、各 consumer が新しい値を正しく扱うか確認する。in-scope の 1 経路（例: kernel `LiveBroker`）だけ直して
+  満足すると、同じ adapter を食う別 subsystem（`ManualOrderFacade` / `NautilusVenueExecClient` 等）が旧契約のまま残り **half-applied contract = landmine** になる。
+  実例（#25 review・2026-06）: kabu `cancel_order` を `CANCELED→PENDING_CANCEL` に変えたが、その契約は LiveBroker 以外に `order_facade.py:320` と
+  `nautilus_exec_client.py:241` も消費していた（どちらも cancel ACK を terminal 扱い）。grill 設計時に consumer を grep し切れず code-review で発覚 →
+  **「mock で証明できる broker honoring だけ #25 に残し、実 adapter flip + 全 consumer 更新 + async 確定配線は実 venue slice (#23) へ一括」**にスコープ分割して解決。
+  教訓: contract を変える fix は **grill / 設計段階で consumer を全 grep し**、テスト可能な範囲（mock で踏める層）と実 venue 配線が要る範囲を**先に分離**する。
 - **pure-helper proxy（PyO3/runtime 経路を unit 化する純粋関数）は、本番コードが実際にその helper を呼んで
   いなければ false-green の test-only ガードになる**。実 backend を起動できない経路（PyO3 worker の startup
   status 列・instrument fetch 判断など）を「現状挙動を写した純粋関数 + desired を assert する RED」で

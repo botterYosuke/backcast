@@ -243,8 +243,9 @@ class MockVenueAdapter:
         """MockVenueAdapter 固有の取消（Protocol 外、submit_order と対）。
 
         set_next_cancel_outcome の仕込みがあれば one-shot 消費し、無ければ既定
-        CANCELED。`order_id` は client_order_id を想定し、結果の client_order_id に
-        そのまま反映する。filled_qty/avg_price は venue 側の最終状態の責務であり、
+        CANCELED（instant-confirm な mock 既定）。ack-then-poll な venue（kabu）の取消受付を
+        模すには status="PENDING_CANCEL" を仕込む。`order_id` は client_order_id を想定し、結果の
+        client_order_id にそのまま反映する。filled_qty/avg_price は venue 側の最終状態の責務であり、
         mock は 0 / None を返す（facade 側が track 済みの約定量とマージする）。
         """
         self._require_login()
@@ -261,9 +262,9 @@ class MockVenueAdapter:
                 reject_reason=outcome["reject_reason"],
             )
         return OrderResult(
-            status="CANCELED",
-            filled_qty=0.0,
-            avg_price=None,
+            status=outcome["status"] if outcome is not None else "CANCELED",
+            filled_qty=outcome["filled_qty"] if outcome is not None and outcome["filled_qty"] is not None else 0.0,
+            avg_price=outcome["avg_price"] if outcome is not None else None,
             client_order_id=order_id,
             reject_reason=None,
         )

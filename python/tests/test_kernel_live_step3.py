@@ -998,3 +998,132 @@ async def test_apply_venue_update_denied_with_embedded_fill_is_accounted():
     assert _types(events) == [OrderFilled, OrderCanceled]  # 約定 → 終端（ACCEPTED 経由しない）
     assert order.filled_qty == 40.0
     assert order.status is OrderStatus.CANCELED
+
+
+# ── #25 review: 取消受付 / 訂正受付（PENDING_CANCEL / PENDING_UPDATE）─────────────
+# kabu の取消 ACK は「取消受付」にすぎず終端ではない（確定は GET /orders polling が後追い）。
+# 受付を終端と誤認すると受付〜確定の隙間の競合約定を取りこぼす（finding 1）。訂正受付
+# （PENDING_UPDATE）も成立扱いせず new_qty を確定まで反映しない（finding 2）。
+
+
+async def test_cancel_pending_ack_keeps_order_open_for_race_fill():
+    """取消受付（PENDING_CANCEL）を終端と誤認せず注文を open に保ち、確定前の競合約定を会計する（finding 1）。
+
+    旧実装は cancel ACK を CANCELED 終端にし、後続 polling の PARTIALLY_FILLED を
+    apply_venue_update 冒頭の terminal early-return で捨て、filled_qty=0 のまま Portfolio が
+    venue 建玉と desync した。受付は PENDING_CANCEL（非終端）で order を open に保つ。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="ACCEPTED")
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+
+    a.set_next_cancel_outcome(status="PENDING_CANCEL")
+    cancel_events = await broker.cancel(order)
+    assert cancel_events == []  # 受付では終端イベントを出さない
+    assert order.status is OrderStatus.PENDING_CANCEL  # 非終端（open）
+
+    # 確定 polling 前の競合約定（PARTIALLY_FILLED 30@8）は捨てず会計する。
+    fill_events = broker.apply_venue_update(
+        order,
+        OrderResult(status="PARTIALLY_FILLED", filled_qty=30.0, avg_price=8.0, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert _types(fill_events) == [OrderFilled]
+    assert fill_events[0].last_qty == 30.0 and fill_events[0].last_px == 8.0
+    assert order.filled_qty == 30.0
+
+
+async def test_cancel_pending_then_poll_confirms_terminal_cancel():
+    """取消受付（PENDING_CANCEL）の後、確定 polling の CANCELED で終端化する（受付→確定の二段）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="ACCEPTED")
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+
+    a.set_next_cancel_outcome(status="PENDING_CANCEL")
+    await broker.cancel(order)
+    assert order.status is OrderStatus.PENDING_CANCEL
+
+    confirm = broker.apply_venue_update(
+        order,
+        OrderResult(status="CANCELED", filled_qty=0.0, avg_price=None, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert _types(confirm) == [OrderCanceled]
+    assert order.status is OrderStatus.CANCELED
+    # 終端後の遅延イベントは無視（idempotent）。
+    assert broker.apply_venue_update(
+        order,
+        OrderResult(status="CANCELED", filled_qty=0.0, avg_price=None, client_order_id="O-1"),
+        source="venue_stream",
+    ) == []
+
+
+async def test_apply_venue_update_pending_cancel_books_embedded_fill():
+    """単一入口（async EC #23）が PENDING_CANCEL を非終端として通し埋め込み約定を会計する（finding 1 sweep）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    order.status = OrderStatus.ACCEPTED
+    events = broker.apply_venue_update(
+        order,
+        OrderResult(status="PENDING_CANCEL", filled_qty=30.0, avg_price=8.0, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert _types(events) == [OrderFilled]  # 約定は会計（終端化しない）
+    assert order.filled_qty == 30.0
+    assert order.status is OrderStatus.PARTIALLY_FILLED  # fill 進行（非終端を維持）
+
+
+async def test_modify_pending_update_keeps_pending_and_defers_qty():
+    """訂正受付（PENDING_UPDATE）を成立扱いせず、new_qty を確定まで反映しない（finding 2）。
+
+    旧実装は modify_took_effect=（status not in REJECTED/DENIED）で PENDING_UPDATE を成立とみなし
+    order.quantity=new_qty に更新、約定が無いため status を prior（ACCEPTED）へ復帰させ
+    `status=ACCEPTED, quantity=50` という偽の成立を作っていた。受付は確定ではないので
+    status=PENDING_UPDATE を維持し、数量は確定イベントまで据え置く。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="ACCEPTED")
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+
+    a.set_next_modify_outcome(status="PENDING_UPDATE")
+    events = await broker.modify(order, new_qty=50.0)
+    assert events == []  # 受付では終端/約定イベントを出さない
+    assert order.status is OrderStatus.PENDING_UPDATE  # 受付＝非終端・成立ではない
+    assert order.quantity == 100.0  # 確定まで new_qty を反映しない
+
+
+async def test_apply_venue_update_pending_update_stays_open_books_fill():
+    """単一入口の PENDING_UPDATE も非終端として通し埋め込み約定を会計する（finding 2 sweep）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    order.status = OrderStatus.ACCEPTED
+    # 約定無しの PENDING_UPDATE → status=PENDING_UPDATE（open）を維持。
+    no_fill = broker.apply_venue_update(
+        order,
+        OrderResult(status="PENDING_UPDATE", filled_qty=0.0, avg_price=None, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert no_fill == []
+    assert order.status is OrderStatus.PENDING_UPDATE
+    # 埋め込み約定があれば会計（fill が status を進める・非終端）。
+    events = broker.apply_venue_update(
+        order,
+        OrderResult(status="PENDING_UPDATE", filled_qty=40.0, avg_price=8.0, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert _types(events) == [OrderFilled]
+    assert order.filled_qty == 40.0
+    assert order.status is OrderStatus.PARTIALLY_FILLED

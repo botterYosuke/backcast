@@ -49,6 +49,20 @@ EC イベントを**同一入口 `apply_venue_update` に正規化**して order
 （非同期 reconciliation は #23）。記録: findings 0011。
 _Avoid_: `ReplayBroker` と同一視すること（fill source・タイミングが別）／受信イベント数で dedup すること（累積数量が正）
 
+**取消受付 / 取消確定（cancel acknowledgment vs confirmation）**:
+ack-then-poll venue（kabu）では `PUT /cancelorder` の成立は**取消受付**にすぎず、注文はまだ open（`PENDING_CANCEL`）。
+終端の**取消確定**（`CANCELED`・約定残ゼロ）は `GET /orders` polling が後追いで運ぶ。受付を終端と誤認すると、受付〜確定の
+隙間で起きた競合約定を取りこぼす（kabu cancel ACK を terminal と誤認・#25 finding 1）。adapter は受付を `PENDING_CANCEL`、
+確定を `CANCELED` で**返し分け**、LiveBroker は `PENDING_CANCEL`/`PENDING_UPDATE` を**非終端**として注文を open に保ち、競合
+約定を会計し続ける。instant-confirm な mock venue は受付＝確定なので即 `CANCELED` を返す（venue ごとの差は adapter の返り
+status だけで表現し broker に venue 分岐を入れない）。同様に**訂正受付**（`PENDING_UPDATE`）も確定まで `new_qty` を注文へ
+反映しない。**#25 が実装したのは broker 側の honoring のみ**（mock 経路で証明）。実 kabu の `cancel_order` の
+`CANCELED`→`PENDING_CANCEL` 返し分け・poll→`apply_venue_update` の非同期確定配線・sibling consumer
+（`ManualOrderFacade` / legacy `NautilusVenueExecClient`）の honoring は **#23 で一括対応**（3 つが揃って実 kabu live で
+end-to-end に塞がる）。記録: findings 0011・#25/#23。
+_Avoid_: 取消受付（`PENDING_CANCEL`）/ 訂正受付（`PENDING_UPDATE`）を終端・成立扱いすること（受付であって確定ではない）／
+mock の即 `CANCELED` を全 venue の cancel 契約と一般化すること／受付時点で `new_qty` を注文数量へ確定反映すること
+
 **確定バー / partial バー（`KlineUpdate.is_closed`）**:
 `LiveRunner` は bucket-rollover で生成した**確定バー**（`is_closed=True`）と、UI 用に 1 秒間隔で publish する
 進行中の**partial バー**（`is_closed=False`）を同じ `KlineUpdate` 型で bus に流す。kernel live driver は

@@ -417,9 +417,59 @@ PASS・`compileall` PASS）:
   `new_qty >= filled_qty` を検証**して venue へ送らず据え置き、**約定成功時は新数量を `order.quantity` に反映**して
   FSM 判定に使う。test: `test_modify_new_qty_drives_filled_determination` / `test_modify_new_qty_below_filled_is_rejected`。
 
-round 6/7/8 はいずれも純 Python の broker fill 検証・pre-trade rail・event 種別の変更で、C#/Mono teardown 経路や
-Rust-core 不在不変条件には触れないため、下記 Unity-Mono full Live gate（round 5 時点で GREEN 実行済み）は
-再実行不要（full-chain purity harness が Python 層で Rust-core 不在＋teardown を毎回再確認）。
+### code-review 反映 round 9（#25 review・2026-06-14・GREEN）
+
+取消受付 / 訂正受付（`PENDING_CANCEL` / `PENDING_UPDATE`）を終端・成立と誤認する FSM 欠落 2 件を、
+**#25 スコープ内（mock 証明可能な broker 側のみ）**で修正。方針: **adapter が受付を `PENDING_CANCEL`、
+確定を `CANCELED` で返し分け、LiveBroker は受付を非終端として注文を open に保つ**（grill で確定・選択肢
+「adapter signals PENDING_CANCEL」。代替の「adapter が確定までブロック」は cancel に modify 固有のブロックを
+横展開しレイテンシ＋#23 で二重実装になるため不採用）。正本の用語は CONTEXT.md「取消受付 / 取消確定」。
+各 fix は RED→GREEN ガード付き（すべて mock venue で broker の挙動を固定）:
+
+- **broker が取消受付 `PENDING_CANCEL` を終端と誤認し後続約定を捨てる（High・review finding 1）** —
+  ack-then-poll venue では取消 ACK は**取消受付**にすぎず終端 CANCELED は polling/async EC が後追いするのに、
+  broker が `apply_venue_update` 冒頭の terminal early-return で受付〜確定の隙間の競合約定を捨てうる
+  （`PENDING_CANCEL→（旧）terminal, 後続 PARTIALLY_FILLED→events=[], filled_qty=0`）。broker は
+  `apply_venue_update` / `modify` で `PENDING_CANCEL`/`PENDING_UPDATE` を**非終端**として注文を open に保ち、
+  埋め込み約定を先に会計、約定が status を進めなければ受付 status を保持する。`driver._OPEN_STATES` に
+  `PENDING_CANCEL` を追加（teardown が取消進行中を open として扱い leak させない）。
+  test: `test_cancel_pending_ack_keeps_order_open_for_race_fill` / `test_cancel_pending_then_poll_confirms_terminal_cancel`
+  / `test_apply_venue_update_pending_cancel_books_embedded_fill`（mock が `set_next_cancel_outcome(status="PENDING_CANCEL")`
+  で受付を模す）。
+- **`PENDING_UPDATE` を成立済みとして数量だけ変更し状態を ACCEPTED へ戻す（Medium・review finding 2）** —
+  `modify_took_effect = status not in (REJECTED, DENIED)` が受付 `PENDING_UPDATE` を成立とみなし
+  `order.quantity=new_qty` に更新、約定が無いため status を prior（ACCEPTED）へ復帰させ `status=ACCEPTED,
+  quantity=50` という偽の成立を作った。**`PENDING_UPDATE`/`PENDING_CANCEL` を成立判定から除外**して new_qty を
+  確定まで反映せず、受付 status を維持する。test: `test_modify_pending_update_keeps_pending_and_defers_qty` /
+  `test_apply_venue_update_pending_update_stays_open_books_fill`。
+
+`/code-review high` 後の simplify 反映（同 round・挙動不変・136 passed）: `modify` / `apply_venue_update` のほぼ同型な
+PENDING 受付ブロックを共通 helper `_apply_pending_receipt(order, res, fill_events)` に抽出し、`PENDING_CANCEL if ... else
+PENDING_UPDATE` の二重 ternary を `OrderStatus(res.status)`（enum 値＝メンバ名）に置換。`driver.cancel_inflight`
+docstring の open 状態列挙に `PENDING_CANCEL` を追記。review で挙がった「SUBMITTED→PENDING で OrderAccepted を飛ばす」
+「PENDING status が C# decoder へ漏れる」は REFUTED（前者は既存の REJECTED/CANCELED/EXPIRED が意図的に ACCEPTED を
+経由しない設計と一致／後者は純受付は event を返さず `_project_event` に届かないため wire へ出ない）。
+
+**#23 へ繰り越し（sibling consumer gap・本 round では未修正）** — 上記は broker（#25 kernel 経路）のみ修正。
+同じ `cancel_order` を消費する他 2 経路は cancel ACK を依然 terminal 化しており、実 kabu live（#20/#23）でのみ
+顕在化する同一 bug-class として #23 に繰り越す。現状リグレッションは無い: いずれも `res.status` を無視し
+`CANCELED` を強制しているため、kabu が `CANCELED` を返す**現契約**では挙動不変（kabu flip 自体も #23 へ寄せ、#25 では
+kabu adapter を変更しない＝mock 経路で broker の honoring のみ証明）:
+  1. **`ManualOrderFacade.cancel`（`order_facade.py:320`）** — 本番 manual-cancel（UI ボタン）。`status="CANCELED"` を
+     ハードコード。sync facade で confirmation path を持たないため、終端 CANCELED の訂正は backend event（#23）経由。
+     完全修正は #23 の async 確定配線とセット。
+  2. **`NautilusVenueExecClient._cancel_order`（`nautilus_exec_client.py:241`）** — legacy auto 経路（Rust core ロード）。
+     非 REJECTED で無条件 `generate_order_canceled`。**#25 が置換対象とする経路**なので #23 で kabu flip と同時に
+     対応（または置換完了で消滅）。
+  - **#23 で一括対応する内容**: (a) `kabusapi_execution.cancel_order` の返り status を `CANCELED`→`PENDING_CANCEL`、
+    (b) poll→`on_order_event`→`broker.apply_venue_update` の async 確定配線、(c) 上記 2 consumer の PENDING_CANCEL honor
+    （または legacy 経路の撤去）。3 つが揃って初めて実 kabu live で「受付〜確定の競合約定取りこぼし」が end-to-end で塞がる。
+
+round 6/7/8/9 はいずれも純 Python の broker fill 検証・pre-trade rail・event 種別・FSM 受付状態の変更で、
+C#/Mono teardown 経路や Rust-core 不在不変条件には触れないため、下記 Unity-Mono full Live gate（round 5 時点で
+GREEN 実行済み）は再実行不要（full-chain purity harness が Python 層で Rust-core 不在＋teardown を毎回再確認）。
+注: 本 round の `pytest` 集計はこのマシンの既知 #34（nautilus high-precision build × standard-precision catalog）で
+`test_kernel_bars` / `test_kernel_golden_cpython` の 2 件が環境要因 fail（本 fix と無関係・stash 確認済み）。
 
 > **Unity-Mono full Live gate（D5 layer 3）実施済み・GREEN（2026-06-14）**: `KernelLiveProbe.Run` を Unity
 > 6000.4.11f1 batchmode（`-nographics -quit`）で実行し **exit 0 / PASS**。ログ（`C:\tmp\kernel_live_probe.log`）に

@@ -14,6 +14,7 @@ the multiplexer hub (:class:`~tachibana_ws.TickerEventWsHub`) live in
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -56,10 +57,16 @@ def is_market_open(now_jst: datetime) -> bool:
 
 
 def _is_finite_quote(v: str) -> bool:
-    """有限な数値文字列なら True。空欄・非数値・NaN/Inf は False。"""
+    """有限な数値文字列なら True。空欄・非数値・NaN/Inf は False。
+
+    adapter (_cb, tachibana.py) が後段で実際に行う ``float(v)`` と **同じ parse** で判定する。
+    こうして初めて『guard が True を返した段は float() が raise しない』不変条件が成立する。
+    Decimal ベースだと ``"1_"`` 等の underscore 区切りを Decimal は受理する一方 float は
+    ValueError を投げる乖離があり、その不正段が recv loop の無防備な float() を割る (#27)。
+    ``"1e400"`` のような overflow も float→inf を isfinite が弾いて段ごと skip できる。"""
     try:
-        return Decimal(v).is_finite()
-    except InvalidOperation:
+        return math.isfinite(float(v))
+    except ValueError:
         return False
 
 

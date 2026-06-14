@@ -50,6 +50,7 @@ _OPEN_STATES = frozenset(
         OrderStatus.ACCEPTED,
         OrderStatus.PARTIALLY_FILLED,
         OrderStatus.PENDING_UPDATE,
+        OrderStatus.PENDING_CANCEL,
     }
 )
 
@@ -181,7 +182,7 @@ class KernelLiveDriver:
             log.exception("kernel strategy on_stop failed")
 
     async def cancel_inflight(self) -> None:
-        """この run の open order（SUBMITTED/ACCEPTED/PARTIALLY_FILLED/PENDING_UPDATE）を取消（D8）。
+        """この run の open order（SUBMITTED/ACCEPTED/PARTIALLY_FILLED/PENDING_UPDATE/PENDING_CANCEL）を取消（D8）。
 
         各 cancel は個別 try で隔離し、1 件の失敗で残りを止めない。
         """

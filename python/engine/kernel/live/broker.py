@@ -157,9 +157,13 @@ class LiveBroker:
             order.status = prior
             return []
 
-        # 訂正が venue に届いた（拒否系でない）場合のみ訂正後数量を FILLED 判定の目標に反映する。
-        # REJECTED/DENIED は訂正不成立で元注文が旧数量のまま live なので prior_qty を維持する（finding 1）。
-        modify_took_effect = res.status not in ("REJECTED", "DENIED")
+        # 訂正が venue で**成立**した場合のみ訂正後数量を FILLED 判定の目標に反映する。REJECTED/DENIED は
+        # 訂正不成立で元注文が旧数量のまま live なので prior_qty を維持する（finding 1）。PENDING_UPDATE/
+        # PENDING_CANCEL は**受付**であって成立ではないので new_qty を確定まで反映しない（受付時点で数量を
+        # 確定すると未確定の訂正を成立扱いする・#25 review finding 2）。
+        modify_took_effect = res.status not in (
+            "REJECTED", "DENIED", "PENDING_UPDATE", "PENDING_CANCEL"
+        )
         if new_qty is not None and modify_took_effect:
             order.quantity = new_qty
 
@@ -196,6 +200,10 @@ class LiveBroker:
             order.status = OrderStatus.CANCELED if res.status == "CANCELED" else OrderStatus.EXPIRED
             terminal = self._canceled(order) if res.status == "CANCELED" else self._expired(order)
             return [*fill_events, terminal]
+        if res.status in ("PENDING_CANCEL", "PENDING_UPDATE"):
+            # 訂正/取消受付: 確定ではないので new_qty は未反映（modify_took_effect=False）。注文を open に
+            # 保ち、約定が status を進めなければ受付 status を保持する（prior へ復帰させない・finding 2）。
+            return self._apply_pending_receipt(order, res, fill_events)
         # ここに到達するのは拒否系 terminal(REJECTED/DENIED) と live(ACCEPTED 等)のみ。約定が無ければ
         # 元 status へ復帰する（注文全体を terminal にしない・D6。新数量は modify_took_effect が制御済み）。
         # embedded fill があればその会計（PARTIALLY_FILLED 等）を保持する。
@@ -254,6 +262,16 @@ class LiveBroker:
                 return [*fill_events, self._canceled(order)]
             order.status = OrderStatus.EXPIRED
             return [*fill_events, self._expired(order)]
+
+        # 取消受付 / 訂正受付（PENDING_CANCEL / PENDING_UPDATE）: 受付であって終端でも約定でもない。
+        # 注文を open（_TERMINAL_STATES 外）に保ち、受付〜確定の隙間で起きた競合約定（取消/訂正待ち中の
+        # 約定）は捨てず先に会計する。確定（kabu の GET /orders polling / async EC #23）が後追いで終端
+        # CANCELED か新数量 ACCEPTED を運ぶまでの暫定 status なので、約定が status を進めなければ受付 status を
+        # 保持する（prior へ復帰させない・#25 review findings 1/2）。訂正受付では new_qty を確定まで反映しない
+        # （modify 側で未適用・order.quantity 据え置き）。
+        if res.status in ("PENDING_CANCEL", "PENDING_UPDATE"):
+            fill_events = self._apply_guarded_fill(order, res, source=source)
+            return self._apply_pending_receipt(order, res, fill_events)
 
         # fail-closed: fill ステータス（FILLED/PARTIALLY_FILLED）の malformed な増分（価格欠落・非有限/
         # 範囲外の累積数量・非正の増分価格）は ACCEPTED emit より前に処理する。REJECTED は ACCEPTED を
@@ -421,6 +439,18 @@ class LiveBroker:
                 cumulative_filled_qty=incoming_cumulative,
             )
         ]
+
+    def _apply_pending_receipt(self, order: Order, res: OrderResult, fill_events: list) -> list:
+        """取消/訂正受付（PENDING_CANCEL / PENDING_UPDATE）を非終端として確定する共通処理（modify / apply_venue_update）。
+
+        受付であって終端でも約定でもないので注文を open に保つ。受付〜確定の隙間で起きた競合約定は呼び出し側が
+        `_apply_guarded_fill` で会計済み（modify は overfill_ceiling 付き）。約定が status を進めなければ
+        （fill_events 空）受付 status を保持し prior へ復帰させない（#25 review findings 1/2）。`OrderStatus(res.status)`
+        は enum 値＝メンバ名（PENDING_CANCEL/PENDING_UPDATE）で受付 status へ対応する。"""
+        order.venue_order_id = order.venue_order_id or order.client_order_id
+        if not fill_events and order.status not in _TERMINAL_STATES:
+            order.status = OrderStatus(res.status)
+        return fill_events
 
     def _canceled(self, order: Order) -> OrderCanceled:
         return OrderCanceled(

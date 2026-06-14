@@ -51,8 +51,37 @@ def _kline(i: int, close: float):
     )
 
 
-def run() -> dict:
-    """full LiveLoopManager chain を完走して結果 dict を返す（fills/net_after_buy/final_net/realized/leaked）。"""
+def _await_resting_order(mgr, *, timeout_s: float = 5.0):
+    """Poll until an order has reached ACCEPTED (resting) on the loop thread.
+
+    Gating on ``submit_order_call_count`` races: the mock increments it before
+    the driver applies the ACCEPTED transition, so the order can still be
+    SUBMITTED when the counter flips. Poll the real terminal-of-interest state.
+    """
+    from engine.kernel.orders import OrderStatus
+
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        host = getattr(mgr, "_strategy_host", None)
+        controller = getattr(host, "_controller", None) if host is not None else None
+        driver = getattr(controller, "_driver", None) if controller is not None else None
+        if driver is not None:
+            # snapshot: the live-loop thread mutates _orders concurrently, so
+            # iterating the live dict can raise "changed size during iteration".
+            for order in list(driver._orders.values()):
+                if order.status == OrderStatus.ACCEPTED:
+                    return order
+        time.sleep(0.02)
+    raise AssertionError("no ACCEPTED resting order appeared within timeout")
+
+
+def _build_live_manager():
+    """Construct the production LiveLoopManager chain over a shared MockVenueAdapter.
+
+    Returns ``(mgr, shared_mock, events)``: ``shared_mock`` is the inject handle,
+    ``events`` accumulates published backend events. ``engine_controller=None`` →
+    既定 KernelLiveEngineController（本番経路・Rust core 非ロード）。
+    """
     shared_mock = MockVenueAdapter()
     shared_mock.set_account_snapshot(cash=10_000_000.0, buying_power=10_000_000.0, positions=())
 
@@ -69,9 +98,15 @@ def run() -> dict:
         venue_sm=venue_sm,
         live_adapter_factory=lambda env_hint=None: shared_mock,  # 共有 mock（inject 用ハンドル）
         live_venue_id="MOCK",
-        engine_controller=None,  # → 既定 KernelLiveEngineController（本番経路）
+        engine_controller=None,
         publish_backend_event_callback=events.append,
     )
+    return mgr, shared_mock, events
+
+
+def run() -> dict:
+    """full LiveLoopManager chain を完走して結果 dict を返す（fills/net_after_buy/final_net/realized/leaked）。"""
+    mgr, shared_mock, events = _build_live_manager()
 
     def _fills() -> int:
         return sum(
@@ -153,27 +188,7 @@ def run_shutdown_cancel() -> dict:
         out-of-process な order pump（multiprocessing child）が無い。
       - stop_live_loop の clean-join 契約 (#22 Gap4 happy path): 正常停止で True を返す。
     """
-    from engine.kernel.orders import OrderStatus
-
-    shared_mock = MockVenueAdapter()
-    shared_mock.set_account_snapshot(cash=10_000_000.0, buying_power=10_000_000.0, positions=())
-
-    events: list = []
-    data_engine = DataEngine()
-    venue_sm = VenueStateMachine()
-    data_engine.state_machine = venue_sm
-    mode_manager = ModeManager(venue_sm=venue_sm, replay_engine=data_engine)
-    data_engine.attach_mode_manager(mode_manager)
-
-    mgr = LiveLoopManager(
-        engine=data_engine,
-        mode_manager=mode_manager,
-        venue_sm=venue_sm,
-        live_adapter_factory=lambda env_hint=None: shared_mock,
-        live_venue_id="MOCK",
-        engine_controller=None,
-        publish_backend_event_callback=events.append,
-    )
+    mgr, shared_mock, _events = _build_live_manager()
 
     run_id = None
     result: dict = {}
@@ -195,23 +210,22 @@ def run_shutdown_cancel() -> dict:
 
         for i in range(1, 4):
             mgr._live_loop.call_soon_threadsafe(shared_mock.inject_tick, _kline(i, 8.0))
-        deadline = time.time() + 5.0
-        while time.time() < deadline and shared_mock.submit_order_call_count == 0:
-            time.sleep(0.02)
 
+        # Poll for the order to actually reach ACCEPTED on the loop thread.
+        # submit_order_call_count increments BEFORE the driver applies the
+        # ACCEPTED transition, so gating on the counter and reading status
+        # immediately races (the order may still be SUBMITTED).
+        resting = _await_resting_order(mgr)
         driver = mgr._strategy_host._controller._driver  # white-box: pre-stop kernel state
-        orders = list(driver._orders.values())
-        assert len(orders) == 1, f"expected exactly 1 resting order, got {len(orders)}"
-        resting = orders[0]
+        assert len(driver._orders) == 1, f"expected exactly 1 resting order, got {len(driver._orders)}"
 
         # orphan 不在の構造不変条件 (#22 Gap3): loop が生きている間に観測する。
         loop_thread = mgr._live_thread
         result["python_pid"] = os.getpid()
-        result["loop_daemon"] = bool(loop_thread is not None and loop_thread.daemon)
-        result["loop_alive"] = bool(loop_thread is not None and loop_thread.is_alive())
+        result["loop_daemon"] = loop_thread is not None and loop_thread.daemon
+        result["loop_alive"] = loop_thread is not None and loop_thread.is_alive()
         result["child_count"] = len(multiprocessing.active_children()) - children_before
-        result["resting_before_stop"] = resting.status.value
-        assert resting.status == OrderStatus.ACCEPTED, result["resting_before_stop"]
+        result["resting_before_stop"] = resting.status.value  # ACCEPTED (polled above)
         cancel_calls_before = shared_mock.cancel_order_call_count
 
         # graceful 停止: cancel_inflight_orders → detach が走り、resting order を取消す。
@@ -252,11 +266,9 @@ def run_all() -> dict:
     Mono probe / CPython purity gate の単一エントリ。両シナリオ完走後に nautilus 非ロードを最終確認する。
     """
     merged = dict(run())            # fills/net_after_buy/final_net/realized/strategy_id/leaked
-    merged.update(run_shutdown_cancel())  # resting cancel + orphan + Gap4 happy path（キー衝突なし）
-
-    from spike.kernel_golden.purity import leaked_nautilus_modules
-
-    merged["leaked"] = list(leaked_nautilus_modules(sys.modules))
+    # run_shutdown_cancel() runs last and computes `leaked` after its own teardown,
+    # so the merged `leaked` is already the authoritative post-both-chains value.
+    merged.update(run_shutdown_cancel())  # resting cancel + orphan + Gap4（`leaked` 含め衝突は意図的に上書き）
     return merged
 
 

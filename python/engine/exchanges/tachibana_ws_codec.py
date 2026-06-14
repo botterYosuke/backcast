@@ -14,6 +14,7 @@ the multiplexer hub (:class:`~tachibana_ws.TickerEventWsHub`) live in
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime, time as dtime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
@@ -53,6 +54,20 @@ def is_market_open(now_jst: datetime) -> bool:
 # ---------------------------------------------------------------------------
 # FD frame processor — stateful, per-row
 # ---------------------------------------------------------------------------
+
+
+def _is_finite_quote(v: str) -> bool:
+    """有限な数値文字列なら True。空欄・非数値・NaN/Inf は False。
+
+    adapter (_cb, tachibana.py) が後段で実際に行う ``float(v)`` と **同じ parse** で判定する。
+    こうして初めて『guard が True を返した段は float() が raise しない』不変条件が成立する。
+    Decimal ベースだと ``"1_"`` 等の underscore 区切りを Decimal は受理する一方 float は
+    ValueError を投げる乖離があり、その不正段が recv loop の無防備な float() を割る (#27)。
+    ``"1e400"`` のような overflow も float→inf を isfinite が弾いて段ごと skip できる。"""
+    try:
+        return math.isfinite(float(v))
+    except ValueError:
+        return False
 
 
 @dataclass
@@ -200,9 +215,13 @@ class FdFrameProcessor:
             bv = fields.get(f"p_{row}_GBV{i}", "")
             ap = fields.get(f"p_{row}_GAP{i}", "")
             av = fields.get(f"p_{row}_GAV{i}", "")
-            if bp and bv:
+            # 空欄・非数値・非有限 (特別気配マーカ等) の段は当該段を落とす。これらを
+            # 通すと adapter (_cb) の float() が ValueError を投げ、tachibana_ws の recv
+            # loop は callback を try で包まないため接続断する。不正段は段ごと skip して
+            # feed を止めない (#27)。price<=0 の弾きは DepthCache の gt=0 が担う二段防御。
+            if _is_finite_quote(bp) and _is_finite_quote(bv):
                 bids.append({"price": bp, "size": bv})
-            if ap and av:
+            if _is_finite_quote(ap) and _is_finite_quote(av):
                 asks.append({"price": ap, "size": av})
 
         if not bids and not asks:

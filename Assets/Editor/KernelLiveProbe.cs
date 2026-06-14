@@ -14,8 +14,10 @@
 // join (Gap4 happy path).
 //
 // This extends #24's KernelTeardownProbe (which ran only the Replay kernel tracer): here the
-// SAME headless harness the CPython purity gate uses (spike.kernel_live.run_mock_live.run_all())
-// is exercised in Mono, then asserts nautilus_trader*/nautilus_pyo3 stayed out of sys.modules.
+// headless harness from spike.kernel_live.run_mock_live: Mono drives the SINGLE-chain
+// run_shutdown_cancel() (CPython gate drives the two-chain run_all(); run_all crashed the Mono
+// runtime — see body comment at the InvokeMethod call), then asserts nautilus_trader*/nautilus_pyo3
+// stayed out of sys.modules.
 //
 //   <UnityEditor> -batchmode -nographics -quit \
 //       -projectPath C:\Users\sasai\Documents\backcast \
@@ -127,7 +129,12 @@ public static class KernelLiveProbe
         {
             try
             {
-                if (engineStarted && workerStopped)
+                // #22 Gap4: actually CONSUME the fail-closed signal. Gate runtime finalize on
+                // BOTH the C# worker having returned AND the Python live loop having joined
+                // cleanly (loop_stopped_clean == True). A hung daemon loop can leave workerStopped
+                // true while the loop thread still holds the GIL — finalizing then deadlocks.
+                bool loopClean = Volatile.Read(ref _loopClean) == 1;
+                if (engineStarted && workerStopped && loopClean)
                 {
                     if (ts != IntPtr.Zero)
                     {
@@ -140,7 +147,7 @@ public static class KernelLiveProbe
                 }
                 else if (engineStarted)
                 {
-                    Debug.LogWarning("[KERNEL LIVE] worker did not stop; skipping Python shutdown to avoid GIL deadlock");
+                    Debug.LogWarning($"[KERNEL LIVE] skipping Python shutdown to avoid GIL deadlock (workerStopped={workerStopped} loopClean={Volatile.Read(ref _loopClean)})");
                 }
             }
             catch (Exception e)

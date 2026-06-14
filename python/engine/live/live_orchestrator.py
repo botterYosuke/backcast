@@ -127,6 +127,10 @@ class LiveLoopManager:
         self._session: Optional[LiveSession] = None
         self._live_loop = None
         self._live_thread = None
+        # A loop thread that failed to join (hung, possibly holding the GIL).
+        # Kept as a sticky reference so stop_live_loop() reports the fail-closed
+        # signal idempotently until the thread actually dies (#22 Gap4).
+        self._hung_loop_thread: Optional[threading.Thread] = None
         self._live_timeout_s = 5.0
         self._order_timeout_s = 40.0
         self._instruments_timeout_s = 60.0
@@ -459,16 +463,19 @@ class LiveLoopManager:
         worker shutdown the thread would otherwise leak. Safe to call when the
         loop was never started (None guard).
 
-        Returns ``True`` when the loop thread joined cleanly (or was never
-        started), ``False`` when ``join(timeout)`` elapsed and the thread is
-        still alive. #22 (Gap4, ADR-0001 decision 6 / S2-spike AC(b)): a hung
-        loop thread may still hold the GIL, so finalizing the Python runtime
-        (C# ``PythonEngine.Shutdown``) on top of it would deadlock. The bool is
-        the contract the C# finalize gate consumes (parallels
-        ``KernelLiveProbe.workerStopped``): on ``False`` the caller must **not**
-        finalize. We also keep ``_live_thread`` referenced (do not null it) so
-        the unsafe state stays observable for diagnostics; only the clean path
-        clears the handles.
+        Returns ``True`` when no live loop thread is still alive (joined cleanly
+        or never started), ``False`` while one is. #22 (Gap4, ADR-0001 decision 6
+        / S2-spike AC(b)): a hung loop thread may still hold the GIL, so
+        finalizing the Python runtime (C# ``PythonEngine.Shutdown``) on top of it
+        would deadlock. The **bool** is the fail-closed signal the host gates
+        finalize on: on ``False`` the caller must **not** finalize.
+
+        The ``_live_loop``/``_live_thread`` handles are always cleared so a
+        subsequent ``_ensure_live_loop()`` starts a fresh loop rather than
+        reusing a hung/dead one; an un-joinable thread is instead kept in
+        ``_hung_loop_thread`` so the ``False`` signal stays **idempotent** (every
+        call returns ``False`` until that thread actually dies — a retried call
+        must not fail open to ``True`` while the GIL-holder lives).
         """
         loop = self._live_loop
         thread = self._live_thread
@@ -483,17 +490,19 @@ class LiveLoopManager:
             except Exception:
                 logging.exception("stop_live_loop: failed to join loop thread")
             if thread.is_alive():
-                # fail-closed: leave handles in place and report unsafe so the
-                # host gates out the runtime finalize (don't finalize on a
-                # thread that may hold the GIL).
+                self._hung_loop_thread = thread
                 logging.error(
                     "stop_live_loop: loop thread did not stop within %ss; "
                     "unsafe to finalize the Python runtime",
                     timeout if timeout is not None else self._live_timeout_s,
                 )
-                return False
         self._live_loop = None
         self._live_thread = None
+        # Fail closed while any prior loop thread is still alive (idempotent).
+        hung = self._hung_loop_thread
+        if hung is not None and hung.is_alive():
+            return False
+        self._hung_loop_thread = None
         return True
 
     def _resolve_live_last_error(self) -> Optional[BaseException]:

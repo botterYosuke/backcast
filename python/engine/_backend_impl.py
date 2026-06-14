@@ -563,8 +563,11 @@ class DataEngineBackend:
     def _ensure_live_loop(self):
         return self._live_mgr._ensure_live_loop()
 
-    def stop_live_loop(self, timeout=None):
-        self._live_mgr.stop_live_loop(timeout=timeout)
+    def stop_live_loop(self, timeout=None) -> bool:
+        # Propagate the live-loop join result so the host can gate runtime
+        # finalize on it (True=joined clean=safe to finalize; False=hung=unsafe).
+        # #22 Gap4 — dropping it here would silence the fail-closed signal.
+        return self._live_mgr.stop_live_loop(timeout=timeout)
 
     def _resolve_live_last_error(self):
         return self._live_mgr._resolve_live_last_error()

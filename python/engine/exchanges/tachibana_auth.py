@@ -6,7 +6,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Mapping, Optional
+from typing import Any, Awaitable, Callable, Mapping, Optional
 
 import httpx
 
@@ -291,8 +291,27 @@ async def login(
     )
 
 
-async def validate_session_on_startup(*args: Any, **kwargs: Any) -> None:
-    """Stub — real implementation lands in A1.4. Keyword-only at call site."""
-    raise NotImplementedError(
-        "validate_session_on_startup() is not yet implemented (A1.4)"
+async def validate_session_on_startup(
+    request: Callable[[Mapping[str, Any]], Awaitable[Mapping[str, Any]]],
+) -> None:
+    """Probe a restored session's liveness with a read-only REQUEST (#35).
+
+    `is_session_valid_for_today()` only checks the cached JST date, which is
+    necessary but not sufficient: a same-day session can still be dead (night
+    market-close crossing / server invalidation) and reply ``p_errno="2"``.
+    Restoring such a corpse would arm the order path on a logged-out session
+    (CONTEXT「セッション当日有効 / セッション生存」).
+
+    `request` issues a Tachibana REQUEST (the adapter's bound ``_request``) and
+    returns the decoded response dict. We fire the cheapest authenticated read
+    (``CLMZanKaiKanougaku`` 買余力 — pure read, no order side effect) and route
+    it through ``check_response``, so a dead virtual URL surfaces as
+    ``SessionExpiredError`` before any order can be placed.
+
+    Returns None when the session is alive. Raises ``SessionExpiredError``
+    (``p_errno="2"``) or ``ApiError`` (other business-level codes).
+    """
+    resp = await request(
+        {"sCLMID": "CLMZanKaiKanougaku", "sIssueCode": "", "sSizyouC": ""}
     )
+    check_response(resp)

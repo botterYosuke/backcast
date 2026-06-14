@@ -67,6 +67,24 @@ public struct LiveTelemetryEvent
     public long TsMs;
 }
 
+// #21 D5: SecretRequired is pushed INSIDE the place_order RPC (tachibana second
+// password). The native secret modal reacts to this and replies via submit_secret
+// on the urgent-secret lane. Carries NO plaintext — only the request envelope.
+public struct LiveSecretRequiredEvent
+{
+    public string RequestId;
+    public string Venue;
+    public string Kind;
+    public string Purpose;
+}
+
+// #21 D6: VenueLogoutDetected is a health-watchdog NOTICE (prompt re-login). It is
+// NOT the badge authority — the badge waits for the get_state_json poll to converge.
+public struct LiveVenueLogoutEvent
+{
+    public string Venue;
+}
+
 public static class LiveBackendEventDecoder
 {
     // wire = {"<Tag>":<innerObject>}. Returns the tag name and sets innerJson to
@@ -127,6 +145,19 @@ public static class LiveBackendEventDecoder
         public long order_count;
         public long fill_count;
         public long ts_ms;
+    }
+
+    [System.Serializable] class SecretRequiredDto
+    {
+        public string request_id;
+        public string venue;
+        public string kind;
+        public string purpose;
+    }
+
+    [System.Serializable] class VenueLogoutDto
+    {
+        public string venue;
     }
 
     public static LiveOrderEvent DecodeOrder(string innerJson)
@@ -192,5 +223,27 @@ public static class LiveBackendEventDecoder
             FillCount = d.fill_count,
             TsMs = d.ts_ms,
         };
+    }
+
+    public static LiveSecretRequiredEvent DecodeSecretRequired(string innerJson)
+    {
+        if (string.IsNullOrWhiteSpace(innerJson)) return default;
+        var d = JsonUtility.FromJson<SecretRequiredDto>(innerJson);
+        if (d == null) return default;
+        return new LiveSecretRequiredEvent
+        {
+            RequestId = d.request_id,
+            Venue = d.venue,
+            Kind = d.kind,
+            Purpose = d.purpose,
+        };
+    }
+
+    public static LiveVenueLogoutEvent DecodeVenueLogout(string innerJson)
+    {
+        if (string.IsNullOrWhiteSpace(innerJson)) return default;
+        var d = JsonUtility.FromJson<VenueLogoutDto>(innerJson);
+        if (d == null) return default;
+        return new LiveVenueLogoutEvent { Venue = d.venue };
     }
 }

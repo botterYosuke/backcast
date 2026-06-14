@@ -43,6 +43,7 @@ from engine.exchanges.tachibana_auth import (
     check_response as _auth_check_response,
     current_p_sd_date,
     login as _auth_login,
+    validate_session_on_startup,
 )
 from engine.exchanges.tachibana_codec import (
     decode_response_body,
@@ -213,6 +214,22 @@ class TachibanaAdapter:
             if not is_session_valid_for_today(data):
                 raise ValueError("SESSION_CACHE_EXPIRED")
             self._apply_session_from_data(data)
+            # #35: date-validity is necessary but not sufficient — a same-JST-day
+            # session can still be dead (night close / server invalidation). Probe
+            # liveness before arming the EC stream. Fail closed: clear the just-
+            # applied session on ANY probe failure so login() never returns/raises
+            # holding a corpse (is_logged_in stays False, order path never entered).
+            # A dead session (p_errno="2" → ApiError) surfaces as SESSION_CACHE_EXPIRED
+            # to drive re-login; transport/parse failures propagate with their own
+            # semantics (orchestrator maps them to VENUE_LOGIN_FAILED).
+            try:
+                await validate_session_on_startup(self._request)
+            except ApiError as exc:  # SessionExpiredError (p_errno="2") も含む
+                self._session = None
+                raise ValueError("SESSION_CACHE_EXPIRED") from exc
+            except BaseException:
+                self._session = None
+                raise
             self._ensure_ec_stream()
             return
         if source == "prompt":

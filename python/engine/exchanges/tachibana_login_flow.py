@@ -12,7 +12,7 @@ import asyncio
 import logging
 import threading
 from datetime import datetime
-from typing import Any, Awaitable, Optional
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from engine.exchanges.tachibana_login_form_state import (
@@ -26,30 +26,6 @@ from engine.exchanges.tachibana_login_form_state import (
 from engine.live._build_mode import IS_DEBUG_BUILD
 
 log = logging.getLogger(__name__)
-
-
-class StartupLatch:
-    """Allow `validate_session_on_startup` exactly once per instance."""
-
-    __slots__ = ("_lock", "_done")
-
-    def __init__(self) -> None:
-        self._lock = asyncio.Lock()
-        self._done = False
-
-    async def run_once(self, coro: Awaitable[Any]) -> Any:
-        async with self._lock:
-            if self._done:
-                if asyncio.iscoroutine(coro):
-                    coro.close()
-                raise RuntimeError(
-                    "validate_session_on_startup は 1 プロセスライフサイクル中に "
-                    "1 度だけ呼べる (L6)。"
-                )
-            try:
-                return await coro
-            finally:
-                self._done = True
 
 
 def _map_exception(exc: BaseException) -> str:

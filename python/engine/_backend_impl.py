@@ -211,6 +211,7 @@ def _resolve_python_executable() -> str:
       1. TTWR_PYTHON_BIN env var (set by run_inproc.ps1 via _pyenv.ps1)
       2. sys.executable if it looks like a Python interpreter
       3. Scripts/python.exe or bin/python relative to sys.base_prefix
+      4. python.exe in the install ROOT (base_prefix / prefix) — uv layout
     """
     env_override = os.environ.get("TTWR_PYTHON_BIN")
     if env_override and os.path.isfile(env_override):
@@ -222,6 +223,13 @@ def _resolve_python_executable() -> str:
     for script_dir in ("Scripts", "bin"):
         for name in ("python.exe", "python3.exe", "python"):
             candidate = os.path.join(sys.base_prefix, script_dir, name)
+            if os.path.isfile(candidate):
+                return candidate
+    # uv-style installs place python.exe in the install ROOT (Scripts/ empty),
+    # so probe base_prefix / prefix directly before falling back to the host exe.
+    for root in (sys.base_prefix, sys.prefix):
+        for name in ("python.exe", "python3.exe", "python"):
+            candidate = os.path.join(root, name)
             if os.path.isfile(candidate):
                 return candidate
     return exe

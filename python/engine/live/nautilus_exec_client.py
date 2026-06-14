@@ -166,12 +166,13 @@ class NautilusVenueExecClient(LiveExecutionClient):
         # evaluate_pre_trade が合成順序を所有する（#199）:
         #   1. 信用規制（エクスポージャ増加のみ評価、fail-closed）
         #   2. allowlist + 建玉上限 (SafetyRails.check_pre_trade)
+        ref_price = self._reference_price(order)  # cache lookup を 1 回に集約（notional と共用）
         violation = evaluate_pre_trade(
             instrument_id=order.instrument_id.value,
             is_buy=order.side == OrderSide.BUY,
             qty=float(order.quantity),
-            order_notional_jpy=self._order_notional(order),
-            reference_price=self._reference_price(order),
+            order_notional_jpy=ref_price * float(order.quantity) if ref_price is not None else 0.0,
+            reference_price=ref_price,
             net_signed_qty=self._net_signed_qty(order.instrument_id),
             rails=self._rails,
             regulation_provider=self._regulation_provider,
@@ -395,11 +396,6 @@ class NautilusVenueExecClient(LiveExecutionClient):
         # mock/現状 adapter は venue 採番 id を OrderResult に載せないため client_order_id
         # から合成する（Step 5/6 で実 venue_order_id に差し替え）。
         return VenueOrderId(client_order_id.value)
-
-    def _order_notional(self, order) -> float:
-        """新規注文の概算約定金額（JPY）。price 不明（MARKET で market data 未供給）なら 0。"""
-        ref = self._reference_price(order)
-        return ref * float(order.quantity) if ref is not None else 0.0
 
     def _reference_price(self, order) -> float | None:
         """約定後建玉の時価評価に使う参照価格（#25 review findings 2/3）。

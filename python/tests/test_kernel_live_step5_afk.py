@@ -614,7 +614,8 @@ def test_mock_live_seeded_position_in_pretrade():
         pf = controller._driver._portfolio
         # bare "8918" が "8918.TSE" に正規化されて pre-trade cap の lookup key と一致する。
         assert pf.net_signed_qty(IID) == 300.0
-        assert pf.position_value_jpy(IID) == 300 * 9.0
+        seeded = pf.open_positions()
+        assert len(seeded) == 1 and seeded[0].quantity == 300.0 and seeded[0].avg_px == 9.0
         controller.detach(nautilus_strategy_id="LIVE-seed0001")
     finally:
         try:
@@ -623,6 +624,25 @@ def test_mock_live_seeded_position_in_pretrade():
             pass
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=2.0)
+
+
+def test_controller_projects_expired_as_expired():
+    """controller projection は OrderExpired を EXPIRED として外部通知する（#25 review finding 3）。
+
+    OrderCanceled に collapse すると CANCELED に化けて内部 order.status=EXPIRED と矛盾する。
+    """
+    from engine.kernel.orders import Order, OrderExpired, OrderSide, OrderStatus
+
+    order = Order(
+        client_order_id="O-1", strategy_id="LIVE-x", instrument_id=IID,
+        side=OrderSide.BUY, quantity=100.0, status=OrderStatus.EXPIRED,
+    )
+    event = OrderExpired(
+        client_order_id="O-1", venue_order_id="O-1", strategy_id="LIVE-x",
+        instrument_id=IID, side=OrderSide.BUY, ts_event_ns=0,
+    )
+    status, filled_qty, avg_price = KernelLiveEngineController._project_event(order, event)
+    assert status == "EXPIRED"
 
 
 def test_instrument_id_rejects_trailing_newline():

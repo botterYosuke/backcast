@@ -109,6 +109,23 @@ class OrderCanceled:
 
 
 @dataclass
+class OrderExpired:
+    """Expiry confirmation (Live FSM → EXPIRED). Handed to Strategy.on_order.
+
+    Distinct from OrderCanceled so the external projection (UI / strategy.on_order) reports
+    EXPIRED, matching the internal `order.status` — collapsing it into OrderCanceled would make
+    the FSM state and the notified status disagree (#25 review finding 3).
+    """
+
+    client_order_id: str
+    venue_order_id: str
+    strategy_id: str
+    instrument_id: str
+    side: OrderSide
+    ts_event_ns: int
+
+
+@dataclass
 class OrderDenied:
     """Risk-denied event handed to Strategy.on_order (kind matches RailViolation.kind)."""
 

@@ -88,13 +88,6 @@ class Portfolio:
         pos = self._positions.get(instrument_id)
         return pos.quantity if pos else 0.0
 
-    def position_value_jpy(self, instrument_id: str) -> float:
-        """|qty| × avg_px — current cost basis of the open position (0 if flat)."""
-        pos = self._positions.get(instrument_id)
-        if pos is None or pos.quantity == 0.0:
-            return 0.0
-        return abs(pos.quantity) * pos.avg_px
-
     def apply_fill(self, fill: OrderFilled) -> None:
         signed = fill.last_qty if fill.side is OrderSide.BUY else -fill.last_qty
         notional = fill.last_qty * fill.last_px

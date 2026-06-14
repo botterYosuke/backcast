@@ -67,6 +67,7 @@ public static class ProductionLiveShellProbe
 
             PhaseConnectBadge();
             PhaseManualRoundtrip();
+            PhaseCancelLane();
             PhaseTeardown();
         }
         catch (Exception e)
@@ -84,7 +85,7 @@ public static class ProductionLiveShellProbe
         {
             Debug.Log(string.Format(CultureInfo.InvariantCulture,
                 "[PRODUCTION LIVE SHELL PASS] connect→badge / place→FILLED→panel order+position / " +
-                "logout→DISCONNECTED — 3 lanes, main GIL-free (maxStall={0}ms)", _maxStall));
+                "cancel-lane GIL-safe / logout→DISCONNECTED — 3 lanes, main GIL-free (maxStall={0}ms)", _maxStall));
             EditorApplication.Exit(0);
         }
         else
@@ -178,6 +179,22 @@ public static class ProductionLiveShellProbe
         var f = new Slot();
         _lanes.SubmitPlaceOrder(VENUE, IID, "SELL", 100.0, null, "MARKET", "DAY", res => f.Set(res));
         WaitUntil(() => f.Done, 15000, "flatten result");
+    }
+
+    static void PhaseCancelLane()
+    {
+        // Regression guard for the cancel-lane GIL crash (findings 0014 §macOS HITL): pre-fix
+        // SubmitCancelOrder built `new PyString(venue/orderId)` on the write lane BEFORE taking
+        // Py.GIL() → PyUnicode_DecodeUTF16 segfault (reproduced 2× on a real demo venue, same
+        // frame). The place/fill phase never drove the cancel lane — that AFK gap let the crash
+        // ship. This proves only the C# marshaling seam; the cancel-ACK FSM is proven by the
+        // Python layer (workstream A). A clean return (no segfault) is the gate.
+        var c = new Slot();
+        _lanes.SubmitCancelOrder(VENUE, "probe-cancel-order-id", res => c.Set(res));
+        WaitUntil(() => c.Done, 15000, "cancel lane result (must marshal args under the GIL)");
+        Check(c.Done, "cancel lane never returned — SubmitCancelOrder likely segfaulted marshaling args");
+        Debug.Log("[PRODUCTION LIVE SHELL MARK] cancel lane returned status=" +
+                  c.Value.Status + " success=" + c.Value.Success);
     }
 
     static void PhaseTeardown()

@@ -234,7 +234,12 @@ initializer・Editor↔runtime assembly 参照すべて整合）。
   既存 `VenueLoginSecretHitlHarness` の engine bring-up / GIL 規律を踏襲し durable 型を再利用。
 - **C**: `LiveDemoRoundtripMenu.cs`（owner HITL launcher・`[LIVE DEMO ROUNDTRIP PASS]` recorder）。
 
-**残ゲート（owner 実行）**:
+**HITL 実走で発見・修正（2026-06-14・Windows）**: production shell の Play 競合と login subprocess バグを 2 件解消し、Connect→login dialog 到達まで確認:
+- **Play 競合**: `ReplayPanelsHarness`（既定 Play 所有者・`AutoBootstrapEnabled=true`）が PythonEngine を先取りし shell が `double-init` で停止。menu 駆動 leg へ Play を譲る既定の作法どおり、HITL 中は `ReplayPanelsHarness.cs:166` を一時 `false`（HITL 後 `true` に戻す・コミットしない）。
+- **`LOGIN_SUBPROCESS_CRASHED`**（commit `a1ef5a6`・実バグ修正）: embedded Python（Unity/pythonnet）では `_resolve_python_executable()` が base CPython を返し、`_login_subprocess_env()` が venv site-packages を子へ渡していなかったため `login_dialog_runner`→`tachibana_auth` が `ModuleNotFoundError: httpx` でクラッシュ（#21 login 経路の Windows-embedded バグ・macOS 非顕在）。`_login_subprocess_env` が `sys.path` の site-packages を PYTHONPATH に伝播するよう修正。base CPython で reproduction（before=exit 1 httpx / after=exit 124 dialog 到達）＋ `tests/test_login_subprocess_env.py`（2 passed）。
+- production shell 自体は GREEN: chrome 描画・badge・Order ticket・panels が production UI として表示、Connect で tkinter login dialog spawn まで到達（実 fill は別PC・JST 平日場中へ）。
+
+**残ゲート（owner 実行・別PC 引き継ぎ＝issue #23 コメント 2026-06-14）**:
 1. `<Unity> -batchmode -nographics -quit -projectPath . -executeMethod ProductionLiveShellProbe.Run`
    → `[PRODUCTION LIVE SHELL PASS]` exit 0（Mono は findings 0013 §深掘りの borderline race で flaky・
    クリーン state で数回リトライ）。

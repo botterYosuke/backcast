@@ -16,6 +16,14 @@ backcast の前身となる Bevy(Rust) アプリ。カットオーバー（#5）
 本番に温存し、その後**廃止**する。going-forward の開発は行わない。
 _Avoid_: Bevy 版を「現行/本番」と呼ぶこと（fallback かつ廃止予定であり本線ではない）
 
+**ExecutionMode（実行モード）**:
+engine 正準の実行モード enum＝ **`Replay` / `LiveManual` / `LiveAuto`** の3値（`models.py` /
+`mode_manager.py` / TTWR `protocol.rs`）。口語の「Live」は **`LiveManual`（実発注・手動）**、「Auto」は
+**`LiveAuto`（実発注・自律戦略実行＝"The Trader Was Replaced" の本丸）**を指す。`LiveAuto` の engine 実配線は
+現状 `NoopLiveEngineController`（TEST PLACEHOLDER）で **「Phase 10 に延期」**（`engine_controller.py` /
+`order_facade.py` / `nautilus_exec_client.py`）＝未完。`LiveManual` の demo roundtrip 統合ゲートは #23。
+_Avoid_: 「Live」と「Auto」を同義で使うこと（手動発注 vs 自律売買で別物）／`LiveAuto` を実装済みと見なすこと（placeholder）
+
 **engine**:
 host 非依存の Python 取引エンジン（Nautilus ベース、`python/engine`）。TTWR から backcast へ
 **移植**して backcast が所有する。host（Bevy/Unity）とは **sink 注入点・2 入口モジュール

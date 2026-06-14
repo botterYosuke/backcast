@@ -375,15 +375,8 @@ def build_instruments_from_master_records(
         if name is None:
             log.warning("tachibana: skipping sizyou row with no kabu name: %r", code)
             continue
-        try:
-            tick = resolve_min_ticksize_for_issue(row, yobine_table, snapshot_price=None)
-        except KeyError:
-            log.warning(
-                "tachibana: skipping sizyou row with unresolved yobine code: "
-                "issue=%r yobine=%r",
-                code, row.get("sYobineTaniNumber"),
-            )
-            continue
+        # 安いチェック（市場・売買単位・suffix 解決）を先に行い、未採用行に
+        # 高コストな呼値解決を払わせない。
         market = row.get("sZyouzyouSizyou")
         # per-market 上書き（正の整数のときのみ）→ 無ければ issue 既定の売買単位。
         # "0"/負値/空欄はいずれも無効として既定へフォールバックする。
@@ -399,6 +392,15 @@ def build_instruments_from_master_records(
             log.warning(
                 "tachibana: skipping sizyou row with unknown market: issue=%r market=%r",
                 code, market,
+            )
+            continue
+        try:
+            tick = resolve_min_ticksize_for_issue(row, yobine_table, snapshot_price=None)
+        except KeyError:
+            log.warning(
+                "tachibana: skipping sizyou row with unresolved yobine code: "
+                "issue=%r yobine=%r",
+                code, row.get("sYobineTaniNumber"),
             )
             continue
 

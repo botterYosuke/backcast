@@ -239,6 +239,42 @@ initializer・Editor↔runtime assembly 参照すべて整合）。
 - **`LOGIN_SUBPROCESS_CRASHED`**（commit `a1ef5a6`・実バグ修正）: embedded Python（Unity/pythonnet）では `_resolve_python_executable()` が base CPython を返し、`_login_subprocess_env()` が venv site-packages を子へ渡していなかったため `login_dialog_runner`→`tachibana_auth` が `ModuleNotFoundError: httpx` でクラッシュ（#21 login 経路の Windows-embedded バグ・macOS 非顕在）。`_login_subprocess_env` が `sys.path` の site-packages を PYTHONPATH に伝播するよう修正。base CPython で reproduction（before=exit 1 httpx / after=exit 124 dialog 到達）＋ `tests/test_login_subprocess_env.py`（2 passed）。
 - production shell 自体は GREEN: chrome 描画・badge・Order ticket・panels が production UI として表示、Connect で tkinter login dialog spawn まで到達（実 fill は別PC・JST 平日場中へ）。
 
+### macOS HITL 実走（2026-06-14 日曜 20:57 JST・閉局・Tachibana demo）
+
+owner 手動で `Tools > Backcast > Live Demo Roundtrip (Tachibana demo)` を macOS（Unity 6000.4.11f1・licensed Editor）で実走。閉局のため FILL leg は対象外とし「閉局でも確認できる leg」を回した。
+
+**通過（✅）**:
+- **接続**: session file cache（当日 11:00 作成）を自動復元・検証成功 → ログインダイアログ不要で `badge: Connected: TACHIBANA` / Positions・cash 取得。`LOGIN_SUBPROCESS_CRASHED` は macOS で非顕在（cache 経路で login subprocess も非経由）。
+- **secret modal（#21）**: 発注時に `Second password (typed; masked, never stored as text)` modal が開き、masked 入力 → Submit → venue まで到達（secret roundtrip 動作）。
+- **発注 REQUEST 経路**: BUY LIMIT `@100` は venue が `REJECTED`（8918 は uPnL=-36800/qty=400/avg=102 から現値 ≈ ¥10 と逆算でき、`@100` は値幅上限 ≈¥40 超のバンド外）。`@9` で `ACCEPTED`（resting・`filled=0@0`）。発注→venue 応答→UI 表示が end-to-end で動作。
+
+**失敗（❌ cancel-ACK leg）**:
+- resting order（`2e407d0e…` ACCEPTED）に対し **`Cancel last` を押した瞬間に Unity が SIGSEGV クラッシュ**（`~/Library/Logs/DiagnosticReports/Unity-2026-06-14-211808.ips`：`EXC_CRASH / SIGSEGV`）。faulting スタック（Editor.log）:
+  ```
+  #0 _PyObject_Malloc
+  #1 _PyUnicodeWriter_PrepareInternal
+  #2 PyUnicode_DecodeUTF16Stateful
+  #3 Python.Runtime.Runtime:wrapper_native_indirect ... [Unity Child Domain]
+  ```
+  → `PyUnicode_DecodeUTF16Stateful` は .NET(UTF-16) 文字列を Python str へ marshal する箇所。
+- **2回再現・同一フレーム・根本原因確定（clean state でも再現）**: PC 再起動後の clean state でも **完全に同じフレーム**でクラッシュ。しかも 2 回目は WS churn が `p_errno=2` 6 行のみ（1 回目 36 行）と少ないのに再発 → **churn は主因でなく誘発の補助因子**。原因は **`LiveRpcLanes.SubmitCancelOrder`（`Assets/Scripts/Live/LiveRpcLanes.cs:152`）が GIL 取得前に `new PyString(venue)` / `new PyString(orderId)` を構築している GIL 規律違反**。`new PyString` は内部で `PyUnicode_DecodeUTF16`→`_PyObject_Malloc` を呼び GIL 必須だが、`CallWrite(...)` の引数として評価されるため `CallWrite` 内の `using (Py.GIL())`（line 196）より前に走る。`CallPlace`（line 99-111）/`SubmitModifyOrder`（line 169-176）は **先に GIL を取ってから** PyString を生成しているため安全＝**cancel 経路だけのバグ**。fix: cancel も GIL 内で PyString を構築する（place/modify と同じ順序）。
+
+**副次所見（記録候補）**:
+- ⚠️ 注文 `REJECTED` の **理由コードが UI に出ない**（`REJECTED` のみ）。owner が原因を判別できない。
+- ⚠️ `SECRET_TIMEOUT`（25s 絶対 timeout）で注文が失敗した**後も secret modal が開いたまま残存**。order 失敗時に modal を閉じる seam が無い。
+- ⚠️ クラッシュは `Cancel` 操作中だったため、**demo venue 側に取消未完了の resting order（`2e407d0e…`）が残っている可能性**。再接続時に手動取消すること（demo・低リスク）。
+
+**結論 / 切り分け**:
+- cancel-ACK の **Python 層ロジック正当性**は pytest（191 passed）＋ import-purity で既に GREEN（本書 §workstream A）。本クラッシュは **C# adapter 層（`LiveRpcLanes` cancel 経路）の GIL 規律違反**であり Python ロジックバグではない。findings 0013 の「AFK probe flaky（箇所がばらつく偶発 race）」とは別物で、**cancel 操作で決定的に落ちる**ため要修正（fix は上記＝GIL 内で PyString 構築）。
+- 本日は閉局のため `[LIVE DEMO ROUNDTRIP PASS]` 未記録。**cancel-ACK 視覚確認（受付→確定）+ FILL leg + depth live を JST 平日場中に再走**。
+
+### fix 適用＋実機検証（2026-06-14 同日・clean state 再 Play）
+
+- **fix（`Assets/Scripts/Live/LiveRpcLanes.cs`）**: `SubmitCancelOrder` を place/modify と同じく **`Py.GIL()` を取ってから `new PyString(venue/orderId)` を構築**する形に変更。GIL 取得前に引数を評価していた footgun helper `CallWrite`（cancel 専用・他に使用なし）を撤去。
+- **RED ガード（`Assets/Editor/ProductionLiveShellProbe.cs`）**: `PhaseCancelLane` を追加。place→FILLED フェーズが cancel lane を一度も叩いていなかった（＝この AFK gap が crash を ship させた）。MOCK で cancel lane を駆動し「segfault せず clean return」を gate 化。
+- **実機検証（macOS・Tachibana demo・閉局）**: fix 後に再 Play し `BUY LIMIT @9` ACCEPTED → **`Cancel last`** を実行。**一度も落ちず**に Cancel→secret modal（cancel も第二暗証番号要）→Submit→venue cancel RPC→応答まで完走（GIL クラッシュ解消を実機確認）。venue 応答は **`ERR CANCEL_REJECTED`**（`order_facade.py:310-312`：adapter `cancel_order` が `REJECTED`＝**閉局のため demo venue が cancel を拒否**。コードは正しく honor＝注文 live のまま）。
+- **未達（market-hours-gated）**: 受付→確定の happy path（`PENDING_CANCEL`→`CANCELED`）は venue が cancel を ACCEPT しないと見えない＝**JST 平日場中が必要**。handoff の「cancel は閉局でも処理される」想定は本 demo では不成立（HITL 所見）。
+
 **残ゲート（owner 実行・別PC 引き継ぎ＝issue #23 コメント 2026-06-14）**:
 1. `<Unity> -batchmode -nographics -quit -projectPath . -executeMethod ProductionLiveShellProbe.Run`
    → `[PRODUCTION LIVE SHELL PASS]` exit 0（Mono は findings 0013 §深掘りの borderline race で flaky・

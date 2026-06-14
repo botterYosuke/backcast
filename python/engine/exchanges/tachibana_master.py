@@ -27,6 +27,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
+from engine.live.instrument_mapping import tachibana_market_to_suffix
+
 from .tachibana_url import MASTER_CLMIDS, PRICE_CLMIDS
 
 log = logging.getLogger(__name__)
@@ -317,25 +319,35 @@ def build_instruments_from_master_records(
     Pipeline:
       1. CLMYobine 行を `decode_clm_yobine_record` で decode し
          ``yobine_table: dict[str, list[YobineBand]]`` を構築。
-      2. CLMIssueMstKabu 行から ``sIssueCode -> sIssueName`` の name map を構築。
+      2. CLMIssueMstKabu 行から ``sIssueCode -> sIssueName`` の name map と
+         ``sIssueCode -> int(sBaibaiTani)`` の lot map を構築（売買単位の正本は
+         issue 単位の CLMIssueMstKabu.sBaibaiTani であり、市場マスタ側ではない）。
       3. CLMIssueSizyouMstKabu 行ごとに 1 行 InstrumentRaw を emit:
          - ``code`` = sIssueCode
          - ``name`` = name_map[sIssueCode]（無ければ skip + warn）
-         - ``market`` = sSizyouC
-         - ``lot_size`` = int(sBaibaiTaniNumber)
+         - ``market`` = tachibana_market_to_suffix(sZyouzyouSizyou) ＝ Nautilus
+           suffix（"00"→"TSE"）。未知市場は ValueError → skip + warn（feed 不停止）
+         - ``lot_size`` = per-market 上書き（sSizyoubetuBaibaiTani が非空ならそれ）、
+           無ければ lot_map[sIssueCode]（= CLMIssueMstKabu.sBaibaiTani）
          - ``tick_size`` = float(`resolve_min_ticksize_for_issue(row, yobine_table, snapshot_price=None)`)
          上記で KeyError（sYobineTaniNumber が yobine_table に無い）に当たった
          行は warn log を出して skip（例外は伝播させない）。
 
     Notes:
-      - 同一 sIssueCode が複数 sSizyouC を持つ場合は市場ごとに 1 行ずつ emit する
-        （test_build_instruments_multiple_markets_for_same_issue_emit_multiple_rows 参照）。
+      - フィールド名は manual (mfds_json_api_ref_text.html) の CLMIssueSizyouMstKabu /
+        CLMIssueMstKabu レコード定義に準拠（上場市場=sZyouzyouSizyou・売買単位=
+        sBaibaiTani）。旧実装の sSizyouC / sBaibaiTaniNumber はこれらのレコードに
+        存在せず全行 skip していた（Issue #36 で修正）。
+      - 同一 sIssueCode が複数 sZyouzyouSizyou を持つ場合は市場ごとに 1 行ずつ emit
+        する。現状 suffix が定義されているのは "00"=東証(TSE) のみのため、他市場の
+        行は未知コードとして skip される（実コード判明後に instrument_mapping へ追加）。
       - InstrumentRaw は frozen Pydantic モデルなので、float 化は最後の 1 回だけ。
     """
     from engine.live.adapter import InstrumentRaw  # 局所 import: 循環回避
 
     yobine_table: dict[str, list[YobineBand]] = {}
     name_map: dict[str, str] = {}
+    lot_map: dict[str, int] = {}
     sizyou_rows: list[dict[str, Any]] = []
 
     for rec in records:
@@ -348,6 +360,11 @@ def build_instruments_from_master_records(
             name = rec.get("sIssueName")
             if isinstance(code, str) and isinstance(name, str):
                 name_map[code] = name
+            # 売買単位の正本（issue 単位）。空欄・非数値・0 以下は載せない
+            # （市場マスタ側の per-market 上書きが無ければ skip 対象になる）。
+            lot = _parse_positive_int(rec.get("sBaibaiTani"))
+            if isinstance(code, str) and lot is not None:
+                lot_map[code] = lot
         elif clmid == "CLMIssueSizyouMstKabu":
             sizyou_rows.append(rec)
 
@@ -367,11 +384,21 @@ def build_instruments_from_master_records(
                 code, row.get("sYobineTaniNumber"),
             )
             continue
-        market = row.get("sSizyouC")
-        lot_size_raw = row.get("sBaibaiTaniNumber")
-        if not market or not lot_size_raw:
+        market = row.get("sZyouzyouSizyou")
+        # per-market 上書き（正の整数のときのみ）→ 無ければ issue 既定の売買単位。
+        # "0"/負値/空欄はいずれも無効として既定へフォールバックする。
+        lot_size = _parse_positive_int(row.get("sSizyoubetuBaibaiTani")) or lot_map.get(code)
+        if not market or lot_size is None:
             log.warning(
                 "tachibana: skipping sizyou row missing market/lot_size: issue=%r", code
+            )
+            continue
+        try:
+            suffix = tachibana_market_to_suffix(str(market))
+        except ValueError:
+            log.warning(
+                "tachibana: skipping sizyou row with unknown market: issue=%r market=%r",
+                code, market,
             )
             continue
 
@@ -379,9 +406,29 @@ def build_instruments_from_master_records(
             InstrumentRaw(
                 code=code,
                 name=name,
-                market=str(market),
+                market=suffix,
                 tick_size=float(tick),
-                lot_size=int(lot_size_raw),
+                lot_size=lot_size,
             )
         )
     return out
+
+
+def _parse_positive_int(raw: Any) -> int | None:
+    """Parse a master trading-unit field to a positive int, or ``None``.
+
+    Tachibana serializes numeric master fields as strings, so a malformed
+    trading unit can arrive as ``""``, ``"0"``, a negative, or a non-numeric
+    token. All of these are unusable as a lot size (a 0 unit would propagate a
+    division-by-zero downstream), so they collapse to ``None`` and the caller
+    falls back to the issue default or skips the row. Note ``"0"`` (truthy
+    string) must be rejected just like the integer ``0``.
+    """
+    if raw in (None, ""):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        log.warning("tachibana: ignoring non-int trading unit: %r", raw)
+        return None
+    return value if value > 0 else None

@@ -285,7 +285,7 @@ class KernelLiveEngineController:
         if isinstance(event, OrderDenied):
             return "DENIED", 0.0, 0.0
         if isinstance(event, OrderFilled):
-            # FILLED vs PARTIALLY_FILLED は broker が _apply_fill で既に決定済み（order.status）。
+            # FILLED vs PARTIALLY_FILLED は broker が約定会計時に決定済み（order.status）。
             # fill event は最新 fill の直後に配られるので order.status はその fill の結果を表す
             # ＝単一ソース（threshold 判定を controller 側で再計算しない・altitude）。
             return order.status.value, float(event.cumulative_filled_qty), float(order.avg_px)

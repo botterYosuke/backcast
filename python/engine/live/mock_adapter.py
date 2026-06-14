@@ -217,15 +217,20 @@ class MockVenueAdapter:
         self,
         *,
         status: str,
+        filled_qty: float | None = None,
+        avg_price: float | None = None,
         reject_reason: str | None = None,
     ) -> None:
         """テスト専用: 次の cancel_order の結果を仕込む（one-shot）。
 
         仕込み無しなら cancel_order は既定 CANCELED。status="REJECTED" 時は
-        reject_reason を載せる。consume 後は None に戻る。
+        reject_reason を載せる。取消拒否でも取消待ち中の約定を載せられる（実 adapter
+        契約: 取消拒否＋既約定）ので filled_qty/avg_price を仕込める。consume 後は None に戻る。
         """
         self._next_cancel_outcome = {
             "status": status,
+            "filled_qty": filled_qty,
+            "avg_price": avg_price,
             "reject_reason": reject_reason,
         }
 
@@ -250,8 +255,8 @@ class MockVenueAdapter:
         if outcome is not None and outcome["status"] == "REJECTED":
             return OrderResult(
                 status="REJECTED",
-                filled_qty=0.0,
-                avg_price=None,
+                filled_qty=outcome["filled_qty"] if outcome["filled_qty"] is not None else 0.0,
+                avg_price=outcome["avg_price"],
                 client_order_id=order_id,
                 reject_reason=outcome["reject_reason"],
             )
@@ -306,10 +311,11 @@ class MockVenueAdapter:
         self._next_modify_outcome = None
 
         if outcome is not None and outcome["status"] == "REJECTED":
+            # REJECTED でも取消待ち中の約定を載せられる（実 adapter 契約: 訂正拒否＋既約定）。
             return OrderResult(
                 status="REJECTED",
-                filled_qty=0.0,
-                avg_price=None,
+                filled_qty=outcome["filled_qty"] if outcome["filled_qty"] is not None else 0.0,
+                avg_price=outcome["avg_price"],
                 client_order_id=order_id,
                 reject_reason=outcome["reject_reason"],
             )

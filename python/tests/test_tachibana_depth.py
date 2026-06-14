@@ -50,6 +50,35 @@ def test_depth_skips_level_when_size_missing() -> None:
     assert d["asks"] == [{"price": "2481", "size": "200"}]
 
 
+def test_depth_skips_non_numeric_level() -> None:
+    """truthy だが非数値/非有限な段値は段ごと落とす (#27 AC: 不正段は当該段を skip し
+    feed を止めない)。これらを通すと _cb の float() (tachibana.py) が ValueError を投げ、
+    tachibana_ws.py:170 は callback を try で包まないため recv loop が落ちて接続断する。"""
+    fields = {
+        f"{PFX}_GBP1": "—", f"{PFX}_GBV1": "100",      # 非数値 price → skip
+        f"{PFX}_GBP2": "2480", f"{PFX}_GBV2": "100",   # 正常 → 残る
+        f"{PFX}_GAP1": "2481", f"{PFX}_GAV1": "nan",   # 非有限 size → skip
+        f"{PFX}_GAP2": "2482", f"{PFX}_GAV2": "200",   # 正常 → 残る
+    }
+    d = _depth(fields)
+    assert d is not None
+    assert d["bids"] == [{"price": "2480", "size": "100"}]
+    assert d["asks"] == [{"price": "2482", "size": "200"}]
+
+
+def test_depth_keeps_zero_and_scientific_notation() -> None:
+    """price='0' / 指数表記は有限数なので段は残す (price<=0 の弾きは DepthCache の
+    gt=0 が担う二段防御。codec は『float() を割らない』ことだけ保証する)。"""
+    fields = {
+        f"{PFX}_GBP1": "0", f"{PFX}_GBV1": "100",
+        f"{PFX}_GAP1": "1e3", f"{PFX}_GAV1": "200",
+    }
+    d = _depth(fields)
+    assert d is not None
+    assert d["bids"] == [{"price": "0", "size": "100"}]
+    assert d["asks"] == [{"price": "1e3", "size": "200"}]
+
+
 def test_depth_collects_up_to_10_levels() -> None:
     fields: dict[str, str] = {}
     for i in range(1, 11):

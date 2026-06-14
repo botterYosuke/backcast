@@ -105,5 +105,27 @@ RED→GREEN で実装。`tests/test_tachibana_startup_session.py`（5 passed）:
 
 backcast に FLOWS.md は無く、本 findings ＋ characterization test（AFK）＋ owner HITL（AC #4・demo 資格情報）が
 behavior gate の等価物。新 ADR 不要（ADR-0001 が方針を所有）。
-</content>
-</invoke>
+
+## 実装結果（owner HITL・AC #4 実機 PASS・2026-06-14）
+
+AC #4「demo 資格情報で HITL 検証」を実 tachibana demo（`demo-kabuka.e-shiten.jp`）で実機実証
+（owner-manual・Windows・Unity Editor in-proc・ProductionLiveShell）:
+
+- Tools > Backcast > Live Demo Roundtrip (Tachibana demo) → Connect → tkinter login dialog → demo 資格情報。
+- 結果: `badge: Connected: TACHIBANA` / `status: connected (LiveManual)`。**Positions パネルに実 demo アカウント
+  保有が表示**（6501 qty=200 avg=4657 / 6502 qty=2000 / 9984 qty=400 avg=6472・cash=bp=19962192）。
+- これは `fetch_account` の `CLMZanKaiKanougaku`（= #35 probe と同一の純読取り）が実 venue から返った＝
+  **session が live で、login() の session_cache 分岐の `validate_session_on_startup` probe が実 tachibana demo に
+  発火し通過した**証跡（失効なら `SESSION_CACHE_EXPIRED` で `login failed` になる）。AC #4 の
+  「有効 session ではそのまま接続継続」を実機で確認。
+- 失効 leg（`SESSION_CACHE_EXPIRED`→再ログイン）は UI 非到達（prompt→session_cache 再ロードは常に fresh session）。
+  AFK pytest（D2 / 実装結果）が回帰ガードの正本。
+
+### 前提として直した embedded login バグ（findings 0016）
+
+この HITL に到達する前に、embedded Python（Unity/pythonnet）で login subprocess が起動できない別バグ
+（`LOGIN_SUBPROCESS_CRASHED`）を直す必要があった。`_resolve_python_executable()` が uv レイアウト
+（`python.exe` が install root・`Scripts/` 空）を見落とし Unity ホスト exe を返し、subprocess が
+`Unity.exe -m engine.live.login_dialog_runner` になっていた（venue 非依存）。詳細と修正は **findings 0016**。
+#35 範囲外だが owner 承認で同セッション修正。
+

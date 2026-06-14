@@ -828,6 +828,26 @@ class DataEngineBackend:
                 base_dir=get_run_buffer_base_dir(),
             )
 
+            # Bar-by-bar live following (#29 AC③): stream each bar into GetState AS the
+            # run processes it (on_bar), instead of bulk-injecting the whole series after
+            # engine_run completes. So GetState polling sees the chart advance bar-by-bar.
+            # The primary's bars[0] was already primed into GetState by
+            # _prime_provider_locked, so skip the FIRST primary bar to avoid a duplicate
+            # (parity with the old post-run start=1 for primary / start=0 for others).
+            # Non-primary instruments are not primed → all their bars stream. Routing to
+            # the primary chart is handled by apply_event(primary_id) inside apply_replay_event.
+            from .nautilus_adapter import bar_to_kline_update
+            primary_id = self.engine._replay_primary_id
+            _primary_first_seen = [False]
+
+            def _stream_bar(bar, iid_str):
+                if iid_str == primary_id and not _primary_first_seen[0]:
+                    _primary_first_seen[0] = True
+                    return
+                self.engine.apply_replay_event(
+                    bar_to_kline_update(bar, instrument_id=iid_str)
+                )
+
             try:
                 engine_run(
                     strategy_cls=strategy_cls,
@@ -837,25 +857,9 @@ class DataEngineBackend:
                     strategy_init_kwargs=None,
                     run_event=self.engine.run_event,
                     bar_interval_sec=0.01,
+                    on_bar=_stream_bar,
                 )
                 rb.finish()
-
-                # D16: Expose ALL bars (all instruments) to GetState for multi-instrument chart.
-                # Primary's bars[0] was already primed by _prime_provider_locked; skip it (start=1).
-                # Non-primary instruments are NOT primed, so their bars[0] must be injected (start=0).
-                # Each bar is emitted with its real instrument_id; primary routing is handled
-                # by apply_event(primary_id=_replay_primary_id) inside apply_replay_event.
-                from .nautilus_adapter import bar_to_kline_update
-                primary_id = self.engine._replay_primary_id
-                for iid, bars in bars_by_instrument.items():
-                    if not bars:
-                        continue
-                    iid_str = str(iid)
-                    start = 1 if iid_str == primary_id else 0
-                    for bar in bars[start:]:
-                        self.engine.apply_replay_event(
-                            bar_to_kline_update(bar, instrument_id=iid_str)
-                        )
 
                 from engine.strategy_runtime.portfolio import compute_portfolio
                 _reader = RunBufferReader(rb.run_dir)

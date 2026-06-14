@@ -272,6 +272,128 @@ _Avoid_: 「Unity kill → 両方死ぬ」の literal kill テストで証明し
 非決定的）／orphan 防止に Job Object / heartbeat / dead-man's-switch を足すこと（同一プロセス埋め込みで
 自動成立済み・ADR-0001 decision 3 が「不要」と明記）
 
+**scenario（実行設定）/ scenario sidecar**:
+Replay run の実行パラメータ（`granularity` / `initial_cash`(cash) / `instruments`(universe) / `start` / `end`）を
+持つ **engine 所有**の versioned dict（schema v1/v2/v3・`engine.strategy_runtime.scenario`）。永続形は strategy
+`.py` に co-locate した `<strategy>.json` の **`"scenario"` キー**（`_sidecar_path`: `foo.py`→`foo.json`）。engine の
+唯一の read 入口は `load_scenario`/`strategy_loader.load`＝**この v3 形式しか読めない**。backcast の Replay 起動
+`start_engine(strategy_file)`（`_backend_impl.py`）は **完全に sidecar 駆動**——`strategy_file` 一個だけ受け取り
+scenario の granularity/instruments/start/end/initial_cash を全部駆動する（`catalog_path` は別途 `LoadReplayData` が
+セットした `last_replay_catalog_path` から取る・panel フィールドではない）。ゆえに「Unity が v3 sidecar を書く →
+engine がネイティブに読む」の一直線で AC③ を満たす（**変換層ゼロ**）。`start_nautilus_replay(cfg)` の flat override
+入口（instruments 必須・granularity/initial_cash は cfg 優先）は **e-station/live 系譜**で backcast の Replay 経路では
+ない。同一 `<strategy>.json` に **`scenario` キー（engine 所有・v3）と `layout` キー（Unity 所有・[[レイアウト parity（capability parity）]] / ADR-0003）が共存**できる（`load_scenario` は layout-only sidecar を許容）。
+**Unity が write する schema_version は v3 のみ**（v1/v2 は切り捨て）。AC③「チャート更新」は **bar-by-bar ライブ追従**で
+満たす——production path（[[backcast Replay 起動経路（production state-machine path）]]）の現実装は全バーを `engine_run`
+**完了後**に `apply_replay_event` で一括注入する（`_backend_impl.py` ~L850）ため、#29 は `engine_run` の**run 中に per-bar
+で chart/state を stream** する engine 側変更を含む（run 完了後一括ではない）。
+_Avoid_: scenario 永続化に **ADR-0003 を適用すること**（ADR-0003 は layout 専用・scenario は engine 所有の別 seam＝category error）／
+Unity 独自スキーマを新設すること（engine が読めず変換層 or engine 改修が要る・第二の真実源）／scenario sidecar を
+[[layout binder]] の document と混同すること（別キー・別所有）／`start_nautilus_replay(cfg)` を backcast Replay の起動入口と見なすこと（`start_engine` が正）
+
+**run 期間（start/end）vs lookback（指標窓ハイパラ）**:
+backcast の scenario スキーマに run 期間としての `lookback` は**存在しない**（v3 は `start`/`end` の日付文字列のみ）。
+移植元 TTWR の startup panel も run 期間は **Start/End を直接編集**で `lookback` フィールドは無い（panel の 4 field =
+Start / End / Granularity / Initial cash）。TTWR で `lookback` と名の付くものは**戦略の指標窓幅**（`lookback=20` 等の
+`__init__` 引数）で、run 期間ではなく v3 optional の `strategy_init_kwargs` を流れる**別物**。issue #29 が panel field に
+挙げた `lookback` は run 期間（→ `start`/`end`）への読み替えで解決し、指標窓ハイパラは #29 の縦切り外（strategy
+editor / `strategy_init_kwargs` の seam）。「どれだけ遡るか」の UX は sidecar 未設定時の**初期 seed**（start = end − 3ヶ月 /
+end = 今日）で満たし、ユーザー上書き可。
+_Avoid_: `lookback` を run 期間フィールドとして scenario sidecar に書くこと（engine が unknown key で reject）／run 期間と
+戦略の指標窓 lookback を混同すること（前者 = `start`/`end`・後者 = `strategy_init_kwargs`）／end+lookback→start の
+導出層を #29 に入れること（営業日計算でスコープが膨らみ going-forward 利益ゼロ）
+
+**scenario 編集の 3 projection（TTWR 踏襲）**:
+panel の scenario 永続化は 3 段に分ける: ①**editing buffer**（不正値も保持できる UI 入力・空 universe や負 cash も一時的に
+取り得る）→ ②**validated-for-write**（[[scenario（実行設定）/ scenario sidecar]] へ書ける形に検証通過した値）→
+③**on-disk scenario**（`<strategy>.json` の `"scenario"` v3）。AC④ の「不正値は run を起動しない」は ①→② のゲートで
+表現する（不正な editing buffer は ② へ昇格できず run も persist もしない）。dirty 中は外部 metadata sync で editing
+buffer を上書きしないガードを持つ。
+_Avoid_: editing buffer の不正値をそのまま on-disk へ書くこと（②の検証ゲートを飛ばさない）
+
+**universe registry（instruments SoT）vs scenario panel**:
+universe（`instruments`）は **panel の 5 番目のフィールドではなく独立 seam**。移植元 TTWR でも startup panel は
+start/end/granularity/initial_cash の 4 field だけで、universe は `InstrumentRegistry`（単一 SoT・editable・replace_all）
+＋ `writeback_scenario_instruments_system`（registry → sidecar の `scenario.instruments` へ永続化・Replay mode gate）で
+別管理される。**#29 の責任** = universe SoT（C# 版 registry）＋ sidecar writeback ＋ engine handoff ＋ validation を所有し、
+縦切りを通すための**最小テキストリスト入力**（行/カンマ区切りで instrument ID 直接編集）まで。**#31（=#C instrument picker /
+universe sidebar）の責任** = 検索・候補・複数選択のリッチ picker を**同じ SoT/writeback に差し込む**（#29 の薄い入力を
+剥がして置換するリワークを出さない）。panel の writeback（start/end/gran/cash）と universe の writeback は**同一
+`<strategy>.json` の `scenario` を協調 co-write**＝unknown フィールド（`account_type` / `strategy_init_kwargs` /
+`instruments_ref`）と `layout` キーを保ったままマージ書き（TTWR `test_10c_concurrent_writeback_with_instruments` の parity）。
+backcast の `start_engine` は sidecar 駆動なので **ADR-0007 の「registry が run 時に SCENARIO に勝つ」override は
+「registry → sidecar に書く → engine が sidecar を読む」の永続化経由で実現**する（TTWR の run-time override 配線は #29 外）。
+_Avoid_: universe を scenario panel のフィールドとして実装すること（別 seam・別 SoT）／#31 の picker UI を #29 に取り込むこと
+（縦切りが太る）／co-write で sidecar を全置換し unknown フィールド・`layout` キーを落とすこと（マージ書きが正）／単一銘柄
+（v1 instrument 単数）で実装すること（AC「空 universe 拒否」「銘柄リスト」は複数前提・後で multi 化は手戻り）
+
+**active strategy 選択（run-UI = #29 の責務）**:
+#29 の panel が設定対象とする strategy `.py` は `IStrategyFileProvider` / `StrategyProviderRegistry`（#16・findings 0010 §5・
+owner-lock）を**消費**して解決する（provider seam はまさに run-UI が消費するために作られた・#16 は run 配線と active 選択を
+意図的に作っていない＝#29 が最初の durable consumer）。解決規則は**沈黙 pick を避けた決定的な形**: ①supplyable provider 0 個
+→ Run をブロック（「保存済み strategy が無い / editor を保存してください」を scenario バリデーションと区別して surface）／
+②1 個 → それを使う（happy path・tracer 本線）／③N 個 → registry の ordinal 決定的列挙で **active windowId を保持し
+どの strategy が対象か必ず表示**（黙って先頭を選ばない・リッチ multi-active picker は follow-up）。sidecar path = provider の
+canonical `.py` → `<strategy>.json`。**supplyable 5 条件（bound / not dirty / Open|Save 成功 / canonical absolute `.py` /
+呼出時点で実在）は Run 起動の瞬間に再問い合わせ**する（populate 結果をキャッシュしない＝設定後に editor を編集すると
+provider が non-supplyable へ反転しうるため・条件5「呼出時点で実在」）。「active windowId」は将来の multi-instance picker が
+差し込む薄い seam（#31 universe と同じ構図・リワーク無し）。
+_Avoid_: panel に strategy path を直接入力させ supplyable 契約（dirty 拒否・exists 保証・canonical 化）を再実装すること
+（provider seam の二重定義・stale path 事故）／populate 時の supplyable 判定をキャッシュして Run 時に再チェックしないこと／
+N 個のとき黙って先頭を選ぶこと（対象を必ず表示）
+
+**backcast Replay 起動経路（production state-machine path）**:
+backcast の通常起動 Replay は **`load_replay_data` →（sidecar 書き）→ `start_engine`** の state-machine path で起動する
+（#29 が最初の Unity 配線を作る）。①`load_replay_data(instrument_ids, start, end, granularity, catalog_path)`＝`IDLE→LOADED`・
+`last_replay_catalog_path` をセットし provider を prime（`core.py`）／②`start_engine({strategy_file})`＝`LOADED→RUNNING`・
+[[scenario（実行設定）/ scenario sidecar]] を `load_scenario` でネイティブ読みし `load_bars_for_scenario` で run。出力は
+**RunBuffer + apply_replay_event + `GetState`/`get_portfolio` ポーリング**（Unity が既に使う seam）で AC③ の
+status/positions/orders/チャート更新を駆動する＝**`RustBacktestSink` 配線は不要**。`start_nautilus_replay(cfg)`（flat cfg・
+`rust_sink` 必須・sidecar を読まない）は **throwaway harness（`ReplayChartHarness` 等）/ e-station 系譜専用**で、#29 後は
+production Replay から deprecated（issue #29「harness 依存解消」の実体）。**dual-load 整合ハザード**: `load_replay_data` は
+instruments/start/end/gran を**引数**で受け、`start_engine` は**同値を sidecar から再読み**する——両者の真実源は同一 panel
+state でなければならない（ズレると prime したチャート初期状態と実 run の scenario が食い違う）。issue 本文の
+「`start_nautilus_replay` 入口へ渡す」は imprecise で production path に読み替える（決定は #29 の `docs/findings/` に記録し
+本 CONTEXT を参照）。**panel 配置**: scenario 実行設定 UI は [[Hakoniwa（split-grid surface）]] の **`PanelKind::Startup`
+タイル（slot 0）**として載せる（TTWR `populate_startup_tile` の直 parity・TTWR Replay Hakoniwa = [Startup, BuyingPower,
+Orders, Positions, RunResult]）。backcast 現タイルセット [chart, status, positions, orders, run_result] は「Python-free
+HITL demo」placeholder（findings 0007 §0）で、#29 が Startup タイルを実体化する。floating window kind 新設は TTWR
+逸脱で却下。検証は AFK probe（headless: populate→edit→`<strategy>.json` persist→restore→run→engine が当該 scenario で
+run したことを assert）＋ HITL harness（owner 目視）。
+_Avoid_: scenario panel を floating window kind / screen-fixed chrome として新設すること（TTWR は Hakoniwa Startup タイル）／
+production Replay を `start_nautilus_replay(cfg)` で起動すること（sidecar が run で読まれず Q1 の「変換ゼロ・
+ネイティブ読み」が空文化・真実源が cfg に二重化）／production path に `RustBacktestSink` を配線すること（GetState ポーリングが
+正・sink は throwaway 専用）／`load_replay_data` 引数と sidecar の instruments/start/end/gran をズラすこと（同一 panel
+state が正）
+
+**catalog_path（環境/配置の関心・scenario 外）**:
+catalog_path は「このマシンのどこに市場データがあるか」＝**マシン依存の環境設定**で、[[scenario（実行設定）/ scenario sidecar]]
+（何をバックテストするか・strategy に随伴して可搬であるべき値）とは別の関心。engine も catalog を `DataEngine` ctor 引数
+（`nautilus_catalog_path`/`jquants_catalog_path`）で持ち、`load_replay_data` は `catalog_path or self._nautilus_catalog_path` で
+構築時デフォルトに fallback する（`core.py`）。ゆえに #29 では catalog を **panel フィールドにしない**——app/engine config
+（settings/env・`DataEngine` 構築引数）で解決し、`load_replay_data` を catalog_path 省略（engine default fallback）or
+config 値で呼ぶ。scenario v3 スキーマに catalog キーは無く（書けば `_check_keys` が unknown key で reject）、絶対パスを
+sidecar に焼くと strategy+sidecar が非可搬になる。既存 harness の `const CATALOG_PATH = "/Users/sasac/..."`（Mac 絶対
+パス）こそ AC⑤「harness ハードコード依存解消」が消す対象で、#29 はこれを config 層の解決に置換する（ユーザー向け panel
+フィールドへの昇格ではない）。
+_Avoid_: catalog を panel フィールド / scenario sidecar に入れること（環境設定・非可搬・engine が unknown key で reject）／
+catalog の真実源を per-run panel state にすること（config 層が正）
+
+**ScenarioSidecarStore（merge-write seam）**:
+[[scenario（実行設定）/ scenario sidecar]] の `<strategy>.json` を**読み込み→`scenario` object の対象キーだけ更新→
+sibling 全保存→atomic write** する単一 seam（TTWR `scenario_sidecar/write.rs` の `atomic_mutate_scenario_object` parity）。
+backcast の layout sidecar は**別ファイル**（`LayoutStore` が `LayoutPathResolver` のパスへ `JsonUtility` で `LayoutDocument`
+を書く）で、scenario sidecar `<strategy>.json` とは独立。engine の `scenario.validate` は strict（未知キー reject）なので
+merge-write が書式・キー順を壊すと strict-validated sidecar を corrupt させる。panel が編集するのは `start`/`end`/
+`granularity`/`initial_cash`/`instruments` の 5 キーのみで、**触らない v3 optional（`account_type`/`instruments_ref`/
+任意 nested dict の `strategy_init_kwargs`）を無損失 preserve** する必要がある。`JsonUtility` は任意 dict を round-trip
+できないため、merge-write は **Newtonsoft `JObject`**（read-modify-write）で行い、Newtonsoft を本 store 一点に封じ込める
+（呼出側は `SetStartupParams`/`SetInstruments` だけを見る・`LayoutStore` の parser-hiding 規律踏襲）。方針: **ADR-0005**。
+3 projection（[[scenario 編集の 3 projection（TTWR 踏襲）]]）の ③on-disk を所有する層。
+_Avoid_: scenario sidecar を `JsonUtility` で write すること（`strategy_init_kwargs` 等を silent drop し sidecar corrupt）／
+PeelTag 型 string surgery で nested dict を跨ぐ merge をすること（whitespace/escape/キー順事故で corrupt・PeelTag は READ
+専用 decoder の慣例で逆 trust boundary）／Newtonsoft を本 store 外へ漏らすこと（layout は `JsonUtility` 据え置き・ADR-0005）
+
 ## Flagged ambiguities
 
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が

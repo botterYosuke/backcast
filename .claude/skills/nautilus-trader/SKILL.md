@@ -17,7 +17,11 @@ description: |
   `merge_bars_by_ts`, and `start_engine` の bar-by-bar streaming into GetState (`apply_replay_event`).
   実例: #29 で engine_runner に `on_bar` を足し start_engine を bar-by-bar 化したとき本スキルを
   invoke せずコード読解＋verify agent だけで進めた（msgbus 同一トピック複数 subscribe の安全性など
-  本スキルで前裁定できた・2026-06）。
+  本スキルで前裁定できた・2026-06）。**実装だけでなく、この seam に触れる diff の code-review /
+  verify でも起動する**: #29 の `/code-review` で「on_bar の二重 subscribe・primary-skip の bar 重複/
+  欠落・`_replay_primary_id` 文字列一致依存」の verify を generic な finder agent に丸投げし、本スキルを
+  invoke しなかった（再発・2026-06）。msgbus 複数 subscribe 安全性／旧 post-run ループ比の bar 重複・
+  欠落／primary id provenance の前裁定こそ本スキルの役目で、generic agent より精度が高い。
   Also trigger on the **precision-mode / catalog-parquet-schema seam** (GH #34): "HIGH_PRECISION",
   "PRECISION_BYTES", "FIXED_PRECISION", "standard vs high precision", "8-byte / 16-byte", "i64 / i128",
   "fixed_size_binary", "PrecisionMismatch", "precision mismatch", "catalog precision", `Price.from_raw` /

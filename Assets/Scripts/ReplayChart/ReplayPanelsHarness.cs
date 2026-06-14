@@ -159,11 +159,18 @@ public class ReplayPanelsHarness : MonoBehaviour
     static readonly Color DOWN_COLOR = new Color(0.85f, 0.28f, 0.28f, 1f);
     static readonly Color TEXT_COLOR = new Color(0.90f, 0.90f, 0.92f, 1f);
 
+    // SINGLE PLAY-OWNER toggle (findings 0005 §6 / 0011 exercise discipline). This harness is the
+    // DEFAULT Play owner (ReplayChartHarness / S2SpikeLiveLoopHarness yield with their own flag=false).
+    // Flip this to false to free the interpreter for ANOTHER menu-driven leg that owns Play —
+    // e.g. the #20 "Live Adapter Tracer HITL" (Tools > Backcast). Restore to true afterwards.
+    const bool AutoBootstrapEnabled = true;
+
     // TURNKEY auto-bootstrap: owner just presses Play. Guarded OUT of batchmode so the
     // headless compile gate (`-batchmode -nographics -quit`) never inits Python / renders.
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
     {
+        if (!AutoBootstrapEnabled) return;   // yield Play to another menu-driven owner (e.g. #20 Live tracer HITL)
         if (Application.isBatchMode) return;
         var go = new GameObject("ReplayPanelsHarness");
         DontDestroyOnLoad(go);

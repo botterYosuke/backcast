@@ -135,8 +135,6 @@ public static class ScenarioSidecarStore
         try
         {
             string raw = File.ReadAllText(path);
-            // strip a UTF-8 BOM if present (matches TTWR read_json_with_bom_strip).
-            if (raw.Length > 0 && raw[0] == '﻿') raw = raw.Substring(1);
             return JObject.Parse(raw);
         }
         catch (JsonException e)

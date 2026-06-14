@@ -15,6 +15,7 @@
 // an ordered list; the sidecar instruments array mirrors this order.
 
 using System.Collections.Generic;
+using System.Linq;
 
 public sealed class InstrumentRegistry
 {
@@ -22,7 +23,7 @@ public sealed class InstrumentRegistry
 
     public bool Editable { get; set; } = true;
 
-    public IReadOnlyList<string> Ids => _ids;
+    public IReadOnlyList<string> Ids => _ids.AsReadOnly();
     public int Count => _ids.Count;
 
     // Append if absent (case-sensitive exact match — instrument ids are canonical e.g.
@@ -60,17 +61,9 @@ public sealed class InstrumentRegistry
             }
         }
 
-        if (SameSequence(_ids, next)) return false;
+        if (_ids.SequenceEqual(next)) return false;
         _ids.Clear();
         _ids.AddRange(next);
-        return true;
-    }
-
-    static bool SameSequence(List<string> a, List<string> b)
-    {
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++)
-            if (a[i] != b[i]) return false;
         return true;
     }
 }

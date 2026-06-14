@@ -115,6 +115,7 @@ public sealed class ScenarioStartupTile
         SetErr(_granErr, e.Granularity);
         SetErr(_cashErr, e.InitialCash);
         SetErr(_universeErr, e.Universe);
+        SetErr(_runMsg, null);
 
         Highlight(_dailyBtn, _ctrl.Params.Granularity == GranularityChoice.Daily);
         Highlight(_minuteBtn, _ctrl.Params.Granularity == GranularityChoice.Minute);

@@ -8,6 +8,16 @@ description: |
   `BacktestEngine` / `BacktestNode` / `BacktestEngineConfig`, `TradingNode` / `LiveExecEngine`,
   `NautilusKernel`, ParquetDataCatalog, indicators, custom data, adapters, or anything in
   `python/engine/nautilus_*.py`.
+  Also trigger on the **replay streaming-runner seam** even though it lives outside
+  `nautilus_*.py` — `python/engine/strategy_runtime/replay_runner.py` / `engine_runner.py` /
+  `catalog_data_loader.py`, the per-bar streaming loop (`engine.add_data([item])` +
+  `engine.run(streaming=True)` one bar at a time), `engine.kernel.msgbus.subscribe`/`unsubscribe`
+  on `data.bars.{bar_type}` / `events.fills.{symbol}` topics, the `ReplaySink` hook
+  `get_extra_subscriptions`, per-bar `on_bar` callbacks, `bar_type_for_instrument`,
+  `merge_bars_by_ts`, and `start_engine` の bar-by-bar streaming into GetState (`apply_replay_event`).
+  実例: #29 で engine_runner に `on_bar` を足し start_engine を bar-by-bar 化したとき本スキルを
+  invoke せずコード読解＋verify agent だけで進めた（msgbus 同一トピック複数 subscribe の安全性など
+  本スキルで前裁定できた・2026-06）。
   Also trigger on the **precision-mode / catalog-parquet-schema seam** (GH #34): "HIGH_PRECISION",
   "PRECISION_BYTES", "FIXED_PRECISION", "standard vs high precision", "8-byte / 16-byte", "i64 / i128",
   "fixed_size_binary", "PrecisionMismatch", "precision mismatch", "catalog precision", `Price.from_raw` /

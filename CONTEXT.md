@@ -98,6 +98,17 @@ ReplayPanel JSON projection で **Live 配送路ではない**（D2）。Live UI
 _Avoid_: `EventSink`/`ReplayEventSink` と同一視すること／#20 コメントの「Replay sink 契約と同型」を Live 配送路の
 指定と読むこと（あれは #24/#25 の **projection 互換**を指す。Live sink wire は外部タグ付き BackendEvent）
 
+**venue 接続状態（connection state — AC「VenueLoggedIn/Out」の正体）**:
+backcast に `VenueLoggedIn`/`VenueLoggedOut` という push event は**無い**。接続状態は役割の異なる 3 源から
+扱う: (1) `venue_login` RPC ACK = login の**即時結果**、(2) `get_state_json` の `venue_state`
+（`DISCONNECTED`/`AUTHENTICATING`/`CONNECTED`/`SUBSCRIBED`/`RECONNECTING`/`ERROR`）＋ `venue_id`
+（接続中のみ載る）= **唯一の継続 canonical state**、(3) `VenueLogoutDetected` backend event = health watchdog 由来の
+外部切断を知らせ**再ログインを促す通知**。UI badge は **(2) の poll から導出**する（接続中＝`CONNECTED/SUBSCRIBED/
+RECONNECTING` のみ venue_id を載せる既存規律で stale バッジを防ぐ）。**(3) は badge を直接 `DISCONNECTED` へ
+変える権威ではない**——通知後も badge は poll の収束を待つ。secret flow とは独立。記録: findings 0012・#21。
+_Avoid_: `VenueLoggedIn`/`VenueLoggedOut` push event を新設すること（存在しない）／`VenueLogoutDetected` を
+badge 変更の権威 state として扱うこと（通知であって canonical は (2) の poll）
+
 **移植（port）**:
 engine のソースを TTWR から backcast へ移し、backcast を唯一の home にすること。
 submodule 参照でも pinned-package-from-TTWR でもない（TTWR は廃止されるため）。

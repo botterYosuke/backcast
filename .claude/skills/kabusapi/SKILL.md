@@ -28,7 +28,8 @@ flowsurface kabu venue 統合は **Python 側 `python/engine/exchanges/kabusapi*
 >   - **発注に Password フィールドは無い**（R3）。Tachibana の第二暗証番号 (SecretVault/SecretRequired) 経路は kabu では一切使わない。`set_execution_hooks` は Tachibana と同じ呼び出し口を保つため `secret_resolver` を受理して無視する。
 >   - **AccountType は MVP 既定 = 特定(4) 定数**（kabu は login 応答に口座種別を載せない）。一般/法人は将来 venue_params で上書き。
 > - **Venue Health Watchdog（Phase 9 Step 7・実装済み）**: `KabuStationAdapter.check_health()` = `GET /apisoftlimit`（info 系・最軽量・副作用なし。`HEAD` は `4001014` で不可、新規 `/token` は本体負荷のため使わない）。`4001007`/`4001017`（本体ログアウト/未ログイン）→ `False`、流量 429・接続断等は transient として **raise**（誤った再ログイン modal を出さないため）。`live/health_watchdog.py` の `VenueHealthWatchdog` が 30s poll で呼び、`False` で `VenueLogoutDetected` を push（debounce 1 回・復旧で re-arm）。server_grpc は `hasattr(check_health)` で kabu のみ watchdog 起動。
-> - **未実装（残課題）**: `kabusapi_login_flow` の prompt フロー本体・instruments 日次更新（Phase 9 Step 9）・Backend Auto-Restart（Phase 9 Step 8 §3.8、`GetOrders` proto RPC 新設が前提）。
+> - **prompt ログインフローは実装済み**（旧記載「未実装」は stale・backcast #21 で確認 2026-06）: `venue_login("KABU","prompt","verify")` → `login_dialog_runner` subprocess → `kabusapi_login_flow.run_dialog()`（tkinter で API password 入力 → `fetch_token` → cred-path に `{"token":...}` 書き込み・**token は stdout 非出力**）→ orchestrator が `VenueCredentials(credentials_source="prompt_result", token=...)` に変換 → `KabuStationAdapter.login(prompt_result)`。`KabuStationAdapter.login` 自体が `"prompt"` 未対応なのは「adapter 内で prompt UI を直接起動しない」境界に過ぎず、通常経路は上記で成立する（env を UI 標準にしない）。
+> - **未実装（残課題）**: instruments 日次更新（Phase 9 Step 9）・Backend Auto-Restart（Phase 9 Step 8 §3.8、`GetOrders` proto RPC 新設が前提）。
 
 ## 参照リソース
 

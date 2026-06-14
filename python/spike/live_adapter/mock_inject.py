@@ -72,6 +72,38 @@ def emit_depth(server, i: int, bid: float, ask: float) -> None:
     loop.call_soon_threadsafe(adapter.emit_depth_snapshot, IID, i * DAY_NS, bids, asks)
 
 
+def _levels_from_csv(prices_csv: str, sizes_csv: str) -> list[DepthLevel]:
+    """CSV("p1,p2"), CSV("s1,s2") → [DepthLevel,...]。空文字列は片側欠の空板を表す。"""
+    if not prices_csv:
+        return []
+    prices = [float(p) for p in prices_csv.split(",")]
+    sizes = [float(s) for s in sizes_csv.split(",")] if sizes_csv else []
+    return [
+        DepthLevel(price=prices[k], size=(sizes[k] if k < len(sizes) else 0.0))
+        for k in range(len(prices))
+    ]
+
+
+def emit_depth_ladder(
+    server,
+    i: int,
+    bid_prices: str,
+    bid_sizes: str,
+    ask_prices: str,
+    ask_sizes: str,
+) -> None:
+    """multi-level の非対称な板を 1 スナップショットとして注入する（#26 用・throwaway）。
+
+    pythonnet の InvokeMethod は list を渡しにくいため price/size を CSV 文字列で受け、
+    ここで DepthLevel list に整形する。`emit_depth`（単段）の multi-level 版。空文字列を
+    渡すと片側欠の空板になる。"""
+    adapter = _adapter(server)
+    loop = _loop(server)
+    bids = _levels_from_csv(bid_prices, bid_sizes)
+    asks = _levels_from_csv(ask_prices, ask_sizes)
+    loop.call_soon_threadsafe(adapter.emit_depth_snapshot, IID, i * DAY_NS, bids, asks)
+
+
 def arm_order(server, status: str, filled_qty: float, avg_price: float) -> None:
     """positional wrapper of set_next_order_outcome（pythonnet InvokeMethod は kwargs を
     渡しにくいため、C# probe 用に positional シグネチャを用意する。throwaway）。"""

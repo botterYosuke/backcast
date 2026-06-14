@@ -408,8 +408,12 @@ class BackendService:
         except Exception:
             logging.exception("[backend_service] teardown: stop_live_loop failed")
 
-    def stop_live_loop(self, timeout: float = 5.0) -> None:
+    def stop_live_loop(self, timeout: float = 5.0) -> bool:
+        # Returns True if the live loop thread joined cleanly (safe to finalize
+        # the Python runtime), False if it hung (host must NOT finalize — #22
+        # Gap4). Fail closed (False) on error.
         try:
-            self._srv.stop_live_loop(timeout=timeout)
+            return self._srv.stop_live_loop(timeout=timeout)
         except Exception:
             logging.exception("[backend_service] stop_live_loop failed")
+            return False

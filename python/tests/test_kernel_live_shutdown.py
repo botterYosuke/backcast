@@ -107,14 +107,22 @@ def test_graceful_stop_cancels_resting_order_on_live_path():
         )
         loop.call_soon_threadsafe(adapter.inject_tick, _kline(1, 8.0))
 
-        # resting order が 1 件できるまで待つ（venue 到達 = submit_order_call_count==1）。
+        # order が ACCEPTED (resting) に到達するまで待つ。submit_order_call_count は
+        # ACCEPTED 遷移の適用より先に増えるので、counter で待って status を即読むと race する。
         deadline = time.time() + 5.0
-        while time.time() < deadline and adapter.submit_order_call_count == 0:
+        resting = None
+        while time.time() < deadline:
+            # snapshot: the live-loop thread mutates _orders concurrently.
+            resting = next(
+                (o for o in list(controller._driver._orders.values())
+                 if o.status == OrderStatus.ACCEPTED),
+                None,
+            )
+            if resting is not None:
+                break
             time.sleep(0.02)
-        orders = list(controller._driver._orders.values())
-        assert len(orders) == 1
-        resting = orders[0]
-        assert resting.status == OrderStatus.ACCEPTED  # 約定せず venue に残っている
+        assert resting is not None, "no ACCEPTED resting order appeared"
+        assert len(controller._driver._orders) == 1
         assert controller._driver._portfolio.open_positions() == []  # 建玉は無い
 
         # graceful 停止の取消フェーズ（stop_run の _teardown 第一段＝cancel_inflight_orders）。
@@ -203,15 +211,17 @@ def test_stop_live_loop_returns_true_on_clean_join():
 
 
 def test_stop_live_loop_fails_closed_when_worker_hangs():
-    """hung worker（join timeout 後も is_alive）なら False を返し handle を保持する（finalize させない）。
+    """hung worker（join timeout 後も is_alive）なら **False**（=finalize させない）を返す。
 
-    この bool が C# finalize gate（KernelLiveProbe の workerStopped 相当）の「Python runtime を
-    finalize しない」契約。生存スレッドが GIL を握ったまま PythonEngine.Shutdown するとデッドロック
-    するため、stop_live_loop は安全側（False・handle 保持）に倒す。
+    この bool が C# finalize gate（KernelLiveProbe）の「Python runtime を finalize しない」契約。
+    生存スレッドが GIL を握ったまま PythonEngine.Shutdown するとデッドロックするため、安全側に倒す。
+    handle 自体は両経路でクリアする（次の _ensure_live_loop が hung/dead loop を再利用しないため）——
+    fail-closed の信号は **戻り値**であって handle 保持ではない。
     """
     mgr = _make_loop_manager()
 
     release = threading.Event()
+    stop_calls: list = []
 
     def _hang():
         # loop.stop を無視してハングし続けるワーカ（GIL を握ったまま止まらない状況の代理）。
@@ -221,8 +231,12 @@ def test_stop_live_loop_fails_closed_when_worker_hangs():
     hung.start()
 
     class _FakeLoop:
+        def stop(self):
+            # 実 loop の stop。hung worker はこれを観測しても止まらない状況を模す。
+            stop_calls.append(True)
+
         def call_soon_threadsafe(self, fn):
-            # 実 loop なら loop.stop が効くが、hung worker はそれを無視する状況を模す。
+            fn()  # loop.stop を呼ぶが、worker は止まらない。
             return None
 
     mgr._live_loop = _FakeLoop()
@@ -230,9 +244,15 @@ def test_stop_live_loop_fails_closed_when_worker_hangs():
     try:
         result = mgr.stop_live_loop(timeout=0.2)
         assert result is False, "hung worker must report unsafe (False)"
-        # handle を null しない: 未停止の危険状態を観測可能に保つ（diagnostics・finalize 抑止）。
-        assert mgr._live_thread is hung
-        assert mgr._live_loop is not None
+        assert stop_calls == [True], "loop.stop was not signaled before join"
+        # 戻り値が信号。handle は再利用回避のため両経路でクリアされる。
+        assert mgr._live_loop is None
+        assert mgr._live_thread is None
+        # idempotent fail-closed: a retried call must NOT fail open to True while
+        # the GIL-holding thread is still alive (handles are already None).
+        assert mgr.stop_live_loop(timeout=0.05) is False
     finally:
         release.set()
         hung.join(timeout=1.0)
+    # once the hung thread actually dies, the signal clears to True.
+    assert mgr.stop_live_loop(timeout=0.05) is True

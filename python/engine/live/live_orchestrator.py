@@ -166,6 +166,10 @@ class LiveLoopManager:
                 run_gate_provider=self._is_run_gated,
                 on_strategy_error=self._on_auto_strategy_error,
             )
+        # #23・(b): adapter の venue 非同期 event（poll/EC）を kernel broker FSM に転送するため
+        # controller 参照を保持する（kernel 実体は apply_venue_async_event を持つ。test 注入の
+        # placeholder controller は持たないので _publish_order_event 側で hasattr ガードする）。
+        self._engine_controller = engine_controller
         self._strategy_host: LiveStrategyHost = LiveStrategyHost(
             run_registry=self._run_registry,
             session_provider=self._live_session_view,
@@ -1063,6 +1067,30 @@ class LiveLoopManager:
         `strategy_id` は **空のまま**にする（§2.9）。unary 応答（MANUAL-001）や kernel
         bridge（LIVE-{run}）が先にタグした行を、UI の「非空が勝つ」マージ規則のもとで
         空イベントが上書きしないようにする。"""
+        # #23・findings 0014 (b)/(c-1): venue 非同期 event を owning consumer に届ける。
+        #  - kernel driver（auto 注文）→ broker FSM。broker が UI へ LIVE-{run} タグ付きで再 emit し、
+        #    fill 時 force_resync まで行う（_on_auto_order_event）。よって owned のときは下の空タグ直接
+        #    emit ＋ resync を **行わない**（二重 UI emit / 二重 resync を避ける）。
+        #  - manual facade（手動注文）→ _states を確定（PENDING_CANCEL→CANCELED・競合約定）。facade は
+        #    UI へ emit しないため、manual は引き続き下の空タグ直接 emit で UI へ運ぶ。
+        # どちらも owned しない（EC-only / 未知）event は従来どおり空タグ直接 emit ＋ resync。
+        # controller が kernel 実体でない（test 注入 placeholder）場合は hasattr で False 扱い。
+        handled_by_kernel = False
+        controller = self._engine_controller
+        if hasattr(controller, "apply_venue_async_event"):
+            try:
+                handled_by_kernel = bool(controller.apply_venue_async_event(ev))
+            except Exception:  # noqa: BLE001 — async 確定の best-effort（後続 poll が再度運ぶ）
+                logging.exception("kernel broker async venue event routing failed")
+        facade = self._session.order_facade if self._session is not None else None
+        if facade is not None:
+            try:
+                facade.apply_venue_event(ev)
+            except Exception:  # noqa: BLE001 — facade reconcile も best-effort
+                logging.exception("manual facade async venue event reconcile failed")
+        if handled_by_kernel:
+            return  # broker が UI 再 emit ＋ force_resync 済み
+
         self._emit(self._order_event_to_typed(ev))
         if ev.status in _ACCOUNT_REFETCH_STATUSES:
             account_sync = self._session.account_sync if self._session is not None else None

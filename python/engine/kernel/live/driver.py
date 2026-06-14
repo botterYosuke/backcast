@@ -31,6 +31,7 @@ from engine.kernel.orders import (
 from engine.kernel.portfolio import Portfolio
 from engine.kernel.strategy import Strategy
 from engine.live.adapter import KlineUpdate, TradesUpdate
+from engine.live.order_types import OrderResult
 from engine.live.safety_rails import (
     KIND_MAX_ORDERS_PER_MINUTE,
     KIND_NO_REFERENCE_PRICE,
@@ -196,6 +197,53 @@ class KernelLiveDriver:
                 continue
             for ev in events:
                 self._deliver(order, ev)
+
+    def apply_venue_async_event(self, ev: Any) -> bool:
+        """venue 非同期 event（poll/EC 由来）を kernel broker FSM へ正規化する（#23・findings 0014・(b)）。
+
+        共有 adapter の async stream（kabu `GET /orders` poll 等）は manual / auto を区別しないため、
+        orchestrator は **client_order_id でルーティング**する: この driver が `_orders` に持つ注文だけを
+        `apply_venue_update` に通し、持たない注文（manual facade / 別 run）は無視する。受付
+        （PENDING_CANCEL / PENDING_UPDATE）は broker が非終端で open に保ち、poll 終端
+        （CANCELED / FILLED / EXPIRED）が確定させる。受付〜確定の隙間の競合約定もここで会計される
+        （CONTEXT.md「取消受付 / 取消確定」）。`ev` は OrderEventData 互換（status / filled_qty /
+        avg_price / client_order_id）。filled_qty は累積（broker の cumulative-delta dedup が前提）。
+
+        live loop thread から sync で呼ばれる（`apply_venue_update` は I/O 無し・pure）。**この driver が
+        当該注文を持つ（＝owned）なら True を返す**（orchestrator が空タグの二重 UI emit を避ける判定に使う）。
+        """
+        order = self._orders.get(ev.client_order_id)
+        if order is None:
+            return False  # この run の注文ではない（manual / 別 run）→ 無視
+        try:
+            # OrderResult 構築は status 検証を伴う（非 canonical status は弾く）。構築失敗も
+            # owned 扱いで握る（後続 poll が再運搬。空タグ二重 emit は避ける）。
+            res = OrderResult(
+                status=ev.status,
+                filled_qty=ev.filled_qty,
+                avg_price=ev.avg_price,
+                client_order_id=ev.client_order_id,
+            )
+            events = self._broker.apply_venue_update(order, res, source="venue_stream")
+        except Exception:  # noqa: BLE001 — async 確定経路は best-effort（poll は後続でも届く）
+            log.exception(
+                "apply_venue_async_event: apply_venue_update failed for %s",
+                ev.client_order_id,
+            )
+            return True
+        for event in events:
+            self._deliver(order, event)
+        # 終端化した注文は _orders から外す（teardown が再 cancel しない・open leak 防止）。
+        if order.status not in _OPEN_STATES:
+            self._orders.pop(order.client_order_id, None)
+        # async fill に反応して戦略が on_order で積んだ intent を drain する。本メソッドは sync なので
+        # live loop に drain task を schedule する（_draining ガードが再入を直列化・consumer 経路と整合）。
+        if self._intents and not self._stopping:
+            try:
+                asyncio.get_running_loop().create_task(self._drain())
+            except RuntimeError:
+                log.warning("apply_venue_async_event: no running loop to drain reaction intents")
+        return True
 
     # ── bus consumer ─────────────────────────────────────────────────────────
 

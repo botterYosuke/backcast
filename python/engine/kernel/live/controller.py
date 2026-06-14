@@ -237,6 +237,17 @@ class KernelLiveEngineController:
         except Exception:  # noqa: BLE001 — 停止失敗でも run state は terminal にする
             log.exception("kernel live driver stop failed during detach")
 
+    def apply_venue_async_event(self, ev: Any) -> bool:
+        """orchestrator が adapter 非同期 event（poll/EC）を kernel broker へ転送する seam（#23・(b)）。
+
+        driver が当該 client_order_id を持つ（owned）なら True（orchestrator は空タグ二重 emit を避ける）。
+        driver 未確立（detach 済み等）や非所有（manual / 別 run）なら False。live loop thread から sync。
+        """
+        driver = self._driver
+        if driver is None:
+            return False
+        return driver.apply_venue_async_event(ev)
+
     def cancel_inflight_orders(self, *, nautilus_strategy_id: str) -> None:
         driver = self._driver
         if driver is None:

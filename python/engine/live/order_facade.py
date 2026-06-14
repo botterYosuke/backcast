@@ -311,13 +311,18 @@ class ManualOrderFacade:
             # 取消拒否: 元注文は live のまま。store は変更しない。
             raise OrderFacadeError("CANCEL_REJECTED")
 
-        # CANCELED 成立: 既存の約定量 / 平均価格は維持したまま終端状態に遷移させる
-        # （取消は約定済み数量を巻き戻さない）。_intents は symbol/side/qty/price を保持（不変）。
+        # #23・findings 0014 (c-1): adapter の返り status を honor する。ack-then-poll venue
+        # （kabu）は取消「受付」を PENDING_CANCEL で返し、注文はまだ open。終端 CANCELED は
+        # GET /orders polling が後追いで運ぶ（backend event 経由＝(b) 配線）。受付を CANCELED と
+        # 終端化すると受付〜確定の隙間の競合約定を取りこぼす（CONTEXT.md「取消受付 / 取消確定」）。
+        # instant-confirm な mock venue は受付＝確定で CANCELED を返す。いずれの status でも既存の
+        # 約定量 / 平均価格は維持する（取消は約定済み数量を巻き戻さない）。_intents は
+        # symbol/side/qty/price を保持（不変）。
         new_state = OrderState(
             order_id=order_id,
             venue_order_id=prior_state.venue_order_id,
             client_order_id=order_id,
-            status="CANCELED",
+            status=res.status,
             filled_qty=prior_state.filled_qty,
             avg_price=prior_state.avg_price,
             ts_ms=_now_ms(),
@@ -403,6 +408,40 @@ class ManualOrderFacade:
         if ev is None:
             raise OrderFacadeError("INTERNAL_STATE_ERROR")
         return ev
+
+    def apply_venue_event(self, ev) -> bool:
+        """venue 非同期 event（poll/EC 由来）を `_states` に反映する（#23・findings 0014・(c-1)）。
+
+        sync facade 自身は確定 path（poll/EC）を持たないため、取消受付（`PENDING_CANCEL`）後の終端
+        `CANCELED` 確定や、受付〜確定の隙間の競合約定を store に運ぶ唯一の経路。これが無いと manual
+        cancel が `PENDING_CANCEL`（非終端）のまま `list_orders` に working order として残り続け、venue
+        と reconcile が永久に desync する（CONTEXT.md「取消受付 / 取消確定」）。
+
+        **この facade が当該 order_id を持つ（owned）かつ非終端なら更新して True を返す**（orchestrator が
+        owning consumer を識別する判定に使う）。終端済み・非所有（auto / 別 run）は触らず False。
+        `filled_qty` は累積前提（後退する stale 値は捨てる）。terminal イベントは終端化する。`ev` は
+        OrderEventData 互換（client_order_id / status / filled_qty / avg_price）。cross-thread のため lock。
+        """
+        cid = getattr(ev, "client_order_id", None)
+        if not cid:
+            return False
+        with self._lock:
+            prior = self._states.get(cid)
+            if prior is None or is_terminal(prior.status):
+                return False
+            new_filled = ev.filled_qty if ev.filled_qty is not None else prior.filled_qty
+            if new_filled < prior.filled_qty:
+                new_filled = prior.filled_qty  # 累積後退（stale poll）は無視
+            self._states[cid] = OrderState(
+                order_id=prior.order_id,
+                venue_order_id=prior.venue_order_id or cid,
+                client_order_id=prior.client_order_id,
+                status=ev.status,
+                filled_qty=new_filled,
+                avg_price=ev.avg_price if ev.avg_price is not None else prior.avg_price,
+                ts_ms=_now_ms(),
+            )
+        return True
 
     def get_status(self, order_id: str) -> OrderEventData | None:
         """同期参照: 指定 order_id の直近イベントを返す。"""

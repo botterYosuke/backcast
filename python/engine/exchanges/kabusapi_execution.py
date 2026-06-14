@@ -315,8 +315,12 @@ class KabuExecutionEngine:
     ) -> OrderResult:
         """PUT /cancelorder で取消する (OrderID のみ・Password 不要)。
 
-        取消受付成立で CANCELED を返す (確定状態は polling が後追い)。Result != 0 の
-        取消拒否は REJECTED (facade が CANCEL_REJECTED に変換し元注文は live のまま)。
+        取消受付成立で **PENDING_CANCEL** を返す (#23・findings 0014・(a))。ack-then-poll
+        venue では PUT /cancelorder 成立は取消「受付」にすぎず、注文はまだ open。終端の取消
+        確定 (CANCELED・約定残ゼロ) は GET /orders polling が後追いで運ぶ。受付を終端 CANCELED と
+        返すと、受付〜確定の隙間で起きた競合約定を consumer が取りこぼす
+        (CONTEXT.md「取消受付 / 取消確定」)。Result != 0 の取消拒否は REJECTED (facade が
+        CANCEL_REJECTED に変換し元注文は live のまま)。
         """
         if self._token is None:
             raise RuntimeError("cancel_order requires login; call login() first")
@@ -337,7 +341,8 @@ class KabuExecutionEngine:
         if ack.rejected:
             return self._rejected_result(order_id, ack)
         return OrderResult(
-            status="CANCELED", filled_qty=0.0, avg_price=None, client_order_id=order_id,
+            status="PENDING_CANCEL", filled_qty=0.0, avg_price=None,
+            client_order_id=order_id,
         )
 
     async def modify_order(

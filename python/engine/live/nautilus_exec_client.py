@@ -238,6 +238,12 @@ class NautilusVenueExecClient(LiveExecutionClient):
         if res.status == "REJECTED":
             # 取消拒否: 元注文は live のまま。CANCELED へは遷移させない。
             return
+        if res.status == "PENDING_CANCEL":
+            # #23・findings 0014 (c-2): ack-then-poll venue（kabu）の取消「受付」は非終端。
+            # 終端 CANCELED は polling/EC が後追いする。受付を CANCELED と誤認すると受付〜確定の
+            # 隙間の競合約定を取りこぼす（CONTEXT.md「取消受付 / 取消確定」）。
+            # generate_order_canceled を呼ばず注文を open に保つ（保守修正・本経路は orphan）。
+            return
         self.generate_order_canceled(
             command.strategy_id,
             command.instrument_id,

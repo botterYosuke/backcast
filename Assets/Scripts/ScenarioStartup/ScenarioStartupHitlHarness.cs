@@ -19,6 +19,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.UI;
@@ -26,11 +27,15 @@ using Python.Runtime;
 
 public class ScenarioStartupHitlHarness : MonoBehaviour
 {
-    // The strategy whose sidecar the tile configures. The owner points this at a real .py
-    // (with or without an existing <strategy>.json). The catalog is config-layer, NOT a tile
-    // field (CONTEXT "catalog_path（環境/配置の関心）").
-    const string STRATEGY_FILE = "/Users/sasac/backcast/python/spike/fixtures/strategies/spike_buy_sell.py";
-    const string CATALOG_PATH = "/Users/sasac/backcast/python/spike/fixtures/jquants-catalog";
+    // Per-machine paths come from .env / env vars (owner 2026-06-14), NOT hardcoded — external
+    // storage differs per 端末. Resolved at Start() via EnvConfig:
+    //   * catalog (external): BACKCAST_CATALOG_PATH (full path) OR ARTIFACTS_PATH + /jquants-catalog
+    //     (the same ARTIFACTS_PATH key engine.paths.jquants_catalog_path reads). NOT a tile field
+    //     (CONTEXT "catalog_path（環境/配置の関心）").
+    //   * strategy (repo fixture, machine-independent): BACKCAST_HITL_STRATEGY OR the repo
+    //     spike_buy_sell.py derived from PythonRuntimeLocator.ProjectRoot (= <repo>/python).
+    string _strategyFile;
+    string _catalogPath;
 
     const int POLL_INTERVAL_MS = 150;
 
@@ -82,13 +87,14 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     {
         try
         {
+            ResolvePaths();
             _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             BuildUi();
 
             // populate the tile from the sidecar (or defaults). The .py inline SCENARIO
             // fallback would need a pythonnet load_scenario read; deferred — sidecar/defaults
             // cover the slice.
-            _ctrl.Populate(STRATEGY_FILE, DateTime.Now);
+            _ctrl.Populate(_strategyFile, DateTime.Now);
             _tile.SyncFieldsFromController();
 
             if (!s_pythonBootstrapped)
@@ -106,6 +112,30 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         }
     }
 
+    // Resolve per-machine paths from .env / env vars (owner: external storage differs per 端末).
+    void ResolvePaths()
+    {
+        // catalog: explicit full path wins, else ARTIFACTS_PATH/jquants-catalog (engine.paths parity),
+        // else repo-relative artifacts/jquants-catalog (engine.paths default — likely empty, surfaces).
+        string explicitCatalog = EnvConfig.Get("BACKCAST_CATALOG_PATH");
+        if (!string.IsNullOrEmpty(explicitCatalog))
+        {
+            _catalogPath = explicitCatalog;
+        }
+        else
+        {
+            string artifacts = EnvConfig.Get("ARTIFACTS_PATH",
+                System.IO.Path.Combine(Directory.GetParent(PythonRuntimeLocator.ProjectRoot).FullName, "artifacts"));
+            _catalogPath = System.IO.Path.Combine(artifacts, "jquants-catalog");
+        }
+
+        // strategy: repo fixture (machine-independent) unless overridden.
+        _strategyFile = EnvConfig.Get("BACKCAST_HITL_STRATEGY",
+            System.IO.Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "spike_buy_sell.py"));
+
+        Debug.Log($"[SCENARIO STARTUP HITL] catalog={_catalogPath} strategy={_strategyFile}");
+    }
+
     // Run button → validate + supplyability gate, then launch the production path.
     void OnRun()
     {
@@ -117,7 +147,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         RunGateResult gate;
         try
         {
-            var provider = new BoundStrategyFileProvider(STRATEGY_FILE);
+            var provider = new BoundStrategyFileProvider(_strategyFile);
             gate = _ctrl.TryStartRun(provider); // validates + writes the sidecar (may do file I/O)
         }
         catch (Exception e)
@@ -183,7 +213,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
                 PyObject dataEngine;
                 using (PyDict kw = new PyDict())
                 {
-                    kw.SetItem("nautilus_catalog_path", new PyString(CATALOG_PATH));
+                    kw.SetItem("nautilus_catalog_path", new PyString(_catalogPath));
                     dataEngine = dataEngCls.Invoke(Array.Empty<PyObject>(), kw);
                 }
                 server = inprocCls.Invoke(dataEngine);

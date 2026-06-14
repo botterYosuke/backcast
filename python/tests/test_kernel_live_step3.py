@@ -363,3 +363,130 @@ async def test_expired_emits_order_expired_not_canceled():
     )
     assert _types(events) == [OrderExpired]
     assert order.status is OrderStatus.EXPIRED
+
+
+async def test_cancel_with_embedded_fill_is_accounted():
+    """CANCELED に含まれる部分約定を捨てず会計してから終端する（#25 review round8 finding 1）。
+
+    kabu modify は「取消中に 50 株約定・新規失敗」を CANCELED+filled_qty=50 で返す。捨てると Portfolio が
+    venue 建玉と desync するため、約定を先に会計してから CANCELED 終端する。
+    """
+    from engine.kernel.portfolio import Portfolio
+
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    order.status = OrderStatus.ACCEPTED  # 取消中の live order
+    events = broker.apply_venue_update(
+        order,
+        OrderResult(status="CANCELED", filled_qty=50.0, avg_price=8.0, client_order_id="O-1"),
+        source="cancel_result",
+    )
+    assert _types(events) == [OrderFilled, OrderCanceled]  # 約定 → 終端の順
+    assert events[0].last_qty == 50.0 and events[0].last_px == 8.0
+    assert order.status is OrderStatus.CANCELED
+    assert order.filled_qty == 50.0
+    # Portfolio に建玉 50 が残る（捨てると venue と desync）。
+    pf = Portfolio(initial_cash=1_000_000.0)
+    pf.apply_fill(events[0])
+    assert pf.open_positions()[0].quantity == 50.0
+
+
+async def test_expired_with_embedded_fill_is_accounted():
+    """EXPIRED に含まれる部分約定も捨てず会計してから終端する（#25 review round8 finding 1）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    order.status = OrderStatus.ACCEPTED
+    events = broker.apply_venue_update(
+        order,
+        OrderResult(status="EXPIRED", filled_qty=30.0, avg_price=9.0, client_order_id="O-1"),
+        source="venue_stream",
+    )
+    assert _types(events) == [OrderFilled, OrderExpired]
+    assert events[0].last_qty == 30.0
+    assert order.status is OrderStatus.EXPIRED
+    assert order.filled_qty == 30.0
+
+
+async def test_modify_cancel_with_embedded_fill_is_accounted():
+    """modify が CANCELED+部分約定を返したら約定を会計してから終端する（finding 1・kabu modify 経路）。"""
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="ACCEPTED")
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    a.set_next_modify_outcome(status="CANCELED", filled_qty=50.0, avg_price=8.0)
+    events = await broker.modify(order, new_qty=80.0)
+    assert _types(events) == [OrderFilled, OrderCanceled]
+    assert events[0].last_qty == 50.0
+    assert order.status is OrderStatus.CANCELED
+    assert order.filled_qty == 50.0
+
+
+async def test_modify_increase_cancel_embedded_fill_above_old_qty():
+    """数量増の訂正で取消約定が旧数量を超えても会計する（over-fill 判定が訂正後数量を使う・finding 1/2）。
+
+    qty=100 を 150 へ訂正中、venue が CANCELED+filled_qty=140 を返す。旧数量 100 で over-fill 判定すると
+    140>100 で取りこぼすが、訂正後数量 150 を使えば 140<=150 で会計される。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="ACCEPTED")
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    a.set_next_modify_outcome(status="CANCELED", filled_qty=140.0, avg_price=8.0)
+    events = await broker.modify(order, new_qty=150.0)
+    assert _types(events) == [OrderFilled, OrderCanceled]
+    assert events[0].last_qty == 140.0  # 旧数量100なら over-fill で drop されていた
+    assert order.status is OrderStatus.CANCELED
+    assert order.filled_qty == 140.0
+
+
+async def test_modify_new_qty_drives_filled_determination():
+    """数量訂正後の FILLED 判定は旧数量でなく訂正後数量を使う（#25 review round8 finding 2）。
+
+    100 株中 50 約定後、目標を 75 へ訂正し venue が cumulative 75 を FILLED で返すと、旧数量 100 と比較すると
+    PARTIALLY_FILLED に誤判定する。訂正後数量 75 を FSM 判定に反映して FILLED にする。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="PARTIALLY_FILLED", filled_qty=50.0, avg_price=8.0)
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    assert order.filled_qty == 50.0 and order.quantity == 100.0
+
+    a.set_next_modify_outcome(status="FILLED", filled_qty=75.0, avg_price=8.0)
+    events = await broker.modify(order, new_qty=75.0)
+    assert _types(events) == [OrderFilled]
+    assert events[0].last_qty == 25.0  # 50 → 75 の増分
+    assert order.quantity == 75.0  # 訂正後数量を反映
+    assert order.filled_qty == 75.0
+    assert order.status is OrderStatus.FILLED  # 旧数量100比較なら PARTIALLY_FILLED の誤判定
+
+
+async def test_modify_new_qty_below_filled_is_rejected():
+    """既約定数量を下回る数量訂正は venue へ送らず据え置く（#25 review round8 finding 2）。
+
+    既約定 50 に対し new_qty=25 を受理すると quantity=25 / filled_qty=50 の不整合になる。送信前に弾く。
+    """
+    a = MockVenueAdapter()
+    await a.login(None)  # type: ignore[arg-type]
+    a.set_next_order_outcome(status="PARTIALLY_FILLED", filled_qty=50.0, avg_price=8.0)
+    broker = LiveBroker(adapter=a, venue="MOCK")
+    order = _order(qty=100.0)
+    await broker.submit(order)
+    assert order.filled_qty == 50.0
+
+    # venue へ届いたら下の outcome が消費され quantity が 25 に化けるはず → 据え置きを証明。
+    a.set_next_modify_outcome(status="ACCEPTED")
+    events = await broker.modify(order, new_qty=25.0)
+    assert events == []
+    assert order.quantity == 100.0  # 旧数量のまま（25 に化けない）
+    assert order.filled_qty == 50.0
+    assert order.status is OrderStatus.PARTIALLY_FILLED

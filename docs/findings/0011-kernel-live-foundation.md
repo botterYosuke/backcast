@@ -399,7 +399,25 @@ import-purity 権威ゲート PASS）:
   broker が EXPIRED で emit、controller `_project_event` が `EXPIRED` を投影。
   test: `test_expired_emits_order_expired_not_canceled` / `test_controller_projects_expired_as_expired`。
 
-round 6/7 はいずれも純 Python の broker fill 検証・pre-trade rail・event 種別の変更で、C#/Mono teardown 経路や
+### code-review 反映 round 8（#25 codex review・2026-06-14・GREEN 134 passed）
+
+会計を壊す High 2 件を修正。各 fix は RED→GREEN ガード付き（`uv run pytest -q` 全 GREEN・full-chain purity
+PASS・`compileall` PASS）:
+
+- **CANCELED/EXPIRED に embedded された約定を捨てる（High・review finding 1）** — terminal 判定が fill 適用より
+  先で、kabu modify が返す「取消中に部分約定・新規失敗」（`CANCELED, filled_qty=50, avg_price`・
+  `kabusapi_execution.py:441`）の約定が Portfolio に反映されず venue 建玉と desync した。terminal 結果でも
+  **累積数量 delta を先に会計してから** CANCELED/EXPIRED へ遷移する（`_apply_embedded_fill` ＝ fill ステータス非依存
+  の会計。malformed/増分無しは drop で terminal は維持）。`_fill_violation`/`_book_fill_increment` を `res.status`
+  非依存に一般化。test: `test_cancel_with_embedded_fill_is_accounted` / `test_expired_with_embedded_fill_is_accounted`
+  / `test_modify_cancel_with_embedded_fill_is_accounted`。
+- **数量訂正時に旧注文数量で FILLED 判定 / 既約定未満の縮小を受理（High・review finding 2）** — 100 株中 50 約定後
+  目標を 75 へ訂正し venue が `FILLED(75)` を返しても旧数量 100 と比較して PARTIALLY_FILLED に誤判定し、また
+  `new_qty=25`（既約定 50 未満）を受理して `quantity=25, filled_qty=50` の不整合を作った。**訂正前に
+  `new_qty >= filled_qty` を検証**して venue へ送らず据え置き、**約定成功時は新数量を `order.quantity` に反映**して
+  FSM 判定に使う。test: `test_modify_new_qty_drives_filled_determination` / `test_modify_new_qty_below_filled_is_rejected`。
+
+round 6/7/8 はいずれも純 Python の broker fill 検証・pre-trade rail・event 種別の変更で、C#/Mono teardown 経路や
 Rust-core 不在不変条件には触れないため、下記 Unity-Mono full Live gate（round 5 時点で GREEN 実行済み）は
 再実行不要（full-chain purity harness が Python 層で Rust-core 不在＋teardown を毎回再確認）。
 

@@ -76,6 +76,7 @@ public class LiveRpcLanes
                                  double? price, string orderType, string tif,
                                  Action<OrderRpcResult> onResult)
     {
+        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
         _writeQueue.Add(() =>
         {
             _coord.BeginWrite();
@@ -139,11 +140,87 @@ public class LiveRpcLanes
         return r;
     }
 
+    // cancel/modify share the SAME order-write lane (D2): serialized with place, and
+    // (on tachibana) they also trigger SecretRequired, handled by the urgent-secret lane.
+    public void SubmitCancelOrder(string venue, string orderId, Action<OrderRpcResult> onResult)
+    {
+        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
+        _writeQueue.Add(() =>
+        {
+            _coord.BeginWrite();
+            OrderRpcResult r;
+            try { r = CallWrite("cancel_order", new PyString(venue), new PyString(orderId), _pyNone); }
+            catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
+            finally { _coord.EndWrite(); }
+            onResult?.Invoke(r);
+        });
+    }
+
+    public void SubmitModifyOrder(string venue, string orderId, double? newQty, double? newPrice,
+                                  Action<OrderRpcResult> onResult)
+    {
+        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
+        _writeQueue.Add(() =>
+        {
+            _coord.BeginWrite();
+            OrderRpcResult r;
+            try
+            {
+                using (Py.GIL())
+                {
+                    PyObject qtyArg = newQty.HasValue ? (PyObject)new PyFloat(newQty.Value) : _pyNone;
+                    PyObject priceArg = newPrice.HasValue ? (PyObject)new PyFloat(newPrice.Value) : _pyNone;
+                    try
+                    {
+                        using (var pv = new PyString(venue))
+                        using (var po = new PyString(orderId))
+                        using (PyObject res = _server.InvokeMethod("modify_order", pv, po, qtyArg, priceArg, _pyNone))
+                            r = ParseOrderResult(res);
+                    }
+                    finally
+                    {
+                        if (newQty.HasValue) qtyArg.Dispose();
+                        if (newPrice.HasValue) priceArg.Dispose();
+                    }
+                }
+            }
+            catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
+            finally { _coord.EndWrite(); }
+            onResult?.Invoke(r);
+        });
+    }
+
+    // Generic single-call write helper (cancel_order takes positional string args only).
+    OrderRpcResult CallWrite(string method, params PyObject[] args)
+    {
+        using (Py.GIL())
+        {
+            var disposables = new System.Collections.Generic.List<PyObject>();
+            foreach (var a in args) if (a != _pyNone) disposables.Add(a);
+            try
+            {
+                using (PyObject res = _server.InvokeMethod(method, args))
+                    return ParseOrderResult(res);
+            }
+            finally { foreach (var d in disposables) d.Dispose(); }
+        }
+    }
+
     // ---- Urgent-secret lane (separate thread) --------------------------------------
     // payload is owned by the caller (SecretModalController.Submit()); we zeroize it the
     // moment the RPC returns. The transient string is the irreducible pythonnet boundary.
+    // Late call after teardown: the queue is CompleteAdding()'d. Don't throw — report a
+    // graceful stop so a UI racing disconnect surfaces it instead of crashing.
+    static OrderRpcResult Stopped() => new OrderRpcResult { Success = false, ErrorCode = "LANES_STOPPED" };
+
     public void SubmitSecret(string requestId, char[] payload, Action<bool> onAck)
     {
+        if (_secretQueue.IsAddingCompleted)
+        {
+            if (payload != null) Array.Clear(payload, 0, payload.Length);
+            onAck?.Invoke(false);
+            return;
+        }
         _secretQueue.Add(() =>
         {
             bool ok = false;
@@ -193,13 +270,17 @@ public class LiveRpcLanes
     // Stop new write intake → stop secret intake → drain+join write → drain+join secret
     // → stop+join poll. The owner then calls venue_logout under the GIL (no lane is left
     // touching _server). Returns only after all three lane threads have joined.
-    public void StopAndJoin(int joinMs = 8000)
+    /// Returns true ONLY if all three lane threads exited within joinMs. The caller MUST
+    /// check this: a false means a lane (e.g. a place still blocked on a secret) is still
+    /// alive, so running venue_logout would race the live write — do not proceed on false.
+    public bool StopAndJoin(int joinMs = 8000)
     {
         _writeQueue.CompleteAdding();
         _secretQueue.CompleteAdding();
-        _writeThread?.Join(joinMs);
-        _secretThread?.Join(joinMs);
+        bool w = _writeThread == null || _writeThread.Join(joinMs);
+        bool s = _secretThread == null || _secretThread.Join(joinMs);
         _pollStop = true;
-        _pollThread?.Join(joinMs);
+        bool p = _pollThread == null || _pollThread.Join(joinMs);
+        return w && s && p;
     }
 }

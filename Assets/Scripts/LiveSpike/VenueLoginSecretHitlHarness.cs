@@ -53,6 +53,8 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
     volatile string _error;
     volatile string _lastOrder = "-";
     volatile bool _loginRunning;
+    volatile bool _teardownComplete;   // Disconnect ran → lanes stopped, no more actions
+    volatile string _finalStateJson;   // one post-logout snapshot to converge the badge
 
     Thread _login;
     IntPtr _mainThreadState;
@@ -94,7 +96,9 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
                 _server = srvCls.Invoke(de, new PyString(_venue));
             de.Dispose();
 
-            using (PyObject mode = _server.InvokeMethod("set_execution_mode", new PyString("LiveManual"))) { }
+            // NOTE: set_execution_mode("LiveManual") is set AFTER login (in Connect) — a
+            // pre-login call fails EXECUTION_MODE_PRECONDITION (venue DISCONNECTED), which
+            // would leave the mode at Replay and reject every place_order.
 
             _mainThreadState = PythonEngine.BeginAllowThreads();   // main GIL-free
             _lanes = new LiveRpcLanes(_server, _coord);
@@ -122,14 +126,10 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
             _modal.Open(_vm.LatestSecretRequired, Time.realtimeSinceStartup);
         }
 
-        // keyboard drain into the modal's char[] (never an InputField/string), and the
-        // 25s absolute timeout.
-        if (_modal.IsOpen)
-        {
-            _modal.AppendInput(Input.inputString);
-            if (_modal.TickExpire(Time.realtimeSinceStartup))
-                _status = "secret modal timed out (25s)";
-        }
+        // 25s absolute timeout (the char-by-char keyboard drain is in OnGUI, where per-key
+        // KeyDown events arrive — NEVER via Input.inputString, an immutable secret string).
+        if (_modal.IsOpen && _modal.TickExpire(Time.realtimeSinceStartup))
+            _status = "secret modal timed out (25s)";
         // keep the coordinator's secret-modal flag in sync (Wall 1).
         if (_modal.IsOpen != _secretModalOpenPrev)
         {
@@ -137,9 +137,18 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
             _secretModalOpenPrev = _modal.IsOpen;
         }
 
-        // poll-canonical badge.
-        string st = _lanes != null ? _lanes.LatestState : null;
-        if (!string.IsNullOrEmpty(st)) _conn.ApplyStatePoll(st);
+        // poll-canonical badge. After teardown the poll lane is gone, so its LatestState
+        // is frozen at the last "Connected" snapshot — apply the ONE post-logout snapshot
+        // instead so the badge converges to DISCONNECTED.
+        if (_teardownComplete)
+        {
+            if (_finalStateJson != null) { _conn.ApplyStatePoll(_finalStateJson); _finalStateJson = null; }
+        }
+        else
+        {
+            string st = _lanes != null ? _lanes.LatestState : null;
+            if (!string.IsNullOrEmpty(st)) _conn.ApplyStatePoll(st);
+        }
     }
 
     void Connect()
@@ -159,8 +168,16 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
                            new PyString(req.EnvironmentHint)))
                 {
                     bool ok = res["success"].As<bool>();
-                    _conn.ApplyLoginAck(ok, ok ? "" : res["error_code"].As<string>());
-                    _status = ok ? "connected" : ("login failed: " + res["error_code"].As<string>());
+                    string ec = ok ? "" : res["error_code"].As<string>();
+                    if (ok)
+                    {
+                        // mode MUST be set after a successful login (D1: place_order needs
+                        // LiveManual; a pre-login set fails EXECUTION_MODE_PRECONDITION).
+                        using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString("LiveManual")))
+                            if (!m["success"].As<bool>()) { ok = false; ec = "set_execution_mode: " + m["error_code"].As<string>(); }
+                    }
+                    _conn.ApplyLoginAck(ok, ec);
+                    _status = ok ? "connected (LiveManual)" : ("login failed: " + ec);
                 }
             }
             catch (Exception e) { _error = "login: " + e; _status = "ERROR"; }
@@ -174,8 +191,8 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
         _status = "placing test order…";
         _lanes.SubmitPlaceOrder(_venue, IID, "BUY", 100.0, null, "MARKET", "DAY", res =>
         {
-            _lastOrder = res.Success ? ("FILLED? " + res.Status) : ("ERR " + res.ErrorCode);
-            _status = "order: " + _lastOrder;
+            _lastOrder = res.Success ? res.Status : ("ERR " + res.ErrorCode);
+            _status = "order: " + _lastOrder + (res.Status == "ACCEPTED" ? " (no fill — closed/閉局?)" : "");
         });
     }
 
@@ -198,13 +215,20 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
         {
             try
             {
-                _lanes.StopAndJoin();
+                if (!_lanes.StopAndJoin())
+                {
+                    _status = "logout aborted: a lane is still in flight (not tearing down to avoid an order race)";
+                    return;
+                }
                 using (Py.GIL())
                 {
                     using (_server.InvokeMethod("set_execution_mode", new PyString("Replay"))) { }
                     using (_server.InvokeMethod("venue_logout")) { }
+                    // poll lane is stopped — grab one final snapshot so the badge converges.
+                    using (PyObject s = _server.InvokeMethod("get_state_json")) _finalStateJson = s.As<string>();
                 }
-                _status = "disconnected";
+                _teardownComplete = true;
+                _status = "disconnected — exit Play to restart";
             }
             catch (Exception e) { _error = "logout: " + e; }
         }) { IsBackground = true, Name = "VenueLogout" }.Start();
@@ -212,6 +236,18 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
 
     void OnGUI()
     {
+        // char-by-char keyboard drain for the secret modal — per-key KeyDown events, so the
+        // plaintext only ever lives in the zeroable char[] (AppendChar filters control keys).
+        if (_modal.IsOpen)
+        {
+            Event ev = Event.current;
+            if (ev != null && ev.type == EventType.KeyDown)
+            {
+                if (ev.keyCode == KeyCode.Backspace) _modal.Backspace();
+                else if (ev.character != '\0') _modal.AppendChar(ev.character);
+            }
+        }
+
         const int W = 460;
         GUILayout.BeginArea(new Rect(12, 12, W, 320), GUI.skin.box);
         GUILayout.Label($"<b>Venue Login + Secret HITL — {_venue}</b>");
@@ -222,11 +258,11 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
         if (_error != null) GUILayout.Label("<color=red>" + _error + "</color>");
 
         GUILayout.Space(6);
-        GUI.enabled = _serverReady && _menu.CanConnect && !_loginRunning;
+        GUI.enabled = _serverReady && _menu.CanConnect && !_loginRunning && !_teardownComplete;
         if (GUILayout.Button("Connect (" + _menu.CredentialsSourceFor(_venue) + ")")) Connect();
-        GUI.enabled = _serverReady && _conn.IsConnected;
+        GUI.enabled = _serverReady && _conn.IsConnected && !_teardownComplete;
         if (GUILayout.Button("Place test order (BUY 100 " + IID + ")")) PlaceTestOrder();
-        GUI.enabled = _serverReady && _menu.CanDisconnect;
+        GUI.enabled = _serverReady && _menu.CanDisconnect && !_teardownComplete;
         if (GUILayout.Button("Disconnect")) Disconnect();
         GUI.enabled = true;
 
@@ -247,7 +283,8 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
     {
         try
         {
-            if (_lanes != null) _lanes.StopAndJoin();
+            if (_lanes != null && !_lanes.StopAndJoin())
+                Debug.LogWarning("[VENUE LOGIN SECRET HITL] teardown: a lane did not join in time");
             // Let an open login dialog settle before reclaiming the GIL — venue_login
             // blocks on the tkinter subprocess (which has its own timeout); joining
             // here avoids EndAllowThreads contending with a live login thread on exit.

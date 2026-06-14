@@ -250,12 +250,22 @@ public static class VenueLoginSecretProbe
 
     static void PhaseAuditAndTeardown()
     {
-        // D7: idle now → logout runs immediately; lanes stop; venue_logout under GIL.
-        Check(_coord.CanUserLogout, "should be able to logout when idle");
-        Check(_coord.RequestLogout(), "idle RequestLogout should be immediate");
-        Check(_coord.ConsumePendingLogout(), "logout should be ready to tear down");
+        // D7 lane-level (kills the "logout ignores an in-flight write" false-green): a
+        // logout requested WHILE a write is in flight must DEFER, then promote only once
+        // the order-write lane drains — here via SECRET_TIMEOUT (we never submit the secret).
+        var stuck = new Slot();
+        long baseS = _vm.SecretRequiredCount;
+        _lanes.SubmitPlaceOrder(VENUE, IID, "BUY", 100.0, null, "MARKET", "DAY", res => stuck.Set(res));
+        WaitUntil(() => _vm.SecretRequiredCount > baseS, 15000, "teardown SecretRequired");
+        Check(!_coord.CanUserLogout, "logout must be forbidden while a write is in flight");
+        Check(!_coord.RequestLogout(), "RequestLogout during in-flight write must DEFER (false)");
+        Check(!_coord.ConsumePendingLogout(), "deferred logout must NOT be ready mid-write");
+        WaitUntil(() => stuck.Done, 20000, "teardown write drains via SECRET_TIMEOUT");
+        Check(stuck.Value.ErrorCode == "SECRET_TIMEOUT", "teardown write did not drain via SECRET_TIMEOUT");
+        Check(_coord.ConsumePendingLogout(), "deferred logout must promote once the write lane drains");
 
-        _lanes.StopAndJoin();                       // joins all 3 lane threads
+        // all lanes idle now → StopAndJoin MUST report a clean join (no stuck lane).
+        Check(_lanes.StopAndJoin(), "StopAndJoin must report all lanes joined cleanly");
         PythonEngine.EndAllowThreads(_mainTs);      // main reacquires the GIL
         try
         {

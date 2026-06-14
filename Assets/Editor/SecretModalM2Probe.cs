@@ -19,6 +19,10 @@ public static class SecretModalM2Probe
     static readonly List<string> _fail = new List<string>();
     static void Check(bool cond, string msg) { if (!cond) _fail.Add(msg); }
 
+    // Type a string ONE char at a time (the only secret entry point — no managed string
+    // reaches the controller).
+    static void Type(SecretModalController m, string s) { foreach (char c in s) m.AppendChar(c); }
+
     static LiveSecretRequiredEvent Req() => new LiveSecretRequiredEvent
     {
         RequestId = "req-7",
@@ -58,13 +62,17 @@ public static class SecretModalM2Probe
         Check(m.IsOpen, "modal not open");
         Check(m.RequestId == "req-7", "request id not bound");
 
-        m.AppendInput("12");
+        m.AppendChar('1');
+        m.AppendChar('2');
         m.AppendChar('3');
-        m.AppendInput("a\bX");           // 'a' then backspace then 'X' => "...X"
+        m.AppendChar('a');
+        m.Backspace();                   // drop the 'a'
+        m.AppendChar('X');
         Check(m.Length == 4, "length mismatch: " + m.Length);   // 1,2,3,X
         Check(m.MaskedDisplay == "••••", "mask mismatch: " + m.MaskedDisplay);
-        // control chars / newlines are ignored (not submit, not appended)
-        m.AppendInput("\n\r");
+        // control chars (newline / backspace char) are ignored by AppendChar
+        m.AppendChar('\n');
+        m.AppendChar('\r');
         Check(m.Length == 4, "newline wrongly appended");
     }
 
@@ -72,7 +80,7 @@ public static class SecretModalM2Probe
     {
         var m = new SecretModalController();
         m.Open(Req(), 0.0);
-        m.AppendInput("9753");
+        Type(m, "9753");
         char[] payload = m.Submit();
         Check(payload != null, "submit returned null payload");
         Check(new string(payload) == "9753", "payload mismatch");
@@ -92,7 +100,7 @@ public static class SecretModalM2Probe
     {
         var m = new SecretModalController();
         m.Open(Req(), 0.0);
-        m.AppendInput("abcd");
+        Type(m, "abcd");
         m.Cancel();
         Check(!m.IsOpen, "modal open after cancel");
         Check(m.BufferIsZeroed(), "buffer not zeroized after cancel");
@@ -104,7 +112,7 @@ public static class SecretModalM2Probe
     {
         var m = new SecretModalController();
         m.Open(Req(), 100.0);
-        m.AppendInput("55");
+        Type(m, "55");
         // typing does NOT extend an absolute timeout: still expires at open+25s.
         Check(!m.TickExpire(110.0), "expired too early at 10s");
         Check(!m.TickExpire(124.9), "expired too early at 24.9s");

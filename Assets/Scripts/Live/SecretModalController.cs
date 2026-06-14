@@ -66,18 +66,10 @@ public class SecretModalController
         _buf[_len++] = c;
     }
 
-    /// Drain a frame's Input.inputString (UGUI keyboard drain helper).
-    public void AppendInput(string frameInput)
-    {
-        if (string.IsNullOrEmpty(frameInput)) return;
-        for (int i = 0; i < frameInput.Length; i++)
-        {
-            char c = frameInput[i];
-            if (c == '\b') { Backspace(); continue; }
-            if (c == '\n' || c == '\r') continue; // submit is an explicit caller action
-            AppendChar(c);
-        }
-    }
+    // NOTE: there is deliberately NO AppendInput(string) entry point. The secret must
+    // never flow through a managed string (immutable → un-zeroable, lingers until GC).
+    // Callers drain the keyboard ONE char at a time via AppendChar (OnGUI Event.character
+    // / IMGUI KeyDown), so the only plaintext lives in the zeroable char[] buffer (D5).
 
     public void Backspace()
     {

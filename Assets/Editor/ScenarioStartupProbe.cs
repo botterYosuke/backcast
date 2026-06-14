@@ -114,6 +114,22 @@ public static class ScenarioStartupProbe
         if (snap.Instruments.Count != 2 || snap.Instruments[0] != "9984.TSE" || snap.Instruments[1] != "7203.TSE")
             return "merge: readback instruments wrong/order lost";
 
+        // combined atomic write (the Commit path) ALSO preserves untouched siblings (it clobbers
+        // StrategyPath, so this runs AFTER all StrategyPath assertions above).
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            StrategyPath, new StartupParamsForWrite("2024-07-01", "2024-08-01", "Daily", "123456"), new[] { "1301.TSE" });
+        string text2 = File.ReadAllText(SidecarPath);
+        if (!text2.Contains("123456") || !text2.Contains("1301.TSE")) return "combined: new values not on disk";
+        if (!text2.Contains("\"strategy_init_kwargs\"") || !text2.Contains("\"nested\""))
+            return "combined: strategy_init_kwargs sibling DROPPED";
+
+        // initial_cash written as a JSON FLOAT must read back as a value (not null → spurious 'empty').
+        string floatStrat = Path.Combine(TempDir, "floatcash_strategy.py");
+        File.WriteAllText(ScenarioSidecarStore.SidecarPathFor(floatStrat),
+            "{\"scenario\":{\"schema_version\":3,\"instruments\":[\"1301.TSE\"],\"start\":\"2024-01-01\",\"end\":\"2024-02-01\",\"granularity\":\"Daily\",\"initial_cash\":1000000.0}}");
+        var fsnap = ScenarioSidecarStore.ReadScenario(floatStrat);
+        if (fsnap == null || fsnap.InitialCash != 1000000) return "read: float initial_cash dropped to null";
+
         return null;
     }
 

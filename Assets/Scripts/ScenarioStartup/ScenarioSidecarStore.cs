@@ -65,29 +65,48 @@ public static class ScenarioSidecarStore
     // validated-for-write projection carries text; the run gate blocks invalid values). ----
     public static WritebackOutcome SetStartupParams(string strategyPath, StartupParamsForWrite p)
     {
-        return Mutate(strategyPath, scenario =>
-        {
-            scenario["start"] = p.Start ?? "";
-            scenario["end"] = p.End ?? "";
-            scenario["granularity"] = p.Granularity ?? "";
-            scenario["initial_cash"] = long.TryParse(p.InitialCashText, out long cash)
-                ? (JToken)new JValue(cash)
-                : JValue.CreateNull();
-        });
+        return Mutate(strategyPath, scenario => ApplyStartupParams(scenario, p));
     }
 
     // ---- WRITE: universe instruments (the InstrumentRegistry SoT → sidecar). Order
     // preserved as supplied (caller dedups). ----
     public static WritebackOutcome SetInstruments(string strategyPath, IReadOnlyList<string> ids)
     {
+        return Mutate(strategyPath, scenario => ApplyInstruments(scenario, ids));
+    }
+
+    // ---- WRITE: startup params + instruments in ONE read-modify-write. The panel's Commit
+    // writes both together, so a single atomic mutate keeps them consistent (a crash between
+    // two separate writes would leave start/end/cash persisted but instruments stale, or vice
+    // versa) and halves the I/O. SetStartupParams / SetInstruments remain for the deferred
+    // registry-only writeback (#31 picker).
+    public static WritebackOutcome SetStartupParamsAndInstruments(
+        string strategyPath, StartupParamsForWrite p, IReadOnlyList<string> ids)
+    {
         return Mutate(strategyPath, scenario =>
         {
-            var arr = new JArray();
-            foreach (string id in ids) arr.Add(id);
-            scenario["instruments"] = arr;
-            // v1 legacy single-instrument key is not produced; drop it if a stale file has one.
-            scenario.Remove("instrument");
+            ApplyStartupParams(scenario, p);
+            ApplyInstruments(scenario, ids);
         });
+    }
+
+    static void ApplyStartupParams(JObject scenario, StartupParamsForWrite p)
+    {
+        scenario["start"] = p.Start ?? "";
+        scenario["end"] = p.End ?? "";
+        scenario["granularity"] = p.Granularity ?? "";
+        scenario["initial_cash"] = long.TryParse(p.InitialCashText, out long cash)
+            ? (JToken)new JValue(cash)
+            : JValue.CreateNull();
+    }
+
+    static void ApplyInstruments(JObject scenario, IReadOnlyList<string> ids)
+    {
+        var arr = new JArray();
+        foreach (string id in ids) arr.Add(id);
+        scenario["instruments"] = arr;
+        // v1 legacy single-instrument key is not produced; drop it if a stale file has one.
+        scenario.Remove("instrument");
     }
 
     // ---- core read-modify-write (atomic_mutate_scenario_object parity) ----
@@ -184,9 +203,7 @@ public sealed class ScenarioSnapshot
             Start = (string)scenario["start"],
             End = (string)scenario["end"],
             Granularity = (string)scenario["granularity"],
-            InitialCash = scenario["initial_cash"]?.Type == JTokenType.Integer
-                ? (long?)(long)scenario["initial_cash"]
-                : null,
+            InitialCash = ReadCash(scenario["initial_cash"]),
         };
         // v2/v3 "instruments" (list) is canonical; tolerate v1 legacy "instrument" (single).
         if (scenario["instruments"] is JArray arr)
@@ -199,6 +216,16 @@ public sealed class ScenarioSnapshot
             s.Instruments.Add((string)scenario["instrument"]);
         }
         return s;
+    }
+
+    // Accept an integer OR a float (e.g. a hand-edited / engine-written 1000000.0); both are
+    // valid cash. A non-numeric / absent value reads as null (the panel then flags "empty").
+    static long? ReadCash(JToken tok)
+    {
+        if (tok == null) return null;
+        if (tok.Type == JTokenType.Integer) return (long)tok;
+        if (tok.Type == JTokenType.Float) return (long)System.Math.Round((double)tok);
+        return null;
     }
 }
 

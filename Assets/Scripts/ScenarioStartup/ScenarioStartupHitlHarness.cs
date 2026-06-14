@@ -43,6 +43,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     string _startError;
     Thread _launcher;
     Thread _poll;
+    volatile bool _running;     // a run is in flight: ignore re-entrant Run clicks
     volatile bool _pollStop;
     volatile bool _pollServerReady;
     volatile PyObject _pollServer;
@@ -108,8 +109,24 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     // Run button → validate + supplyability gate, then launch the production path.
     void OnRun()
     {
-        var provider = new BoundStrategyFileProvider(STRATEGY_FILE);
-        RunGateResult gate = _ctrl.TryStartRun(provider);
+        // Re-entrancy guard: a run is synchronous on the engine side and gated to IDLE→LOADED,
+        // so a second click while running would fail load_replay_data and flip the live run to
+        // FAILED. Ignore clicks until the current run finishes (Launcher clears _running).
+        if (Volatile.Read(ref _running)) return;
+
+        RunGateResult gate;
+        try
+        {
+            var provider = new BoundStrategyFileProvider(STRATEGY_FILE);
+            gate = _ctrl.TryStartRun(provider); // validates + writes the sidecar (may do file I/O)
+        }
+        catch (Exception e)
+        {
+            // A sidecar write failure (locked/non-NTFS dest) must surface, not abort silently.
+            _tile.ShowRunMessage("Could not save scenario: " + e.Message);
+            Debug.LogError("[SCENARIO STARTUP HITL] commit failed: " + e);
+            return;
+        }
         if (!gate.IsReady)
         {
             _tile.ShowRunMessage(gate.Message);
@@ -127,8 +144,11 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
 
         _renderedCount = 0;
         _lastPayload = null;
+        _startError = null;
+        _errLogged = false;
         if (_statusText != null) _statusText.text = "Running…";
 
+        Volatile.Write(ref _running, true);
         _launcher = new Thread(Launcher) { IsBackground = true, Name = "ScenarioStartupLauncher" };
         _launcher.Start();
 
@@ -213,6 +233,12 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         catch (Exception e)
         {
             Volatile.Write(ref _startError, "launcher: " + e);
+        }
+        finally
+        {
+            // start_engine is synchronous, so reaching here means the run finished (or failed):
+            // clear the re-entrancy guard so the owner can configure + Run again.
+            Volatile.Write(ref _running, false);
         }
     }
 

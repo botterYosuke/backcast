@@ -93,8 +93,9 @@ public sealed class ScenarioStartupController
             Errors = errors;
             return false;
         }
-        ScenarioSidecarStore.SetStartupParams(strategyPath, forWrite);
-        ScenarioSidecarStore.SetInstruments(strategyPath, Universe.Ids);
+        // One atomic read-modify-write so start/end/cash and instruments never persist
+        // half-updated (a crash between two separate writes would leave a mismatched sidecar).
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(strategyPath, forWrite, Universe.Ids);
         Params.Dirty = false;
         Errors = new ScenarioStartupErrors();
         return true;

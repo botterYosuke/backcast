@@ -419,6 +419,23 @@ _Avoid_: scenario sidecar を `JsonUtility` で write すること（`strategy_i
 PeelTag 型 string surgery で nested dict を跨ぐ merge をすること（whitespace/escape/キー順事故で corrupt・PeelTag は READ
 専用 decoder の慣例で逆 trust boundary）／Newtonsoft を本 store 外へ漏らすこと（layout は `JsonUtility` 据え置き・ADR-0005）
 
+**menu bar（全体メニュー / screen-fixed chrome）**:
+アプリ全体の最上段メニュー。[[infinite canvas]] の Content **外**に置く screen-fixed chrome（pan/zoom 非追従）。TTWR
+`src/ui/menu_bar.rs` の 1:1 表面 parity（方針: ADR-0005）で、トップレベルは **File / Edit / Venue / Help**。**File は Layout 文書**
+（New / Open / Save / Save As・[[レイアウト parity（capability parity）]] / ADR-0003）を対象とし、**strategy `.py` の Open/Save では
+ない**（strategy 編集は [[Strategy Editor（code buffer）]]＝#16 が所有・menu bar は再実装しない。layout sidecar が strategy
+パスを参照し File→Open で間接復元する）。**[[ExecutionMode（実行モード）]] 切替は menu bar の独立 picker ではなく File 操作の
+副作用**：`File→New`→ loaded strategy/panel clear ＋ `SetExecutionMode(LiveManual)`、Live 中の `File→Open`→`SetExecutionMode(LiveAuto)`。
+明示的な Replay/LiveManual/LiveAuto picker と run 操作（▶/pause/step/speed）は **footer が所有**（mode 切替＋StartLiveAuto=#39・
+replay transport=#30）。Venue メニュー（Connect×venue / Disconnect）は既存 [[VenueMenuViewModel]]（#21）を**再利用合成**し重複実装
+しない（AC③）。mode 副作用は venue 未接続時に [[ExecutionMode（実行モード）]] の precondition（`ModeManager` が
+`CONNECTED`/`SUBSCRIBED` 以外を `EXECUTION_MODE_PRECONDITION` で拒否）に当たるため、menu bar 側で接続中のみ送信ガードし TTWR の
+**observable no-op** を再現する（clear 自体は無条件）。backcast に TTWR の `ForceStop`（走行中 replay 停止）等価は無く、replay-stop は
+#30 の責務（#42 は clear+LiveManual で先行）。実装は #42。
+_Avoid_: File を strategy `.py` opener と解釈すること（File=Layout・strategy 編集は #16）／menu bar に明示 mode picker / run 操作を
+持たせること（footer #39/#30 の責務）／venue ロジックを menu bar に再実装すること（[[VenueMenuViewModel]] 再利用が正）／mode 副作用を
+venue 未接続でも無条件送信すること（`EXECUTION_MODE_PRECONDITION` 例外＝接続中ガードで no-op 再現が正）
+
 **市場データソース（J-Quants DuckDB 直読み）**:
 backcast Replay の going-forward な市場データ at-rest 源＝`/Volumes/StockData/jp/` 配下の**銘柄別 DuckDB ファイル**
 （`stocks_daily/<code>.duckdb`・`stocks_minute/<code>.duckdb`・`listed_info.duckdb`＝銘柄マスタ）。Replay 実行時に

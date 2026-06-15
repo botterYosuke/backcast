@@ -17,9 +17,10 @@
   controller / gRPC handler）の責務。
 - **Nautilus を import してはならない**（import すると Rust core `nautilus_pyo3` が載り、
   Backcast Execution Kernel の Mono プロセス無 Rust-core 不変条件を壊す。ADR-0004 案 C /
-  findings 0008 §1.1）。ネイティブ rail を Nautilus `LiveRiskEngineConfig` に変換する
-  `build_live_risk_engine_config()` は `engine.live.nautilus_risk_config` 側に分離した。
-  import 純度は `tests/test_gate_import_purity.py` が gate する。
+  findings 0008 §1.1）。#50 (ADR-0006) で nautilus を完全退役したので、ネイティブ rail を
+  Nautilus `LiveRiskEngineConfig` へ変換していた `build_live_risk_engine_config()`
+  （旧 `engine.live.nautilus_risk_config`）も撤去済み。import 純度は
+  `tests/test_gate_import_purity.py` が gate する。
 
 **0 = 無効（その rail を課さない）**: proto `SafetyLimits` の int は未指定で 0 になる。
 backend は「0 はその rail 無効」と解釈し、実際の default 値（50万 / 5 / 100万 / 10万）は

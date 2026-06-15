@@ -209,29 +209,9 @@ class InprocLiveServer:
     def get_portfolio(self) -> dict:
         return self._svc.get_portfolio()
 
-    # ------------------------------------------------------------------
-    # Nautilus BacktestEngine replay (issue #68 Slice 1)
-    # ------------------------------------------------------------------
-
-    def start_nautilus_replay(self, cfg: dict) -> dict:
-        """Delegate to BackendService.start_nautilus_replay()."""
-        return self._svc.start_nautilus_replay(cfg)
-
-    # ------------------------------------------------------------------
-    # Nautilus backtest Pause / Step / Resume control (Slice 2)
-    # ------------------------------------------------------------------
-
-    def pause_backtest(self) -> dict:
-        return self._svc.pause_backtest()
-
-    def resume_backtest(self) -> dict:
-        return self._svc.resume_backtest()
-
-    def step_backtest(self) -> dict:
-        return self._svc.step_backtest()
-
-    def set_replay_speed(self, multiplier: int) -> dict:
-        return self._svc.set_replay_speed(multiplier)
+    # #50 (ADR-0006): the nautilus BacktestEngine→GUI bridge (#68 start_nautilus_replay +
+    # pause/step/resume/set_replay_speed) was retired with nautilus. Production Replay runs
+    # through start_engine (DuckDB→kernel); the #68 forwarders had no production caller.
 
     def close(self) -> None:
         """Tear down the underlying live server (loop/runner/account-sync).

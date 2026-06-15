@@ -363,36 +363,9 @@ class BackendService:
             "summary_json": result.summary_json if result.success else "",
         }
 
-    # ------------------------------------------------------------------
-    # Nautilus BacktestEngine replay (issue #68 Slice 1)
-    # ------------------------------------------------------------------
-
-    def start_nautilus_replay(self, cfg: dict) -> dict:
-        """Delegate to DataEngineBackend.start_nautilus_replay()."""
-        try:
-            result = self._srv.start_nautilus_replay(cfg)
-        except RuntimeError as exc:
-            return {"success": False, "error_code": "INPROC_ABORT", "error_message": str(exc), "run_id": "", "detail": str(exc)}
-        except Exception as exc:
-            return {"success": False, "error_code": "INPROC_ERROR", "error_message": str(exc), "run_id": ""}
-        return {
-            "success": result.success,
-            "error_code": result.error_code if not result.success else "",
-            "error_message": result.error_message if not result.success else "",
-            "run_id": result.run_id if result.success else "",
-        }
-
-    def pause_backtest(self) -> dict:
-        return _call_ack(self._srv.pause_backtest)
-
-    def resume_backtest(self) -> dict:
-        return _call_ack(self._srv.resume_backtest)
-
-    def step_backtest(self) -> dict:
-        return _call_ack(self._srv.step_backtest)
-
-    def set_replay_speed(self, multiplier: int) -> dict:
-        return _call_ack(self._srv.set_replay_speed, multiplier)
+    # #50 (ADR-0006): the nautilus BacktestEngine→GUI bridge (#68 start_nautilus_replay +
+    # pause/step/resume/set_replay_speed) was retired with nautilus. Production Replay runs
+    # through start_engine (DuckDB→kernel); these forwarders had no production caller.
 
     # ------------------------------------------------------------------
     # Teardown

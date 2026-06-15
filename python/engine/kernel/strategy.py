@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderSide
 
 

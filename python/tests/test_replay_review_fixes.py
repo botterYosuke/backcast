@@ -45,7 +45,7 @@ def _build_synthetic_duckdb(root, *, symbol: str = "8918", n: int = 50) -> None:
 def _write_strategy(tmp_path, *, granularity: str, body_extra: str = "") -> str:
     """Write a kernel-native strategy file with the given SCENARIO granularity."""
     src = f'''
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderSide
 from engine.kernel.strategy import Strategy
 
@@ -126,7 +126,7 @@ def test_kernel_run_breaks_on_stop_event(tmp_path) -> None:
 
     from engine.kernel.runner import KernelRunner
     from engine.kernel.strategy import Strategy
-    from engine.kernel.bars import Bar
+    from engine.kernel.duckdb_bars import Bar
 
     stop = threading.Event()
     seen = {"bars": 0}
@@ -183,7 +183,7 @@ def test_throttle_total_is_bounded_for_many_bars(tmp_path, monkeypatch) -> None:
 
     from engine.kernel.runner import KernelRunner
     from engine.kernel.strategy import Strategy
-    from engine.kernel.bars import Bar
+    from engine.kernel.duckdb_bars import Bar
 
     class _Sink:
         def push_bar(self, b): pass

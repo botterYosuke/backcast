@@ -1,4 +1,13 @@
-"""Import-purity gate (#24): the Safety Rails gates must be Rust-core-free.
+"""Import-purity gate (#24, broadened in #50 AC④): the runtime must be Rust-core-free.
+
+#50 / ADR-0006 retired nautilus entirely. This gate now imports the WHOLE production runtime
+seam — `engine._backend_impl` (InProc entry → DataEngine + the DuckDB Replay chain + the Live
+orchestrator/kernel-live controller), plus `engine.kernel.duckdb_bars` and
+`engine.strategy_runtime.replay_kernel_observer` — in a clean interpreter and asserts no
+`nautilus_trader*`/`nautilus_pyo3` module leaks into `sys.modules`. So Replay AND Live module
+import is pinned nautilus-free here; the full lifecycle is covered by `test_kernel_live_purity`
+(LiveAuto roundtrip) and `test_replay_duckdb_kernel_afk` (DuckDB→kernel Replay roundtrip).
+
 
 ADR-0004 案 C / findings 0008 §1.1 — the Backcast Execution Kernel runs in the
 Unity-Mono process WITHOUT the Nautilus Rust core (`nautilus_trader.core.nautilus_pyo3`),
@@ -31,10 +40,20 @@ _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _CHILD = r"""
 import sys
 
+# Safety Rails gates (#24).
 import engine.live.safety_rails       # noqa: F401
 import engine.live.pre_trade_gate     # noqa: F401
 import engine.live.post_trade_gate    # noqa: F401
-import engine.kernel.runner           # noqa: F401  (pulls bars/orders/portfolio/broker/strategy/sink/risk)
+# Kernel execution core (pulls bars/orders/portfolio/broker/strategy/sink/risk).
+import engine.kernel.runner           # noqa: F401
+# #50 (AC④): the WHOLE production runtime seam must import nautilus-free. `engine._backend_impl`
+# is the InProc entry point — importing it pulls core (DataEngine), the DuckDB Replay chain
+# (_start_engine_duckdb → kernel.runner + duckdb_bars + replay_kernel_observer) AND the Live
+# orchestrator (live_orchestrator → engine.kernel.live controller/driver). If any module on
+# Replay or Live loads nautilus_trader/nautilus_pyo3, it surfaces here in a clean interpreter.
+import engine._backend_impl                            # noqa: F401
+import engine.kernel.duckdb_bars                       # noqa: F401
+import engine.strategy_runtime.replay_kernel_observer  # noqa: F401
 
 from spike.kernel_golden.purity import leaked_nautilus_modules
 
@@ -57,8 +76,9 @@ def _run_purity_child() -> subprocess.CompletedProcess:
 def test_gates_import_without_nautilus_rust_core() -> None:
     result = _run_purity_child()
     assert result.returncode == 0, (
-        "importing the Safety Rails gates loaded Nautilus into a clean interpreter — "
-        "AC#2 requires the kernel process to stay Rust-core-free.\n"
+        "importing the production runtime seam (Safety Rails gates + kernel + _backend_impl "
+        "Replay/Live chain) loaded Nautilus into a clean interpreter — #50 AC④ requires every "
+        "Replay/Live runtime path to stay Rust-core-free.\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
     )
     assert "PURE" in result.stdout

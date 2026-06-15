@@ -187,19 +187,19 @@ def test_base_strategy_accepts_common_construction_contract():
 
 
 def test_loader_wrong_base_finds_zero():
-    # nautilus Strategy base で kernel twin を読むと subclass 0 件 → StrategyLoadError。
+    # 無関係な base_cls で kernel twin を読むと subclass 0 件 → StrategyLoadError。
+    # （#50 で nautilus を退役したので、旧 nautilus Strategy 比較は任意の非マッチ基底で代替する。）
     from engine.strategy_runtime.strategy_loader import StrategyLoadError, load
 
+    class _UnrelatedBase:  # kernel twin はこれを継承しない
+        pass
+
     try:
-        from nautilus_trader.trading.strategy import Strategy as NautilusStrategy
-    except ImportError:
-        return  # nautilus 不在環境ではスキップ（kernel 経路の本質ではない）
-    try:
-        load(KERNEL_TWIN, base_cls=NautilusStrategy)
+        load(KERNEL_TWIN, base_cls=_UnrelatedBase)
     except StrategyLoadError as exc:
         assert "subclass found" in str(exc)
     else:  # pragma: no cover
-        raise AssertionError("expected StrategyLoadError (0 nautilus subclasses)")
+        raise AssertionError("expected StrategyLoadError (0 matching subclasses)")
 
 
 if __name__ == "__main__":  # standalone 実行

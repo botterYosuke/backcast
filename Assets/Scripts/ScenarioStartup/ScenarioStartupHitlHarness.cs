@@ -216,12 +216,11 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
                 PyObject dataEngCls = coreMod.GetAttr("DataEngine");
                 PyObject inprocCls = inprocMod.GetAttr("InprocLiveServer");
 
-                PyObject dataEngine;
-                using (PyDict kw = new PyDict())
-                {
-                    kw.SetItem("nautilus_catalog_path", new PyString(_catalogPath));
-                    dataEngine = dataEngCls.Invoke(Array.Empty<PyObject>(), kw);
-                }
+                // #50 / ADR-0006: nautilus catalog retired. DataEngine() resolves the J-Quants
+                // DuckDB root from env (BACKCAST_JQUANTS_DUCKDB_ROOT) and Replay streams via the
+                // nautilus-free kernel — no nautilus_catalog_path ctor arg anymore (_catalogPath
+                // is vestigial, kept only for the owner-facing log above).
+                PyObject dataEngine = dataEngCls.Invoke(Array.Empty<PyObject>());
                 server = inprocCls.Invoke(dataEngine);
 
                 // load_replay_data(instrument_ids, start, end, granularity) → IDLE→LOADED.

@@ -47,14 +47,7 @@ from dataclasses import dataclass, field
 from .replay import BaseReplayProvider
 from .jquants_loader import JQuantsLoader
 from .paths import PYTHON_SRC_ROOT, listed_symbols_artifact_path
-from engine.strategy_runtime.catalog_data_loader import load_bars_for_scenario
-from engine.nautilus_catalog_loader import (
-    CatalogPrecisionMismatchError,
-    _assert_catalog_writable_for_precision,
-)
-from engine.jquants_to_catalog import ensure_jquants_catalog
-# normalize_granularity は nautilus 非依存の kernel 側から取得（#49 review）。catalog_data_loader
-# 経由だと #50 の nautilus catalog 撤去で DuckDB 経路まで道連れに壊れるため、正本を直接参照する。
+# normalize_granularity は nautilus 非依存の kernel 側（DuckDB 直読み reader）から取得。
 from engine.kernel.duckdb_bars import normalize_granularity
 
 
@@ -181,11 +174,6 @@ class PortfolioResult:
     equity: float = 0.0
     positions: list[PortfolioPositionInfo] = field(default_factory=list)
     orders: list[PortfolioOrderInfo] = field(default_factory=list)
-
-
-def engine_run(*args, **kwargs):
-    from engine.strategy_runtime.engine_runner import run
-    return run(*args, **kwargs)
 
 
 # Per-bar wallclock throttle for both production Replay runners (legacy catalog + DuckDB
@@ -439,10 +427,6 @@ class DataEngineBackend:
         self.engine = engine
         self.mode_manager = mode_manager
         self.venue_sm = venue_sm
-        # issue #68: Nautilus backtest control state (Slice 1/2/7).
-        self._backtest_pause_event = None
-        self._backtest_step_event = None
-        self._backtest_speed_ref: list = [1.0]
         # Phase 9 Step 0: backend -> frontend event push.
         self._backend_event_bus: BackendEventStream = BackendEventStream()
         # Issue #266: Curated Set (backend-authoritative instrument list).
@@ -741,194 +725,19 @@ class DataEngineBackend:
                 error_message="start_engine requires config.strategy_file",
             )
 
-        # ADR-0006 (#49): when LoadReplayData resolved a J-Quants DuckDB root, run the Replay
-        # through the nautilus-free kernel runner instead of the catalog/BacktestEngine path.
-        # The runtime loads no nautilus_trader here (purity gate). The legacy catalog branch
-        # below is retained (un-wired) for #47/#48 equivalence tests until #50 removes it.
+        # ADR-0006 / #50: Replay runs exclusively through the nautilus-free DuckDB→kernel
+        # path. The legacy nautilus catalog + BacktestEngine branch was removed in #50.
         duckdb_root = self.engine.replay_duckdb_root
-        if duckdb_root:
-            return self._start_engine_duckdb(strategy_file, duckdb_root)
-
-        try:
-            from engine.strategy_runtime.strategy_loader import load as _load_strategy, StrategyLoadError
-            _module, scenario, strategy_cls = _load_strategy(strategy_file)
-            logging.info(
-                f"start_engine: strategy loaded cls={strategy_cls.__name__!r}"
-                f" instruments={scenario.get('instruments') or [scenario.get('instrument')]}"
-                f" granularity={scenario.get('granularity')!r}"
-                f" start={scenario.get('start')!r} end={scenario.get('end')!r}"
-            )
-        except FileNotFoundError as exc:
-            logging.error(f"start_engine: strategy file not found: {exc}")
+        if not duckdb_root:
             return BacktestRunResult(
                 success=False,
-                error_code="STRATEGY_FILE_NOT_FOUND",
-                error_message=str(exc),
+                error_code="REPLAY_DATA_NOT_LOADED",
+                error_message=(
+                    "start_engine requires a DuckDB replay root "
+                    "(call LoadReplayData first)"
+                ),
             )
-        except Exception as exc:
-            logging.error(f"start_engine: strategy load failed: {exc}")
-            return BacktestRunResult(
-                success=False,
-                error_code="STRATEGY_LOAD_ERROR",
-                error_message=str(exc),
-            )
-
-        catalog_path = self.engine.last_replay_catalog_path
-        if not catalog_path:
-            logging.error("start_engine: catalog_path not available (LoadReplayData not called or no catalog configured)")
-            return BacktestRunResult(
-                success=False,
-                error_code="CATALOG_PATH_NOT_AVAILABLE",
-                error_message="No catalog_path available from prior LoadReplayData",
-            )
-
-        try:
-            bars_by_instrument = load_bars_for_scenario(catalog_path, scenario)
-            total_bars = sum(len(v) for v in bars_by_instrument.values())
-            per_instrument = {str(k): len(v) for k, v in bars_by_instrument.items()}
-            logging.info(
-                f"start_engine: bars loaded total={total_bars} per_instrument={per_instrument}"
-            )
-
-            base_dir = self.engine.jquants_loader_base_dir
-            if base_dir:
-                missing = [str(k) for k, v in bars_by_instrument.items() if not v]
-                if missing:
-                    gran = normalize_granularity(scenario["granularity"])
-                    # GH #34: missing symbol を書き込む前に catalog 全体の
-                    # precision を検査。typed error は外側 try の
-                    # except CatalogPrecisionMismatchError が拾い
-                    # CATALOG_PRECISION_MISMATCH を返す（ループ内 except では
-                    # 飲み込まれない位置）。
-                    _assert_catalog_writable_for_precision(catalog_path)
-                    for symbol in missing:
-                        try:
-                            ensure_jquants_catalog(
-                                base_dir=base_dir,
-                                catalog_path=catalog_path,
-                                instrument_id=symbol,
-                                start_date=scenario["start"],
-                                end_date=scenario["end"],
-                                granularity=gran,
-                            )
-                        except (ValueError, FileNotFoundError) as e:
-                            logging.warning("ensure_jquants_catalog skipped %s: %s", symbol, e)
-                    bars_by_instrument = load_bars_for_scenario(catalog_path, scenario)
-
-            still_missing = [str(k) for k, v in bars_by_instrument.items() if not v]
-            if still_missing:
-                return BacktestRunResult(
-                    success=False,
-                    error_code="NO_BARS_AFTER_FALLBACK",
-                    error_message=f"No bars after catalog fallback: {still_missing}",
-                )
-        except CatalogPrecisionMismatchError as exc:
-            # GH #34: surface the real cause instead of letting nautilus abort the
-            # process (which the UI only ever sees as "transport error").
-            logging.error(f"start_engine: catalog precision mismatch: {exc}")
-            return BacktestRunResult(
-                success=False,
-                error_code="CATALOG_PRECISION_MISMATCH",
-                error_message=str(exc),
-            )
-        except Exception as exc:
-            logging.error(f"start_engine: catalog bars load failed: {exc}")
-            return BacktestRunResult(
-                success=False,
-                error_code="CATALOG_BARS_LOAD_ERROR",
-                error_message=str(exc),
-            )
-
-        import json as _json
-        # Transition LOADED → RUNNING before engine_run so PauseReplay can work mid-run.
-        se_ok, se_err = self.engine.start_engine()
-        if not se_ok:
-            return BacktestRunResult(
-                success=False,
-                error_code="INVALID_STATE",
-                error_message=se_err or "",
-            )
-
-        try:
-            from engine.strategy_runtime.run_buffer import (
-                RunBuffer,
-                make_run_id,
-                get_run_buffer_base_dir,
-            )
-
-            instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
-            first_instrument = instruments[0] if instruments else "unknown"
-            run_id = make_run_id(strategy_file, first_instrument)
-
-            rb = RunBuffer(
-                run_id=run_id,
-                strategy_file=str(strategy_file),
-                scenario=scenario,
-                base_dir=get_run_buffer_base_dir(),
-            )
-
-            # Bar-by-bar live following (#29 AC③): stream each bar into GetState AS the
-            # run processes it (on_bar), instead of bulk-injecting the whole series after
-            # engine_run completes. So GetState polling sees the chart advance bar-by-bar.
-            # The primary's bars[0] was already primed into GetState by
-            # _prime_provider_locked, so skip the FIRST primary bar to avoid a duplicate
-            # (parity with the old post-run start=1 for primary / start=0 for others).
-            # Non-primary instruments are not primed → all their bars stream. Routing to
-            # the primary chart is handled by apply_event(primary_id) inside apply_replay_event.
-            from .nautilus_adapter import bar_to_kline_update
-            primary_id = self.engine._replay_primary_id
-            _primary_first_seen = [False]
-
-            def _stream_bar(bar, iid_str):
-                if iid_str == primary_id and not _primary_first_seen[0]:
-                    _primary_first_seen[0] = True
-                    return
-                self.engine.apply_replay_event(
-                    bar_to_kline_update(bar, instrument_id=iid_str)
-                )
-
-            try:
-                engine_run(
-                    strategy_cls=strategy_cls,
-                    scenario=scenario,
-                    bars_by_instrument=bars_by_instrument,
-                    run_buffer=rb,
-                    strategy_init_kwargs=None,
-                    run_event=self.engine.run_event,
-                    bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
-                    on_bar=_stream_bar,
-                )
-                summary = self._finalize_run(rb, scenario)
-                logging.info(
-                    "start_engine: run complete run_id=%s run_dir=%s summary=%r",
-                    run_id,
-                    rb.run_dir,
-                    summary,
-                )
-            except Exception as exc:
-                rb.abort()
-                self.engine.force_stop_replay()
-                logging.exception("start_engine: engine_runner failed")
-                return BacktestRunResult(
-                    success=False,
-                    error_code="RUN_FAILED",
-                    error_message=str(exc),
-                )
-        except ImportError as exc:
-            self.engine.force_stop_replay()
-            logging.error("start_engine: RunBuffer/engine_runner import failed: %s", exc)
-            return BacktestRunResult(
-                success=False,
-                error_code="RUN_FAILED",
-                error_message=str(exc),
-            )
-
-        self.engine.force_stop_replay()
-        return BacktestRunResult(
-            success=True,
-            run_id=run_id,
-            summary_json=_json.dumps(summary, ensure_ascii=False),
-        )
+        return self._start_engine_duckdb(strategy_file, duckdb_root)
 
     def _start_engine_duckdb(self, strategy_file, duckdb_root):
         """ADR-0006 (#49): run the production Replay through the DuckDB→kernel path.
@@ -1354,135 +1163,6 @@ class DataEngineBackend:
             resolved_end_date=resolved_end_date,
         )
 
-
-    # ── Nautilus BacktestEngine replay control (issue #68 Slice 1/2/7) ─────────
-
-    def start_nautilus_replay(self, cfg: dict) -> "BacktestRunResult":
-        """Run a strategy via nautilus BacktestEngine and stream bars to RustBacktestSink.
-
-        Slice 2: runs on a daemon background thread so the Python worker thread
-        remains free to process Pause/Step/Resume commands concurrently.
-        Returns immediately once the thread starts; completion is signalled via
-        rust_sink.push_run_complete() or rust_sink.push_run_failed().
-
-        cfg keys:
-            strategy_file   str   — path to strategy .py
-            instruments     list  — e.g. ["1301.TSE"]
-            start_date      str   — "YYYY-MM-DD"
-            end_date        str   — "YYYY-MM-DD"
-            granularity     str   — "Daily" | "Minute"
-            initial_cash    float — optional, default 10_000_000
-            catalog_path    str   — parquet catalog root
-            rust_sink       obj   — RustBacktestSink PyO3 object
-        """
-        import threading
-        from .nautilus_backtest_runner import NautilusBacktestRunner
-
-        strategy_file = cfg.get("strategy_file", "")
-        if not strategy_file:
-            return BacktestRunResult(success=False, error_code="NO_STRATEGY", error_message="strategy_file is required")
-
-        instruments = list(cfg.get("instruments") or [])
-        if not instruments:
-            return BacktestRunResult(success=False, error_code="NO_INSTRUMENTS", error_message="instruments list is required")
-
-        rust_sink = cfg.get("rust_sink")
-        if rust_sink is None:
-            return BacktestRunResult(success=False, error_code="NO_SINK", error_message="rust_sink is required")
-
-        catalog_path = cfg.get("catalog_path") or ""
-        if not catalog_path:
-            return BacktestRunResult(success=False, error_code="NO_CATALOG", error_message="catalog_path is required")
-
-        original_path: str | None = cfg.get("original_path") or None
-
-        self._backtest_speed_ref[0] = 1.0  # Reset to default speed for each new run
-        # Create Pause/Step/Resume control events (start in running state).
-        pause_event = threading.Event()
-        pause_event.set()  # running by default
-        step_event = threading.Event()
-        self._backtest_pause_event = pause_event
-        self._backtest_step_event = step_event
-
-        _initial_cash = cfg.get("initial_cash")
-        runner = NautilusBacktestRunner(
-            catalog_path=catalog_path,
-            strategy_file=strategy_file,
-            instruments=instruments,
-            start_date=cfg.get("start_date") or "",
-            end_date=cfg.get("end_date") or "",
-            granularity=cfg.get("granularity") or "Daily",
-            initial_cash=float(_initial_cash if _initial_cash is not None else 10_000_000),
-            rust_sink=rust_sink,
-            pause_event=pause_event,
-            step_event=step_event,
-            speed_ref=self._backtest_speed_ref,
-            original_path=original_path,
-        )
-
-        def _run() -> None:
-            try:
-                result = runner.run()
-                # runner.run() calls rust_sink.push_run_complete() on success.
-                if not result["success"]:
-                    try:
-                        rust_sink.push_run_failed(result.get("error", "unknown error"))
-                    except Exception:
-                        logging.exception("[backend] push_run_failed failed")
-            except Exception:
-                logging.exception("[backend] backtest thread uncaught exception")
-                try:
-                    rust_sink.push_run_failed("backtest thread error")
-                except Exception:
-                    pass
-            finally:
-                # Use identity check so a concurrent second run's events are not nullified.
-                if self._backtest_pause_event is pause_event:
-                    self._backtest_pause_event = None
-                if self._backtest_step_event is step_event:
-                    self._backtest_step_event = None
-
-        t = threading.Thread(target=_run, daemon=True, name="backtest-runner")
-        t.start()
-        return BacktestRunResult(success=True)
-
-    def pause_backtest(self) -> CommandAck:
-        """Pause the running backtest by clearing the pause event."""
-        ev = self._backtest_pause_event
-        if ev is not None:
-            ev.clear()
-        return CommandAck(success=True)
-
-    def resume_backtest(self) -> CommandAck:
-        """Resume a paused backtest by setting the pause event.
-
-        Also clears any pending step token so it is not silently consumed on the
-        first bar after the next Pause (stale token from step_backtest while running).
-        """
-        sev = self._backtest_step_event
-        if sev is not None:
-            sev.clear()
-        pev = self._backtest_pause_event
-        if pev is not None:
-            pev.set()
-        return CommandAck(success=True)
-
-    def step_backtest(self) -> CommandAck:
-        """Advance the paused backtest by exactly one bar."""
-        ev = self._backtest_step_event
-        if ev is not None:
-            ev.set()
-        return CommandAck(success=True)
-
-    def set_replay_speed(self, multiplier: int) -> CommandAck:
-        """Set replay speed for the running nautilus backtest (Slice 7).
-
-        multiplier 0  = unlimited (no delay between bars)
-        multiplier 1  = 1x speed (BASE_DELAY_S per bar)
-        multiplier N  = N x speed (BASE_DELAY_S / N per bar)
-        """
-        self._backtest_speed_ref[0] = float(multiplier)
-        return CommandAck(success=True)
 
     def publish_backend_event(self, event: backend_events.BackendEvent) -> None:
         """Fan a BackendEvent out to all BackendEventStream subscribers."""

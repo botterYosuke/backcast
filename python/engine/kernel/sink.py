@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderFilled
 from engine.kernel.portfolio import Portfolio
 

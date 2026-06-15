@@ -18,7 +18,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.live.broker import LiveBroker
 from engine.kernel.orders import (
     Order,

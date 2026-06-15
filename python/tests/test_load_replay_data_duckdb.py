@@ -63,13 +63,17 @@ def test_env_root_resolves_when_no_ctor_arg(tmp_path, monkeypatch) -> None:
     assert ok and eng.replay_duckdb_root == str(tmp_path)
 
 
-def test_duckdb_takes_precedence_over_catalog(tmp_path) -> None:
-    """A vestigial catalog arg is ignored when a DuckDB root is configured (no nautilus)."""
+def test_duckdb_load_builds_no_providers(tmp_path) -> None:
+    """The DuckDB path streams via the kernel and builds no replay provider (no nautilus).
+
+    #50 (ADR-0006): the legacy nautilus catalog provider branch was removed, so a DuckDB
+    load never constructs a provider — bars are streamed externally by start_engine.
+    """
     _touch_daily(tmp_path)
-    eng = DataEngine(nautilus_catalog_path="/some/catalog", duckdb_root=str(tmp_path))
+    eng = DataEngine(duckdb_root=str(tmp_path))
     ok, _ = eng.load_replay_data(["8918.TSE"], "2024-10-01", "2025-01-10", "Daily")
     assert ok and eng.replay_duckdb_root == str(tmp_path)
-    # The catalog branch was not taken → no providers built.
+    # The DuckDB path builds no providers.
     assert eng._replay_provider is None and eng._replay_providers == {}
 
 

@@ -114,7 +114,9 @@ public static class BackcastWorkspaceSceneBuilder
         EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
         AssetDatabase.SaveAssets();
 
-        Debug.Log("[BackcastWorkspaceSceneBuilder] built " + ScenePath + " and set it as the only enabled build scene.");
+        BackcastDefaultScene.Apply();   // also make it the default Play scene immediately (no recompile wait)
+
+        Debug.Log("[BackcastWorkspaceSceneBuilder] built " + ScenePath + " and set it as the only enabled build + default Play scene.");
     }
 
     // ---- helpers ----

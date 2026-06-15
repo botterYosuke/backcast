@@ -31,6 +31,14 @@ description: |
   source rebuild (`build.py` Cargo feature) used to match a standard-precision shared catalog. Precision
   mode is compiled into the wheel, so wheels differ per platform even at the same version — confirm with
   `nautilus_pyo3.PRECISION_BYTES`, never the version string.
+  **Also trigger when the work is to REMOVE / RETIRE nautilus or reconsider the catalog format**, not just
+  build with it — faithfully porting away needs the same domain knowledge (what `ParquetDataCatalog` /
+  `BacktestEngine` / `Price`/`Quantity` raw scaling actually did). Fire on: "nautilus を消す/退役/撤去",
+  "nautilus を runtime から外す", "catalog 形式の再考", "catalog をやめる", "DuckDB 直読みへ移行",
+  "nautilus_catalog_loader を置換/削除", "jquants_to_catalog を廃止", "replay を kernel へ", "ADR-0006".
+  実例: #29 HITL の `CatalogPrecisionMismatchError` を機に grill-with-docs で catalog 形式を再考し ADR-0006
+  （DuckDB 直読み＋nautilus 完全退役）を起こしたとき、precision/ParquetDataCatalog の議論で関連していたのに
+  本スキルを invoke しなかった（2026-06・#47-#50 を発行）。退役の faithfulness 確認に使えた。
   Also trigger on **PyO3 in-process embedding** of the Python engine (issue #64 Phase 2–4):
   "InProcTransport", "PyO3", "pyo3", "Python::with_gil", "Py<PyAny>", "GIL strategy",
   "embed Python", "in-proc call", "DataEngine を直接呼ぶ", "PyO3 経由", "in-process transport",

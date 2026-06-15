@@ -100,8 +100,13 @@ fill 数・価格 / position 数量 / realized PnL / 最終 cash・equity / **si
 （nautilus version・`PRECISION_BYTES`・strategy/catalog/scenario の hash）。golden は**計算で組み立てず必ず
 oracle 経路から記録**する（自己参照を避ける）。oracle subprocess と kernel subprocess を別プロセスで走らせ、
 `capture`（明示生成）／`verify`（read-only・差分で失敗）を分ける。方針: ADR-0004 案 C・記録: findings 0008。
+**runtime からの nautilus 完全排除（[[市場データソース（J-Quants DuckDB 直読み）]]・ADR-0006）に伴い、nautilus oracle は
+"生かし続ける比較相手" から退役**し、#24 で取得済みの golden を**凍結した正解表（回帰 fixture）**として残す（新規 capture に
+nautilus を起こさない）。新データ（DuckDB 直読み）の faithfulness は **既知銘柄の data-equivalence チェック**（例: 8918.TSE 日足の
+本数・OHLCV）で担保する。
 _Avoid_: golden を kernel と同じ仮定から計算すること（oracle ではなく期待値の自己照合になる）／
-生 JSON のバイト一致を parity 条件にすること（正規化値＋イベント順が正）
+生 JSON のバイト一致を parity 条件にすること（正規化値＋イベント順が正）／oracle 退役後に nautilus を runtime/CI 既定へ
+復帰させること（凍結 fixture ＋ data-equivalence が正・ADR-0006）
 
 **adapter（C# adapter 層）**:
 Unity(C#) 側で pythonnet を介し engine を駆動する単一の境界。engine の sink 口に C# 製 sink を
@@ -409,6 +414,20 @@ merge-write が書式・キー順を壊すと strict-validated sidecar を corru
 _Avoid_: scenario sidecar を `JsonUtility` で write すること（`strategy_init_kwargs` 等を silent drop し sidecar corrupt）／
 PeelTag 型 string surgery で nested dict を跨ぐ merge をすること（whitespace/escape/キー順事故で corrupt・PeelTag は READ
 専用 decoder の慣例で逆 trust boundary）／Newtonsoft を本 store 外へ漏らすこと（layout は `JsonUtility` 据え置き・ADR-0005）
+
+**市場データソース（J-Quants DuckDB 直読み）**:
+backcast Replay の going-forward な市場データ at-rest 源＝`/Volumes/StockData/jp/` 配下の**銘柄別 DuckDB ファイル**
+（`stocks_daily/<code>.duckdb`・`stocks_minute/<code>.duckdb`・`listed_info.duckdb`＝銘柄マスタ）。Replay 実行時に
+`duckdb` で**直接クエリ**して [[Backcast Execution Kernel（kernel）]] へ bar を渡す（中間 catalog の生成・変換ステップを持たない）。
+これは TTWR 由来の **nautilus `ParquetDataCatalog`（precision-baked `fixed_size_binary` ＝ `nautilus_pyo3` ビルドに data が
+縛られる形式）を置換**し、runtime から nautilus を完全排除する（方針: ADR-0006・ADR-0004 案 C の Replay への延伸）。値段は
+**生(raw) OHLCV**（調整列は当面 NULL のため不使用）、銘柄IDは `<code>.TSE`（master の市場は全て東証）、当面は **bars（日足/分足）
+のみ**（`stocks_board` の歩み値/板は将来スライス）。`jquants_to_catalog.py`（nautilus 書き出し）/ `nautilus_catalog_loader.py`
+（nautilus 読み）/ `/Volumes/StockData/artifacts` parquet catalog は本決定で廃止対象。
+_Avoid_: 「catalog」と呼ぶこと（中間 parquet を作らない直読み・[[catalog_path（環境/配置の関心・scenario 外）]] の旧 nautilus
+catalog とは別物）／DuckDB から parquet へ一度変換する中間層を入れること（第二の真実源・変換ズレ）／調整済み価格を使うと
+仮定すること（当面は raw・調整は別スライス）／nautilus を oracle のため runtime に残すこと（[[golden 契約（Backcast vs Nautilus oracle）]]
+は凍結 fixture 化し runtime から nautilus を消す）
 
 ## Flagged ambiguities
 

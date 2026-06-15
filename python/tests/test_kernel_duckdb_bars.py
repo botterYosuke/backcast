@@ -87,24 +87,10 @@ def test_matches_frozen_fixture() -> None:
         assert b.volume == exp["volume"], f"bar {i} volume"
 
 
-@pytest.mark.skipif(
-    not os.path.isdir(scenario.CATALOG), reason="catalog fixture absent (removed in #50)"
-)
-def test_matches_catalog_including_ts_event() -> None:
-    """Faithfulness vs the #24 catalog known-good, INCLUDING the ts_event linchpin."""
-    from engine.kernel.bars import load_bars as load_catalog_bars
-
-    duck = _load_window()
-    cat = load_catalog_bars(
-        scenario.CATALOG, scenario.INSTRUMENT, start=scenario.START, end=scenario.END
-    )
-    assert len(duck) == len(cat) == 68
-    for i, (d, c) in enumerate(zip(duck, cat)):
-        # ts_event_ns equality is the #47 linchpin (15:30 JST reproduction).
-        assert d.ts_event_ns == c.ts_event_ns, f"bar {i} ts_event_ns: {d.ts_event_ns} != {c.ts_event_ns}"
-        assert (d.open, d.high, d.low, d.close, d.volume) == (
-            c.open, c.high, c.low, c.close, c.volume
-        ), f"bar {i} OHLCV mismatch"
+# NOTE (#50): the DuckDB-vs-catalog skip-if-absent equivalence test that lived here was
+# removed when the catalog pyarrow reader (engine.kernel.bars) was deleted. The ts_event
+# linchpin (#47 15:30 JST reproduction) is now pinned purely by `test_matches_frozen_fixture`
+# above against the frozen 68-bar golden — no catalog needed (findings 0022 §4).
 
 
 def test_five_digit_localcode_excluded() -> None:

@@ -33,6 +33,7 @@ public class ThemeHitlHarness : MonoBehaviour
     // For ThemeProbe: the montage's own direct graphics keyed by semantic role.
     public IReadOnlyDictionary<string, Graphic> Samples => _samples;
     public PythonSyntaxMeshEffect SyntaxEffect => _syntax;
+    public ChartView ChartView => _chartView;   // #53: lets ThemeProbe value-assert the title bar
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -95,7 +96,7 @@ public class ThemeHitlHarness : MonoBehaviour
 
         // -- chart strip (top-right) — the REAL production ChartView (#53), not a swatch. A 2-bar
         // mock (one bearish, one bullish) gives ThemeProbe a real candle of EACH direction to sample,
-        // so AC③ verifies the PRODUCTION part's color switch (findings 0022). No Image on the host —
+        // so AC③ verifies the PRODUCTION part's color switch (findings 0023). No Image on the host —
         // ChartView paints its own themed bg. (Plain RectTransform: Destroy in EditMode is illegal.) --
         var chartGo = new GameObject("chart_strip", typeof(RectTransform));
         var chartArea = chartGo.GetComponent<RectTransform>();

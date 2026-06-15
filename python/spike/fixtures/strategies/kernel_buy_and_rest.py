@@ -11,7 +11,7 @@ Deliberately separate from the golden twin so the oracle/kernel golden parity
 """
 from __future__ import annotations
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderSide
 from engine.kernel.strategy import Strategy
 

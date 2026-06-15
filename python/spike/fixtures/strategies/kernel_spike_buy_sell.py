@@ -13,7 +13,7 @@ schedule (BUY_AT_BAR / SELL_AT_BAR / TRADE_QTY) in lock-step with the oracle.
 """
 from __future__ import annotations
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderSide
 from engine.kernel.strategy import Strategy
 

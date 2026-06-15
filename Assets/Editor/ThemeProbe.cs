@@ -181,6 +181,18 @@ public static class ThemeProbe
         Eq(harness.Samples["chart_bg"].color, d.colors.background, "ChartView (production) chart_bg == dark background");
         if (candleUp != null) Eq(candleUp.color, d.status.@long, "ChartView (production) candle_up == dark long");
         if (candleDown != null) Eq(candleDown.color, d.status.@short, "ChartView (production) candle_down == dark short");
+
+        // -- 4c-ii title bar (#53): the 2-bar mock is firstOpen=100 / lastClose=105 → +5.00% gain.
+        // Value-asserts the NEW title port (price/change% formatting incl. sign) AND that the change%
+        // color follows the theme (long when gain) — neither was gated before. --
+        var title = harness.ChartView;
+        True(title != null, "montage exposed the production ChartView");
+        if (title != null)
+        {
+            Eq(title.PriceText.text, "105.00", "ChartView title price == last close (105)");
+            Eq(title.ChangeText.text, "+5.00%", "ChartView title change% == +5.00% (mock +5% gain)");
+            Eq(title.ChangeText.color, d.status.@long, "ChartView title change% colored long (gain) under dark");
+        }
         Eq(harness.Samples["ladder_bid"].color, d.status.bid, "montage ladder_bid == dark bid");
         Eq(harness.Samples["ladder_ask"].color, d.status.ask, "montage ladder_ask == dark ask");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
@@ -201,6 +213,8 @@ public static class ThemeProbe
         Eq(harness.Samples["chart_bg"].color, nd.colors.background, "ChartView (production) chart_bg switched");
         if (candleUp != null) Eq(candleUp.color, nd.status.@long, "ChartView (production) candle_up switched");
         if (candleDown != null) Eq(candleDown.color, nd.status.@short, "ChartView (production) candle_down switched");
+        // title change% color must ALSO follow the switch (gain stays long, now NonDefault's long) (#53).
+        if (title != null) Eq(title.ChangeText.color, nd.status.@long, "ChartView title change% recolors on switch");
         Eq(harness.Samples["ladder_bid"].color, nd.status.bid, "montage ladder_bid switched");
         Eq(harness.Samples["ladder_ask"].color, nd.status.ask, "montage ladder_ask switched");
         Eq(harness.Samples["accent_editor"].color, nd.players.Get(0), "montage accent_editor switched");
@@ -223,6 +237,11 @@ public static class ThemeProbe
     static void Eq(Color got, Color want, string msg)
     {
         if (!Approx(got, want)) _fails.Add(msg + $" (got {got}, want {want})");
+    }
+
+    static void Eq(string got, string want, string msg)
+    {
+        if (got != want) _fails.Add(msg + $" (got \"{got}\", want \"{want}\")");
     }
 
     static void Ne(Color got, Color other, string msg)

@@ -5,7 +5,7 @@
 // each carried its own BuildChartUi + RenderCandles + AddRect). This consolidates that single
 // rendering into one component; the 3 harnesses and the #44 montage now feed the SAME part.
 //
-// PARITY STANCE (memory "TTWR parity first"; findings 0022): TTWR's chart is an IMMEDIATE-mode
+// PARITY STANCE (memory "TTWR parity first"; findings 0023): TTWR's chart is an IMMEDIATE-mode
 // Bevy system (`chart_main_render_system` re-paints every candle each frame via ShapePainter on
 // a read-only ChartViewState) — there is no "ChartView component" to port 1:1. This retained
 // uGUI widget (Image rects rebuilt only when the bar count grows) is therefore a backcast-
@@ -20,7 +20,7 @@
 //
 // SCOPE (v1): candle + axis + background (+ optional title bar). TTWR's richer chrome — grid
 // lines, axis tick labels (axes_labels.rs), the last-price dashed line — is NOT yet ported in
-// backcast and is split to a follow-up (see findings 0022), keeping this an extraction, not a
+// backcast and is split to a follow-up (see findings 0023), keeping this an extraction, not a
 // feature add.
 
 using System.Collections.Generic;
@@ -51,8 +51,10 @@ public class ChartView : MonoBehaviour
     bool _hasFrame;
     double _lastClose, _firstOpen;
 
-    // ---- probe / montage seams (ThemeProbe samples the PRODUCTION graphics, findings 0022) ----
+    // ---- probe / montage seams (ThemeProbe samples the PRODUCTION graphics, findings 0023) ----
     public Image Background => _bg;
+    public Text PriceText => _priceText;     // title bar price (last close) — for ThemeProbe value-assert
+    public Text ChangeText => _changeText;   // title bar signed change% (themed long/short) — for ThemeProbe
 
     // First candle body matching the requested direction (the montage feeds a 2-bar mock so both
     // exist) — lets ThemeProbe assert the real candle color switches, not a throwaway swatch.

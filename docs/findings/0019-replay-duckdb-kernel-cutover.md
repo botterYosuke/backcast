@@ -154,3 +154,54 @@ owner HITL（AC⑤・2026-06-15）で **チャートは 68 本 bar-by-bar 前進
 3. Startup タイルで granularity/cash/start/end/universe を編集 → Run。
 4. 期待: DuckDB→kernel で run・チャートにローソクが **bar-by-bar 前進**・`CatalogPrecisionMismatchError` が
    構造的に出ない（nautilus 非ロード）。strategy 既定は `kernel_spike_buy_sell.py`。
+
+## 5. code-review 修正（#49 review #1〜#5・RED→GREEN・`tests/test_replay_review_fixes.py`）
+
+`/code-review` の Medium+ 5 件を tdd で修正。golden は **byte-identical 維持**（`verify_golden` PASS）。
+
+- **#1 granularity 正規化**: `_start_engine_duckdb` が `scenario["granularity"]` を生で kernel に渡し
+  `'daily'`/空白で `_granularity` ValueError→RUN_FAILED だった。legacy catalog 経路（`load_bars_for_scenario`
+  →`normalize_granularity`）に合わせ DuckDB 分岐でも `normalize_granularity` を適用。
+- **#4 `on_equity` を宣言メソッド化**: runner が `getattr(sink,"on_equity",None)` で探していた（typo で equity
+  curve が無言欠落）。`EventSink` に **no-op `on_equity`** を宣言し runner は無条件呼び出し。sink に無ければ
+  loud に raise（`test_sink_without_on_equity_raises`）。
+- **#5 走行中 run の停止**: loop は `run_event.wait()`（pause）のみで stop-flag が無く force_stop でも走り切って
+  いた。`run_event`(pause: clear/set) とは別の **`stop_event`** を注入（core `_replay_stop_event`・
+  `start_engine` で clear / `stop_replay`・`force_stop_replay` で set）。loop 先頭で `is_set()`→break。既定 None
+  で golden 素通り。
+- **#3 アニメ throttle の上限化**: 固定 10ms/bar は Minute（〜10万本）で分単位 sleep。総予算
+  `_ANIM_BUDGET_SEC=2.0` で `effective_interval = min(bar_interval, budget/n_bars)`＝総 sleep を bar 数非依存に
+  上限化（Daily 68 本は満額 10ms・大量 bar は near-instant だが毎 bar GIL は解放）。
+- **#2 equity を mark-to-market 化（cash 分離）**: `get_portfolio.equity` が realized cash で、建玉保有のまま
+  終わる戦略で過小だった。**venue 横断 grill 結論**（`/nautilus-trader /kabusapi /tachibana`）= equity は
+  「cash + 建玉×最新値」が正（kabu 余力/`CurrentPrice`・立花 買余力/時価と同義・live #25 の MTM 接続と一致）。
+  → runner が毎 bar `last_prices[iid]=bar.close` を追跡し `mark_to_market_equity` を `on_equity(ts, equity=MTM,
+  cash)` で production observer へ。`EquityPoint.cash` 追加・`compute_portfolio` で `equity=MTM` / `cash`・
+  `buying_power=cash`（CASH 口座）に分離。`buying_power` の venue 権威化（kabu wallet / 立花 買余力）は live slice。
+  - **golden を触らずに済んだ**（当初「MTM化＋golden 再生成」想定からの訂正）: production の summary/portfolio は
+    `_finalize_run`→`RunBufferReader`（observer の `on_equity` 書き込み）由来で、**kernel 内部 `equity_curve`
+    （→ RunResult/golden）とは別系統**。よって `on_equity` 側のみ MTM 化すれば get_portfolio が正しくなり、
+    `equity_curve`（cash・frozen #24・oracle-matched）は不変＝golden byte-identical。なお本機は nautilus
+    high-precision のため oracle 再 capture 自体が不可（`capture_golden` は oracle 依存）で、regen は将来 #50 で
+    kernel characterization 化する際に行う。
+
+検証: `tests/test_replay_review_fixes.py` 5 passed、#49 既存 + observer + seam + purity 22 passed、
+`verify_golden` PASS（kernel byte-identical）、full suite 263 passed / 3 failed（既存: nautilus precision ×2 +
+Windows パス on macOS・#49 無関係）。
+
+## 再検証（2026-06-15・#29 の DuckDB+kernel 経路）
+
+#50（nautilus runtime 完全撤去）後に #29 の Replay run 経路が end-to-end で緑のままかを再確認した依頼。
+`.venv` が stale だったため `uv sync`（duckdb 1.5.3 導入・nautilus-trader 撤去で現 main と整合）後に実行：
+
+- **end-to-end GREEN**: `test_replay_duckdb_kernel_afk.py` 2 passed
+  （`load_replay_data → start_engine → KernelRunner → apply_replay_event/GetState + RunBuffer→get_portfolio`
+  で BUY+SELL fill・exactly-once streaming 50 bars・clean interpreter で nautilus 非 import）。
+  `test_load_replay_data_duckdb.py` 6 passed。
+- **契約チェーン健在**: C# `server.start_engine({strategy_file})` → `inproc_server.start_engine(cfg)` →
+  `BackendService.start_engine(cfg)`（`cfg["strategy_file"]` 抽出）→ `DataEngineBackend.start_engine`
+  （DuckDB+kernel）。#29 panel/HITL が呼ぶ入口は #50 後も無改修で解決する。
+- **full suite**: 243 passed / 17 skipped / **1 failed**。失敗は `test_paths_dotenv.py::
+  test_jquants_duckdb_root_absolute_kept`（Mac パス `/Volumes/...` を Windows で検証＝drive-relative 解決の
+  platform 固有・#29 無関係・上記の既知 3 失敗のうち nautilus precision ×2 が #50 で消え残った 1 件）。
+- **未実測ゲート**: owner HITL（Unity 目視・display+catalog 要）は headless 不可のため未走（従来どおり owner 残）。

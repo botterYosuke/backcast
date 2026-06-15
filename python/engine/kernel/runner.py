@@ -34,6 +34,11 @@ from engine.kernel.sink import EventSink
 from engine.kernel.strategy import Strategy
 from engine.live.safety_rails import RailViolation, SafetyRails
 
+# Total wall-clock budget for the per-bar animation throttle (#49 review #3). The effective
+# per-bar sleep is min(bar_interval_sec, _ANIM_BUDGET_SEC / n_bars), so total throttle time
+# never exceeds this regardless of bar count.
+_ANIM_BUDGET_SEC = 2.0
+
 
 @dataclass
 class RunResult:
@@ -119,6 +124,7 @@ class KernelRunner:
         rails: Optional[SafetyRails] = None,
         run_event=None,
         bar_interval_sec: float = 0.0,
+        stop_event=None,
     ) -> None:
         self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/<table>/<code>.duckdb
         # Single instrument (#47) or a universe (#48); universe is time-order-merged into one
@@ -161,16 +167,16 @@ class KernelRunner:
         # golden path runs straight through, byte-identical.
         self._run_event = run_event
         self._bar_interval_sec = bar_interval_sec
+        # Stop seam (#49 review #5): distinct from run_event (which only pauses: clear=pause,
+        # set=run — it can't signal "stop" because a running run also has it set). force_stop
+        # sets this; the loop breaks promptly so a long Minute run halts instead of running
+        # out. Default None → golden path never breaks early (byte-identical).
+        self._stop_event = stop_event
 
     def run(self) -> RunResult:
         import time as _time
 
         from engine.strategy_runtime.summary import equity_curve_stats
-
-        # Resolved once: the production observer implements on_equity (per-bar cash →
-        # RunBuffer.write_equity); the golden EventSink does not, so this stays None and the
-        # golden contract/summary is untouched (byte-identical).
-        emit_equity = getattr(self._sink, "on_equity", None)
 
         bars: list[Bar] = load_universe_bars(
             self._data_root,
@@ -182,6 +188,14 @@ class KernelRunner:
 
         self._strategy.register(self._ctx)
         self._strategy.on_start()
+
+        # Budget-bound the per-bar animation throttle (#49 review #3): a fixed 10ms/bar would
+        # make a long Minute run sleep for minutes. Cap the TOTAL animation time so cadence
+        # scales down with bar count (Daily 68 bars → full 10ms each; a year of Minute bars →
+        # near-instant per bar, still releasing the GIL each bar for the poll thread).
+        effective_interval = self._bar_interval_sec
+        if self._bar_interval_sec > 0 and bars:
+            effective_interval = min(self._bar_interval_sec, _ANIM_BUDGET_SEC / len(bars))
 
         equity_curve: list[float] = []
         fills = 0
@@ -196,9 +210,14 @@ class KernelRunner:
         stopped_reason = ""
 
         for bar in bars:
-            # Pause/resume/stop gate (host-owned). Blocks here when the DataEngine clears the
-            # event (PauseReplay); force_stop sets it so a stopped run unblocks and runs out.
-            # Same single-Event semantics the legacy replay_runner consumes — no stop-flag.
+            # Stop gate (#49 review #5): break promptly when the host requests a stop, so a
+            # long run halts instead of streaming every remaining bar.
+            if self._stop_event is not None and self._stop_event.is_set():
+                stopped_reason = "stopped"
+                break
+
+            # Pause/resume gate (host-owned). Blocks here when the DataEngine clears the event
+            # (PauseReplay); resume sets it. (Stop is the separate stop_event above.)
             if self._run_event is not None:
                 self._run_event.wait()
 
@@ -226,20 +245,29 @@ class KernelRunner:
                 self._sink.push_portfolio(self._portfolio)
                 fills += 1
 
-            # Per-bar equity point (post-fill cash), mirroring the oracle's on_equity.
+            # Track each instrument's latest close so equity can be marked to market
+            # (cash + open-position value), consistent with how live venues report account
+            # value. Updated every bar (not just when rails are on).
+            last_prices[bar.instrument_id] = bar.close
+            mtm_equity = self._portfolio.mark_to_market_equity(last_prices)
+
+            # equity_curve feeds the kernel's RunResult/summary = the FROZEN #24 golden
+            # (cash-basis, oracle-matched, immutable per ADR-0006). Left as cash so the golden
+            # stays byte-identical.
             equity_curve.append(self._portfolio.cash)
-            # Production observer mirrors this point into RunBuffer (per-bar, post-fill) so
-            # get_portfolio's last_portfolio is derived from the same equity cadence the
-            # legacy nautilus path recorded (account balance_total per bar). No-op for golden.
-            if emit_equity is not None:
-                emit_equity(bar.ts_event_ns // 1_000_000, self._portfolio.cash)
+            # Production observer projection (#49 review #2): mark-to-market equity + realized
+            # cash, mirrored into RunBuffer per bar → compute_portfolio → get_portfolio. So the
+            # UI's equity reflects open-position value (not just cash); cash stays separate.
+            # No-op for the golden EventSink. Called unconditionally (declared sink method).
+            self._sink.on_equity(
+                bar.ts_event_ns // 1_000_000, mtm_equity, self._portfolio.cash
+            )
 
             # Post-trade rail on mark-to-market equity (skipped when rails are
             # unconfigured, so the golden tracer is untouched).
             if rails_active:
-                last_prices[bar.instrument_id] = bar.close
                 violation = self._risk.check_post_trade(
-                    equity=self._portfolio.mark_to_market_equity(last_prices),
+                    equity=mtm_equity,
                     baseline_equity=baseline_equity,
                 )
                 if violation is not None:
@@ -249,8 +277,8 @@ class KernelRunner:
             # Wallclock throttle (last in the body, like the legacy replay_runner): releases
             # the GIL between bars so the host's poll thread reads the incrementally-streamed
             # chart (issue #29 bar-by-bar following). Default 0 → golden runs straight through.
-            if self._bar_interval_sec > 0:
-                _time.sleep(self._bar_interval_sec)
+            if effective_interval > 0:
+                _time.sleep(effective_interval)
 
         self._strategy.on_stop()
 

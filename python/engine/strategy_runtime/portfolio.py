@@ -70,11 +70,17 @@ def compute_portfolio(
     positions = _net_positions(fills)
 
     initial_cash = float((scenario or {}).get("initial_cash", 0) or 0)
-    last_equity = equity_points[-1].equity if equity_points else initial_cash
+    last = equity_points[-1] if equity_points else None
+    # equity = mark-to-market (cash + open-position value). cash = realized cash, recorded
+    # separately by the DuckDB/kernel path (#49 review #2); the legacy equity-only path leaves
+    # cash=None, so fall back to equity (cash==equity for a flat round-trip). buying_power for a
+    # CASH account == cash (live margin venues report 余力 authoritatively — out of scope here).
+    last_equity = last.equity if last else initial_cash
+    last_cash = last.cash if (last and last.cash is not None) else last_equity
 
     return {
-        "buying_power": last_equity,
-        "cash": last_equity,
+        "buying_power": last_cash,
+        "cash": last_cash,
         "equity": last_equity,
         "positions": positions,
         "orders": orders,

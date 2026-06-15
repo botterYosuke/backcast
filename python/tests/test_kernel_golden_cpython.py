@@ -43,16 +43,10 @@ def _golden() -> dict:
         return json.load(fh)
 
 
-def test_oracle_subprocess_matches_committed_golden() -> None:
-    golden = _golden()
-    proc = _run("spike.kernel_golden.run_oracle")
-    assert proc.returncode == 0, f"oracle subprocess failed:\n{proc.stderr}"
-    out = json.loads(proc.stdout)
-    diff = first_difference(golden["contract"], out["contract"])
-    assert diff is None, f"committed golden is stale vs the live Nautilus oracle: {diff}"
-    assert out["provenance"] == golden["provenance"], (
-        "oracle provenance drifted (nautilus build / precision / hashes) — re-capture and review"
-    )
+# NOTE (#50 / ADR-0006): the live-nautilus oracle capture (spike.kernel_golden.run_oracle)
+# was retired with nautilus. The #24 golden is now a FROZEN regression fixture — no new
+# capture re-runs nautilus. Faithfulness is pinned purely by the nautilus-free kernel run
+# below matching the committed golden byte-for-byte (findings 0022 §4).
 
 
 @pytest.mark.skipif(

@@ -89,8 +89,11 @@ def test_push_order_writes_runbuffer_fill_with_reader_shape() -> None:
 
 def test_on_equity_writes_runbuffer_equity_point() -> None:
     obs, _, buf = _observer()
-    obs.on_equity(1_700_000_000_000, 9_990_000.0)
-    assert buf.equity == [{"ts_event_ms": 1_700_000_000_000, "equity": 9_990_000.0}]
+    # equity = mark-to-market, cash = realized cash — recorded separately (#49 review #2).
+    obs.on_equity(1_700_000_000_000, 10_004_700.0, 9_899_600.0)
+    assert buf.equity == [
+        {"ts_event_ms": 1_700_000_000_000, "equity": 10_004_700.0, "cash": 9_899_600.0}
+    ]
 
 
 def test_push_portfolio_and_run_complete_are_inert() -> None:

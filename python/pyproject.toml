@@ -4,10 +4,10 @@ version = "0.0.0"
 description = "Ported TTWR replay engine running under Unity Mono+pythonnet (S1 / issue #9)"
 requires-python = ">=3.13,<3.14"
 dependencies = [
-    "nautilus-trader==1.226.0",
-    # Direct dep: the Backcast Execution Kernel (engine.kernel.bars) reads catalog parquet
-    # via pyarrow independently of Nautilus (#24). Pinned directly so it survives the
-    # eventual nautilus_trader removal rather than relying on it as a transitive dep.
+    # #50 (ADR-0006): nautilus-trader was removed entirely — Replay reads J-Quants DuckDB
+    # directly (engine.kernel.duckdb_bars) and the kernel runs nautilus-free.
+    # pyarrow remains a direct dep for _backend_impl's parquet catalog scan (instrument
+    # listing); independent of Nautilus.
     "pyarrow>=18",
     # Direct read of the J-Quants per-symbol DuckDB as the kernel's market-data source,
     # replacing the nautilus parquet catalog (ADR-0006 / #47). No intermediate catalog.

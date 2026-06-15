@@ -4,12 +4,9 @@ import threading
 import time
 from typing import Literal, Optional
 
-from .jquants_to_catalog import instrument_id_to_bar_type  # noqa: F401 — re-exported for callers
 from .models import EngineSnapshot, HistoryPoint, OhlcPoint, PerInstrumentState, TradingState
-from .nautilus_catalog_loader import CatalogPrecisionMismatchError
 from .reducer import KlineUpdate, ReducerState, ReplayEvent, ReplayTimeUpdated, apply_event
-from .replay import BaseReplayProvider, NautilusBarsReplayProvider
-from .replay_loader import ReplayLoader
+from .replay import BaseReplayProvider
 
 # Placeholder price for a DuckDB Replay that is LOADED but not yet streaming (#49). It only
 # satisfies TradingState's price>0 invariant for the brief pre-stream poll window and is
@@ -24,7 +21,6 @@ class DataEngine:
         replay_provider: Optional[BaseReplayProvider] = None,
         max_history_len: int = 1000,
         jquants_loader=None,
-        nautilus_catalog_path: Optional[str] = None,
         jquants_catalog_path: Optional[str] = None,
         state_machine: Optional["VenueStateMachine"] = None,
         venue_id: Optional[str] = None,
@@ -43,6 +39,10 @@ class DataEngine:
         # Gate for engine_runner: SET = running, CLEAR = paused.
         self._run_event = threading.Event()
         self._run_event.set()
+        # Stop signal for an in-flight kernel replay (#49 review #5). Distinct from
+        # _run_event (pause): set on stop/force-stop so KernelRunner breaks promptly;
+        # cleared when a run starts (start_engine LOADED→RUNNING).
+        self._replay_stop_event = threading.Event()
         self._replay_provider = replay_provider
         self._mode: Literal["static", "replay"] = (
             "replay" if replay_provider else "static"
@@ -50,13 +50,7 @@ class DataEngine:
         self._is_exhausted = False
         self._max_history_len = max_history_len
         self._jquants_loader = jquants_loader
-        self._nautilus_catalog_path = nautilus_catalog_path
         self._jquants_catalog_path = jquants_catalog_path
-        self._replay_loader = ReplayLoader(
-            nautilus_catalog_path=nautilus_catalog_path,
-            jquants_loader=jquants_loader,
-            jquants_catalog_path=jquants_catalog_path,
-        )
         self._event_log: list[ReplayEvent] = []
         self._last_replay_catalog_path: Optional[str] = None
         # ADR-0006 (#49): J-Quants DuckDB direct-read root. ctor arg overrides the .env
@@ -67,7 +61,7 @@ class DataEngine:
         self._replay_duckdb_root: Optional[str] = None
         self.last_portfolio: Optional[dict] = None
         # D9/D24: multi-instrument replay support
-        self._replay_providers: dict[str, NautilusBarsReplayProvider] = {}
+        self._replay_providers: dict[str, BaseReplayProvider] = {}
         self._replay_primary_id: str = ""
         # Phase 3: in-proc Rust event sink (set by inproc_python_worker via set_rust_event_sink)
         self._rust_event_sink = None
@@ -159,10 +153,11 @@ class DataEngine:
         granularity: str = "Trade",
         catalog_path: str | None = None,
     ) -> tuple[bool, str | None]:
-        """Backward-compatible wrapper — delegates loader logic to ReplayLoader.
+        """Resolve the replay data source and transition IDLE → LOADED.
 
-        State transitions (_replay_state, _prime_provider_locked, etc.) remain
-        owned by DataEngine; ReplayLoader only builds the providers.
+        ADR-0006 / #50: production resolves a J-Quants DuckDB root (env or ctor arg) and
+        streams via the kernel; the legacy nautilus catalog provider branches were removed.
+        A provider passed to the ctor is a test/back-compat seam handled below.
         """
         with self._lock:
             if self._replay_state != "IDLE":
@@ -189,55 +184,10 @@ class DataEngine:
                 self._replay_state = "LOADED"
                 return True, None
 
-            instrument_ids = instrument_ids or []
-            if not instrument_ids:
-                return False, "At least one instrument_id is required"
-
-            effective_catalog_path = catalog_path or self._nautilus_catalog_path
-            if effective_catalog_path is not None:
-                try:
-                    providers = self._replay_loader.load_catalog_providers(
-                        instrument_ids=instrument_ids,
-                        start_date=start_date,
-                        end_date=end_date,
-                        granularity=granularity,
-                        catalog_path=effective_catalog_path,
-                    )
-                except CatalogPrecisionMismatchError:
-                    raise
-                except (ValueError, FileNotFoundError) as e:
-                    return False, str(e)
-
-                primary_iid = instrument_ids[0]
-                self._prime_provider_locked(providers[primary_iid])
-                self._replay_providers = providers
-                self._replay_primary_id = primary_iid
-                # A0: priming は primary の初バーを global ohlc_points だけに積むので per-id にも複製
-                if self._rs.ohlc_points:
-                    self._rs.per_id_ohlc_points[primary_iid] = list(self._rs.ohlc_points)
-                    self._rs.per_id_close.setdefault(primary_iid, self._rs.price)
-                self._last_replay_catalog_path = effective_catalog_path
-                self._replay_state = "LOADED"
-                return True, None
-
-            if self._jquants_loader is not None:
-                try:
-                    provider, used_catalog_path = self._replay_loader.load_jquants_provider(
-                        instrument_id=instrument_ids[0],
-                        start_date=start_date,
-                        end_date=end_date,
-                        granularity=granularity,
-                    )
-                except (ValueError, FileNotFoundError) as e:
-                    return False, str(e)
-
-                self._prime_provider_locked(provider)
-                self._replay_primary_id = str(instrument_ids[0])
-                self._last_replay_catalog_path = used_catalog_path
-                self._replay_state = "LOADED"
-                return True, None
-
-            return False, "Replay provider is not configured"
+            # #50: the legacy nautilus catalog / J-Quants-catalog replay-provider branches
+            # were removed (ADR-0006). Production resolves a DuckDB root above; a preconfigured
+            # provider (ctor arg, test seam) was handled above. Anything else is unconfigured.
+            return False, "Replay data source is not configured (no DuckDB root)"
 
     def _load_replay_duckdb_locked(
         self, *, instrument_ids: list[str], granularity: str, root: str
@@ -303,6 +253,7 @@ class DataEngine:
 
             self._is_running = True
             self._replay_state = "RUNNING"
+            self._replay_stop_event.clear()  # fresh run: clear any prior stop signal (#49 #5)
             return True, None
 
     def pause_replay(self) -> tuple[bool, str | None]:
@@ -333,6 +284,7 @@ class DataEngine:
             self._is_running = False
             self._replay_state = "IDLE"
             self._replay_duckdb_root = None  # #49: see force_stop_replay
+            self._replay_stop_event.set()  # halt an in-flight kernel run promptly (#49 #5)
             self._run_event.set()
             return True, None
 
@@ -347,12 +299,17 @@ class DataEngine:
             # #49: drop the DuckDB root too, so a subsequent catalog-based load is not
             # misrouted to the kernel path by a stale flag.
             self._replay_duckdb_root = None
+            self._replay_stop_event.set()  # halt an in-flight kernel run promptly (#49 #5)
             self._run_event.set()
             return True, None
 
     @property
     def run_event(self) -> threading.Event:
         return self._run_event
+
+    @property
+    def replay_stop_event(self) -> threading.Event:
+        return self._replay_stop_event
 
     def set_replay_speed(self, multiplier: int) -> tuple[bool, str | None]:
         with self._lock:

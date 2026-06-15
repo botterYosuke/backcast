@@ -1,8 +1,15 @@
-# findings 0022 — candlestick 描画を本番コンポーネント `ChartView` に抽出（#53）
+# findings 0023 — candlestick 描画を本番コンポーネント `ChartView` に抽出（#53）
 
 方針: ADR-0005（1:1 surface parity・chart は明示 in-scope サーフェス）/ ADR-0001（Unity+pythonnet frontend）。
 移植元 parity 参照: TTWR `src/ui/chart/render_main.rs`・`title_bar.rs`・`axes_labels.rs`。
 本ファイルが #53 スライスの正本。ADR-0005 は自己保護条項により**編集せず**、本 findings から「方針: ADR-0005」で参照する。
+
+> **マージ後の注記（origin/main #50 nautilus 全撤去との合流時）**: #53 抽出後に #50（findings
+> 0022-nautilus-full-removal）がマージされ、nautilus ベースの throwaway harness `ReplayChartHarness` /
+> `ReplayPanelsHarness` は**削除**された（kernel-native の `ScenarioStartupHitlHarness`（#29）が後継）。
+> よって `ChartView` の現実の consumer は **`ScenarioStartupHitlHarness` + #44 montage（`ThemeHitlHarness`）**
+> の 2 つに収束。本抽出により両者が同一部品を共有し AC②③ を満たす構図は不変。本 findings 内で
+> 「3 harness」と記す箇所は抽出時点（#50 マージ前）の記録として読むこと。
 
 ## 結論（grill-with-docs 2026-06-15・owner 確定）
 

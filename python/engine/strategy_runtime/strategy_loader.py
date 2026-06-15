@@ -56,11 +56,10 @@ def load(
     - strategy_cls はインスタンス化しない（呼び出し元 engine_runner の責務）。
     - ``STRATEGY_PARAM_*`` 環境変数の適用は ``get_strategy_param_env()`` で
       取得した dict を engine_runner が StrategyConfig / __init__ kwargs に注入する。
-    - ``base_cls``: subclass 検出に使う基底クラス。``None`` のときだけ
-      ``nautilus_trader.trading.strategy.Strategy`` を import する（既定・後方互換）。
-      kernel 経路は ``engine.kernel.strategy.Strategy`` を渡し、**この import に到達しない**
-      （Rust core 非ロード・D4）。default 引数に nautilus クラスを直書きしないこと
-      （module import 時に Rust core を引いてしまうため）。
+    - ``base_cls``: subclass 検出に使う基底クラス。``None`` のときだけ #50 (ADR-0006) 以降は
+      kernel-native ``engine.kernel.strategy.Strategy`` を遅延 import する（nautilus 退役）。
+      呼び出し側は通常これを明示で渡す。default 引数にクラスを直書きしないのは module import 時の
+      不要結合を避けるため。
 
     Raises:
         FileNotFoundError: path が存在しない場合。
@@ -99,13 +98,11 @@ def load(
     scenario = load_scenario(path)
 
     # Strategy サブクラス検索（このファイルで定義されたものだけ）。
-    # base_cls 未指定時のみ nautilus Strategy を import する（既定・後方互換）。kernel 経路は
-    # engine.kernel.strategy.Strategy を渡すのでこの import 行に到達しない（Rust core 非ロード・D4）。
+    # #50 (ADR-0006): nautilus を退役したので base_cls 未指定の既定は kernel-native Strategy。
+    # 呼び出し側は通常 base_cls=engine.kernel.strategy.Strategy を明示で渡す。遅延 import で
+    # module-level 結合を避けつつ Rust core 非ロードを保つ。
     if base_cls is None:
-        try:
-            from nautilus_trader.trading.strategy import Strategy as base_cls  # type: ignore[no-redef]
-        except ImportError as exc:
-            raise StrategyLoadError(f"nautilus_trader not available: {exc}") from exc
+        from engine.kernel.strategy import Strategy as base_cls  # type: ignore[no-redef]
 
     subclasses: list[type] = [
         cls

@@ -9,7 +9,7 @@ for this tracer. Nautilus-free.
 """
 from __future__ import annotations
 
-from engine.kernel.bars import Bar
+from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import Order, OrderEngine, OrderFilled, OrderStatus
 
 

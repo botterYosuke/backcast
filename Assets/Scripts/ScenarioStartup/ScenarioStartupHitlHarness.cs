@@ -51,6 +51,8 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     Thread _launcher;
     Thread _poll;
     volatile bool _running;     // a run is in flight: ignore re-entrant Run clicks
+    volatile bool _runFinished; // launcher reached its finally (run done/failed) — for terminal status
+    bool _finishedHandled;      // main: terminal status shown once per run
     volatile bool _pollStop;
     volatile bool _pollServerReady;
     volatile PyObject _pollServer;
@@ -72,7 +74,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     // issue #44: the bars-count status text color sources the theme. Chart colors moved into ChartView (#53).
     static readonly Color TEXT = ThemeService.Current.colors.text;
 
-    const bool AutoBootstrapEnabled = false; // owner flips ON to claim Play (single Play-owner rule)
+    const bool AutoBootstrapEnabled = true; // owner flips ON to claim Play (single Play-owner rule)
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -180,6 +182,8 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         _lastPayload = null;
         _startError = null;
         _errLogged = false;
+        Volatile.Write(ref _runFinished, false);
+        _finishedHandled = false;
         if (_statusText != null) _statusText.text = "Running…";
 
         Volatile.Write(ref _running, true);
@@ -214,12 +218,11 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
                 PyObject dataEngCls = coreMod.GetAttr("DataEngine");
                 PyObject inprocCls = inprocMod.GetAttr("InprocLiveServer");
 
-                PyObject dataEngine;
-                using (PyDict kw = new PyDict())
-                {
-                    kw.SetItem("nautilus_catalog_path", new PyString(_catalogPath));
-                    dataEngine = dataEngCls.Invoke(Array.Empty<PyObject>(), kw);
-                }
+                // #50 / ADR-0006: nautilus catalog retired. DataEngine() resolves the J-Quants
+                // DuckDB root from env (BACKCAST_JQUANTS_DUCKDB_ROOT) and Replay streams via the
+                // nautilus-free kernel — no nautilus_catalog_path ctor arg anymore (_catalogPath
+                // is vestigial, kept only for the owner-facing log above).
+                PyObject dataEngine = dataEngCls.Invoke(Array.Empty<PyObject>());
                 server = inprocCls.Invoke(dataEngine);
 
                 // load_replay_data(instrument_ids, start, end, granularity) → IDLE→LOADED.
@@ -273,6 +276,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             // start_engine is synchronous, so reaching here means the run finished (or failed):
             // clear the re-entrancy guard so the owner can configure + Run again.
             Volatile.Write(ref _running, false);
+            Volatile.Write(ref _runFinished, true);
         }
     }
 
@@ -305,6 +309,19 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             if (_statusText != null) _statusText.text = "FAILED: " + err;
             Debug.LogError("[SCENARIO STARTUP HITL] FAIL: " + err);
             _errLogged = true;
+        }
+
+        // A run that COMPLETES with zero streamed bars (e.g. the date range has no data for the
+        // instrument — its DuckDB ends before the requested range) otherwise leaves the status on
+        // "Running…" forever, because the "bars: N" transition below only fires when bars stream.
+        // Surface a terminal status on completion so the owner gets feedback instead of an
+        // apparent hang. N>0 runs already show "bars: N" via streaming, so only the 0-bar case
+        // needs this terminal override.
+        if (Volatile.Read(ref _runFinished) && !_finishedHandled && err == null && _renderedCount == 0)
+        {
+            _finishedHandled = true;
+            if (_statusText != null) _statusText.text = "DONE: 0 bars — no data in the date range?";
+            Debug.Log("[SCENARIO STARTUP HITL] run complete with 0 streamed bars (empty/future date range?)");
         }
 
         string state = Volatile.Read(ref _latestStateJson);

@@ -20,9 +20,17 @@ import sys
 _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PYTHON_ROOT)
 
+import pytest
+
+from engine.kernel.duckdb_bars import daily_db_path
+from spike.kernel_golden import scenario
 from spike.kernel_golden.capture_golden import GOLDEN_PATH
 from spike.kernel_golden.subprocess_util import run_python
 from spike.kernel_golden.verify_golden import first_difference
+
+# The kernel leg now sources bars from the J-Quants DuckDB (ADR-0006 / #47); skip where the
+# owner's data root is not mounted. The oracle leg keeps using the committed catalog.
+_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
 
 
 def _run(module: str) -> subprocess.CompletedProcess:
@@ -47,6 +55,9 @@ def test_oracle_subprocess_matches_committed_golden() -> None:
     )
 
 
+@pytest.mark.skipif(
+    not _DB_PRESENT, reason=f"J-Quants DuckDB not mounted at {scenario.DUCKDB_ROOT}"
+)
 def test_kernel_subprocess_matches_committed_golden() -> None:
     golden = _golden()
     proc = _run("spike.kernel_golden.run_kernel")

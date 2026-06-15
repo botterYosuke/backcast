@@ -9,6 +9,9 @@ dependencies = [
     # via pyarrow independently of Nautilus (#24). Pinned directly so it survives the
     # eventual nautilus_trader removal rather than relying on it as a transitive dep.
     "pyarrow>=18",
+    # Direct read of the J-Quants per-symbol DuckDB as the kernel's market-data source,
+    # replacing the nautilus parquet catalog (ADR-0006 / #47). No intermediate catalog.
+    "duckdb>=1.5",
     "orjson>=3.11.9",
     "pydantic>=2.13.4",
     "httpx>=0.27",

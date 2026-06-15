@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from engine.kernel.bars import Bar, load_bars
 from engine.kernel.broker import ReplayBroker
+from engine.kernel.duckdb_bars import Bar, load_universe_bars
 from engine.kernel.orders import (
     Order,
     OrderDenied,
@@ -106,8 +106,10 @@ class KernelRunner:
     def __init__(
         self,
         *,
-        catalog_path: str | Path,
-        instrument_id: str,
+        data_root: str | Path,
+        instrument_id: str | None = None,
+        instrument_ids: Optional[list[str]] = None,
+        granularity: str = "Daily",
         start: str,
         end: str,
         initial_cash: float,
@@ -115,13 +117,25 @@ class KernelRunner:
         push_target,
         rails: Optional[SafetyRails] = None,
     ) -> None:
-        self._catalog_path = catalog_path
-        self._instrument_id = instrument_id
+        self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/<table>/<code>.duckdb
+        # Single instrument (#47) or a universe (#48); universe is time-order-merged into one
+        # stream. instrument_id is kept for back-compat with existing single-instrument callers.
+        if instrument_ids is None:
+            if instrument_id is None:
+                raise ValueError("KernelRunner requires instrument_id or instrument_ids")
+            instrument_ids = [instrument_id]
+        if not instrument_ids:
+            raise ValueError("instrument_ids must be non-empty")
+        self._instrument_ids = list(instrument_ids)
+        self._granularity = granularity
         self._start = start
         self._end = end
         self._initial_cash = float(initial_cash)
         self._strategy = strategy
-        self._venue = instrument_id.split(".")[-1]
+        venues = {iid.split(".")[-1] for iid in self._instrument_ids}
+        if len(venues) != 1:
+            raise ValueError(f"universe must share a single venue, got {sorted(venues)}")
+        self._venue = venues.pop()
         self._risk = RiskEngine(rails)
         self._order_engine = OrderEngine(risk_engine=self._risk, venue=self._venue)
         self._portfolio = Portfolio(initial_cash=initial_cash)
@@ -132,8 +146,12 @@ class KernelRunner:
     def run(self) -> RunResult:
         from engine.strategy_runtime.summary import equity_curve_stats
 
-        bars: list[Bar] = load_bars(
-            self._catalog_path, self._instrument_id, start=self._start, end=self._end
+        bars: list[Bar] = load_universe_bars(
+            self._data_root,
+            self._instrument_ids,
+            start=self._start,
+            end=self._end,
+            granularity=self._granularity,
         )
 
         self._strategy.register(self._ctx)

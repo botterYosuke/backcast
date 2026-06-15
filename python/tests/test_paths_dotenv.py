@@ -55,8 +55,21 @@ def test_jquants_duckdb_root_relative_resolves_under_repo(monkeypatch) -> None:
 
 
 def test_jquants_duckdb_root_absolute_kept(monkeypatch) -> None:
-    monkeypatch.setattr(os, "environ", {"BACKCAST_JQUANTS_DUCKDB_ROOT": "/Volumes/StockData/jp"})
-    assert paths.jquants_duckdb_root() == Path("/Volumes/StockData/jp")
+    """An absolute root is kept verbatim (not resolved under the repo).
+
+    Uses this machine's real `BACKCAST_JQUANTS_DUCKDB_ROOT` from `.env` (loaded into the
+    process env at `engine.paths` import) so the absolute path is OS-appropriate: a hardcoded
+    Mac `/Volumes/...` is drive-relative on Windows (`is_absolute()` is False there) and would
+    be repo-resolved, failing this assertion. Skip-if-absent matches the module's per-machine
+    `.env` contract (external-storage paths differ per machine; ADR-0006 / `.env.example`).
+    """
+    import pytest
+
+    configured = os.environ.get("BACKCAST_JQUANTS_DUCKDB_ROOT")
+    if not configured or not Path(configured).is_absolute():
+        pytest.skip("BACKCAST_JQUANTS_DUCKDB_ROOT not set to an absolute path in .env")
+    monkeypatch.setattr(os, "environ", {"BACKCAST_JQUANTS_DUCKDB_ROOT": configured})
+    assert paths.jquants_duckdb_root() == Path(configured)
 
 
 def test_db_path_rejects_unconfigured_root() -> None:

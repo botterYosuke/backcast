@@ -188,3 +188,20 @@ owner HITL（AC⑤・2026-06-15）で **チャートは 68 本 bar-by-bar 前進
 検証: `tests/test_replay_review_fixes.py` 5 passed、#49 既存 + observer + seam + purity 22 passed、
 `verify_golden` PASS（kernel byte-identical）、full suite 263 passed / 3 failed（既存: nautilus precision ×2 +
 Windows パス on macOS・#49 無関係）。
+
+## 再検証（2026-06-15・#29 の DuckDB+kernel 経路）
+
+#50（nautilus runtime 完全撤去）後に #29 の Replay run 経路が end-to-end で緑のままかを再確認した依頼。
+`.venv` が stale だったため `uv sync`（duckdb 1.5.3 導入・nautilus-trader 撤去で現 main と整合）後に実行：
+
+- **end-to-end GREEN**: `test_replay_duckdb_kernel_afk.py` 2 passed
+  （`load_replay_data → start_engine → KernelRunner → apply_replay_event/GetState + RunBuffer→get_portfolio`
+  で BUY+SELL fill・exactly-once streaming 50 bars・clean interpreter で nautilus 非 import）。
+  `test_load_replay_data_duckdb.py` 6 passed。
+- **契約チェーン健在**: C# `server.start_engine({strategy_file})` → `inproc_server.start_engine(cfg)` →
+  `BackendService.start_engine(cfg)`（`cfg["strategy_file"]` 抽出）→ `DataEngineBackend.start_engine`
+  （DuckDB+kernel）。#29 panel/HITL が呼ぶ入口は #50 後も無改修で解決する。
+- **full suite**: 243 passed / 17 skipped / **1 failed**。失敗は `test_paths_dotenv.py::
+  test_jquants_duckdb_root_absolute_kept`（Mac パス `/Volumes/...` を Windows で検証＝drive-relative 解決の
+  platform 固有・#29 無関係・上記の既知 3 失敗のうち nautilus precision ×2 が #50 で消え残った 1 件）。
+- **未実測ゲート**: owner HITL（Unity 目視・display+catalog 要）は headless 不可のため未走（従来どおり owner 残）。

@@ -7,14 +7,22 @@ these so they run the identical scenario (findings 0008 §2).
 from __future__ import annotations
 
 import os
+import sys
 
 PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if PYTHON_ROOT not in sys.path:
+    sys.path.insert(0, PYTHON_ROOT)
+
+from engine import paths
 
 CATALOG = os.path.join(PYTHON_ROOT, "spike", "fixtures", "jquants-catalog")
 # J-Quants DuckDB root (ADR-0006): the kernel reads <root>/stocks_daily/<code>.duckdb
-# directly. env-overridable; default = owner's mounted data root. CATALOG is retained only
-# as the data-equivalence comparison source (#47) and the oracle source until #50.
-DUCKDB_ROOT = os.environ.get("BACKCAST_JQUANTS_DUCKDB_ROOT", "/Volumes/StockData/jp")
+# directly. Per-machine path read from .env (BACKCAST_JQUANTS_DUCKDB_ROOT) via engine.paths —
+# never hardcoded (paths differ per machine; .env.example). Empty when unset, so the real-data
+# tests skip-if-absent. CATALOG is retained only as the data-equivalence comparison source
+# (#47) and the oracle source until #50.
+_DUCKDB_ROOT = paths.jquants_duckdb_root()
+DUCKDB_ROOT = str(_DUCKDB_ROOT) if _DUCKDB_ROOT is not None else ""
 INSTRUMENT = "8918.TSE"
 START = "2024-10-01"
 END = "2025-01-10"

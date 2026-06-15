@@ -136,17 +136,26 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _windows = new FloatingWindowController(_floatingLayer, FloatingWindowCatalog.Default(), BuildEditorWindowFrame);
 
         // Hakoniwa [startup slot0, chart slot1] on Content (CONTEXT: Startup = PanelKind::Startup slot 0).
-        _chartView = _chartTile.gameObject.GetComponent<ChartView>();
-        if (_chartView == null) _chartView = _chartTile.gameObject.AddComponent<ChartView>();
-        _chartView.Build(_chartTile, showTitleBar: false);
+        // Each tile gets a panel bg + a header bar so it reads as a DISTINCT box against the infinite-
+        // space field (else tile bg ≈ field and the grid is invisible), and HakoniwaTileHeaderInput
+        // makes header-drag SWAP while body-drag falls through to pan. Mirrors HakoniwaHitlHarness's
+        // durable construction (HakoniwaController only lays cells; the caller owns tile chrome).
+        EnsureRootImage(_hakoniwaRoot, HAKO_ROOT_COLOR);
 
+        RectTransform startupBody = BuildTileChrome(_startupTile, "startup", out HakoniwaTileHeaderInput startupHeader);
         _tile = new ScenarioStartupTile(_scenario, OnRun, _font);
-        _tile.Build(_startupTile);
+        _tile.Build(startupBody);
         _tile.SyncFieldsFromController();
+
+        RectTransform chartBody = BuildTileChrome(_chartTile, "chart", out HakoniwaTileHeaderInput chartHeader);
+        _chartView = chartBody.gameObject.AddComponent<ChartView>();
+        _chartView.Build(chartBody, showTitleBar: false);
 
         _hako = new HakoniwaController(_hakoniwaRoot,
             new Dictionary<string, RectTransform> { { "startup", _startupTile }, { "chart", _chartTile } },
             new[] { "startup", "chart" });
+        startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
+        chartHeader.Initialize(_hako, _hakoniwaRoot, "chart");
 
         // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
@@ -186,6 +195,55 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (view != null) _editors[id] = view;
         }
         return root;
+    }
+
+    // ---- Hakoniwa tile chrome (panel bg + header swap handle), so tiles read against the field ----
+    static readonly Color HAKO_ROOT_COLOR = new Color(0.12f, 0.12f, 0.15f, 1f);
+    static readonly Color HAKO_TILE_COLOR = new Color(0.16f, 0.18f, 0.22f, 1f);
+    static readonly Color HAKO_HEADER_COLOR = new Color(0.27f, 0.30f, 0.38f, 1f);
+    static readonly Color HAKO_LABEL_COLOR = new Color(0.92f, 0.92f, 0.94f, 1f);
+    const float HAKO_HEADER_H = 26f;
+
+    static void EnsureRootImage(RectTransform root, Color color)
+    {
+        var img = root.GetComponent<Image>();
+        if (img == null) img = root.gameObject.AddComponent<Image>();
+        img.color = color;
+        img.raycastTarget = false;   // gaps between tiles fall through to canvas pan
+    }
+
+    // tile = body Image (NOT a raycast target, so body-drag pans) + a header bar (raycast target +
+    // HakoniwaTileHeaderInput, so header-drag SWAPS) + a content Body inset below the header.
+    RectTransform BuildTileChrome(RectTransform tile, string id, out HakoniwaTileHeaderInput header)
+    {
+        var tileImg = tile.GetComponent<Image>();
+        if (tileImg == null) tileImg = tile.gameObject.AddComponent<Image>();
+        tileImg.color = HAKO_TILE_COLOR;
+        tileImg.raycastTarget = false;
+
+        var headerGo = new GameObject("Header", typeof(RectTransform), typeof(Image), typeof(HakoniwaTileHeaderInput));
+        var hRt = (RectTransform)headerGo.transform;
+        hRt.SetParent(tile, false);
+        hRt.anchorMin = new Vector2(0f, 1f); hRt.anchorMax = new Vector2(1f, 1f); hRt.pivot = new Vector2(0.5f, 1f);
+        hRt.offsetMin = new Vector2(2f, -HAKO_HEADER_H); hRt.offsetMax = new Vector2(-2f, -2f);
+        headerGo.GetComponent<Image>().color = HAKO_HEADER_COLOR;   // opaque -> raycast target for the drag
+        header = headerGo.GetComponent<HakoniwaTileHeaderInput>();
+
+        var labelGo = new GameObject("Label", typeof(RectTransform), typeof(Text));
+        var lRt = (RectTransform)labelGo.transform;
+        lRt.SetParent(hRt, false);
+        lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
+        lRt.offsetMin = new Vector2(8f, 0f); lRt.offsetMax = new Vector2(-8f, 0f);
+        var t = labelGo.GetComponent<Text>();
+        t.font = _font; t.fontSize = 12; t.color = HAKO_LABEL_COLOR; t.alignment = TextAnchor.MiddleLeft;
+        t.text = id; t.raycastTarget = false;
+
+        var bodyGo = new GameObject("Body", typeof(RectTransform));
+        var body = (RectTransform)bodyGo.transform;
+        body.SetParent(tile, false);
+        body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
+        body.offsetMin = new Vector2(2f, 2f); body.offsetMax = new Vector2(-2f, -HAKO_HEADER_H - 2f);
+        return body;
     }
 
     // ---- run path (footer ▶ / Startup tile Run): controller validates + writes the sidecar, then

@@ -111,18 +111,24 @@ $ .venv/bin/python -m pytest -q
 ## 8. 再走手順
 
 ```
-# 前提: /Volumes/StockData/jp mount（無ければ DuckDB 依存テストは skip）。
-#       別ルート: env BACKCAST_JQUANTS_DUCKDB_ROOT=/path/to/jp
+# 前提: .env の BACKCAST_JQUANTS_DUCKDB_ROOT が指す DuckDB root が mount 済み（直書きしない・
+#       engine.paths が .env / process env から読む）。未設定なら DuckDB 依存テストは skip。
 cd python
 .venv/bin/python tests/test_kernel_duckdb_bars.py        # 日足＋分足 equivalence＋purity
 .venv/bin/python tests/test_kernel_duckdb_universe.py     # tie 反転＋分足 universe run
 
-# 分足 fixture の再生成（独立: raw SQL ＋ catalog-gen ts 規約・reader 非経由）
+# 分足 fixture の再生成（独立: raw SQL ＋ catalog-gen ts 規約・reader 非経由）。
+# root は engine.paths.jquants_duckdb_root() 経由（直書きせず .env から）・未設定なら明示失敗。
 .venv/bin/python - <<'PY'
-import duckdb, json, os
+import duckdb, json
 from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
-JST = ZoneInfo("Asia/Tokyo"); ROOT = os.environ.get("BACKCAST_JQUANTS_DUCKDB_ROOT", "/Volumes/StockData/jp")
+from engine.paths import jquants_duckdb_root
+JST = ZoneInfo("Asia/Tokyo")
+_root = jquants_duckdb_root()
+if _root is None:
+    raise SystemExit("set BACKCAST_JQUANTS_DUCKDB_ROOT (.env) — no hardcoded fallback")
+ROOT = str(_root)
 SYMBOL, DAY = "8918", "2024-04-01"
 con = duckdb.connect(f"{ROOT}/stocks_minute/{SYMBOL}.duckdb", read_only=True)
 rows = con.execute("SELECT Date,Time,Open,High,Low,Close,Volume FROM stocks_minute "

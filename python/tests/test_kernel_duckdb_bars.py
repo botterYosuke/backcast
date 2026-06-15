@@ -36,7 +36,7 @@ from spike.kernel_golden.subprocess_util import run_python
 
 _FIXTURE = os.path.join(_PYTHON_ROOT, "tests", "fixtures", "duckdb_bars_8918_daily_golden.json")
 _DB_PATH = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT)
-_DB_PRESENT = _DB_PATH.exists()
+_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and _DB_PATH.exists()
 
 # --- Minute (#48) ----------------------------------------------------------------
 _MINUTE_INSTRUMENT = "8918.TSE"

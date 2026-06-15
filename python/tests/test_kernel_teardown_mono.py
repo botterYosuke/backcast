@@ -30,7 +30,7 @@ from spike.kernel_golden.verify_golden import first_difference
 
 # The kernel now sources bars from the J-Quants DuckDB (ADR-0006 / #47); skip where the
 # owner's data root is not mounted (real-data dependency; repo skip-if-absent convention).
-_DB_PRESENT = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
+_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
 
 
 # Generous vs the kernel's ~seconds runtime: a longer wall time means a real teardown

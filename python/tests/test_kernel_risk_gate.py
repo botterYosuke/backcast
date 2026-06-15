@@ -32,7 +32,7 @@ from spike.kernel_golden import scenario
 
 # The kernel path now reads the J-Quants DuckDB directly (ADR-0006 / #47). Skip where the
 # owner's data root is not mounted (real-data dependency; repo skip-if-absent convention).
-_DB_PRESENT = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
+_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
 pytestmark = pytest.mark.skipif(
     not _DB_PRESENT, reason=f"J-Quants DuckDB not mounted at {scenario.DUCKDB_ROOT}"
 )

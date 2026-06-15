@@ -22,6 +22,10 @@ CATALOG = os.path.join(PYTHON_ROOT, "spike", "fixtures", "jquants-catalog")
 # tests skip-if-absent. CATALOG is retained only as the data-equivalence comparison source
 # (#47) and the oracle source until #50.
 _DUCKDB_ROOT = paths.jquants_duckdb_root()
+# Explicit "is the root configured?" flag. When unset, DUCKDB_ROOT is "" and db_path() would
+# yield a RELATIVE path (e.g. stocks_daily/8918.duckdb) that could false-match a same-named
+# file under cwd — so real-data tests must gate skip on this flag, not on .exists() alone.
+DUCKDB_ROOT_CONFIGURED = _DUCKDB_ROOT is not None
 DUCKDB_ROOT = str(_DUCKDB_ROOT) if _DUCKDB_ROOT is not None else ""
 INSTRUMENT = "8918.TSE"
 START = "2024-10-01"

@@ -41,7 +41,7 @@ _TIE_START, _TIE_END = "2024-10-01", "2024-10-10"
 _UNI = ["1301.TSE", "1305.TSE"]
 _UNI_DAY = "2024-01-04"
 
-_DB_PRESENT = db_path(scenario.DUCKDB_ROOT, _TIE_A, "Daily").exists()
+_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and db_path(scenario.DUCKDB_ROOT, _TIE_A, "Daily").exists()
 
 pytestmark = pytest.mark.skipif(
     not _DB_PRESENT, reason=f"J-Quants DuckDB not mounted at {scenario.DUCKDB_ROOT}"

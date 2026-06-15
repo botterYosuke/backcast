@@ -55,6 +55,9 @@ class InprocLiveServer:
             live_adapter_factory=factory,
             live_venue_id=live_venue_id,
         )
+        # #30: the footer transport drives these directly on the DataEngine (state-mutating
+        # control, distinct from the run orchestration in BackendService.start_engine).
+        self._engine = data_engine
 
 
     # ------------------------------------------------------------------
@@ -209,9 +212,38 @@ class InprocLiveServer:
     def get_portfolio(self) -> dict:
         return self._svc.get_portfolio()
 
-    # #50 (ADR-0006): the nautilus BacktestEngine→GUI bridge (#68 start_nautilus_replay +
-    # pause/step/resume/set_replay_speed) was retired with nautilus. Production Replay runs
-    # through start_engine (DuckDB→kernel); the #68 forwarders had no production caller.
+    # ------------------------------------------------------------------
+    # Replay transport (#30 footer: play / pause / step / speed / stop)
+    # ------------------------------------------------------------------
+    #
+    # #50 (ADR-0006) retired the nautilus #68 forwarders (start_nautilus_replay +
+    # pause/step/resume/set_replay_speed) for lack of a production caller. The #30 footer IS
+    # that caller, now over the DuckDB→kernel path: these forward to the DataEngine control
+    # methods and map its (ok, err) tuple to the {success, error_code, error_message} dict the
+    # C# side already consumes from start_engine. Run lifecycle control lives on the server;
+    # data prep (load_replay_data) stays on the engine (findings 0023 §5 C3).
+
+    @staticmethod
+    def _transport_result(ok_err: tuple) -> dict:
+        ok, err = ok_err
+        if ok:
+            return {"success": True, "error_code": "", "error_message": ""}
+        return {"success": False, "error_code": "TRANSPORT_REJECTED", "error_message": err or ""}
+
+    def pause_replay(self) -> dict:
+        return self._transport_result(self._engine.pause_replay())
+
+    def resume_replay(self) -> dict:
+        return self._transport_result(self._engine.resume_replay())
+
+    def step_replay(self) -> dict:
+        return self._transport_result(self._engine.step_replay())
+
+    def force_stop_replay(self) -> dict:
+        return self._transport_result(self._engine.force_stop_replay())
+
+    def set_replay_speed(self, multiplier: int) -> dict:
+        return self._transport_result(self._engine.set_replay_speed(multiplier))
 
     def close(self) -> None:
         """Tear down the underlying live server (loop/runner/account-sync).

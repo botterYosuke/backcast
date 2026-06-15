@@ -62,6 +62,16 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     string[] _runInstruments;
     string _runStart, _runEnd, _runGran, _runStrategy;
 
+    // #30 transport footer. ReplayLifecycle + ReplayTransportViewModel + ReplayFooterView are the
+    // DURABLE parity surface; this owner-run harness is the throwaway host that drives them (poll
+    // → lifecycle, launcher result → terminal, footer clicks → InprocLiveServer transport RPCs).
+    readonly ReplayLifecycle _lifecycle = new ReplayLifecycle();
+    ReplayTransportViewModel _transport;
+    ReplayFooterView _footer;
+    ReplayPhase? _lastFooterPhase;   // gate footer Refresh to actual phase changes (not 60fps)
+
+    [Serializable] struct _StateLite { public string replay_state; }
+
     // chart render — the reusable production widget (#53) owns candle/axis render + #44 theme-follow.
     RectTransform _chartArea;
     ChartView _chartView;
@@ -185,6 +195,10 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         Volatile.Write(ref _runFinished, false);
         _finishedHandled = false;
         if (_statusText != null) _statusText.text = "Running…";
+
+        // #30: a fresh run clears the terminal latch + resets the footer's 1x highlight (the
+        // engine likewise resets speed on start_engine). Phase tracks the new run via the poll.
+        _transport?.OnRunStarted();
 
         Volatile.Write(ref _running, true);
         _launcher = new Thread(Launcher) { IsBackground = true, Name = "ScenarioStartupLauncher" };
@@ -317,17 +331,29 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         // Surface a terminal status on completion so the owner gets feedback instead of an
         // apparent hang. N>0 runs already show "bars: N" via streaming, so only the 0-bar case
         // needs this terminal override.
-        if (Volatile.Read(ref _runFinished) && !_finishedHandled && err == null && _renderedCount == 0)
+        if (Volatile.Read(ref _runFinished) && !_finishedHandled)
         {
             _finishedHandled = true;
-            if (_statusText != null) _statusText.text = "DONE: 0 bars — no data in the date range?";
-            Debug.Log("[SCENARIO STARTUP HITL] run complete with 0 streamed bars (empty/future date range?)");
+            // #30: terminal authority is the launcher result (poll goes IDLE after force_stop, so
+            // it can't carry Done/Failed). Latch it on the lifecycle so the footer disables
+            // transport + the ▶ re-arms on the next click.
+            if (err != null) _lifecycle.MarkFailed(err); else _lifecycle.MarkDone();
+            if (err == null && _renderedCount == 0)
+            {
+                if (_statusText != null) _statusText.text = "DONE: 0 bars — no data in the date range?";
+                Debug.Log("[SCENARIO STARTUP HITL] run complete with 0 streamed bars (empty/future date range?)");
+            }
         }
 
         string state = Volatile.Read(ref _latestStateJson);
         if (state != null && state != _lastPayload)
         {
             _lastPayload = state;
+            // #30: feed the engine replay_state (IDLE/LOADED/RUNNING/PAUSED) to the lifecycle so
+            // the footer ▶/⏸ + enablement track pause/resume. The terminal latch (above) wins.
+            try { _lifecycle.ApplyPoll(JsonUtility.FromJson<_StateLite>(state).replay_state); }
+            catch { /* malformed poll snapshot: keep the last phase */ }
+
             ReplayBarFrame frame = ReplayBarDecoder.Decode(state);
             if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)
             {
@@ -335,6 +361,73 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
                 _renderedCount = frame.Ohlc.Count;
                 if (_statusText != null && err == null) _statusText.text = $"bars: {_renderedCount}";
             }
+        }
+
+        // Refresh the footer only when the phase actually changed (clicks Refresh themselves):
+        // the durable view's setters early-out on unchanged values, but skipping the per-frame
+        // call avoids needless GetComponent churn during a streaming run.
+        if (_footer != null)
+        {
+            ReplayPhase phase = _lifecycle.Phase;
+            if (_lastFooterPhase != phase) { _lastFooterPhase = phase; _footer.Refresh(); }
+        }
+    }
+
+    // ---- #30 footer click handlers: decide the intent from the VM, marshal it over the GIL to
+    // the InprocLiveServer transport forwarders (T1: a brief main-thread GIL acquire on click;
+    // the per-bar sleep keeps the GIL available, and the calls are O(1)). ----
+    void OnFooterPlayPause()
+    {
+        switch (_transport.PlayPauseIntent())
+        {
+            case ReplayTransportIntent.Run: OnRun(); break;          // re-arm / launch (OnRun resets)
+            case ReplayTransportIntent.Pause: CallTransport("pause_replay"); break;
+            case ReplayTransportIntent.Resume: CallTransport("resume_replay"); break;
+        }
+    }
+
+    void OnFooterStep() { CallTransport("step_replay"); }
+    void OnFooterStop() { CallTransport("force_stop_replay"); }
+    void OnFooterSpeed(int mult) { if (_transport.SelectSpeed(mult)) CallTransportSpeed(mult); }
+
+    void CallTransport(string method)
+    {
+        if (!Volatile.Read(ref _pollServerReady)) return;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _pollServer.InvokeMethod(method))
+            using (PyObject ok = res["success"])
+            {
+                if (!ok.As<bool>())
+                {
+                    using (PyObject em = res["error_message"])
+                        Debug.LogWarning($"[SCENARIO STARTUP HITL] {method} rejected: {em.As<string>()}");
+                }
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[SCENARIO STARTUP HITL] {method} error (non-fatal): {e.Message}");
+        }
+    }
+
+    void CallTransportSpeed(int mult)
+    {
+        if (!Volatile.Read(ref _pollServerReady)) return;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _pollServer.InvokeMethod("set_replay_speed", new PyInt(mult)))
+            using (PyObject ok = res["success"])
+            {
+                if (!ok.As<bool>())
+                    Debug.LogWarning($"[SCENARIO STARTUP HITL] set_replay_speed({mult}) rejected");
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"[SCENARIO STARTUP HITL] set_replay_speed error (non-fatal): {e.Message}");
         }
     }
 
@@ -370,6 +463,10 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         var root = new GameObject("HakoniwaRoot", typeof(RectTransform)).GetComponent<RectTransform>();
         root.SetParent(canvasGo.transform, false);
         Stretch(root);
+        // #30: reserve a bottom strip for the screen-fixed transport footer so the grid doesn't
+        // sit under it (the footer overlays the canvas, anchored to the bottom).
+        const float footerPx = 40f;
+        root.offsetMin = new Vector2(0f, footerPx);
 
         var startupTile = new GameObject("startup", typeof(RectTransform)).GetComponent<RectTransform>();
         startupTile.SetParent(root, false);
@@ -391,6 +488,20 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
 
         _tile = new ScenarioStartupTile(_ctrl, OnRun, _font);
         _tile.Build(startupTile);
+
+        // #30 transport footer: a screen-fixed bottom bar (40px) hosting play/pause/step/speed/stop.
+        var footerBar = new GameObject("footer", typeof(RectTransform)).GetComponent<RectTransform>();
+        footerBar.SetParent(canvasGo.transform, false);
+        footerBar.anchorMin = new Vector2(0f, 0f);
+        footerBar.anchorMax = new Vector2(1f, 0f);
+        footerBar.pivot = new Vector2(0.5f, 0f);
+        footerBar.anchoredPosition = Vector2.zero;
+        footerBar.sizeDelta = new Vector2(0f, 40f);
+
+        _transport = new ReplayTransportViewModel(_lifecycle);
+        _footer = new ReplayFooterView(
+            _transport, OnFooterPlayPause, OnFooterStep, OnFooterStop, OnFooterSpeed, _font);
+        _footer.Build(footerBar);
     }
 
     Text MakeText(RectTransform parent, string text, int size, TextAnchor anchor)

@@ -165,10 +165,12 @@ def test_kernel_run_breaks_on_stop_event(tmp_path) -> None:
     )
 
 
-# --- #3: per-bar animation throttle is bounded ------------------------------
-def test_throttle_total_is_bounded_for_many_bars(tmp_path, monkeypatch) -> None:
-    """The 10ms/bar animation throttle must NOT scale to bar_count (a year of Minute bars
-    would sleep for minutes). Total throttle sleep is budgeted regardless of bar count."""
+# --- #30: per-bar throttle is uncapped and speed-scaled (supersedes the #49-review-#3 cap) -
+def test_throttle_is_uncapped_and_per_bar(tmp_path, monkeypatch) -> None:
+    """#30 (findings 0023 §4(D)) REVERSES the #49-review-#3 total-budget cap: transport hands
+    rate ownership to the user, so a 1x run sleeps bar_interval_sec EVERY bar (watchable),
+    not a budgeted ~2s total. High-speed completion is the speed multiplier (50x) or stop —
+    not a silent auto-cap. The golden path (bar_interval_sec=0) still never sleeps."""
     N = 1000  # all within the wide window below → 1000 streamed bars
     _build_synthetic_duckdb(tmp_path, n=N)
 
@@ -207,12 +209,12 @@ def test_throttle_total_is_bounded_for_many_bars(tmp_path, monkeypatch) -> None:
         initial_cash=10_000_000,
         strategy=_Noop(),
         sink=_Sink(),
-        bar_interval_sec=0.01,  # unbounded would be N*0.01 = 10s
+        bar_interval_sec=0.01,  # #30: 1x sleeps 0.01s EVERY bar → N*0.01 total (uncapped)
     ).run()
 
-    assert slept["total"] <= 3.0, (
-        f"throttle must be budget-bounded; slept {slept['total']:.2f}s for {N} bars "
-        f"(unbounded would be {N * 0.01:.0f}s)"
+    assert abs(slept["total"] - N * 0.01) < 1e-6, (
+        f"throttle must be uncapped per-bar at 1x; slept {slept['total']:.2f}s for {N} bars "
+        f"(expected {N * 0.01:.2f}s — the #49-review-#3 2s budget cap is removed by #30)"
     )
 
 

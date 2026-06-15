@@ -833,6 +833,8 @@ class DataEngineBackend:
                 run_event=self.engine.run_event,
                 bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
                 stop_event=self.engine.replay_stop_event,
+                step_event=self.engine.step_event,  # #30: PAUSED + step → exactly one bar
+                speed_provider=lambda: self.engine.replay_speed_multiplier,  # #30: per-bar speed
             ).run()
             summary = self._finalize_run(rb, scenario)
             logging.info(

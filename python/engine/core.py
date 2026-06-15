@@ -43,6 +43,13 @@ class DataEngine:
         # _run_event (pause): set on stop/force-stop so KernelRunner breaks promptly;
         # cleared when a run starts (start_engine LOADED→RUNNING).
         self._replay_stop_event = threading.Event()
+        # Transport step pulse (#30): set by step_replay() while PAUSED — the KernelRunner gate
+        # consumes one pulse to advance EXACTLY one bar, then re-blocks. Cleared on a fresh run
+        # (start_engine) and on resume so no stale pulse survives across runs / a resume.
+        self._step_event = threading.Event()
+        # Transport replay speed multiplier (#30): read EACH bar by the KernelRunner throttle as
+        # bar_interval_sec / multiplier, so a speed change takes effect mid-run. Default 1x.
+        self._replay_speed_multiplier = 1
         self._replay_provider = replay_provider
         self._mode: Literal["static", "replay"] = (
             "replay" if replay_provider else "static"
@@ -254,6 +261,8 @@ class DataEngine:
             self._is_running = True
             self._replay_state = "RUNNING"
             self._replay_stop_event.clear()  # fresh run: clear any prior stop signal (#49 #5)
+            self._step_event.clear()  # fresh run: no stale step pulse (#30)
+            self._replay_speed_multiplier = 1  # fresh run starts at the footer's 1x default (#30)
             return True, None
 
     def pause_replay(self) -> tuple[bool, str | None]:
@@ -273,6 +282,7 @@ class DataEngine:
 
             self._is_running = True
             self._replay_state = "RUNNING"
+            self._step_event.clear()  # resume: drop any unconsumed step pulse (#30)
             self._run_event.set()
             return True, None
 
@@ -311,11 +321,29 @@ class DataEngine:
     def replay_stop_event(self) -> threading.Event:
         return self._replay_stop_event
 
+    @property
+    def step_event(self) -> threading.Event:
+        return self._step_event
+
+    @property
+    def replay_speed_multiplier(self) -> int:
+        with self._lock:
+            return self._replay_speed_multiplier
+
     def set_replay_speed(self, multiplier: int) -> tuple[bool, str | None]:
         with self._lock:
-            if multiplier == 0:
+            # Coerce defensively: this is a host boundary method (an int comes from C# today, but
+            # a non-int must return the error tuple, not raise TypeError mid-call).
+            try:
+                m = int(multiplier)
+            except (TypeError, ValueError):
+                return False, "SetReplaySpeed multiplier must be a positive integer"
+            if m < 1:
                 return False, "SetReplaySpeed multiplier must be greater than 0"
 
+            # Store it; the KernelRunner throttle reads replay_speed_multiplier EACH bar, so the
+            # change takes effect mid-run (interval = bar_interval_sec / multiplier) (#30).
+            self._replay_speed_multiplier = m
             return True, None
 
     def advance(self):
@@ -391,8 +419,25 @@ class DataEngine:
             self._apply_event_locked(KlineUpdate(timestamp_ms=ts_ms, close=price, open=price, high=price, low=price))
 
     def step_replay(self) -> tuple[bool, str | None]:
-        """Advance one tick while paused or loaded, then remain in the same state."""
+        """Advance EXACTLY one bar.
+
+        Kernel (DuckDB) Replay path (#30): bars are produced by the KernelRunner thread, not an
+        in-proc provider, so step releases the runner's paused gate for one bar via _step_event.
+        Only meaningful during a PAUSED run (the runner must be blocked in the gate); reject
+        otherwise so a stale pulse can't be left for a later pause to silently consume.
+
+        Legacy provider path (test / back-compat): advance one tick in-place via the reducer,
+        staying in the same state (PAUSED or LOADED).
+        """
         with self._lock:
+            # Kernel path is active while a DuckDB run is loaded/running (set in
+            # _load_replay_duckdb_locked; cleared by stop/force_stop).
+            if self._replay_duckdb_root is not None:
+                if self._replay_state != "PAUSED":
+                    return False, "StepReplay requires a paused run"
+                self._step_event.set()  # KernelRunner gate consumes one pulse → one bar
+                return True, None
+
             if self._replay_state not in ("PAUSED", "LOADED"):
                 return False, "StepReplay is only allowed from PAUSED or LOADED"
 

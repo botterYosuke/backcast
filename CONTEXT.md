@@ -480,6 +480,17 @@ _Avoid_: File を strategy `.py` opener と解釈すること（File=Layout・st
 持たせること（footer #39/#30 の責務）／venue ロジックを menu bar に再実装すること（[[VenueMenuViewModel]] 再利用が正）／mode 副作用を
 venue 未接続でも無条件送信すること（`EXECUTION_MODE_PRECONDITION` 例外＝接続中ガードで no-op 再現が正）
 
+**footer（screen-fixed chrome / 実行トランスポート）**:
+アプリ最下段の screen-fixed chrome（[[infinite canvas]] の Content 外・pan/zoom 非追従）。TTWR `src/ui/footer.rs` の 1:1 表面 parity
+（方針: ADR-0005）で、**run を対話的に駆動するトランスポート**を所有する。責務は 2 issue に分かれる: **Replay transport（#30）**＝
+**play / pause / step / speed / stop** で Replay run を進める（▶ は文脈依存: PAUSED→resume・RUNNING→pause・terminal/Idle/Loaded→run
+起動＝re-arm）。**mode picker ＋ StartLiveAuto（#39）**＝明示的な [[ExecutionMode（実行モード）]] 切替と Live auto 起動。run の**起動設定**
+（universe/期間/granularity/cash）は footer ではなく [[Replay 実行設定（scenario startup）]]＝#29 が所有し、footer はそれを駆動する
+transport に徹する。backcast の transport seam は TTWR の `TransportCommand` enum + mpsc ではなく、**in-proc pythonnet の直接メソッド
+呼び出し**（[[Backcast Execution Kernel（kernel）]] の `run_event`/`stop_event`/`step_event`/speed holder を host が叩く）。
+_Avoid_: footer に run 起動設定（scenario）を持たせること（#29 が所有・footer は transport）／#30 と #39 を混同すること（前者=Replay
+の play/pause/step/speed/stop、後者=mode 切替＋StartLiveAuto）／`TransportCommand` enum/mpsc を移植すること（backcast は pythonnet 直呼びが正）
+
 **市場データソース（J-Quants DuckDB 直読み）**:
 backcast Replay の going-forward な市場データ at-rest 源＝`/Volumes/StockData/jp/` 配下の**銘柄別 DuckDB ファイル**
 （`stocks_daily/<code>.duckdb`・`stocks_minute/<code>.duckdb`・`listed_info.duckdb`＝銘柄マスタ）。Replay 実行時に

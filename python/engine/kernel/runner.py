@@ -34,10 +34,10 @@ from engine.kernel.sink import EventSink
 from engine.kernel.strategy import Strategy
 from engine.live.safety_rails import RailViolation, SafetyRails
 
-# Total wall-clock budget for the per-bar animation throttle (#49 review #3). The effective
-# per-bar sleep is min(bar_interval_sec, _ANIM_BUDGET_SEC / n_bars), so total throttle time
-# never exceeds this regardless of bar count.
-_ANIM_BUDGET_SEC = 2.0
+# Poll cadence for the paused gate (#30): while PAUSED (run_event cleared) the loop waits in
+# short slices so it can wake promptly on a step pulse OR a stop signal. 50ms is imperceptible
+# to a human watching a paused chart and costs negligible CPU.
+_PAUSE_POLL_SEC = 0.05
 
 
 @dataclass
@@ -125,6 +125,8 @@ class KernelRunner:
         run_event=None,
         bar_interval_sec: float = 0.0,
         stop_event=None,
+        step_event=None,
+        speed_provider=None,
     ) -> None:
         self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/<table>/<code>.duckdb
         # Single instrument (#47) or a universe (#48); universe is time-order-merged into one
@@ -172,6 +174,12 @@ class KernelRunner:
         # sets this; the loop breaks promptly so a long Minute run halts instead of running
         # out. Default None → golden path never breaks early (byte-identical).
         self._stop_event = stop_event
+        # Transport seam (#30): step_event advances EXACTLY one bar while PAUSED (run_event
+        # cleared) — one pulse → one bar → re-block. speed_provider() is read EACH bar to scale
+        # the throttle interval (bar_interval_sec / multiplier), so a speed change takes effect
+        # mid-run. Both default None → golden path byte-identical (no step gate, multiplier 1).
+        self._step_event = step_event
+        self._speed_provider = speed_provider
 
     def run(self) -> RunResult:
         import time as _time
@@ -188,14 +196,6 @@ class KernelRunner:
 
         self._strategy.register(self._ctx)
         self._strategy.on_start()
-
-        # Budget-bound the per-bar animation throttle (#49 review #3): a fixed 10ms/bar would
-        # make a long Minute run sleep for minutes. Cap the TOTAL animation time so cadence
-        # scales down with bar count (Daily 68 bars → full 10ms each; a year of Minute bars →
-        # near-instant per bar, still releasing the GIL each bar for the poll thread).
-        effective_interval = self._bar_interval_sec
-        if self._bar_interval_sec > 0 and bars:
-            effective_interval = min(self._bar_interval_sec, _ANIM_BUDGET_SEC / len(bars))
 
         equity_curve: list[float] = []
         fills = 0
@@ -216,10 +216,25 @@ class KernelRunner:
                 stopped_reason = "stopped"
                 break
 
-            # Pause/resume gate (host-owned). Blocks here when the DataEngine clears the event
-            # (PauseReplay); resume sets it. (Stop is the separate stop_event above.)
+            # Pause / step gate (#30, host-owned). When PAUSED (run_event cleared) the loop
+            # waits in short slices so it can wake on either resume (run_event set), a single
+            # step pulse (step_event → advance EXACTLY this one bar, then re-block), or a stop
+            # signal (break out). run_event/stop_event mutation stays in the DataEngine; this
+            # gate is purely additive (step_event None → identical to a plain run_event.wait()).
             if self._run_event is not None:
-                self._run_event.wait()
+                while not self._run_event.is_set():
+                    if self._stop_event is not None and self._stop_event.is_set():
+                        break
+                    if self._step_event is not None and self._step_event.is_set():
+                        self._step_event.clear()  # consume one pulse → let this one bar through
+                        break
+                    # Paused: sleep a slice (waking immediately on resume via run_event), then
+                    # re-check stop/step. Waiting ON run_event — not a bare sleep — means resume
+                    # is instant and the loop never busy-spins, including when step_event is None.
+                    self._run_event.wait(_PAUSE_POLL_SEC)
+                if self._stop_event is not None and self._stop_event.is_set():
+                    stopped_reason = "stopped"
+                    break
 
             self._sink.push_bar(bar)
 
@@ -277,8 +292,15 @@ class KernelRunner:
             # Wallclock throttle (last in the body, like the legacy replay_runner): releases
             # the GIL between bars so the host's poll thread reads the incrementally-streamed
             # chart (issue #29 bar-by-bar following). Default 0 → golden runs straight through.
-            if effective_interval > 0:
-                _time.sleep(effective_interval)
+            # #30: the interval is read EACH bar as bar_interval_sec / speed_multiplier so a
+            # transport speed change takes effect mid-run. The #49-review-#3 total-budget cap is
+            # removed — #30 hands rate ownership to the user (findings 0023 §4(D)); a long run at
+            # 1x is meant to be watchable (high-speed completion is 50x or stop).
+            if self._bar_interval_sec > 0:
+                multiplier = self._speed_provider() if self._speed_provider is not None else 1
+                if multiplier < 1:
+                    multiplier = 1
+                _time.sleep(self._bar_interval_sec / multiplier)
 
         self._strategy.on_stop()
 

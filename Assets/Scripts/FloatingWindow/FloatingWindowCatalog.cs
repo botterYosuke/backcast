@@ -41,18 +41,22 @@ public class FloatingWindowCatalog
     public bool Contains(string kind) => !string.IsNullOrEmpty(kind) && _specs.ContainsKey(kind);
 
     // The #15 demo catalog: the two real TTWR floating windows (NOT chart).
+    // Issue #44: per-kind accents come from the theme PlayerColors palette (findings 0018) so the
+    // two windows stay distinguishable (editor = players[0] iris, order = players[2] amber) without
+    // an inline literal. PlayerColors has no blue family, so the editor's "blue" is iris (blue-ish).
     public static FloatingWindowCatalog Default()
     {
+        var players = ThemeService.Current.players;
         return new FloatingWindowCatalog(new[]
         {
             new FloatingWindowSpec(
                 KIND_STRATEGY_EDITOR, "Strategy Editor",
                 defaultSize: new Vector2(520f, 380f), minSize: new Vector2(280f, 180f),
-                accent: new Color(0.36f, 0.62f, 0.92f, 1f), closeable: true),
+                accent: players.Get(0), closeable: true),
             new FloatingWindowSpec(
                 KIND_ORDER, "Order",
                 defaultSize: new Vector2(360f, 300f), minSize: new Vector2(280f, 180f),
-                accent: new Color(0.92f, 0.55f, 0.30f, 1f), closeable: true),
+                accent: players.Get(2), closeable: true),
         });
     }
 }

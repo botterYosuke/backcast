@@ -54,6 +54,11 @@ public class StrategyEditorView : MonoBehaviour
 
         if (_registry != null && !string.IsNullOrEmpty(_windowId))
             _registry.Register(_windowId, Document);
+
+        // issue #44: re-theme on a theme switch. This view owns a lifecycle (OnDestroy), so it
+        // self-subscribes — the durable editor window re-themes without a separate owner wiring it.
+        ThemeService.Changed += ApplyTheme;
+        ApplyTheme();
     }
 
     void OnDestroy()
@@ -61,6 +66,22 @@ public class StrategyEditorView : MonoBehaviour
         if (_input != null) _input.onValueChanged.RemoveListener(OnValueChanged);
         if (_registry != null && !string.IsNullOrEmpty(_windowId))
             _registry.Unregister(_windowId);
+        ThemeService.Changed -= ApplyTheme;
+    }
+
+    // Repaint the editor surface from the active theme (issue #44): the InputField background,
+    // the base text colour, and the syntax palette. Self-subscribed to ThemeService.Changed in
+    // Initialize (and called once there).
+    public void ApplyTheme()
+    {
+        var c = ThemeService.Current.colors;
+        if (_input != null)
+        {
+            var img = _input.GetComponent<Image>();
+            if (img != null) img.color = c.background;
+            if (_input.textComponent != null) _input.textComponent.color = c.text;
+        }
+        if (_effect != null) _effect.ApplyTheme();
     }
 
     // ---- editing sync (snapshot model) ----

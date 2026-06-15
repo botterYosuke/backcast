@@ -89,9 +89,10 @@ public class DepthLadderHitlHarness : MonoBehaviour
     void OnGUI()
     {
         var title = new GUIStyle(GUI.skin.label) { fontSize = 16, richText = false };
-        var ask   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = new Color(0.95f, 0.45f, 0.45f) } };
-        var bid   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = new Color(0.45f, 0.85f, 0.95f) } };
-        var mid   = new GUIStyle(GUI.skin.label) { fontSize = 13, richText = false, normal = { textColor = Color.gray } };
+        // issue #44: ladder colors source the theme (層2) — OnGUI re-reads each frame so a switch is live.
+        var ask   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = ThemeService.Current.status.ask } };
+        var bid   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = ThemeService.Current.status.bid } };
+        var mid   = new GUIStyle(GUI.skin.label) { fontSize = 13, richText = false, normal = { textColor = ThemeService.Current.colors.text_muted } };
 
         GUI.Label(new Rect(20, 16, 1000, 24),
             $"Depth Ladder HITL — mock venue / LiveAuto (backcast #26)   status: {_status}   updates: {_updateCount}", title);

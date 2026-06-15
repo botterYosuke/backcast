@@ -31,7 +31,7 @@ public static class StrategyEditorContentBuilder
         var inputRt = (RectTransform)inputGo.transform;
         inputRt.SetParent(body, false);
         Stretch(inputRt);
-        inputGo.GetComponent<Image>().color = new Color(0.10f, 0.11f, 0.13f, 1f);
+        inputGo.GetComponent<Image>().color = ThemeService.Current.colors.background; // issue #44
 
         // Text component (the editing surface) + the syntax mesh effect.
         var textGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text), typeof(PythonSyntaxMeshEffect));
@@ -41,7 +41,7 @@ public static class StrategyEditorContentBuilder
         var text = textGo.GetComponent<Text>();
         text.font = font;
         text.fontSize = 14;
-        text.color = new Color(0.86f, 0.87f, 0.89f, 1f);   // base (Default) colour
+        text.color = ThemeService.Current.colors.text;     // base (Default) colour — issue #44
         text.supportRichText = false;                       // colouring is per-vertex, NOT tags
         text.alignment = TextAnchor.UpperLeft;
         text.horizontalOverflow = HorizontalWrapMode.Overflow;

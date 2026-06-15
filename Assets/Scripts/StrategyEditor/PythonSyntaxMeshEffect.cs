@@ -30,12 +30,15 @@ public class PythonSyntaxMeshEffect : BaseMeshEffect
 {
     // Palette (HITL-visual; AFK only asserts that a token glyph differs from base and Default does
     // not). Default == the Text's own colour, so uncovered glyphs are left UNCHANGED.
-    public Color keyword    = new Color(0.36f, 0.62f, 0.92f, 1f);
-    public Color stringLit  = new Color(0.42f, 0.74f, 0.42f, 1f);
-    public Color comment    = new Color(0.50f, 0.52f, 0.55f, 1f);
-    public Color number     = new Color(0.82f, 0.62f, 0.92f, 1f);
-    public Color decorator  = new Color(0.90f, 0.78f, 0.36f, 1f);
-    public Color definition = new Color(0.36f, 0.82f, 0.80f, 1f);
+    // Issue #44: sourced from ThemeService.Current.syntax (findings 0018 mapping) — Decorator has
+    // no TTWR role so it borrows `type_`; Definition (def/class name) maps to `function`. Set in
+    // OnEnable and re-pulled by ApplyTheme() on a theme switch.
+    public Color keyword;
+    public Color stringLit;
+    public Color comment;
+    public Color number;
+    public Color decorator;
+    public Color definition;
 
     Text _text;
     List<PythonToken> _tokens;
@@ -43,6 +46,27 @@ public class PythonSyntaxMeshEffect : BaseMeshEffect
     Func<int> _displayStartProvider;    // LIVE offset of the displayed substring into the full source
 
     Text TextComp => _text != null ? _text : (_text = GetComponent<Text>());
+
+    // Pull the syntax palette from the active theme and recolour (issue #44). Called from
+    // OnEnable so freshly-added effects are themed, and by the owning harness on
+    // ThemeService.Changed. type_ ← Decorator, function ← Definition (findings 0018).
+    public void ApplyTheme()
+    {
+        var sx = ThemeService.Current.syntax;
+        keyword = sx.keyword;
+        stringLit = sx.str;
+        comment = sx.comment;
+        number = sx.number;
+        decorator = sx.type_;
+        definition = sx.function;
+        if (TextComp != null) TextComp.SetVerticesDirty();
+    }
+
+    protected override void OnEnable()
+    {
+        base.OnEnable();
+        ApplyTheme();
+    }
 
     // Push freshly-computed full-source tokens (and the fixed-fallback display offset) and force a
     // recolour. The fallback is used only when no live provider is set (e.g. the AFK probe).

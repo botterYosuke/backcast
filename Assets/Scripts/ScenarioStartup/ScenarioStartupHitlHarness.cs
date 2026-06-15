@@ -66,10 +66,11 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     int _renderedCount;
     bool _errLogged;
 
-    static readonly Color BG = new Color(0.08f, 0.08f, 0.10f, 1f);
-    static readonly Color UP = new Color(0.20f, 0.80f, 0.35f, 1f);
-    static readonly Color DOWN = new Color(0.85f, 0.28f, 0.28f, 1f);
-    static readonly Color TEXT = new Color(0.90f, 0.90f, 0.92f, 1f);
+    // issue #44: chart colors source the theme (層2) — candle up/down = status.long/short.
+    static readonly Color BG = ThemeService.Current.colors.background;
+    static readonly Color UP = ThemeService.Current.status.@long;
+    static readonly Color DOWN = ThemeService.Current.status.@short;
+    static readonly Color TEXT = ThemeService.Current.colors.text;
 
     const bool AutoBootstrapEnabled = false; // owner flips ON to claim Play (single Play-owner rule)
 

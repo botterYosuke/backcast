@@ -410,6 +410,35 @@ _Avoid_: scenario sidecar を `JsonUtility` で write すること（`strategy_i
 PeelTag 型 string surgery で nested dict を跨ぐ merge をすること（whitespace/escape/キー順事故で corrupt・PeelTag は READ
 専用 decoder の慣例で逆 trust boundary）／Newtonsoft を本 store 外へ漏らすこと（layout は `JsonUtility` 据え置き・ADR-0005）
 
+**broker reconciliation modal（#40）= 移植せず除外（not-applicable・ADR-0006）**:
+owner 決定（2026-06-15・案②）で #40 は**実装せず close**、`reconcile_modal` を ADR-0005 の 1:1 surface parity 契約から
+**除外**する（ADR-0006＝ADR-0005 を本サーフェス限定で supersede・ADR-0005 本体は自己保護条項により非編集）。理由: TTWR
+`reconcile_modal.rs` が開く唯一の契機は**別プロセス backend の crash→自動再起動で記憶を失い UI の楽観的注文とズレる**こと
+（`GetOrdersAndReconcile`→`OrdersReconciled`→`ReconcileUnknownOrder{client_order_id,symbol,status}`・`orders_model.rs`
+`reconcile_unknown_orders`・通知専従・採用/取消なし §3.8）。backcast は in-proc 埋め込みで「UI 死＝engine 死／orphan 不在」
+（[[orphan-absence invariant（orphan 不在の構造不変条件）]]・ADR-0001 dec.3）のため**engine 単独再起動が構造的に発生せず契機が
+発火不能**＝実データで一度も開けない dead surface。これは「起こり得ない故障モードへの反応 UI」であり不在は機能後退に当たらない。
+起動時の既存 venue 状態は modal ではなく **seed で正として取り込む**：venue resting order は connect-seed
+（`fetch_working_orders`・現状 stub `[]`）で注文パネル、venue 建玉は `account_sync` 初回 emit＋kernel `portfolio.py`
+`seed_position`（D7・`kernel/live/controller.py:161` wired）で口座。実契機を作る open issue は無い（#40 body の「engine 非同期
+reconcile は #23」は stale＝#23 は demo-roundtrip done-gate として close 済み）。詳細調査と Q1–Q4 経路は findings 0017。
+_Avoid_: #40 を「未実装 TODO」と読むこと（owner が not-applicable で close 済み＝作らないのが正）／復活時に #40 を再 open すること
+（venue 再ログイン突合など in-proc でも成立する別契機を設計するなら新規 issue＋ADR-0006 参照）／起動時の seed 済み venue 状態を
+modal 化すること（案A・却下＝"うるさすぎ"・既にパネル表示で二重）／in-modal 採用/取消（§3.8・[[取消受付 / 取消確定（cancel acknowledgment vs confirmation）]]）
+
+**テーマ（配色システム）/ ThemeService / ColorScale / ProbeTheme（#44）**:
+UI 配色の集中定義と切替の単一 SoT。**`ColorScale`**＝Radix 12 段スケール（neutral=slate/accent=iris/red/green=grass/
+yellow=amber/blue の 6 本）。これを大元に **`from_scales`** が `ThemeColors`(54 ロール)/`StatusColors`(info/warn/error/
+success＋long/short/bid/ask)/`SyntaxColors`/`PlayerColors` を**導出**する（TTWR `src/ui/theme/` の配色レイヤー忠実移植）。
+**`ThemeService`** ＝アプリ単一 global（TTWR Bevy Resource 同型）で `Current`（遅延 dark 既定）/`SetTheme`/`event Changed` を
+持つ。各サーフェスは色を参照し、`Changed` 購読→**`ApplyTheme()`** で塗り直す（平面は `image.color` 再代入、描画時消費＝
+syntax mesh/chart candle/ladder は色フィールド再読込＋再描画）。**`ProbeTheme`**（=TTWR `non_default_theme()` 移植・全ロール
+別値）は検証専用テーマで、AFK probe/HITL の切替先に使う（shipped は dark のみ・`Light()` は dark stub＝TTWR 踏襲、実 light は
+follow-up）。**配色レイヤーのみ**移植（spacing/typography/elevation/radius/layout は別 issue）。記録: findings 0018・方針 ADR-0005。
+_Avoid_: テーマに spacing/typography 等の非配色トークンを含めると解釈すること（#44 は配色のみ）／切替伝播を TTWR parity と
+呼ぶこと（伝播は backcast 独自・TTWR は swap 未実装で Bevy change-detection に依存）／`ApplyTheme` を [[layout binder]] の
+Capture/Apply と混同すること（別系統・前者は配色再適用）／インライン配色を新規追加すること（theme 参照が正・静的ゲートで縛る）
+
 ## Flagged ambiguities
 
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が

@@ -152,12 +152,13 @@ public class ReplayPanelsHarness : MonoBehaviour
     Text _runResultText;
     Font _font;
 
-    static readonly Color BG_COLOR   = new Color(0.08f, 0.08f, 0.10f, 1f);
-    static readonly Color PANEL_BG   = new Color(0.13f, 0.13f, 0.16f, 1f);
-    static readonly Color AXIS_COLOR = new Color(0.55f, 0.55f, 0.60f, 1f);
-    static readonly Color UP_COLOR   = new Color(0.20f, 0.80f, 0.35f, 1f);
-    static readonly Color DOWN_COLOR = new Color(0.85f, 0.28f, 0.28f, 1f);
-    static readonly Color TEXT_COLOR = new Color(0.90f, 0.90f, 0.92f, 1f);
+    // issue #44: chart/panel colors source the theme (層2) — candle up/down = status.long/short.
+    static readonly Color BG_COLOR   = ThemeService.Current.colors.background;
+    static readonly Color PANEL_BG   = ThemeService.Current.colors.panel_background;
+    static readonly Color AXIS_COLOR = ThemeService.Current.colors.text_muted;
+    static readonly Color UP_COLOR   = ThemeService.Current.status.@long;
+    static readonly Color DOWN_COLOR = ThemeService.Current.status.@short;
+    static readonly Color TEXT_COLOR = ThemeService.Current.colors.text;
 
     // SINGLE PLAY-OWNER toggle (findings 0005 §6 / 0011 exercise discipline). This harness is the
     // DEFAULT Play owner (ReplayChartHarness / S2SpikeLiveLoopHarness yield with their own flag=false).

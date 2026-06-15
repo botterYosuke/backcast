@@ -86,10 +86,11 @@ public class ReplayChartHarness : MonoBehaviour
     RectTransform _chartArea;   // the plot rect (inside the axis margins)
     RectTransform _candleRoot;  // candle rects parent (full-stretch over _chartArea)
 
-    static readonly Color BG_COLOR    = new Color(0.08f, 0.08f, 0.10f, 1f);
-    static readonly Color AXIS_COLOR  = new Color(0.55f, 0.55f, 0.60f, 1f);
-    static readonly Color UP_COLOR    = new Color(0.20f, 0.80f, 0.35f, 1f);
-    static readonly Color DOWN_COLOR  = new Color(0.85f, 0.28f, 0.28f, 1f);
+    // issue #44: chart colors source the theme (層2) — candle up/down = status.long/short.
+    static readonly Color BG_COLOR    = ThemeService.Current.colors.background;
+    static readonly Color AXIS_COLOR  = ThemeService.Current.colors.text_muted;
+    static readonly Color UP_COLOR    = ThemeService.Current.status.@long;
+    static readonly Color DOWN_COLOR  = ThemeService.Current.status.@short;
 
     // SUPERSEDED by #11 ReplayPanelsHarness: that harness now OWNS Play (chart + 4
     // panels in one Play). This #10 auto-bootstrap is PRESERVED but flag-OFF so it

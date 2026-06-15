@@ -396,9 +396,13 @@ catalog_path は「このマシンのどこに市場データがあるか」＝*
 config 値で呼ぶ。scenario v3 スキーマに catalog キーは無く（書けば `_check_keys` が unknown key で reject）、絶対パスを
 sidecar に焼くと strategy+sidecar が非可搬になる。既存 harness の `const CATALOG_PATH = "/Users/sasac/..."`（Mac 絶対
 パス）こそ AC⑤「harness ハードコード依存解消」が消す対象で、#29 はこれを config 層の解決に置換する（ユーザー向け panel
-フィールドへの昇格ではない）。
+フィールドへの昇格ではない）。**ADR-0006（#49）以降、production Replay の市場データ源は [[市場データソース（J-Quants DuckDB
+直読み）]] へ移り、catalog_path の代わりに DuckDB ルート（`BACKCAST_JQUANTS_DUCKDB_ROOT`・`.env`）を同じ「環境/配置の関心」
+として env/config で解決する**（ctor 引数 > `.env`・panel/sidecar には焼かない）。未設定は hard error で、nautilus catalog への
+silent fallback は持たない（root が解決すれば catalog 引数より優先）。legacy catalog 解決は #50 の nautilus 撤去まで code として残る。
 _Avoid_: catalog を panel フィールド / scenario sidecar に入れること（環境設定・非可搬・engine が unknown key で reject）／
-catalog の真実源を per-run panel state にすること（config 層が正）
+catalog の真実源を per-run panel state にすること（config 層が正）／DuckDB root 未設定時に nautilus catalog へ fallback すること
+（runtime nautilus-free が env 依存で非決定的になる・ADR-0006）
 
 **ScenarioSidecarStore（merge-write seam）**:
 [[scenario（実行設定）/ scenario sidecar]] の `<strategy>.json` を**読み込み→`scenario` object の対象キーだけ更新→

@@ -131,9 +131,12 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             _catalogPath = System.IO.Path.Combine(artifacts, "jquants-catalog");
         }
 
-        // strategy: repo fixture (machine-independent) unless overridden.
+        // strategy: kernel-native repo fixture (machine-independent) unless overridden.
+        // ADR-0006 (#49): the production Replay now runs through the nautilus-free kernel, so
+        // the default must be a engine.kernel.strategy.Strategy subclass — the nautilus
+        // spike_buy_sell.py would fail the kernel loader and re-introduce nautilus.
         _strategyFile = EnvConfig.Get("BACKCAST_HITL_STRATEGY",
-            System.IO.Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "spike_buy_sell.py"));
+            System.IO.Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "kernel_spike_buy_sell.py"));
 
         Debug.Log($"[SCENARIO STARTUP HITL] catalog={_catalogPath} strategy={_strategyFile}");
     }

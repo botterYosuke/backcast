@@ -11,6 +11,12 @@ from .reducer import KlineUpdate, ReducerState, ReplayEvent, ReplayTimeUpdated, 
 from .replay import BaseReplayProvider, NautilusBarsReplayProvider
 from .replay_loader import ReplayLoader
 
+# Placeholder price for a DuckDB Replay that is LOADED but not yet streaming (#49). It only
+# satisfies TradingState's price>0 invariant for the brief pre-stream poll window and is
+# overwritten by bar 0; it is never rendered (ohlc_points is empty until streaming). Value is
+# arbitrary-positive — paired with timestamp_ms=1 it reads as an obvious "warming up" marker.
+_REPLAY_WARMUP_PRICE = 1.0
+
 
 class DataEngine:
     def __init__(
@@ -22,6 +28,7 @@ class DataEngine:
         jquants_catalog_path: Optional[str] = None,
         state_machine: Optional["VenueStateMachine"] = None,
         venue_id: Optional[str] = None,
+        duckdb_root: Optional[str] = None,
     ):
         logging.info(
             f"Initializing DataEngine core (max_history_len: {max_history_len})"
@@ -52,6 +59,12 @@ class DataEngine:
         )
         self._event_log: list[ReplayEvent] = []
         self._last_replay_catalog_path: Optional[str] = None
+        # ADR-0006 (#49): J-Quants DuckDB direct-read root. ctor arg overrides the .env
+        # `BACKCAST_JQUANTS_DUCKDB_ROOT`; resolved lazily in load_replay_data so tests can
+        # monkeypatch the env. `_replay_duckdb_root` is set when a DuckDB Replay is LOADED and
+        # selects the nautilus-free kernel runner in start_engine.
+        self._duckdb_root = duckdb_root
+        self._replay_duckdb_root: Optional[str] = None
         self.last_portfolio: Optional[dict] = None
         # D9/D24: multi-instrument replay support
         self._replay_providers: dict[str, NautilusBarsReplayProvider] = {}
@@ -155,6 +168,23 @@ class DataEngine:
             if self._replay_state != "IDLE":
                 return False, "LoadReplayData is only allowed from IDLE"
 
+            # ADR-0006 (#49): J-Quants DuckDB direct-read takes precedence over everything
+            # else — an explicitly-passed catalog (the panel's vestigial arg) AND a stale
+            # catalog provider left from a prior catalog run (resolved BEFORE the provider-
+            # reuse guard so a later DuckDB-intended load can't be silently shadowed and
+            # misrouted to the legacy path). Production resolves the root from .env; an unset
+            # root is a hard error below, never a silent precision-bound catalog fallback.
+            from engine.paths import jquants_duckdb_root
+
+            root = self._duckdb_root or jquants_duckdb_root()
+            if root is not None:
+                ids = instrument_ids or []
+                if not ids:
+                    return False, "At least one instrument_id is required"
+                return self._load_replay_duckdb_locked(
+                    instrument_ids=ids, granularity=granularity, root=str(root)
+                )
+
             if self._replay_provider is not None:
                 self._replay_state = "LOADED"
                 return True, None
@@ -209,6 +239,59 @@ class DataEngine:
 
             return False, "Replay provider is not configured"
 
+    def _load_replay_duckdb_locked(
+        self, *, instrument_ids: list[str], granularity: str, root: str
+    ) -> tuple[bool, str | None]:
+        """LOADED transition for the ADR-0006 DuckDB direct-read path (called under _lock).
+
+        Unlike the catalog branch this does NOT prime bar 0. It resets the reducer to a fresh
+        replay state with timestamp_ms=0 so every streamed historical bar (ts > 0) is past the
+        primary staleness guard and accumulates **exactly once** (no prime → no primary-skip;
+        the chart's ohlc_points count equals the streamed primary-bar count). Bars are streamed
+        externally by start_engine's kernel run via apply_replay_event, so no provider object is
+        built here (_replay_provider stays None).
+        """
+        from engine.kernel.duckdb_bars import db_path
+
+        # Early panel feedback: validate each instrument's per-symbol DuckDB file exists for
+        # this granularity. The granularity here is the LoadReplayData arg (a hint); the run
+        # uses the scenario's granularity. Only validate the two ADR-0006 granularities — for
+        # anything else (e.g. the reducer's "Trade" default from a non-panel caller) skip the
+        # check and let start_engine's load surface any real error, rather than hard-failing
+        # LOAD on a granularity that isn't even what the run will use.
+        if granularity in ("Daily", "Minute"):
+            for iid in instrument_ids:
+                try:
+                    path = db_path(root, iid, granularity)
+                except ValueError as exc:  # empty/unset root
+                    return False, str(exc)
+                if not path.exists():
+                    return False, f"DuckDB {granularity} file not found: {path}"
+
+        self._mode = "replay"
+        self._replay_primary_id = str(instrument_ids[0])
+        self._replay_duckdb_root = root
+        # Replay-ready reducer in a "warming-up" state. We do NOT prime bar 0 (so every bar is
+        # streamed exactly once — no primary-skip), but the LOADED state is still polled by the
+        # UI before streaming starts, and TradingState requires price>0 & timestamp>0. So seed
+        # a minimal valid placeholder: timestamp_ms=1 is below any historical bar ts (nothing is
+        # stale-dropped by the reducer's `ts < state.timestamp_ms` guard) and is overwritten by
+        # bar 0; ohlc_points stays empty so no candle renders the placeholder. Without this the
+        # poll thread logs "2 validation errors for TradingState (price/timestamp > 0)" until the
+        # first bar streams (the static-mode init used 'now', which would instead stale-drop the
+        # whole historical series).
+        self._rs = ReducerState(
+            timestamp_ms=1,
+            price=_REPLAY_WARMUP_PRICE,
+            max_history_len=self._max_history_len,
+        )
+        self._replay_state = "LOADED"
+        return True, None
+
+    @property
+    def replay_duckdb_root(self) -> str | None:
+        return self._replay_duckdb_root
+
     @property
     def last_replay_catalog_path(self) -> str | None:
         return self._last_replay_catalog_path
@@ -249,6 +332,7 @@ class DataEngine:
 
             self._is_running = False
             self._replay_state = "IDLE"
+            self._replay_duckdb_root = None  # #49: see force_stop_replay
             self._run_event.set()
             return True, None
 
@@ -260,6 +344,9 @@ class DataEngine:
             # instead of hitting the early-return guard at line 167 (#70).
             self._replay_provider = None
             self._replay_providers = {}
+            # #49: drop the DuckDB root too, so a subsequent catalog-based load is not
+            # misrouted to the kernel path by a stale flag.
+            self._replay_duckdb_root = None
             self._run_event.set()
             return True, None
 

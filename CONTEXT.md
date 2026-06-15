@@ -434,9 +434,9 @@ _Avoid_: scenario sidecar を `JsonUtility` で write すること（`strategy_i
 PeelTag 型 string surgery で nested dict を跨ぐ merge をすること（whitespace/escape/キー順事故で corrupt・PeelTag は READ
 専用 decoder の慣例で逆 trust boundary）／Newtonsoft を本 store 外へ漏らすこと（layout は `JsonUtility` 据え置き・ADR-0005）
 
-**broker reconciliation modal（#40）= 移植せず除外（not-applicable・ADR-0007）**:
+**broker reconciliation modal（#40）= 移植せず除外（not-applicable・ADR-0008）**:
 owner 決定（2026-06-15・案②）で #40 は**実装せず close**、`reconcile_modal` を ADR-0005 の 1:1 surface parity 契約から
-**除外**する（ADR-0007＝ADR-0005 を本サーフェス限定で supersede・ADR-0005 本体は自己保護条項により非編集）。理由: TTWR
+**除外**する（ADR-0008＝ADR-0005 を本サーフェス限定で supersede・ADR-0005 本体は自己保護条項により非編集）。理由: TTWR
 `reconcile_modal.rs` が開く唯一の契機は**別プロセス backend の crash→自動再起動で記憶を失い UI の楽観的注文とズレる**こと
 （`GetOrdersAndReconcile`→`OrdersReconciled`→`ReconcileUnknownOrder{client_order_id,symbol,status}`・`orders_model.rs`
 `reconcile_unknown_orders`・通知専従・採用/取消なし §3.8）。backcast は in-proc 埋め込みで「UI 死＝engine 死／orphan 不在」
@@ -447,7 +447,7 @@ owner 決定（2026-06-15・案②）で #40 は**実装せず close**、`reconc
 `seed_position`（D7・`kernel/live/controller.py:161` wired）で口座。実契機を作る open issue は無い（#40 body の「engine 非同期
 reconcile は #23」は stale＝#23 は demo-roundtrip done-gate として close 済み）。詳細調査と Q1–Q4 経路は findings 0021。
 _Avoid_: #40 を「未実装 TODO」と読むこと（owner が not-applicable で close 済み＝作らないのが正）／復活時に #40 を再 open すること
-（venue 再ログイン突合など in-proc でも成立する別契機を設計するなら新規 issue＋ADR-0007 参照）／起動時の seed 済み venue 状態を
+（venue 再ログイン突合など in-proc でも成立する別契機を設計するなら新規 issue＋ADR-0008 参照）／起動時の seed 済み venue 状態を
 modal 化すること（案A・却下＝"うるさすぎ"・既にパネル表示で二重）／in-modal 採用/取消（§3.8・[[取消受付 / 取消確定（cancel acknowledgment vs confirmation）]]）
 
 **テーマ（配色システム）/ ThemeService / ColorScale / ProbeTheme（#44）**:

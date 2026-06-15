@@ -3,7 +3,7 @@
 ## 結論（owner 決定 2026-06-15・案②）
 
 issue #40（reconcile modal）は**実装せず close**。`reconcile_modal` を ADR-0005 の 1:1 surface parity 契約から
-**除外**する（ADR-0007）。コード追加なし。
+**除外**する（ADR-0008）。コード追加なし。
 
 ## 調査（ハード証拠・TTWR src 実機照合）
 
@@ -34,10 +34,10 @@ issue #40（reconcile modal）は**実装せず close**。`reconcile_modal` を 
 3. **Q3 非ブロッキング** — TTWR が非ブロッキング。ブロッキング gate 化は Phase 10 LiveAuto run-start
    （`NoopLiveEngineController` placeholder）への結合を招くため不可。
 4. **Q4 dead surface 判明 → 案②** — 案B で忠実移植しても契機が in-proc で発火せず、実 venue HITL 経路も無い
-   （AC④ 達成不能）。owner は「出ない画面に工数をかけない」を選択し、移植せず除外（ADR-0007）。
+   （AC④ 達成不能）。owner は「出ない画面に工数をかけない」を選択し、移植せず除外（ADR-0008）。
 
 ## 影響・後続
 
-- 追加コードなし。CONTEXT.md「broker reconciliation modal（#40）」を除外決定に更新。ADR-0007 起票。issue #40 close。
+- 追加コードなし。CONTEXT.md「broker reconciliation modal（#40）」を除外決定に更新。ADR-0008 起票。issue #40 close。
 - 復活させるなら **#40 を再 open せず**、in-proc でも成立する別契機（venue 再ログイン突合等）を新規 issue で設計し
-  ADR-0007 を参照する。
+  ADR-0008 を参照する。

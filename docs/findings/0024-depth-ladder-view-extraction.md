@@ -96,3 +96,39 @@ follow-up」と決めた規律を踏襲。
 1. **TTWR ladder parity の追加要素**: 21 行固定・LAST 中央行・段不足 `---` プレースホルダ・bid/ask 薄塗り背景
    （alpha 0.22）・pane bg の alpha 0.95（`overlays_ladder.rs`）。A案で scope 外にした分。
 2. **本線 scene への載せ替え**: floating window / hakoniwa 上の depth パネル化（findings 0012 §4 deferral）。
+   立花 demo の実 depth を本番 ladder で見る AC④ の「demo venue HITL」leg は、この本線 consumer が
+   存在しないと回せない（HITL harness は venue=`"MOCK"`・IID `8918.TSE` ハードコードのため）。①と同梱で起票。
+
+## 検証ステータス（実機実証・2026-06-15・Windows・Unity 6000.4.11f1）
+
+mock 経路は全 GREEN。owner マシン（Windows 11・`C:\Program Files\Unity\Hub\Editor\6000.4.11f1`）で実走。
+
+### Step 1 — AFK `ThemeProbe.Run`（権威ゲート・Python-free）GREEN
+```
+<Unity 6000.4.11f1> -batchmode -nographics -quit -projectPath <proj> -executeMethod ThemeProbe.Run
+→ return code 0
+[THEME PASS] derivation + NonDefault≠dark + service semantics + wiring kill all green
+```
+`error CS` ゼロ（`DepthLadderView` ＋ 改修3ファイルのクリーンコンパイル）。Section4c の wiring kill が
+**本番 `DepthLadderView` の graphics**（`BestBid()`/`BestAsk()` 非 null・`ladder_bg==colors.background`）を
+dark→NonDefault で非空虚に kill。
+
+### Step 2a — montage HITL 目視 GREEN
+`ThemeHitlHarness`（AutoBootstrap 一時 true）の Play で、mid-right に本番 `DepthLadderView` が ASK 赤 /
+`— spread —` / BID 緑 / 黒地（`colors.background`）で描画。**T トグルで bid/ask/bg 3色が dark↔NonDefault
+追従**（AC②③ を実機確定）。em-dash セパレータも豆腐化せず描画。
+
+### Step 2b — mock venue 実時間 drift HITL GREEN
+`Tools > Backcast > Depth Ladder HITL`（`ScenarioStartupHitlHarness` AutoBootstrap を一時 false で Play 譲渡）で、
+mock の 5×5 板が `status: streaming depth… / updates:` 増加とともに realtime 更新。ASK reverse（999.3→995.3、
+最高 ask が上）/ BID wire 順（994.3→990.3）/ 色ロール正。Pump→`DepthLadderView.Render` の changed-tick
+ガード経由で全置換。`!HasDepth` 時の "(no board)" プレースホルダも別フレームで確認。
+- **副次（記録価値）**: findings 0012 §5 が記録した Windows-Mono live-path native crash が**再現せず完走**
+  （#50 の nautilus 撤去・kernel-native 化の効果）。
+- **環境メモ**: 検証時、`python/.venv` に declared dep `duckdb>=1.5` が未導入で drive worker が
+  `No module named 'duckdb'` で停止 → `uv pip install duckdb`（=1.5.3）で解消。#54 と無関係の venv provisioning ギャップ。
+
+### Step 3 — demo venue（立花）実 depth HITL：未実施（スコープ外・deferral）
+HITL harness は MOCK ハードコードで、`DepthLadderView` の本線 consumer も未配置（上記 follow-up ①②）。
+AC④ の「demo venue で HITL 検証」は本線載せ替えスライスに同梱する。**#54 のスコープ（抽出＋harness＋montage）は
+Step 1/2a/2b で実機確定済み**（描画・theme・realtime 経路は本スライスで完結）。

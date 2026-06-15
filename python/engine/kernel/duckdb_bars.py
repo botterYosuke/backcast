@@ -142,6 +142,23 @@ def _granularity(granularity: str) -> _Granularity:
         ) from None
 
 
+def normalize_granularity(value: str) -> str:
+    """大文字小文字・前後空白を正規化して "Daily" / "Minute" を返す（nautilus-free）。
+
+    catalog_data_loader から本モジュール（kernel・nautilus 非依存）へ移設（#49 review）。
+    DuckDB 直読み経路が #50 で削除予定の nautilus catalog モジュールに依存しないようにするため。
+    catalog_data_loader 側は本関数を re-export して後方互換を保つ。
+
+    Raises:
+        ValueError: "daily" / "minute" 以外の場合。
+    """
+    v = value.strip().lower()
+    for name in _GRANULARITIES:
+        if name.lower() == v:
+            return name
+    raise ValueError(f"Unsupported granularity: {value!r}")
+
+
 def db_path(
     data_root: str | Path, instrument_id: str, granularity: str = "Daily"
 ) -> Path:

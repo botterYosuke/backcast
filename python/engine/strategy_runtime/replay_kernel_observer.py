@@ -70,8 +70,13 @@ class ReplayKernelObserver:
         )
 
     # --- per-bar equity (RunBuffer; #49-added KernelRunner hook) ---------------
-    def on_equity(self, ts_event_ms: int, equity: float) -> None:
-        self._buf.write_equity({"ts_event_ms": ts_event_ms, "equity": equity})
+    def on_equity(self, ts_event_ms: int, equity: float, cash: float) -> None:
+        # equity = mark-to-market (cash + open-position value); cash = realized cash. Both
+        # recorded so compute_portfolio reports equity (MTM) and cash/buying_power separately
+        # (#49 review #2). Mirrors how live venues expose account value vs 余力/cash.
+        self._buf.write_equity(
+            {"ts_event_ms": ts_event_ms, "equity": equity, "cash": cash}
+        )
 
     # --- intentionally inert in production ------------------------------------
     def push_portfolio(self, portfolio: Any) -> None:

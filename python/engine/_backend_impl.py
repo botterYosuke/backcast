@@ -47,12 +47,15 @@ from dataclasses import dataclass, field
 from .replay import BaseReplayProvider
 from .jquants_loader import JQuantsLoader
 from .paths import PYTHON_SRC_ROOT, listed_symbols_artifact_path
-from engine.strategy_runtime.catalog_data_loader import load_bars_for_scenario, normalize_granularity
+from engine.strategy_runtime.catalog_data_loader import load_bars_for_scenario
 from engine.nautilus_catalog_loader import (
     CatalogPrecisionMismatchError,
     _assert_catalog_writable_for_precision,
 )
 from engine.jquants_to_catalog import ensure_jquants_catalog
+# normalize_granularity は nautilus 非依存の kernel 側から取得（#49 review）。catalog_data_loader
+# 経由だと #50 の nautilus catalog 撤去で DuckDB 経路まで道連れに壊れるため、正本を直接参照する。
+from engine.kernel.duckdb_bars import normalize_granularity
 
 
 @dataclass(frozen=True)
@@ -958,7 +961,10 @@ class DataEngineBackend:
 
         instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
         primary_id = instruments[0]
-        granularity = scenario["granularity"]
+        # Normalize case/whitespace ('daily' / ' Daily ' → 'Daily') so a non-canonical
+        # scenario granularity runs, matching the legacy catalog path (load_bars_for_scenario
+        # → normalize_granularity). Without this the kernel's _granularity() raises → RUN_FAILED.
+        granularity = normalize_granularity(scenario["granularity"])
         initial_cash = scenario.get("initial_cash", 10_000_000)
         logging.info(
             "start_engine(duckdb): cls=%r instruments=%r granularity=%r start=%r end=%r root=%r",
@@ -1017,6 +1023,7 @@ class DataEngineBackend:
                 sink=observer,
                 run_event=self.engine.run_event,
                 bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
+                stop_event=self.engine.replay_stop_event,
             ).run()
             summary = self._finalize_run(rb, scenario)
             logging.info(

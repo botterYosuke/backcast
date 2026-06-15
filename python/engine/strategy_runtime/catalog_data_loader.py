@@ -18,6 +18,11 @@ from typing import Any
 
 from engine.nautilus_catalog_loader import load_bars  # noqa: E402  (import at module scope for monkeypatching)
 
+# normalize_granularity の正本は kernel 側（nautilus 非依存）へ移設（#49 review）。ここは
+# 後方互換の re-export。本モジュールは nautilus catalog 用で #50 で削除予定だが、DuckDB 直読み
+# 経路は duckdb_bars 側を直接使うので、catalog 撤去後も正規化は生き残る。
+from engine.kernel.duckdb_bars import normalize_granularity  # noqa: F401 (re-export)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -29,20 +34,6 @@ def instruments_from_scenario(scenario: dict) -> list[str]:  # type: ignore[type
     if "instrument" in scenario:
         return [scenario["instrument"]]
     return list(scenario["instruments"])
-
-
-def normalize_granularity(value: str) -> str:
-    """大文字小文字・前後空白を正規化して "Daily" または "Minute" を返す。
-
-    Raises:
-        ValueError: "daily" / "minute" 以外の場合。
-    """
-    v = value.strip().lower()
-    if v == "daily":
-        return "Daily"
-    if v == "minute":
-        return "Minute"
-    raise ValueError(f"Unsupported granularity: {value!r}")
 
 
 def bar_type_for_instrument(instrument: str, granularity: str) -> str:

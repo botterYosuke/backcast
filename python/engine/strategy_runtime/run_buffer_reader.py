@@ -25,6 +25,9 @@ class Fill:
 class EquityPoint:
     ts_event_ms: int
     equity: float
+    # Realized cash at this point, recorded separately from equity (mark-to-market) by the
+    # DuckDB/kernel path (#49 review #2). None for the legacy path that wrote equity only.
+    cash: float | None = None
 
 
 class RunBufferReader:
@@ -137,7 +140,8 @@ def _parse_equity_points(path: Path) -> list[EquityPoint]:
                 ts_ms = int(row.get("ts_event_ms", 0))
             except (TypeError, ValueError):
                 ts_ms = 0
-            points.append(EquityPoint(ts_event_ms=ts_ms, equity=equity))
+            cash = _to_optional_float(row.get("cash"))  # None on the legacy equity-only path
+            points.append(EquityPoint(ts_event_ms=ts_ms, equity=equity, cash=cash))
     return points
 
 

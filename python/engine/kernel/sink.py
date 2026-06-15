@@ -95,3 +95,10 @@ class EventSink:
 
     def push_run_complete(self, run_id: str, summary: dict) -> None:
         self._target.push_run_complete(run_id, json.dumps(summary))
+
+    def on_equity(self, ts_event_ms: int, equity: float, cash: float) -> None:
+        # No-op for the golden contract: per-bar equity is summarized internally by the
+        # runner (equity_curve_stats), not pushed to the RustBacktestSink target. Declared
+        # so KernelRunner can call sink.on_equity unconditionally — a getattr probe would
+        # silently drop the production observer's equity curve on a method-name typo.
+        pass

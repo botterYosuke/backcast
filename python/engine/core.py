@@ -43,6 +43,10 @@ class DataEngine:
         # Gate for engine_runner: SET = running, CLEAR = paused.
         self._run_event = threading.Event()
         self._run_event.set()
+        # Stop signal for an in-flight kernel replay (#49 review #5). Distinct from
+        # _run_event (pause): set on stop/force-stop so KernelRunner breaks promptly;
+        # cleared when a run starts (start_engine LOADED→RUNNING).
+        self._replay_stop_event = threading.Event()
         self._replay_provider = replay_provider
         self._mode: Literal["static", "replay"] = (
             "replay" if replay_provider else "static"
@@ -303,6 +307,7 @@ class DataEngine:
 
             self._is_running = True
             self._replay_state = "RUNNING"
+            self._replay_stop_event.clear()  # fresh run: clear any prior stop signal (#49 #5)
             return True, None
 
     def pause_replay(self) -> tuple[bool, str | None]:
@@ -333,6 +338,7 @@ class DataEngine:
             self._is_running = False
             self._replay_state = "IDLE"
             self._replay_duckdb_root = None  # #49: see force_stop_replay
+            self._replay_stop_event.set()  # halt an in-flight kernel run promptly (#49 #5)
             self._run_event.set()
             return True, None
 
@@ -347,12 +353,17 @@ class DataEngine:
             # #49: drop the DuckDB root too, so a subsequent catalog-based load is not
             # misrouted to the kernel path by a stale flag.
             self._replay_duckdb_root = None
+            self._replay_stop_event.set()  # halt an in-flight kernel run promptly (#49 #5)
             self._run_event.set()
             return True, None
 
     @property
     def run_event(self) -> threading.Event:
         return self._run_event
+
+    @property
+    def replay_stop_event(self) -> threading.Event:
+        return self._replay_stop_event
 
     def set_replay_speed(self, multiplier: int) -> tuple[bool, str | None]:
         with self._lock:

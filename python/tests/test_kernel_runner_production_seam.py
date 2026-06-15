@@ -51,8 +51,8 @@ class _Recorder:
     def push_portfolio(self, pf) -> None:
         self.portfolios += 1
 
-    def on_equity(self, ts_ms: int, equity: float) -> None:
-        self.equity.append((ts_ms, equity))
+    def on_equity(self, ts_ms: int, equity: float, cash: float) -> None:
+        self.equity.append((ts_ms, equity, cash))
 
     def push_run_complete(self, run_id, summary) -> None:
         self.complete += 1
@@ -78,9 +78,10 @@ def test_on_equity_fires_once_per_bar_with_cash(monkeypatch) -> None:
     _make_runner(monkeypatch, sink=sink, bars=bars).run()
 
     assert len(sink.bars) == 5
-    # No fills → cash stays at initial; one equity point per bar with the bar's ts.
-    assert [ts for ts, _ in sink.equity] == [b.ts_event_ns // 1_000_000 for b in bars]
-    assert all(eq == 10_000_000 for _, eq in sink.equity)
+    # No fills → cash stays at initial and (flat book) MTM equity == cash; one point per bar.
+    assert [ts for ts, _, _ in sink.equity] == [b.ts_event_ns // 1_000_000 for b in bars]
+    assert all(eq == 10_000_000 for _, eq, _ in sink.equity)
+    assert all(cash == 10_000_000 for _, _, cash in sink.equity)
 
 
 def test_run_event_gate_blocks_until_set(monkeypatch) -> None:
@@ -104,15 +105,14 @@ def test_run_event_gate_blocks_until_set(monkeypatch) -> None:
     assert len(sink.bars) == 3
 
 
-def test_sink_without_on_equity_is_tolerated(monkeypatch) -> None:
-    """Golden EventSink has no on_equity — the runner must getattr-guard it (no crash)."""
+def test_sink_without_on_equity_raises(monkeypatch) -> None:
+    """#49 review #4: on_equity is a declared sink method, NOT a getattr-probed optional.
+    A sink missing it must fail LOUDLY (a typo would otherwise silently drop the equity
+    curve). EventSink declares a no-op on_equity, so real sinks always have it."""
 
     class _NoEquitySink:
-        def __init__(self) -> None:
-            self.bars = 0
-
         def push_bar(self, bar) -> None:
-            self.bars += 1
+            pass
 
         def push_order(self, fill) -> None:  # pragma: no cover
             pass
@@ -123,9 +123,12 @@ def test_sink_without_on_equity_is_tolerated(monkeypatch) -> None:
         def push_run_complete(self, run_id, summary) -> None:
             pass
 
-    sink = _NoEquitySink()
-    result = _make_runner(monkeypatch, sink=sink, bars=_bars(4)).run()
-    assert result.success and sink.bars == 4
+    try:
+        _make_runner(monkeypatch, sink=_NoEquitySink(), bars=_bars(4)).run()
+    except AttributeError:
+        pass  # expected: no silent getattr fallback
+    else:  # pragma: no cover
+        raise AssertionError("a sink without on_equity must raise, not silently drop equity")
 
 
 def test_requires_push_target_or_sink() -> None:

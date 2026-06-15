@@ -1,0 +1,168 @@
+# findings 0025 — footer LiveAuto 起動 + mode 切替（#39 Slice 3 / UI）
+
+issue #39。親: #4（Step 2: Live/Auto parity）/ #5（Step 3: カットオーバー）。
+方針: **ADR-0005（1:1 表面 parity・固定 decision）/ ADR-0001（in-proc 埋め込み・orphan 不在）**。
+`grill-with-docs`（2026-06-15）で導出。移植 oracle = TTWR `src/ui/footer.rs`（mode segment /
+`execution_mode_toggle_system` / `footer_pause_resume_system` の LiveAuto 枝 / 可視性 system 群）。
+ADR-0005/0001 は自己保護条項を持つため本 findings に実装事実を記録し、ADR は参照のみ（書き戻さない）。
+CONTEXT.md の **[[footer（screen-fixed chrome / 実行トランスポート）]]** 用語（#30 で確定）を本スライスで拡張。
+
+---
+
+## 0. #39 のスライス構成（engine 先行・本スライスは UI）
+
+#39 は engine 側がすでに着手済みの multi-slice issue。本タスクは **Slice 3（footer UI）**:
+
+- **Slice 1（engine・実装済み）**: Replay 切替時の `live_last_error` 抑止（`live_orchestrator.py:881`・
+  抑止フラグ。runner/bridge の `_last_error` 自体は消さない＝stale-CONNECTED の healthy 誤判定を防ぐ）。
+- **Slice 2（engine・実装済み）**: Replay 中の account fetch/emit 抑止（`account_sync.py:62/93`・`_tick` 入口の
+  mode_provider gate）。
+- **Slice 3（本スライス・UI）**: footer の mode セグメント（Replay/LiveManual/LiveAuto）＋ LiveAuto ▶ 起動。
+
+## 1. 移植 oracle の実態（TTWR `footer.rs` を直接読んだ確定事実）
+
+- mode セグメント3つを spawn（`spawn_mode_segment`）。**Manual/Auto は venue が live のときだけ表示**
+  （`apply_venue_live_button_visibility_system`）、Replay は常時表示。
+- mode クリック → `SetExecutionMode` RPC（`execution_mode_toggle_system`）。**楽観的ローカル状態を持たず、
+  poll 差分（`BackendStatusUpdate::ExecutionModeChanged`）でしか `ExecutionModeRes` を更新しない**＝UI/backend
+  desync を構造的に防ぐ。Live 遷移は venue Disconnected/Error なら client 側 precondition で送らず warn のみ。
+- venue 非 live 転落で Live→Replay 自動復帰（`auto_replay_on_venue_disconnect_system`）。
+- LiveAuto ▶（`footer_pause_resume_system` の LiveAuto 枝）= ①二重押しガード（`command_in_flight` or Running×run_id=None）
+  → ②run_id ありなら Running→Pause / Paused→Resume トグル → ③停止中なら pre-flight 通過後に `StartLiveAuto` 送出。
+- 可視性（`apply_execution_mode_visibility_system`）: LiveAuto では ▶ のみ表示、step/stop/speed は隠す。
+  LiveManual では ▶ すら隠す（手動発注は別 ticket・footer の責務外）。
+- **TTWR footer は live run を止めない**。`StopLiveStrategy` は protocol/inproc handler/内部状態機械にしか現れず
+  **UI から一度も送出されない**。唯一の live teardown 経路は `venue_logout`→`_teardown_live_components`。
+  TTWR のモデル = **live run の寿命 = venue セッション、mode とは別物**（Replay に切替えても auto は走り続ける）。
+
+## 2. backcast seam の実態（一次コード読みで確定）
+
+- engine seam は #38/#25 で**実配線済み**。`set_execution_mode` / `register_live_strategy` /
+  `start_live_strategy` が `inproc_server.py`→`backend_service.py`→`_backend_impl.py`→`live_orchestrator.py` で公開。
+  `start_live_strategy` は本物の auto ループを起こす（`_strategy_host.start_run`→controller.attach→on_start→
+  live loop→post-trade 評価。Noop ではない）。
+- **2段直列の backcast 形**: `register_live_strategy(strategy_file, original_path)`→`strategy_id` /
+  `start_live_strategy(strategy_id, instrument_id, venue, safety_limits_dict=None)`→`run_id`。
+  precondition: `start_live_strategy` は `ExecutionMode==LiveAuto` 必須（`live_orchestrator.py:1623`）。
+  **TTWR の `StartLiveAuto` wire が運ぶ `allowed_instruments` を backcast seam は取らない。`safety_limits` も optional**。
+- **`set_execution_mode` は TTWR とバイト同一**（`live_orchestrator.py:856-884` ≡ TTWR `:805-833`）。両方とも
+  Replay 切替で run を止めず抑止フラグを立てるだけ。→「mode と run は分離」が両者共通のセマンティクス。
+- 既に `ProductionLiveShell.RegisterAndStartAuto()`/`StopAuto()` が IMGUI placeholder として register→start /
+  stop を叩いて動作（`ProductionLiveShell.cs:331-377`・コメントに「これは footer #39 surface」）。本スライスで
+  production footer に役目を移し placeholder を退役させる。
+- LiveAuto run 状態の権威 = `LivePanelViewModel.LatestLifecycle`（`LiveLifecycleEvent` の RunId/Status、
+  C# `LiveBackendEventSink`→`Apply` 経由）。AC3 の terminal 返し分け／re-arm はここから導出（#30 の
+  `ReplayLifecycle` は Replay 専用なので Live は別系統）。
+- 選択中銘柄 = `SelectedSymbol`（`UniverseSidebarController` 保持）。戦略 = `IStrategyFileProvider`
+  （#16・supplyable 5条件）。venue = `VenueConnectionViewModel` の poll venue_id（fallback 構成 venue）。
+- **穴は C# 側（Python は塞がっている）**: poll は **execution_mode を最初から権威値で運んでいる**——
+  `core.py:494` が `get_current_state()` で `execution_mode=mode_manager.current_mode` を populate する
+  （model 構築時に入るので `_backend_impl.get_state_json` の update dict には現れない＝TTWR `_backend_impl` でも
+  同理由で見えなかった）。`models.py:70` の `TradingState.execution_mode` も実値で出る。**真の穴は C#**:
+  `VenueConnectionViewModel.StateDto`（`cs:44-48`）は「自分が要る2スカラ（venue_state/venue_id）だけ parse」する
+  明示方針（`cs:52-53`）で execution_mode を読まない（shell は last-sent の `_execMode` mirror を使用）。これが
+  findings 0017 §9(d) の穴の実体。→ engine 変更は不要。**`FooterModeViewModel` が同じ poll 文字列から自前の最小 DTO
+  （`{ string execution_mode; }`）で parse して `DisplayMode` を上書き**（D1）。`VenueConnectionViewModel` を拡張せず
+  各 VM が自分の関心だけ読む＝tested VM 無傷（`ReplayTransportViewModel` を触らないのと同原則）。
+  Python 契約ガードとして「`set_execution_mode(LiveAuto)` 後 poll が `execution_mode=="LiveAuto"`」のテスト2本を
+  追加済み（2 passed・将来 `core.py` が execution_mode を落としたら footer が無言で壊れるのを防ぐ低コスト回帰）。
+
+## 3. 決定（grill 2026-06-15）
+
+### (D1) mode 真実源 = 楽観＋poll 答え合わせ（poll 値で常に上書き）
+
+- **Replay / 速度 / step など engine が断り得ない切替は poll を待たず即時反映**。
+- **Live（Manual/Auto）への切替は押下→即ロック＋スピナー→poll で通れば切替／断られたら解除**（実質 TTWR parity）。
+- poll の値が常に正準で、楽観表示を上書きする。
+
+**唯一の TTWR poll 正準からの逸脱**: 「engine が断り得ない切替（Replay/速度/step）は poll を待たず即時反映」。
+根拠 (1) これらは engine が拒否し得ず即時反映しても poll が同値を返すだけで構造的に desync しない、
+(2) 反応速度を優先する owner 要望。Live 遷移だけは拒否され得るのでロックして engine の答えを待つ＝ここは parity。
+→ CONTEXT.md の footer 用語に1行追記（§下）。
+
+### (D2) LiveAuto の停止 = C# が明示的に run をたたむ（表面 parity・配線は backcast 固有の追加）
+
+stop ボタンは**出さない**（TTWR 表面 parity）。だが backcast は findings 0017 §4 で orphan（blank/Replay 表示
+なのに live 執行継続）を **ADR-0001 由来の不変条件として禁止**し、「走行中 live の停止は #39 の責務」と先送り済み。
+TTWR footer は teardown を持たない（venue 寿命に紐付け）が、**backcast はその不変条件のぶん厳しいので、TTWR footer
+に無い teardown を追加する**——これは正当な逸脱（justification: backcast の orphan 禁止不変条件。「TTWR engine に
+合わせる」ではない）。
+
+**動作詳細（C案・確定）**: footer が「LiveAuto から抜ける」操作（Replay **または** LiveManual セグメント押下）を受けたとき:
+- run_id あり（Running/Paused）: 先に `stop_live_strategy(run_id)` → 成功時のみ `set_execution_mode(target)` 送出。
+  この間はロック＋スピナー（graceful teardown は時間がかかるので即時にしない＝D1 の Live 遷移と同じ扱い）。
+- stop 失敗: mode を切替えず **LiveAuto に留め**、エラー表示。→「Replay 表示なのに run 生存」を構造的に作らない。
+- run_id 無し: Replay 切替は即時（engine が断れず desync しない）。
+- LiveManual に抜けるときも auto loop が裏で発注し続けたら同じ orphan なので同様に stop してから切替える。
+
+**venue-drop auto-replay も同じ stop-then-switch を通す（grill round で確証・誤前提を訂正）**: 外部 venue drop は
+走行中 LiveAuto run を**止めない**——`live_orchestrator._publish_venue_logout`（:1061-1069）は `VenueLogoutDetected` を
+emit するだけで `_teardown_live_components` も `stop_live_strategy` も呼ばない（kabu watchdog も Tachibana SS hook も
+同コールバック :264/:273）。よって poll 由来の auto-replay（`FooterModeViewModel.ShouldAutoReplay`）で host が素の
+`SetExecutionMode(Replay)` だけ送ると、run は zombie として生存し Replay 表示＝D2 が防ぐ orphan と同型になり、venue
+再接続で ▶ が Pause/Resume 判定になって**捨てたつもりの run が蘇り実発注を再開し得る**。→ **auto-replay も active run が
+あれば user-leave と対称に `stop_live_strategy(ActiveRunId)`→成功で `SetExecutionMode(Replay)`**（venue 不在なので
+graceful cancel は best-effort・ローカル teardown は成立）。「user-leave は stop / venue-drop-leave は stop しない」の
+非対称は不変条件違反＝禁止。
+
+### (D3) LiveAuto ▶ の pre-flight 材料（backcast seam へのマッピング）
+
+| TTWR `StartLiveAuto` | backcast | 出どころ |
+|---|---|---|
+| `strategy_file` | `register_live_strategy(strategy_file=...)` | `IStrategyFileProvider`（supplyable・呼出時再問い合わせ） |
+| `original_path` | `register_live_strategy(original_path=...)` | 同 provider のパス（backcast は cache/original 分割を持たない・provider が保存済み canonical を返す） |
+| instrument | `start_live_strategy(instrument_id=...)` | scenario universe ∩ `SelectedSymbol`（無ければ先頭）＝TTWR `check_live_auto_venue_and_instrument` と同型 |
+| venue | `start_live_strategy(venue=...)` | `VenueConnectionViewModel` poll venue_id（fallback 構成 venue） |
+| `safety_limits` | `start_live_strategy(safety_limits_dict=None)` | **None**（backcast scenario に safety_limits 無し・scenario 由来 rail は follow-up） |
+| `allowed_instruments` | — | **backcast seam は取らない**（map 先なし） |
+
+▶ の文脈分岐（TTWR `footer_pause_resume_system` LiveAuto 枝と同型）:
+- 二重押しガード（起動 in-flight or Running×run_id 未確定）→ block。
+- run_id あり: Running→`pause_live_strategy` / Paused→`resume_live_strategy`（即時・graceful 不要）。
+- 停止中（Idle/terminal）: pre-flight 通過時のみ register→start（起動はロック＋スピナー）。terminal 後の ▶ は re-arm。
+
+## 4. 実装の置き場所（parity-first）
+
+- #30 の `ReplayFooterView` + `ReplayTransportViewModel`（production uGUI・Replay専用）を**拡張**し、mode セグメント
+  （Replay/Manual/Auto）と LiveAuto ▶ を載せる。TTWR が `footer.rs` 1枚で全モードを捌くのに合わせ footer は1つに保つ。
+- LiveAuto 起動／停止／pause/resume の orchestration（register→start・stop-on-leave・文脈分岐）は durable な
+  pure-logic VM（`ReplayTransportViewModel` 同型・AFK 駆動）に置き、uGUI view は intent を上げるだけ。
+- `ProductionLiveShell.RegisterAndStartAuto()/StopAuto()` の register→start / stop ロジックと2段ガードを
+  production footer 側へ移し、IMGUI placeholder を退役（findings 0017 §6(c) の撤去境界）。
+
+## 5. composition root / 検証 venue（確定）
+
+- **(O1 確定) HITL host = `ProductionLiveShell`**。findings 0017 §2 が ProductionLiveShell を composition root
+  （live loop / GIL 規律 / run_id / 全 durable 型の所有者）と明記。findings 0017 §9(c) が「Manual/Auto footer toggle の
+  正式 footer 化は #39 が所有」と名指しで先送り済み＝本スライスがその回収。production footer を ProductionLiveShell に
+  配線→IMGUI placeholder 退役→mode/▶/抜け時 stop をここで検証。同 footer view の Replay transport ボタンは可視性で
+  隠れて同居するだけ（Replay run を ProductionLiveShell から駆動する完全統合シェルは別スコープ・findings 0023 §5）。
+- **(O2 確定) AFK = MOCK / HITL = MOCK 全ロジック ＋ tachibana demo 実起動1レグ**。
+  - MOCK が回帰ガードの正本。#39 新規挙動（orphan-teardown: Replay/Manual に抜ける→`stop_live_strategy(run_id)`→
+    teardown / 二度押しガード / ▶ 文脈分岐）は MOCK で register→start→live loop→(mock fill)→抜けて teardown まで
+    **決定的に・閉局でも**全部回せる。
+  - demo leg = 既存 Tools > Backcast > Live Demo Roundtrip（Tachibana demo・findings 0014 が確立、2026-06-14 実証）。
+    **demo leg の done-bar = 「tachibana demo で ▶→RUNNING 到達＋Replay/Manual に抜けて teardown を実機目視」**
+    （閉局でも観測可能）。実 fill→建玉反映は market-hours-gated で #23 LiveDemoRoundtrip が既に所有する領域＝
+    #39 固有の新規挙動ではない（平日場中ならボーナス確認）。kabu Verify は同 launcher 並記の代替（owner 任意）。
+
+## 6. 検証（予定・RED 先行・正本は本 findings＝backcast に FLOWS.md 無し）
+
+- **C# AFK probe**（headless 決定的・`ReplayTransportVerify` 同型・MOCK）: mode 遷移（楽観＋poll 上書き・Live ロック→
+  poll 解除）、可視性（Manual/Auto は venue live 限定・LiveAuto で step/stop/speed 隠す・LiveManual で ▶ 隠す）、
+  ▶ 文脈分岐（起動/pause/resume・二度押しガード）、LiveAuto 抜け時の stop-then-switch・stop 失敗時 LiveAuto 維持、
+  terminal re-arm。register→start→RUNNING→抜けて teardown（run_id クリア・orphan 不在）まで MOCK で決定的に。
+  **必須ゲート2本（grill round で追加）**: (G1) **venue-drop-while-LiveAuto-running → run が stop される**
+  （`ShouldAutoReplay` 消費時に active run なら mode→Replay だけで終わらず `stop_live_strategy` を通す）。
+  (G2) **start ok → 初手 lifecycle が terminal(ERROR) → ▶ が再 arm**（`_startInFlight` が同期 run_id 解除で stick しない）。
+- **HITL（owner 目視）**: ①MOCK で venue 接続→Auto 切替→▶ で strategy 起動→panel 反映→Replay/Manual に抜けて
+  teardown（orphan 不在）。②tachibana demo で ▶→RUNNING 到達＋抜けて teardown（done-bar・閉局可）。
+
+### 検証実績（VM ロジック・2026-06-15）
+
+- **C# AFK PASS**: `Assets/Editor/FooterLiveAutoVerify.cs` を `Unity -batchmode -executeMethod FooterLiveAutoVerify.Run`
+  で **29/29 PASS**・`error CS` 0 件（compile 成功）。カバレッジ: mode D1（poll 上書き・Live ロック→poll 解除・拒否解除・
+  Replay 即時）／可視性（Manual/Auto は venue live 限定）／▶ 文脈分岐（Start/Pause/Resume/re-arm）＋pre-flight 4ゲート＋
+  instrument 解決（selected∈universe 優先・無→先頭）＋二度押し（ack ok でも lifecycle 未追従なら block）／D2 stop-then-switch
+  （Replay/LiveManual 両方向）／**G1**（venue-drop 中 run 生存＝host stop 必須）／**G2**（start ok→初手 ERROR→▶ 再 arm）。
+  Unity 6000.4.11f1・Windows。**view（item4）/ 配線（item5）/ HITL（item7）は未了**。

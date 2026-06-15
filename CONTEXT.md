@@ -488,6 +488,13 @@ venue 未接続でも無条件送信すること（`EXECUTION_MODE_PRECONDITION`
 （universe/期間/granularity/cash）は footer ではなく [[Replay 実行設定（scenario startup）]]＝#29 が所有し、footer はそれを駆動する
 transport に徹する。backcast の transport seam は TTWR の `TransportCommand` enum + mpsc ではなく、**in-proc pythonnet の直接メソッド
 呼び出し**（[[Backcast Execution Kernel（kernel）]] の `run_event`/`stop_event`/`step_event`/speed holder を host が叩く）。
+**#39 の mode 真実源 = 楽観＋poll 答え合わせ**（poll 値で常に上書き）。**TTWR poll 正準からの唯一の逸脱 = engine が断り得ない
+切替（Replay/速度/step）は poll を待たず即時反映**（拒否され得ない＝構造的に desync しない・反応速度優先）。Live 遷移は拒否され得るので
+ロック→engine の答え待ち＝parity。**LiveAuto の停止 = stop ボタンを出さず、Replay/LiveManual セグメント押下で footer が
+`stop_live_strategy(run_id)` を先に呼び成功時のみ mode 切替**（stop 失敗なら LiveAuto 維持＋エラー）。これは TTWR footer に無い
+teardown の追加だが、backcast の orphan 禁止不変条件（findings 0017 §4・ADR-0001）が根拠の正当な逸脱。記録: findings 0025。
+_Avoid_: mode 切替を純 poll 正準（楽観表示なし）と解釈すること（Replay/速度/step は即時が正）／LiveAuto を mode 切替だけで
+止まると見なすこと（`set_execution_mode` は run を止めない＝footer が明示 stop する・findings 0017）
 _Avoid_: footer に run 起動設定（scenario）を持たせること（#29 が所有・footer は transport）／#30 と #39 を混同すること（前者=Replay
 の play/pause/step/speed/stop、後者=mode 切替＋StartLiveAuto）／`TransportCommand` enum/mpsc を移植すること（backcast は pythonnet 直呼びが正）
 

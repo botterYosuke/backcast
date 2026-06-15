@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from engine.kernel.bars import Bar, load_bars
 from engine.kernel.broker import ReplayBroker
+from engine.kernel.duckdb_bars import Bar, load_bars
 from engine.kernel.orders import (
     Order,
     OrderDenied,
@@ -106,7 +106,7 @@ class KernelRunner:
     def __init__(
         self,
         *,
-        catalog_path: str | Path,
+        data_root: str | Path,
         instrument_id: str,
         start: str,
         end: str,
@@ -115,7 +115,7 @@ class KernelRunner:
         push_target,
         rails: Optional[SafetyRails] = None,
     ) -> None:
-        self._catalog_path = catalog_path
+        self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/stocks_daily/<code>.duckdb
         self._instrument_id = instrument_id
         self._start = start
         self._end = end
@@ -133,7 +133,7 @@ class KernelRunner:
         from engine.strategy_runtime.summary import equity_curve_stats
 
         bars: list[Bar] = load_bars(
-            self._catalog_path, self._instrument_id, start=self._start, end=self._end
+            self._data_root, self._instrument_id, start=self._start, end=self._end
         )
 
         self._strategy.register(self._ctx)

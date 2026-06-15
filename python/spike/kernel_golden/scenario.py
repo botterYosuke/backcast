@@ -11,6 +11,10 @@ import os
 PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 CATALOG = os.path.join(PYTHON_ROOT, "spike", "fixtures", "jquants-catalog")
+# J-Quants DuckDB root (ADR-0006): the kernel reads <root>/stocks_daily/<code>.duckdb
+# directly. env-overridable; default = owner's mounted data root. CATALOG is retained only
+# as the data-equivalence comparison source (#47) and the oracle source until #50.
+DUCKDB_ROOT = os.environ.get("BACKCAST_JQUANTS_DUCKDB_ROOT", "/Volumes/StockData/jp")
 INSTRUMENT = "8918.TSE"
 START = "2024-10-01"
 END = "2025-01-10"

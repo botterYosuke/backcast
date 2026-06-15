@@ -35,10 +35,15 @@ description: |
   build with it — faithfully porting away needs the same domain knowledge (what `ParquetDataCatalog` /
   `BacktestEngine` / `Price`/`Quantity` raw scaling actually did). Fire on: "nautilus を消す/退役/撤去",
   "nautilus を runtime から外す", "catalog 形式の再考", "catalog をやめる", "DuckDB 直読みへ移行",
-  "nautilus_catalog_loader を置換/削除", "jquants_to_catalog を廃止", "replay を kernel へ", "ADR-0006".
+  "nautilus_catalog_loader を置換/削除", "jquants_to_catalog を廃止", "replay を kernel へ", "ADR-0006",
+  および退役後の新データ経路 `engine/kernel/duckdb_bars.py`（DuckDB 直読み bar reader・#47 で導入）/
+  import-purity gate（`run_kernel --assert-pure`・`leaked_nautilus_modules`）/ `engine/kernel/bars.py`
+  (catalog pyarrow reader・#50 で撤去予定) / 凍結 golden の data-equivalence 突合。
   実例: #29 HITL の `CatalogPrecisionMismatchError` を機に grill-with-docs で catalog 形式を再考し ADR-0006
   （DuckDB 直読み＋nautilus 完全退役）を起こしたとき、precision/ParquetDataCatalog の議論で関連していたのに
   本スキルを invoke しなかった（2026-06・#47-#50 を発行）。退役の faithfulness 確認に使えた。
+  #47（DuckDB bar reader）では本スキル＋grill-with-docs を併発し、kernel が既に nautilus-free である点・
+  ts_event=15:30 JST 再現が凍結 golden 一致の linchpin である点を前裁定できた（findings 0017・2026-06）。
   Also trigger on **PyO3 in-process embedding** of the Python engine (issue #64 Phase 2–4):
   "InProcTransport", "PyO3", "pyo3", "Python::with_gil", "Py<PyAny>", "GIL strategy",
   "embed Python", "in-proc call", "DataEngine を直接呼ぶ", "PyO3 経由", "in-process transport",

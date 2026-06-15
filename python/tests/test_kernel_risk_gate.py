@@ -16,6 +16,9 @@ import sys
 _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PYTHON_ROOT)
 
+import pytest
+
+from engine.kernel.duckdb_bars import daily_db_path
 from engine.kernel.orders import OrderDenied, OrderFilled, OrderSide
 from engine.kernel.runner import KernelRunner
 from engine.live.safety_rails import (
@@ -26,6 +29,13 @@ from engine.live.safety_rails import (
 )
 from spike.fixtures.strategies.kernel_spike_buy_sell import KernelSpikeBuySell
 from spike.kernel_golden import scenario
+
+# The kernel path now reads the J-Quants DuckDB directly (ADR-0006 / #47). Skip where the
+# owner's data root is not mounted (real-data dependency; repo skip-if-absent convention).
+_DB_PRESENT = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
+pytestmark = pytest.mark.skipif(
+    not _DB_PRESENT, reason=f"J-Quants DuckDB not mounted at {scenario.DUCKDB_ROOT}"
+)
 
 
 class _RecordingBuySell(KernelSpikeBuySell):
@@ -63,7 +73,7 @@ def test_allowlist_denies_order_through_kernel_path() -> None:
     rails = SafetyRails(SafetyLimits(allowed_instruments=("9999.TSE",)))
 
     result = KernelRunner(
-        catalog_path=scenario.CATALOG,
+        data_root=scenario.DUCKDB_ROOT,
         instrument_id=scenario.INSTRUMENT,
         start=scenario.START,
         end=scenario.END,
@@ -101,7 +111,7 @@ def test_post_trade_daily_loss_halts_run_on_price_drop() -> None:
     rails = SafetyRails(SafetyLimits(max_daily_loss_jpy=50))
 
     result = KernelRunner(
-        catalog_path=scenario.CATALOG,
+        data_root=scenario.DUCKDB_ROOT,
         instrument_id=scenario.INSTRUMENT,
         start=scenario.START,
         end=scenario.END,
@@ -134,7 +144,7 @@ def test_post_trade_does_not_halt_on_purchase() -> None:
     rails = SafetyRails(SafetyLimits(max_daily_loss_jpy=500))
 
     result = KernelRunner(
-        catalog_path=scenario.CATALOG,
+        data_root=scenario.DUCKDB_ROOT,
         instrument_id=scenario.INSTRUMENT,
         start=scenario.START,
         end=scenario.END,
@@ -157,7 +167,7 @@ def test_no_rails_allows_fills() -> None:
     strategy = _RecordingBuySell()
     sink = _CountingSink()
     result = KernelRunner(
-        catalog_path=scenario.CATALOG,
+        data_root=scenario.DUCKDB_ROOT,
         instrument_id=scenario.INSTRUMENT,
         start=scenario.START,
         end=scenario.END,
@@ -171,6 +181,9 @@ def test_no_rails_allows_fills() -> None:
 
 
 if __name__ == "__main__":
+    if not _DB_PRESENT:
+        print(f"[KERNEL RISK GATE SKIP] DuckDB not mounted at {scenario.DUCKDB_ROOT}")
+        sys.exit(0)
     failures = []
     for name, fn in list(globals().items()):
         if name.startswith("test_") and callable(fn):

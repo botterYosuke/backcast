@@ -21,8 +21,16 @@ import sys
 _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PYTHON_ROOT)
 
+import pytest
+
+from engine.kernel.duckdb_bars import daily_db_path
+from spike.kernel_golden import scenario
 from spike.kernel_golden.capture_golden import GOLDEN_PATH
 from spike.kernel_golden.verify_golden import first_difference
+
+# The kernel now sources bars from the J-Quants DuckDB (ADR-0006 / #47); skip where the
+# owner's data root is not mounted (real-data dependency; repo skip-if-absent convention).
+_DB_PRESENT = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT).exists()
 
 
 # Generous vs the kernel's ~seconds runtime: a longer wall time means a real teardown
@@ -41,6 +49,9 @@ def _run_kernel_subprocess() -> subprocess.CompletedProcess:
     )
 
 
+@pytest.mark.skipif(
+    not _DB_PRESENT, reason=f"J-Quants DuckDB not mounted at {scenario.DUCKDB_ROOT}"
+)
 def test_kernel_subprocess_exits_clean_and_rust_core_free() -> None:
     try:
         proc = _run_kernel_subprocess()
@@ -62,6 +73,9 @@ def test_kernel_subprocess_exits_clean_and_rust_core_free() -> None:
 
 
 if __name__ == "__main__":
+    if not _DB_PRESENT:
+        print(f"[KERNEL TEARDOWN SKIP] DuckDB not mounted at {scenario.DUCKDB_ROOT}")
+        sys.exit(0)
     try:
         test_kernel_subprocess_exits_clean_and_rust_core_free()
     except AssertionError as exc:

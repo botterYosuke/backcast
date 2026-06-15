@@ -75,6 +75,13 @@ menu 構造 File/Edit/Venue/Help は出す。**Edit(Undo/Redo)** は active edit
 - **HITL harness**（owner 目視）: menu 描画・File/Venue 操作・mode badge 反映。`ProductionLiveShell` のインライン venue chrome 撤去後の重複ゼロ確認。
 - pure VM unit（AFK）: `CanConnect`/prod-gate/mode-guard/`File→New` refuse-when-running。
 
+### 検証実績（2026-06-15・Unity 6000.4.11f1 実機）
+
+- **コンパイル PASS**: `Unity -batchmode -quit -nographics` で exit 0・`error CS` 0 件（ILPP post-process まで到達）。
+- **headless 判定ロジック 16/16 PASS**: `Unity -batchmode -executeMethod MenuBarVerify.Run`（Python 不要・`Assets/Editor/MenuBarVerify.cs`）。prod grey-out gate / `File→New` refuse・clear・guarded-LiveManual no-op / `File→Open` LiveAuto 副作用 / `ScenarioStartupController.Clear()` を実機実行で GREEN。
+- **実機 HITL 14/14 PASS（AC④）**: `Tools > Backcast > Menu Bar HITL (#42)`（`MenuBarHitlHarness` + `MenuBarHitlMenu`）を Play で起動。MOCK engine 起動で **engine 往復まで GREEN**——C3 `File→Open-while-Live → get_state_json execution_mode==LiveAuto`、C5 `File→New → execution_mode==LiveManual`、C1 CONNECTED で `LiveModeAllowed`。Console 0 error / 0 warning。
+- **運用 gotcha**: menu-driven HITL は単一 Play-owner 規律のため、当時の auto-bootstrap owner（`ReplayPanelsHarness.AutoBootstrapEnabled`）を一時的に `false` にして engine を解放 → HITL 後 `true` に復元（findings 0005 §6 の規律どおり）。`ReplayPanelsHarness` は別途 Mac 固定パス（`/Users/sasac/...` strategy/catalog）が Windows で未解決の既知問題あり（#42 外）。
+
 ## 9. 起票する follow-up（ADR-0005 surface を silent drop しないため）
 
 - (a) native file picker ＋ `File→Save As` ＋ 任意パス layout Open（multi-document layout surface）。

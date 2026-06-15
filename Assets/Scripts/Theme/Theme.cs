@@ -1,7 +1,7 @@
 // Theme.cs — issue #44 "theme（配色）システム"
 //
 // PORT of TTWR Theme (theme/mod.rs): the design-system root. #44 carries the COLOR layer
-// only (findings 0018) — spacing/typography/elevation/radius/layout are #52. Build via
+// only (findings 0020) — spacing/typography/elevation/radius/layout are #52. Build via
 // FromScales(scales); Dark()/Light() differ only by the ColorScales passed (Light() stubs
 // to dark until #51). NonDefault() is the verification palette (every role a distinct value)
 // used by ThemeProbe / ThemeHitlHarness to prove switching is non-vacuous even while
@@ -48,7 +48,7 @@ public sealed class Theme
     // -- NonDefault (verification palette) ------------------------------------------------
     // PORT of TTWR non_default_theme(): every serializable color is a distinct non-default
     // value. ThemeProbe / ThemeHitlHarness switch dark↔NonDefault so the non-vacuous wiring
-    // kill works regardless of shipped dark==light (findings 0018 Q9).
+    // kill works regardless of shipped dark==light (findings 0020 Q9).
     static Color Distinct(int i)
     {
         float v = i / 255f;

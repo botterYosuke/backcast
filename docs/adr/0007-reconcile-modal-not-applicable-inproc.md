@@ -30,7 +30,7 @@ ADR-0005 が surface 網羅を契約にしたのは「欠落＝機能後退・TT
 
 ## Consequences
 
-- issue #40 は closed-as-not-applicable。詳細調査・ハード証拠・Q1–Q4 決定経路は findings 0017。
+- issue #40 は closed-as-not-applicable。詳細調査・ハード証拠・Q1–Q4 決定経路は findings 0021。
 - 他の TTWR surface（settings/theme/menu_bar/instruments_universe_prune 等）は ADR-0005 の対象のまま。本除外は
   `reconcile_modal` 限定。
 - 将来 venue 再ログイン突合（`VenueLogoutDetected` 後の「UI 楽観注文 vs venue 実態」提示）等、in-proc でも成立する

@@ -30,7 +30,7 @@ public class PythonSyntaxMeshEffect : BaseMeshEffect
 {
     // Palette (HITL-visual; AFK only asserts that a token glyph differs from base and Default does
     // not). Default == the Text's own colour, so uncovered glyphs are left UNCHANGED.
-    // Issue #44: sourced from ThemeService.Current.syntax (findings 0018 mapping) — Decorator has
+    // Issue #44: sourced from ThemeService.Current.syntax (findings 0020 mapping) — Decorator has
     // no TTWR role so it borrows `type_`; Definition (def/class name) maps to `function`. Set in
     // OnEnable and re-pulled by ApplyTheme() on a theme switch.
     public Color keyword;
@@ -49,7 +49,7 @@ public class PythonSyntaxMeshEffect : BaseMeshEffect
 
     // Pull the syntax palette from the active theme and recolour (issue #44). Called from
     // OnEnable so freshly-added effects are themed, and by the owning harness on
-    // ThemeService.Changed. type_ ← Decorator, function ← Definition (findings 0018).
+    // ThemeService.Changed. type_ ← Decorator, function ← Definition (findings 0020).
     public void ApplyTheme()
     {
         var sx = ThemeService.Current.syntax;

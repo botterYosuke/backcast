@@ -8,7 +8,7 @@
 //
 // sRGB floats are the published Radix hex values divided by 255 (~4 sig figs), written
 // RAW into new Color(r,g,b,1) — same流儀 as existing backcast inline colors. Project is in
-// Linear color space (findings 0018 known-risk); revisit only if HITL shows luminance drift.
+// Linear color space (findings 0020 known-risk); revisit only if HITL shows luminance drift.
 //
 // Light scales are NOT shipped in #44 (案A): the *_light factories stub to *_dark, mirroring
 // TTWR ColorScales::light() which returns dark. Real Radix light values land in #51.
@@ -27,8 +27,6 @@ public sealed class ColorScale
     }
 
     // 1-based step access (matches Radix / TTWR naming).
-    public Color Step(int step) => _steps[step - 1];
-
     public Color Step1 => _steps[0];
     public Color Step2 => _steps[1];
     public Color Step3 => _steps[2];

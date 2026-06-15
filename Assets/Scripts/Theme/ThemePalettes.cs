@@ -4,7 +4,7 @@
 // (theme/mod.rs). FromScales(...) is the SINGLE source of truth for the scale-step →
 // semantic-role mapping; swapping the ColorScales it receives (dark ↔ light) re-derives
 // every role. Full role set is defined even where backcast has no consumer yet (parity
-// completeness — findings 0018); the wired subset is in ScenarioStartupTile / syntax /
+// completeness — findings 0020); the wired subset is in ScenarioStartupTile / syntax /
 // editor / floating-window / chart / ladder.
 
 using UnityEngine;
@@ -136,7 +136,7 @@ public sealed class StatusColors
 
 // -- SyntaxColors (8 lexical roles) -------------------------------------------------------
 // type_ retains the trailing underscore from TTWR. backcast's Decorator class maps here
-// (findings 0018) — TTWR has no decorator role.
+// (findings 0020) — TTWR has no decorator role.
 public sealed class SyntaxColors
 {
     public Color comment, keyword, str, number, type_, function, variable, op;

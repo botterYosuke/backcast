@@ -5,7 +5,7 @@
 // appearance — from_scales is appearance-agnostic by Radix design (step_12 is always the
 // high-contrast text step, step_1 always app bg).
 //
-// 案A (findings 0018): Light() stubs to Dark() exactly like TTWR ColorScales::light(). Real
+// 案A (findings 0020): Light() stubs to Dark() exactly like TTWR ColorScales::light(). Real
 // Radix light scales land in #51; filling Light() needs ZERO re-wiring downstream.
 
 public sealed class ColorScales

@@ -1,7 +1,7 @@
 // ThemeService.cs — issue #44 "theme（配色）システム"
 //
 // The single app-global theme owner — the Unity analogue of TTWR's Bevy `Theme` Resource +
-// `ThemePlugin` (findings 0018):
+// `ThemePlugin` (findings 0020):
 //   * Current  : lazy-default dark (= init_resource::<Theme>() + Default for Theme = dark()).
 //                Every surface reads colors from here.
 //   * SetTheme : swaps the active theme and fires Changed.

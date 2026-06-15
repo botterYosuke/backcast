@@ -5,7 +5,7 @@
 //   <Unity> -batchmode -nographics -projectPath <proj> -executeMethod ThemeProbe.Run -logFile <log>
 //   # expect: [THEME PASS] ... / exit=0
 //
-// Four sections (findings 0018 Q9):
+// Four sections (findings 0020 Q9):
 //   1. DERIVATION PARITY — representative semantic roles equal the right Radix scale step (the
 //      from_scales single-source-of-truth, TTWR theme_scale_accent_step_9 parity).
 //   2. NonDefault != Dark — the verification palette actually differs from shipped dark, so the
@@ -158,7 +158,7 @@ public static class ThemeProbe
         eff.ApplyTheme(); // OnEnable is play-mode-only; apply explicitly for the headless probe
         var dk = Theme.Dark();
         Eq(eff.keyword, dk.syntax.keyword, "syntax effect keyword == dark");
-        Eq(eff.decorator, dk.syntax.type_, "syntax effect decorator == type_ (findings 0018)");
+        Eq(eff.decorator, dk.syntax.type_, "syntax effect decorator == type_ (findings 0020)");
         Eq(eff.definition, dk.syntax.function, "syntax effect definition == function");
         ThemeService.SetTheme(Theme.NonDefault());
         eff.ApplyTheme();

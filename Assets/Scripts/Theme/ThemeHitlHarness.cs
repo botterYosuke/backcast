@@ -4,7 +4,7 @@
 // (ScenarioStartupTile), a candle strip (status.long/short on colors.background), a depth
 // ladder (status.bid/ask), a Python editor snippet (PythonSyntaxMeshEffect), and the two
 // floating-window accents (players[0]/[2]) — so a theme switch can be eyeballed for the
-// per-frame re-render (mesh/candles) the AFK ThemeProbe cannot see (findings 0018 Q9).
+// per-frame re-render (mesh/candles) the AFK ThemeProbe cannot see (findings 0020 Q9).
 //
 // Press T to toggle dark ↔ NonDefault (the verification palette). Because shipped dark==light
 // (案A; real light is #51), the toggle target is NonDefault so the switch is actually visible.

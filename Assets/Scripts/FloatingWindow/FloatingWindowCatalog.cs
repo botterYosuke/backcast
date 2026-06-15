@@ -41,7 +41,7 @@ public class FloatingWindowCatalog
     public bool Contains(string kind) => !string.IsNullOrEmpty(kind) && _specs.ContainsKey(kind);
 
     // The #15 demo catalog: the two real TTWR floating windows (NOT chart).
-    // Issue #44: per-kind accents come from the theme PlayerColors palette (findings 0018) so the
+    // Issue #44: per-kind accents come from the theme PlayerColors palette (findings 0020) so the
     // two windows stay distinguishable (editor = players[0] iris, order = players[2] amber) without
     // an inline literal. PlayerColors has no blue family, so the editor's "blue" is iris (blue-ish).
     public static FloatingWindowCatalog Default()

@@ -15,7 +15,7 @@
 // recomputed from controller.Validate(), so AC④ (invalid → no run) is visible live.
 //
 // COLORS (issue #44): no inline color constants — every graphic reads ThemeService.Current
-// (findings 0018). Retained graphic refs let ApplyTheme() repaint on a theme switch; the
+// (findings 0020). Retained graphic refs let ApplyTheme() repaint on a theme switch; the
 // owning harness wires `ThemeService.Changed += tile.ApplyTheme`.
 
 using System;

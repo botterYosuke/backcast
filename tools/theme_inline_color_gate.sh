@@ -3,9 +3,9 @@
 #
 # Fails if any themed surface still hard-codes an RGBA color literal (`new Color(...)` /
 # `new Color32(...)`) instead of reading ThemeService.Current. Complements the runtime
-# ThemeProbe, which can only catch surfaces it actually builds (findings 0018 Q9).
+# ThemeProbe, which can only catch surfaces it actually builds (findings 0020 Q9).
 #
-# SCOPE (findings 0018):
+# SCOPE (findings 0020):
 #   TARGET   = 層1 production builders + 層2 theme-consuming chart/ladder harnesses (below).
 #   ALLOWED  = theme/scale definition files (Assets/Scripts/Theme/* — the literal home) and
 #              層3 harness debug chrome (other harnesses, out of scope) — simply not listed.

@@ -50,8 +50,12 @@ public static class BackcastWorkspaceSceneBuilder
         AnchorLeftColumn(sidebar, SIDEBAR_W, MENU_H, FOOTER_H);
         var sidebarView = sidebar.gameObject.AddComponent<UniverseSidebarView>();
 
+        // The infinite-space FIELD fills the WHOLE window (owner 2026-06-15: "背景は無限空間・全体に・
+        // サイドバーの後ろも背景"). It is the BACKMOST sibling so the chrome (menu/sidebar/footer) and the
+        // uGUI footer draw ON TOP of it; the skybox is fully covered by the Viewport's opaque background.
         var center = NewRect("CenterWorkspace", canvasRt);
-        AnchorCenter(center, SIDEBAR_W, MENU_H, FOOTER_H);
+        Stretch(center);
+        center.SetAsFirstSibling();
 
         // ── center workspace: Viewport → Content → {HakoniwaRoot[startup,chart], FloatingWindowLayer} ──
         var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(RectMask2D), typeof(InfiniteCanvasInputSurface));
@@ -156,13 +160,6 @@ public static class BackcastWorkspaceSceneBuilder
         rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 0.5f);
         rt.offsetMin = new Vector2(0f, bottomInset);   // left=0, bottom=footer
         rt.offsetMax = new Vector2(w, -topInset);      // right=width, top=menu
-    }
-
-    static void AnchorCenter(RectTransform rt, float leftInset, float topInset, float bottomInset)
-    {
-        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
-        rt.offsetMin = new Vector2(leftInset, bottomInset);   // left=sidebar, bottom=footer
-        rt.offsetMax = new Vector2(0f, -topInset);            // top=menu
     }
 
     static void SetRef(SerializedObject so, string field, Object value)

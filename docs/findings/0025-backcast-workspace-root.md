@@ -41,14 +41,20 @@ CONTEXT 正式 term = **「Backcast workspace root」**。
 ## §3 中央 workspace の空間ネスト = P-all（既存権威定義と一致）
 
 ```
-CenterWorkspace (menu/footer/sidebar を除いた scene-authored 矩形)
-└─ Viewport (Image + RectMask2D + InfiniteCanvasInputSurface)
+CenterWorkspace (= 無限空間フィールド・全画面 stretch・最背面 sibling)
+└─ Viewport (Image[不透明背景] + RectMask2D + InfiniteCanvasInputSurface)
    └─ Content (pan = anchoredPosition / zoom = localScale)
       ├─ HakoniwaRoot
       │  └─ Chart tile (ChartView)
       └─ FloatingWindowLayer
          └─ Strategy Editor (floating window)
 ```
+
+**背景＝無限空間は全画面（owner 2026-06-15）**：フィールド（Viewport）は中央に inset せず**ウィンドウ全体に
+stretch**し、**最背面 sibling**に置く。menu / sidebar / footer の chrome はその上に重なる（menu/sidebar は OnGUI
+で常に最前面、footer は uGUI なのでフィールドより後の sibling＝上に描画）。これによりサイドバー/メニュー/フッター
+の裏も無限空間フィールドになり、カメラの skybox は Viewport の不透明背景で完全に隠れる。chrome が Content の外で
+ある点（CONTEXT「infinite canvas」）は不変。
 
 - **Hakoniwa も FloatingWindowLayer も Content 配下**＝pan/zoom に一緒に追従する（CONTEXT.md「infinite canvas」/
   findings 0006/0007/0008 で確定済み。P-float =チャート固定は不採用）。

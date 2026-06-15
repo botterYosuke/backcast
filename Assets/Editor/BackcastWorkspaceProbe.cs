@@ -151,10 +151,14 @@ public static class BackcastWorkspaceProbe
         if (IsDescendant(side.transform, content)) return "Sidebar is INSIDE Content (must be chrome, outside)";
         if (IsDescendant(footer, content)) return "Footer is INSIDE Content (must be chrome, outside)";
 
-        // CenterWorkspace insets exclude menu(top)/sidebar(left)/footer(bottom).
-        if (Mathf.Abs(center.offsetMin.x - 200f) > EPS) return "CenterWorkspace left inset != sidebar width";
-        if (Mathf.Abs(center.offsetMin.y - 40f) > EPS) return "CenterWorkspace bottom inset != footer height";
-        if (Mathf.Abs(center.offsetMax.y - (-24f)) > EPS) return "CenterWorkspace top inset != menu height";
+        // the infinite-space FIELD fills the WHOLE window (full-screen stretch) and is the BACKMOST
+        // sibling, so chrome + the uGUI footer draw on top and the skybox is fully covered (owner 2026-06-15).
+        if (center.anchorMin != Vector2.zero || center.anchorMax != Vector2.one)
+            return "CenterWorkspace field must be full-screen stretch (anchors 0..1)";
+        if (center.offsetMin != Vector2.zero || center.offsetMax != Vector2.zero)
+            return "CenterWorkspace field must be full-screen (zero offsets)";
+        if (center.GetSiblingIndex() != 0)
+            return "CenterWorkspace field must be the BACKMOST sibling (chrome overlays on top)";
         return null;
     }
 

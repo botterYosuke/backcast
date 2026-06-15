@@ -29,6 +29,13 @@ public static class LiveDemoRoundtripMenu
     [MenuItem("Tools/Backcast/Live Demo Roundtrip (Kabu verify)")]
     static void SpawnKabu() => Spawn("KABU", "7203.TSE");
 
+    // #39 Slice 3 footer HITL: MOCK is the deterministic, closed-market-OK regression leg. The
+    // footer (mode segments + LiveAuto ▶) drives the flow now — Connect → "Auto" segment → footer ▶
+    // (register→start) → panel reflects the run → press "Replay"/"Manual" to stop-then-switch (the
+    // run is torn down FIRST, no orphan). findings 0025 §6.
+    [MenuItem("Tools/Backcast/Footer LiveAuto HITL (MOCK)")]
+    static void SpawnMock() => Spawn("MOCK", "8918.TSE");
+
     static void Spawn(string venue, string instrumentId)
     {
         if (!EditorApplication.isPlaying)

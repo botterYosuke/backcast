@@ -20,6 +20,9 @@
 using System;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.UI;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using Python.Runtime;
 using Debug = UnityEngine.Debug;
 
@@ -59,7 +62,6 @@ public class ProductionLiveShell : MonoBehaviour
     bool _secretModalOpenPrev;
 
     // ── UI state (manual ticket / auto run) ──────────────────────────────────
-    public string Mode = "Manual";          // "Manual" | "Auto"
     string _iidText = DefaultInstrumentId;
     string _qtyText = "100";
     string _priceText = "";
@@ -72,6 +74,22 @@ public class ProductionLiveShell : MonoBehaviour
     volatile string _autoStrategyId = "";
     volatile string _autoRunId = "";
     volatile string _autoStatus = "-";
+
+    // ── #39 Slice 3: production footer (mode segments + LiveAuto ▶), replacing the retired IMGUI
+    // Manual/Auto placeholder (findings 0017 §9c / 0025). The footer OWNS mode switching + LiveAuto
+    // launch/pause/resume + the D2 stop-on-leave; pure-logic VMs decide, this shell marshals RPCs. ──
+    Font _font;
+    ReplayFooterView _footer;
+    FooterModeViewModel _footerMode;
+    LiveAutoTransportViewModel _footerAuto;
+    ReplayTransportViewModel _footerReplay;     // the shared footer view needs one; Replay surface hidden in Live
+    readonly SelectedSymbol _footerSelected = new SelectedSymbol();
+    volatile bool _autoActionSending;           // single-flight for footer-driven start/stop/pause RPCs
+    // worker→main signals (footer VMs are main-thread-owned; workers never mutate them directly).
+    volatile bool _footerModeRejected;          // a SetExecutionMode (mode/stop-then-switch) failed
+    volatile int _footerStartResult;            // 0 none / 1 ok / 2 fail (register→start outcome)
+    volatile string _footerStartedRunId;        // run_id from a successful start (guard release key)
+    string _lastFooterSig = "";                 // gate footer Refresh to real state changes
 
     // Public read-only seams the AFK probe / roundtrip recorder observe.
     public bool ServerReady => _serverReady;
@@ -94,7 +112,10 @@ public class ProductionLiveShell : MonoBehaviour
         // engine-touching slice (venue submenu + File-op mode side-effects, AC②/AC③).
         _menuBar = new MenuBarViewModel(_menu, _conn,
             currentMode: () => _execMode,
-            isLiveAutoRunning: () => !string.IsNullOrEmpty(_autoRunId),
+            // Consult the lifecycle authority, not the _autoRunId mirror: _autoRunId is only cleared on
+            // a StopRunThenSwitch, so a naturally-terminated run (ERROR/STOPPED/complete) would leave it
+            // stale and wedge File→New as "auto running" forever. HasActiveRun follows the lifecycle.
+            isLiveAutoRunning: () => _footerAuto != null && _footerAuto.HasActiveRun,
             isReplayRunning: () => false);
         try
         {
@@ -131,6 +152,7 @@ public class ProductionLiveShell : MonoBehaviour
             _lanes.Start();
             _serverReady = true;
             _status = "ready — press Connect";
+            BuildFooter();   // #39: production footer (mode segments + LiveAuto ▶)
         }
         catch (Exception e)
         {
@@ -162,13 +184,55 @@ public class ProductionLiveShell : MonoBehaviour
         // gone, so converge the badge with the single post-logout snapshot instead.
         if (_teardownComplete)
         {
-            if (_finalStateJson != null) { _conn.ApplyStatePoll(_finalStateJson); _finalStateJson = null; }
+            // Feed BOTH the badge and the footer mode VM the single post-logout snapshot before
+            // nulling it — else the footer stays pinned to the last live mode (segments + manual
+            // ticket visible) because DriveFooter runs after this and would read a nulled snapshot.
+            if (_finalStateJson != null) { _conn.ApplyStatePoll(_finalStateJson); _footerMode?.ApplyPoll(_finalStateJson); _finalStateJson = null; }
         }
         else
         {
             string st = _lanes != null ? _lanes.LatestState : null;
             if (!string.IsNullOrEmpty(st)) _conn.ApplyStatePoll(st);
         }
+
+        DriveFooter();
+    }
+
+    // #39: main-thread footer drive — consume worker→VM signals, overwrite the mode display from the
+    // poll (D1), release the start guard as the lifecycle catches up, honour the venue-drop auto-replay
+    // (G1: stop the run, not just fall back to Replay), and Refresh only on a real state change.
+    void DriveFooter()
+    {
+        if (_footer == null) return;
+
+        // worker outcomes → VM (kept on main so the pure VMs are never mutated off-thread).
+        if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); }
+        int sr = _footerStartResult;
+        if (sr != 0) { _footerStartResult = 0; _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId); }
+
+        string st = _teardownComplete ? _finalStateJson : (_lanes != null ? _lanes.LatestState : null);
+        if (!string.IsNullOrEmpty(st)) _footerMode.ApplyPoll(st);
+
+        _footerAuto.ObserveLifecycle();
+
+        // G1: a venue drop does NOT stop a running LiveAuto run (engine emits VenueLogoutDetected only),
+        // so an active run must be stopped here too — not merely switched to Replay (findings 0025 §3 D2).
+        // Only act (and consume the one-shot) when no auto RPC is in flight: ShouldAutoReplay is level-
+        // triggered (re-armed each poll while the venue is non-live in a Live mode), so deferring a
+        // frame is safe and avoids consuming it into a StopRunThenSwitch that would early-return. Once
+        // the switch lands the poll reports Replay and the condition clears — no repeated stop on a
+        // dead run.
+        if (!_teardownComplete && !_autoActionSending && _footerMode.ShouldAutoReplay)
+        {
+            _footerMode.ConsumeAutoReplay();
+            if (_footerAuto.HasActiveRun) StopRunThenSwitch(_footerAuto.ActiveRunId, FooterModeViewModel.Replay);
+            else SendMode(FooterModeViewModel.Replay);
+        }
+
+        // Refresh only when something the footer renders actually changed (avoid per-frame churn).
+        string sig = _footerMode.DisplayMode + "|" + _footerMode.Locked + "|" + _footerMode.VenueLive
+                   + "|" + _footerAuto.HasActiveRun + "|" + _footerAuto.PlayGlyph + "|" + _autoStatus;
+        if (sig != _lastFooterSig) { _lastFooterSig = sig; _footer.Refresh(); }
     }
 
     // ── venue connect/disconnect (now driven by the menu bar Venue submenu, #42) ──────
@@ -284,7 +348,7 @@ public class ProductionLiveShell : MonoBehaviour
                 using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString(mode)))
                 {
                     if (m["success"].As<bool>()) { _execMode = mode; _status = "mode → " + mode; }
-                    else _status = "set_execution_mode(" + mode + ") rejected: " + m["error_code"].As<string>();
+                    else { _status = "set_execution_mode(" + mode + ") rejected: " + m["error_code"].As<string>(); _footerModeRejected = true; }
                 }
             }
             catch (Exception e) { _error = "set_execution_mode: " + e; }
@@ -327,10 +391,136 @@ public class ProductionLiveShell : MonoBehaviour
         });
     }
 
-    // ── auto run (kernel strategy) ───────────────────────────────────────────
-    public void RegisterAndStartAuto()
+    // ── #39 Slice 3: production footer (mode segments + LiveAuto ▶) ───────────────────────────
+    // A text-field-backed IStrategyFileProvider: the live shell's "strategy" is the typed path
+    // (the rich provider seam is #16; this shell keeps the simple text entry it always had).
+    sealed class FuncStrategyProvider : IStrategyFileProvider
     {
-        if (string.IsNullOrEmpty(_strategyFileText)) { _autoStatus = "no strategy file"; return; }
+        readonly Func<string> _get;
+        public FuncStrategyProvider(Func<string> get) { _get = get; }
+        public bool TryGetStrategyFile(out string path)
+        {
+            path = _get();
+            return !string.IsNullOrEmpty(path);
+        }
+    }
+
+    void BuildFooter()
+    {
+        _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+
+        var canvasGo = new GameObject("ProductionFooterCanvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        canvasGo.transform.SetParent(transform, false);
+        canvasGo.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
+
+        // New Input System (activeInputHandler=1): legacy modules throw every frame — disable them
+        // and ensure an InputSystemUIInputModule EventSystem (mirrors the other harnesses).
+        foreach (var legacy in FindObjectsByType<StandaloneInputModule>(FindObjectsSortMode.None))
+            legacy.enabled = false;
+        var existing = FindAnyObjectByType<EventSystem>();
+        if (existing == null)
+        {
+            var go = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+            go.transform.SetParent(transform, false);
+        }
+        else
+        {
+            var module = existing.GetComponent<InputSystemUIInputModule>();
+            if (module == null) module = existing.gameObject.AddComponent<InputSystemUIInputModule>();
+            module.enabled = true;
+        }
+
+        var footerBar = new GameObject("footer", typeof(RectTransform)).GetComponent<RectTransform>();
+        footerBar.SetParent(canvasGo.transform, false);
+        footerBar.anchorMin = new Vector2(0f, 0f);
+        footerBar.anchorMax = new Vector2(1f, 0f);
+        footerBar.pivot = new Vector2(0.5f, 0f);
+        footerBar.anchoredPosition = Vector2.zero;
+        footerBar.sizeDelta = new Vector2(0f, 40f);
+
+        _footerReplay = new ReplayTransportViewModel(new ReplayLifecycle());
+        _footerMode = new FooterModeViewModel();
+        _footerAuto = new LiveAutoTransportViewModel(
+            _vm,                                                  // LiveLifecycle authority
+            new FuncStrategyProvider(() => _strategyFileText),
+            _footerSelected,
+            () => string.IsNullOrEmpty(_iidText) ? Array.Empty<string>() : new[] { _iidText },
+            () => !string.IsNullOrEmpty(_conn.VenueId) ? _conn.VenueId : _venue);
+        _footer = new ReplayFooterView(
+            _footerReplay, OnFooterPlayPause, OnFooterStep, OnFooterStop, OnFooterSpeed, _font,
+            _footerMode, _footerAuto, OnFooterMode);
+        _footer.Build(footerBar);
+    }
+
+    // ── footer mode segment click → SetExecutionMode (D1) / stop-then-switch on leaving LiveAuto (D2) ──
+    void OnFooterMode(string target)
+    {
+        // A footer-driven engine mutation (start/pause/resume/stop, or a start awaiting its first
+        // lifecycle event) is in flight: block a concurrent mode switch. Otherwise set_execution_mode
+        // could race start_live_strategy under the GIL (a run launched while the engine flips to Replay
+        // = orphan), or a StopRunThenSwitch would lock the segment VM and then early-return without
+        // firing the RPC (stuck spinner). The in-flight RPCs are sub-second; the user just waits.
+        if (_autoActionSending || _footerAuto.IsStartInFlight)
+        {
+            _menuNotice = "Live action in flight — wait before switching mode.";
+            return;
+        }
+        var req = _footerMode.RequestMode(target, _footerAuto.HasActiveRun);
+        switch (req.Kind)
+        {
+            case FooterModeRequestKind.SwitchImmediate:
+            case FooterModeRequestKind.SwitchLockedLive:
+                SendMode(req.Target);
+                break;
+            case FooterModeRequestKind.StopRunThenSwitch:
+                StopRunThenSwitch(_footerAuto.ActiveRunId, req.Target);
+                break;
+            case FooterModeRequestKind.BlockedVenueNotLive:
+                _menuNotice = req.Message;
+                break;
+            case FooterModeRequestKind.Ignore:
+                break;
+        }
+    }
+
+    // ── footer ▶/⏸ — routed by the displayed mode (TTWR footer_pause_resume_system branch) ──
+    void OnFooterPlayPause()
+    {
+        if (_footerMode.DisplayMode == FooterModeViewModel.LiveAuto)
+        {
+            var d = _footerAuto.PlayPauseDecision();
+            switch (d.Action)
+            {
+                case LiveAutoAction.Start: FooterAutoStart(d.Start); break;
+                case LiveAutoAction.Pause: CallAutoControl("pause_live_strategy", d.RunId, "paused"); break;
+                case LiveAutoAction.Resume: CallAutoControl("resume_live_strategy", d.RunId, "running"); break;
+                case LiveAutoAction.None: _autoStatus = d.Message; break;
+            }
+        }
+        else
+        {
+            // The live shell hosts no replay run; the footer's Replay transport is the scenario shell's.
+            _menuNotice = "Replay transport is driven from the scenario shell, not the live shell.";
+        }
+    }
+
+    // step / stop / speed are Replay-only (hidden in Live); inert in the live shell.
+    void OnFooterStep() { }
+    void OnFooterStop() { }
+    void OnFooterSpeed(int mult) { }
+
+    // LiveAuto ▶ at rest → register → start (the 2-stage StartLiveAuto). Pre-flight already gated by
+    // the VM; this only marshals the RPCs and reports the outcome to the start guard via main.
+    void FooterAutoStart(LiveAutoStartRequest req)
+    {
+        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; return; }
+        // Connection gate (parity with the retired DrawAutoControls' canTrade): the VM only checks a
+        // non-empty venue-identity string, and the configured-venue fallback is never empty, so re-
+        // assert the live session here before firing register→start (the manual ticket keeps this gate).
+        if (!_serverReady || !_conn.IsConnected || _teardownComplete) { _autoStatus = "connect a venue before starting LiveAuto"; return; }
+        if (_autoActionSending) { _autoStatus = "auto action already in flight"; return; }
+        _autoActionSending = true;
+        _footerAuto.NotifyStartIssued();
         _autoStatus = "register+start…";
         new Thread(() =>
         {
@@ -339,41 +529,90 @@ public class ProductionLiveShell : MonoBehaviour
                 using (Py.GIL())
                 {
                     string sid;
-                    using (PyObject r = _server.InvokeMethod("register_live_strategy", new PyString(_strategyFileText)))
+                    using (PyObject r = _server.InvokeMethod("register_live_strategy",
+                               new PyString(req.StrategyFile), new PyString(req.OriginalPath)))
                     {
-                        if (!r["success"].As<bool>()) { _autoStatus = "register failed: " + r["error_code"].As<string>(); return; }
+                        if (!r["success"].As<bool>())
+                        {
+                            _autoStatus = "register failed: " + r["error_code"].As<string>();
+                            _footerStartResult = 2; return;
+                        }
                         sid = r["strategy_id"].As<string>();
                     }
                     _autoStrategyId = sid;
                     using (PyObject s = _server.InvokeMethod("start_live_strategy",
-                               new PyString(sid), new PyString(_iidText), new PyString(_venue)))
+                               new PyString(sid), new PyString(req.InstrumentId), new PyString(req.Venue)))
                     {
-                        if (!s["success"].As<bool>()) { _autoStatus = "start failed: " + s["error_code"].As<string>(); return; }
+                        if (!s["success"].As<bool>())
+                        {
+                            _autoStatus = "start failed: " + s["error_code"].As<string>();
+                            _footerStartResult = 2; return;
+                        }
                         _autoRunId = s["run_id"].As<string>();
+                        _footerStartedRunId = _autoRunId;
+                        _footerStartResult = 1;
                         _autoStatus = "running run=" + _autoRunId;
                     }
                 }
             }
-            catch (Exception e) { _autoStatus = "auto error: " + e.Message; }
+            catch (Exception e) { _autoStatus = "auto error: " + e.Message; _footerStartResult = 2; }
+            finally { _autoActionSending = false; }
         }) { IsBackground = true, Name = "ShellAutoStart" }.Start();
     }
 
-    public void StopAuto()
+    // LiveAuto ▶ on an active run → pause / resume (immediate; no graceful teardown).
+    void CallAutoControl(string method, string runId, string okWord)
     {
-        if (string.IsNullOrEmpty(_autoRunId)) { _autoStatus = "no run to stop"; return; }
-        string runId = _autoRunId;
+        if (string.IsNullOrEmpty(runId) || _autoActionSending) return;
+        _autoActionSending = true;
+        new Thread(() =>
+        {
+            try
+            {
+                using (Py.GIL())
+                using (PyObject s = _server.InvokeMethod(method, new PyString(runId)))
+                    _autoStatus = s["success"].As<bool>() ? okWord + " run=" + runId
+                                                          : (method + " failed: " + s["error_code"].As<string>());
+            }
+            catch (Exception e) { _autoStatus = method + " error: " + e.Message; }
+            finally { _autoActionSending = false; }
+        }) { IsBackground = true, Name = "ShellAutoControl" }.Start();
+    }
+
+    // D2: leaving LiveAuto with an active run → stop_live_strategy FIRST; switch mode only on stop
+    // success (else stay in LiveAuto + surface the error — no "Replay display over a live run" orphan).
+    void StopRunThenSwitch(string runId, string target)
+    {
+        if (string.IsNullOrEmpty(runId)) { SendMode(target); return; }
+        if (_autoActionSending) { _autoStatus = "auto action already in flight"; return; }
+        _autoActionSending = true;
         _autoStatus = "stopping (graceful → cancel resting → teardown)…";
         new Thread(() =>
         {
             try
             {
                 using (Py.GIL())
-                using (PyObject s = _server.InvokeMethod("stop_live_strategy", new PyString(runId)))
-                    _autoStatus = s["success"].As<bool>() ? "stopped run=" + runId : ("stop failed: " + s["error_code"].As<string>());
-                _autoRunId = "";
+                {
+                    bool stopped;
+                    using (PyObject s = _server.InvokeMethod("stop_live_strategy", new PyString(runId)))
+                        stopped = s["success"].As<bool>();
+                    if (!stopped)
+                    {
+                        _autoStatus = "stop failed — staying in LiveAuto";
+                        _footerModeRejected = true;   // release the footer lock on main; mode unchanged
+                        return;
+                    }
+                    _autoRunId = "";
+                    using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString(target)))
+                    {
+                        if (m["success"].As<bool>()) { _execMode = target; _autoStatus = "stopped → " + target; }
+                        else { _autoStatus = "stopped, but mode switch rejected: " + m["error_code"].As<string>(); _footerModeRejected = true; }
+                    }
+                }
             }
-            catch (Exception e) { _autoStatus = "stop error: " + e.Message; }
-        }) { IsBackground = true, Name = "ShellAutoStop" }.Start();
+            catch (Exception e) { _autoStatus = "stop/switch error: " + e.Message; _footerModeRejected = true; }
+            finally { _autoActionSending = false; }
+        }) { IsBackground = true, Name = "ShellStopThenSwitch" }.Start();
     }
 
     void SubmitSecret()
@@ -495,24 +734,26 @@ public class ProductionLiveShell : MonoBehaviour
         if (_error != null) GUILayout.Label("<color=red>" + _error + "</color>");
 
         // Venue Connect/Disconnect moved to the menu bar Venue submenu (#42 AC③ — no duplicate).
-        // The Manual/Auto toggle stays here: it's the footer #39 surface (decorative ticket switch).
-        // While a menu is open, disable chrome's interactive controls so they can't steal the open
-        // submenu's MouseDown in the overlap band (#42 F1-residual). Disabled controls don't grab clicks.
+        // #39: mode switching + LiveAuto launch/pause/stop are now the uGUI footer (mode segments +
+        // ▶); the old IMGUI Manual/Auto toggle is retired (findings 0017 §9c). The manual order
+        // ticket shows when the footer mode is LiveManual; LiveAuto is the footer ▶ (no IMGUI auto
+        // controls). While a menu is open, disable chrome's interactive controls so they can't steal
+        // the open submenu's MouseDown in the overlap band (#42 F1-residual).
         bool menuOpen = _openMenu != TopMenu.None;
         GUI.enabled = !menuOpen;
-        GUILayout.BeginHorizontal();
-        Mode = GUILayout.Toggle(Mode == "Manual", "Manual", GUI.skin.button) ? "Manual" : "Auto";
-        GUILayout.EndHorizontal();
-
-        GUILayout.Space(4);
         GUILayout.BeginHorizontal();
         GUILayout.Label("instrument", GUILayout.Width(70));
         _iidText = GUILayout.TextField(_iidText, GUILayout.Width(120));
         GUILayout.EndHorizontal();
+        GUILayout.BeginHorizontal();
+        GUILayout.Label("strategy .py", GUILayout.Width(80));
+        _strategyFileText = GUILayout.TextField(_strategyFileText, GUILayout.Width(260));
+        GUILayout.EndHorizontal();
 
+        string fm = _footerMode != null ? _footerMode.DisplayMode : _execMode;
         bool canTrade = _serverReady && _conn.IsConnected && !_teardownComplete && !menuOpen;
-        if (Mode == "Manual") DrawManualTicket(canTrade);
-        else DrawAutoControls(canTrade);
+        if (fm == "LiveManual") DrawManualTicket(canTrade);
+        else if (fm == "LiveAuto") GUILayout.Label("auto: " + _autoStatus + "  (footer ▶ to start; switch mode to stop)");
         GUI.enabled = true;
         GUILayout.EndArea();
     }
@@ -537,24 +778,6 @@ public class ProductionLiveShell : MonoBehaviour
         GUI.enabled = true;
         GUILayout.EndHorizontal();
         GUILayout.Label("last order: " + _lastManualStatus + (string.IsNullOrEmpty(_lastManualOrderId) ? "" : " (" + _lastManualOrderId + ")"));
-    }
-
-    void DrawAutoControls(bool canTrade)
-    {
-        GUILayout.Space(6);
-        GUILayout.Label("<b>Auto run</b> (kernel strategy)");
-        GUILayout.BeginHorizontal();
-        GUILayout.Label("strategy .py", GUILayout.Width(80));
-        _strategyFileText = GUILayout.TextField(_strategyFileText, GUILayout.Width(260));
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        GUI.enabled = canTrade && string.IsNullOrEmpty(_autoRunId);
-        if (GUILayout.Button("▶ Register & Start")) RegisterAndStartAuto();
-        GUI.enabled = canTrade && !string.IsNullOrEmpty(_autoRunId);
-        if (GUILayout.Button("■ Stop")) StopAuto();
-        GUI.enabled = true;
-        GUILayout.EndHorizontal();
-        GUILayout.Label("auto: " + _autoStatus);
     }
 
     void DrawPanels()

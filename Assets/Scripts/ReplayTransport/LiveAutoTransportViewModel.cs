@@ -99,6 +99,12 @@ public sealed class LiveAutoTransportViewModel
 
     public string ActiveRunId => HasActiveRun ? LifecycleRunId : null;
 
+    // True from NotifyStartIssued until the started run is confirmed in the lifecycle (or the start
+    // fails). The host blocks a mode-leave during this window: the run isn't in the lifecycle yet, so
+    // a leave would neither stop it (HasActiveRun is still false) nor await it — orphaning a just-
+    // started run under a Replay/Manual display, and racing set_execution_mode against start.
+    public bool IsStartInFlight => _startInFlight;
+
     public bool IsRunning => Status == "RUNNING";
     public bool IsPaused => Status == "PAUSED";
 

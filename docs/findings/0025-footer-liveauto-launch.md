@@ -165,4 +165,36 @@ graceful cancel は best-effort・ローカル teardown は成立）。「user-l
   Replay 即時）／可視性（Manual/Auto は venue live 限定）／▶ 文脈分岐（Start/Pause/Resume/re-arm）＋pre-flight 4ゲート＋
   instrument 解決（selected∈universe 優先・無→先頭）＋二度押し（ack ok でも lifecycle 未追従なら block）／D2 stop-then-switch
   （Replay/LiveManual 両方向）／**G1**（venue-drop 中 run 生存＝host stop 必須）／**G2**（start ok→初手 ERROR→▶ 再 arm）。
-  Unity 6000.4.11f1・Windows。**view（item4）/ 配線（item5）/ HITL（item7）は未了**。
+  Unity 6000.4.11f1・Windows。
+
+- **view（item4）/ 配線（item5）compile クリーン（2026-06-15）**: `ReplayFooterView` を後方互換拡張（modeVm/autoVm/onMode は
+  optional・null で #30 Replay-only render を完全保持＝`ScenarioStartupHitlHarness` 無改変）。mode セグメント3つ＋mode-routed ▶
+  （Replay/LiveAuto 共有・LiveManual は ▶ も隠す）＋step/stop/speed は Replay 限定可視。`ProductionLiveShell` に production footer を
+  配線（Canvas/EventSystem/40px bottom bar・harness 同型）、IMGUI Manual/Auto placeholder（`Mode` toggle / `DrawAutoControls` /
+  `RegisterAndStartAuto` / `StopAuto`）を退役、register→start / pause/resume / stop-then-switch を VM-routed handler へ移設。
+  worker→VM 通知は volatile signal 経由で main 消費（pure VM を off-thread mutate しない）。**`FooterLiveAutoVerify.Run` を
+  改変後アセンブリ全体で再 compile→29/29 PASS・`error CS` 0**（item4/5 の compile ゲート）。**残: HITL（item7・uGUI 実描画/クリック/
+  mode 切替/LiveAuto 実起動/抜け teardown）— probe は compile+VM ロジックのみで uGUI runtime は未検証**。
+
+### code-review（high/recall・2026-06-15）— Medium+ 5 件を修正
+
+`/code-review`（7 angle・finder→verify）で item4/5 を grill。**CONFIRMED Medium+ 5 件**を RED 観点で確定し修正（CLAUDE.md
+「Medium 以上が消えるまで」規約）。シグネチャは実型照合済み・**compile は owner 側 Unity 再検証が owed**（当 dev 環境で C# compile/run 不可）:
+
+- **[High] mode 切替と auto-start が別 single-flight**（`_modeSending` vs `_autoActionSending`）→ `set_execution_mode(Replay)` が
+  `start_live_strategy` と GIL 上で競合し Replay 下で run 起動＝orphan。start in-flight 中は `HasActiveRun=false` で D2 も回避される。
+  **fix**: `LiveAutoTransportViewModel.IsStartInFlight` を公開し、`OnFooterMode` が `_autoActionSending || IsStartInFlight` の間は
+  mode 切替を block（notice 表示）。StopRunThenSwitch が lock だけ立てて early-return する stuck も同時解消。
+- **[Med] FooterAutoStart が canTrade 接続ゲート喪失**＋venueIdentity の `_venue` fallback（既定"MOCK"）が空にならず `BlockedNoVenue`
+  dead。**fix**: `!_serverReady || !_conn.IsConnected || _teardownComplete` を register→start 前に再アサート（manual ticket と対称化）。
+- **[Med] disconnect 後 footer stuck**: `Update` が `_finalStateJson` を `DriveFooter` より先に null 化 → `_footerMode` が最終状態を
+  受け取れず Manual/Auto セグメント＋ticket 残存。**fix**: teardown ブロックで `_footerMode.ApplyPoll(_finalStateJson)` も給電。
+- **[Med] `_autoRunId` は StopRunThenSwitch でしか clear されず**自然終了（ERROR/STOPPED/complete）で stale → `isLiveAutoRunning`
+  stuck true → File→New 永久拒否。**fix**: `isLiveAutoRunning` を lifecycle 権威 `_footerAuto.HasActiveRun` 参照に変更。
+- **[Med] `ShouldAutoReplay` level-trigger** → consume 後に StopRunThenSwitch が early-return で取りこぼし／lag 窓で二重 stop。
+  **fix**: `DriveFooter` が `!_teardownComplete && !_autoActionSending && ShouldAutoReplay` のときのみ consume+act（teardown 後の
+  RPC 発火も防止）。
+
+**LOW（未修正・記録のみ）**: lock 中 Replay セグメント無効化で abort 不可・lock タイムアウト無し・sig が ActiveRunId 欠落/_autoStatus
+余分・選択セグメントの lock 中 dim・ResolveInstrument の silent 代替（TTWR parity）。**owner 側 TODO**: 改変後の compile + `FooterLiveAutoVerify`
+再走（new gate の AFK 追補が望ましい）→ HITL。

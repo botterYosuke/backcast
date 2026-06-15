@@ -59,6 +59,19 @@ def test_jquants_duckdb_root_absolute_kept(monkeypatch) -> None:
     assert paths.jquants_duckdb_root() == Path("/Volumes/StockData/jp")
 
 
+def test_db_path_rejects_unconfigured_root() -> None:
+    """An empty/unset root must fail loudly, not resolve to a relative cwd path (#48 review)."""
+    import pytest
+
+    from engine.kernel.duckdb_bars import db_path
+
+    for bad in ("", "   ", "."):
+        with pytest.raises(ValueError, match="not configured"):
+            db_path(bad, "8918.TSE", "Daily")
+    # A real absolute root still builds the expected path.
+    assert db_path("/data/jp", "8918.TSE", "Minute") == Path("/data/jp/stocks_minute/8918.duckdb")
+
+
 if __name__ == "__main__":
     import pytest
 

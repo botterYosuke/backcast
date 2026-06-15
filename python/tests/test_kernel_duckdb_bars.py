@@ -27,7 +27,7 @@ sys.path.insert(0, _PYTHON_ROOT)
 import duckdb
 import pytest
 
-from datetime import datetime, time as dt_time
+from datetime import date, datetime, time as dt_time
 from zoneinfo import ZoneInfo
 
 from engine.kernel.duckdb_bars import daily_db_path, db_path, load_bars
@@ -35,8 +35,14 @@ from spike.kernel_golden import scenario
 from spike.kernel_golden.subprocess_util import run_python
 
 _FIXTURE = os.path.join(_PYTHON_ROOT, "tests", "fixtures", "duckdb_bars_8918_daily_golden.json")
-_DB_PATH = daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT)
-_DB_PRESENT = scenario.DUCKDB_ROOT_CONFIGURED and _DB_PATH.exists()
+# daily_db_path() raises on an unconfigured (empty) root, so only build it when configured;
+# _DB_PATH stays None otherwise and the module skips (it is used only in non-skipped tests).
+_DB_PATH = (
+    daily_db_path(scenario.DUCKDB_ROOT, scenario.INSTRUMENT)
+    if scenario.DUCKDB_ROOT_CONFIGURED
+    else None
+)
+_DB_PRESENT = bool(_DB_PATH and _DB_PATH.exists())
 
 # --- Minute (#48) ----------------------------------------------------------------
 _MINUTE_INSTRUMENT = "8918.TSE"
@@ -138,11 +144,8 @@ def _load_minute_window() -> list:
 
 def _oracle_minute_ts_ns(day: str, time_str: str) -> int:
     """Independent ts oracle = catalog-gen convention (jquants_loader.py:24): (h,m,59,999999) JST."""
-    year, month, dom = (int(p) for p in day.split("-"))
     hour, minute = (int(p) for p in time_str.split(":"))
-    from datetime import date as _date
-
-    dt = datetime.combine(_date(year, month, dom), dt_time(hour, minute, 59, 999999), tzinfo=_JST)
+    dt = datetime.combine(date.fromisoformat(day), dt_time(hour, minute, 59, 999999), tzinfo=_JST)
     return int(dt.timestamp() * 1_000_000_000)
 
 
@@ -169,14 +172,12 @@ def test_minute_matches_frozen_fixture() -> None:
 
 def test_minute_ts_is_bar_end_convention() -> None:
     """Linchpin (daily 15:30 analogue): minute ts = (h,m,59,999999) JST bar-end, NOT '09:00' start."""
-    from datetime import date as _date
-
     bars = _load_minute_window()
     # First labelled minute is 09:00 → ts must be 09:00:59.999999 JST (bar end).
     assert bars[0].ts_event_ns == _oracle_minute_ts_ns(_MINUTE_DATE, "09:00")
     # And NOT the bar-start instant 09:00:00 — guards against dropping the 59.999999s synthesis.
     bar_start_ns = int(
-        datetime.combine(_date(2024, 4, 1), dt_time(9, 0, 0), tzinfo=_JST).timestamp()
+        datetime.combine(date.fromisoformat(_MINUTE_DATE), dt_time(9, 0, 0), tzinfo=_JST).timestamp()
         * 1_000_000_000
     )
     assert bars[0].ts_event_ns != bar_start_ns, "ts must be bar-end, not bar-start (00s)"

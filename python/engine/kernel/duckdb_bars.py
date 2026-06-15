@@ -145,9 +145,20 @@ def _granularity(granularity: str) -> _Granularity:
 def db_path(
     data_root: str | Path, instrument_id: str, granularity: str = "Daily"
 ) -> Path:
-    """Per-symbol DuckDB file: <root>/<table>/<code>.duckdb (table per granularity)."""
+    """Per-symbol DuckDB file: <root>/<table>/<code>.duckdb (table per granularity).
+
+    Rejects an empty/unset data_root loudly (#48 review): an empty root would silently
+    resolve to a RELATIVE path (e.g. stocks_daily/8918.duckdb) that could match an unrelated
+    file under cwd. The per-machine root comes from .env (BACKCAST_JQUANTS_DUCKDB_ROOT) and is
+    always absolute when set, so an empty value means "not configured" — fail rather than guess.
+    """
+    root = str(data_root).strip()
+    if not root or root == ".":
+        raise ValueError(
+            "DuckDB data_root is not configured; set BACKCAST_JQUANTS_DUCKDB_ROOT in .env"
+        )
     g = _granularity(granularity)
-    return Path(data_root) / g.name / f"{_symbol_of(instrument_id)}.duckdb"
+    return Path(root) / g.name / f"{_symbol_of(instrument_id)}.duckdb"
 
 
 def daily_db_path(data_root: str | Path, instrument_id: str) -> Path:

@@ -26,6 +26,7 @@ public class ThemeHitlHarness : MonoBehaviour
     Font _font;
     ScenarioStartupTile _tile;
     PythonSyntaxMeshEffect _syntax;
+    ChartView _chartView;   // #53: the REAL production candlestick part (was a fake swatch pre-#53)
     readonly Dictionary<string, Graphic> _samples = new Dictionary<string, Graphic>();
     bool _alt; // false = dark, true = NonDefault
 
@@ -92,12 +93,21 @@ public class ThemeHitlHarness : MonoBehaviour
         _tile = new ScenarioStartupTile(new ScenarioStartupController(), null, _font);
         _tile.Build(panel);
 
-        // -- chart strip (top-right) — colors.background bg + status.long/short candles --
-        var chartBg = Panel(parent, "chart_bg", new Vector2(0.36f, 0.55f), new Vector2(1f, 1f));
-        chartBg.GetComponent<Image>().color = ThemeService.Current.colors.background;
-        _samples["chart_bg"] = chartBg.GetComponent<Image>();
-        _samples["candle_up"] = Swatch(chartBg, new Vector2(0.1f, 0.2f), new Vector2(0.35f, 0.9f));
-        _samples["candle_down"] = Swatch(chartBg, new Vector2(0.55f, 0.1f), new Vector2(0.8f, 0.7f));
+        // -- chart strip (top-right) — the REAL production ChartView (#53), not a swatch. A 2-bar
+        // mock (one bearish, one bullish) gives ThemeProbe a real candle of EACH direction to sample,
+        // so AC③ verifies the PRODUCTION part's color switch (findings 0022). No Image on the host —
+        // ChartView paints its own themed bg. (Plain RectTransform: Destroy in EditMode is illegal.) --
+        var chartGo = new GameObject("chart_strip", typeof(RectTransform));
+        var chartArea = chartGo.GetComponent<RectTransform>();
+        chartArea.SetParent(parent, false);
+        chartArea.anchorMin = new Vector2(0.36f, 0.55f); chartArea.anchorMax = new Vector2(1f, 1f);
+        chartArea.offsetMin = new Vector2(4, 4); chartArea.offsetMax = new Vector2(-4, -4);
+        _chartView = chartGo.AddComponent<ChartView>();
+        _chartView.Build(chartArea, showTitleBar: true);
+        _chartView.Render(MockTwoBarFrame());
+        _samples["chart_bg"] = _chartView.Background;
+        _samples["candle_up"] = _chartView.FirstCandle(bullish: true);
+        _samples["candle_down"] = _chartView.FirstCandle(bullish: false);
 
         // -- depth ladder (mid-right) — status.bid / status.ask --
         var ladder = Panel(parent, "ladder", new Vector2(0.36f, 0.30f), new Vector2(1f, 0.53f));
@@ -135,9 +145,8 @@ public class ThemeHitlHarness : MonoBehaviour
     public void ApplyTheme()
     {
         var t = ThemeService.Current;
-        Set("chart_bg", t.colors.background);
-        Set("candle_up", t.status.@long);
-        Set("candle_down", t.status.@short);
+        // chart_bg / candle_up / candle_down are owned by ChartView (#53), which self-subscribes to
+        // ThemeService.Changed and re-paints itself — the montage no longer sets them here.
         Set("ladder_bg", t.colors.surface_background);
         Set("ladder_bid", t.status.bid);
         Set("ladder_ask", t.status.ask);
@@ -153,6 +162,18 @@ public class ThemeHitlHarness : MonoBehaviour
     void Set(string role, Color c)
     {
         if (_samples.TryGetValue(role, out var g) && g != null) g.color = c;
+    }
+
+    // Deterministic 2-bar mock for the chart strip: bar0 bearish (close<open), bar1 bullish
+    // (close>open) — so ChartView.FirstCandle(true) and (false) both resolve for ThemeProbe (#53).
+    static ReplayBarFrame MockTwoBarFrame()
+    {
+        var pts = new OhlcPoint[]
+        {
+            new OhlcPoint { open_time_ms = 0,      open = 100, high = 101, low = 94, close = 95,  volume = 1 },
+            new OhlcPoint { open_time_ms = 60_000, open = 95,  high = 106, low = 94, close = 105, volume = 1 },
+        };
+        return new ReplayBarFrame { Ohlc = pts, Price = 105, TimestampMs = 60_000 };
     }
 
     // ---- widget helpers ----

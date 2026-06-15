@@ -144,20 +144,15 @@ public class ReplayPanelsHarness : MonoBehaviour
 
     // runtime uGUI
     RectTransform _chartArea;   // persisted-layout PANEL (offset-zero; box == Default chart rect)
-    RectTransform _plotArea;    // CHILD inset = axis-label gutter (widget chrome; NOT persisted)
-    RectTransform _candleRoot;
+    ChartView _chartView;       // #53: candle/axis/title render; axis gutter is INTERNAL (NOT persisted)
     Text _statusText;
     Text _positionsText;
     Text _ordersText;
     Text _runResultText;
     Font _font;
 
-    // issue #44: chart/panel colors source the theme (層2) — candle up/down = status.long/short.
-    static readonly Color BG_COLOR   = ThemeService.Current.colors.background;
+    // issue #44: right-column panel colors source the theme (層2). Chart colors moved into ChartView (#53).
     static readonly Color PANEL_BG   = ThemeService.Current.colors.panel_background;
-    static readonly Color AXIS_COLOR = ThemeService.Current.colors.text_muted;
-    static readonly Color UP_COLOR   = ThemeService.Current.status.@long;
-    static readonly Color DOWN_COLOR = ThemeService.Current.status.@short;
     static readonly Color TEXT_COLOR = ThemeService.Current.colors.text;
 
     // SINGLE PLAY-OWNER toggle (findings 0005 §6 / 0011 exercise discipline). This harness is the
@@ -396,7 +391,7 @@ public class ReplayPanelsHarness : MonoBehaviour
             ReplayBarFrame frame = ReplayBarDecoder.Decode(_lastBarPayload);
             if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)
             {
-                RenderCandles(frame);
+                _chartView.Render(frame);
                 _renderedCount = frame.Ohlc.Count;
             }
         }
@@ -495,55 +490,21 @@ public class ReplayPanelsHarness : MonoBehaviour
     void BuildChartArea(Transform parent)
     {
         // Chart PANEL = the persisted-layout target: offset-ZERO so its box equals the
-        // NORMALIZED rect LayoutDocument.Default() carries (chart [0..0.62]). The axis-
-        // label gutter is NOT on this panel — it moved to the PlotArea CHILD below, i.e.
-        // widget-internal chrome the layout seam never persists (Medium-2 review: this is
-        // what makes the missing/corrupt fallback reproduce the live default at ALL
-        // resolutions instead of dropping a folded-in pixel gutter).
-        var areaGo = new GameObject("ChartArea", typeof(RectTransform), typeof(Image));
+        // NORMALIZED rect LayoutDocument.Default() carries (chart [0..0.62]). The axis-label
+        // gutter is NOT on this panel — it lives INSIDE ChartView (widget-internal chrome the
+        // layout seam never persists; Medium-2 review: this is what makes the missing/corrupt
+        // fallback reproduce the live default at ALL resolutions, not a folded-in pixel gutter).
+        var areaGo = new GameObject("ChartArea", typeof(RectTransform));
         areaGo.transform.SetParent(parent, false);
         _chartArea = areaGo.GetComponent<RectTransform>();
         _chartArea.anchorMin = new Vector2(0f, 0f);
         _chartArea.anchorMax = new Vector2(0.62f, 1f);
         _chartArea.offsetMin = Vector2.zero;
         _chartArea.offsetMax = Vector2.zero;
-        areaGo.GetComponent<Image>().color = BG_COLOR;
 
-        // PlotArea: the axis-label gutter, now a CHILD inset of the chart panel (the old
-        // (60,40)/(-10,-20) ChartArea offsets). Axes + candles live here, so candle sizing
-        // uses _plotArea.rect (not the full panel).
-        var plotGo = new GameObject("PlotArea", typeof(RectTransform));
-        plotGo.transform.SetParent(_chartArea, false);
-        _plotArea = plotGo.GetComponent<RectTransform>();
-        _plotArea.anchorMin = new Vector2(0f, 0f);
-        _plotArea.anchorMax = new Vector2(1f, 1f);
-        _plotArea.offsetMin = new Vector2(60f, 40f);
-        _plotArea.offsetMax = new Vector2(-10f, -20f);
-
-        AddAxis(_plotArea, new Vector2(0f, 0f), new Vector2(0f, 1f), new Vector2(0f, 0.5f), new Vector2(2f, 0f)); // y
-        AddAxis(_plotArea, new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 2f)); // x
-
-        var rootGo = new GameObject("Candles", typeof(RectTransform));
-        rootGo.transform.SetParent(_plotArea, false);
-        _candleRoot = rootGo.GetComponent<RectTransform>();
-        _candleRoot.anchorMin = new Vector2(0f, 0f);
-        _candleRoot.anchorMax = new Vector2(1f, 1f);
-        _candleRoot.offsetMin = Vector2.zero;
-        _candleRoot.offsetMax = Vector2.zero;
-        _candleRoot.pivot = new Vector2(0f, 0f);
-    }
-
-    void AddAxis(RectTransform parent, Vector2 aMin, Vector2 aMax, Vector2 pivot, Vector2 size)
-    {
-        var go = new GameObject("Axis", typeof(RectTransform), typeof(Image));
-        go.transform.SetParent(parent, false);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = aMin;
-        rt.anchorMax = aMax;
-        rt.pivot = pivot;
-        rt.sizeDelta = size;
-        rt.anchoredPosition = Vector2.zero;
-        go.GetComponent<Image>().color = AXIS_COLOR;
+        // production candlestick widget (#53) — owns bg + axes + candles + title bar.
+        _chartView = areaGo.AddComponent<ChartView>();
+        _chartView.Build(_chartArea, showTitleBar: true);
     }
 
     void BuildPanels(Transform parent)
@@ -641,73 +602,6 @@ public class ReplayPanelsHarness : MonoBehaviour
             $"  equityPts={_runResult.EquityPoints}\n" +
             $"  maxDD={_runResult.MaxDrawdown:0.####}\n" +
             $"  sharpe={_runResult.Sharpe:0.###}  sortino={_runResult.Sortino:0.###}";
-    }
-
-    void RenderCandles(ReplayBarFrame frame)
-    {
-        var pts = frame.Ohlc;
-        int n = pts.Count;
-
-        // Rebuild from scratch (<=68 candles, only on a new bar -> cheap).
-        for (int i = _candleRoot.childCount - 1; i >= 0; i--)
-        {
-            Destroy(_candleRoot.GetChild(i).gameObject);
-        }
-        if (n == 0) return;
-
-        double minLow = double.MaxValue, maxHigh = double.MinValue;
-        long minT = long.MaxValue, maxT = long.MinValue;
-        for (int i = 0; i < n; i++)
-        {
-            OhlcPoint p = pts[i];
-            if (p.low  < minLow)  minLow  = p.low;
-            if (p.high > maxHigh) maxHigh = p.high;
-            if (p.open_time_ms < minT) minT = p.open_time_ms;
-            if (p.open_time_ms > maxT) maxT = p.open_time_ms;
-        }
-
-        double priceRange = maxHigh - minLow;
-        if (priceRange <= 0) priceRange = 1.0; // flat series guard
-        long timeRange = maxT - minT;
-
-        float w = _plotArea.rect.width;   // candles fill the PlotArea (gutter-inset child), not the full panel
-        float h = _plotArea.rect.height;
-        float bodyW = Mathf.Max(1f, (w / n) * 0.6f);
-
-        for (int i = 0; i < n; i++)
-        {
-            OhlcPoint p = pts[i];
-
-            float x = timeRange > 0
-                ? (float)((p.open_time_ms - minT) / (double)timeRange) * w
-                : (n > 1 ? (float)i / (n - 1) * w : w * 0.5f);
-
-            float yOpen  = (float)((p.open  - minLow) / priceRange) * h;
-            float yClose = (float)((p.close - minLow) / priceRange) * h;
-            float yHigh  = (float)((p.high  - minLow) / priceRange) * h;
-            float yLow   = (float)((p.low   - minLow) / priceRange) * h;
-
-            Color c = p.close >= p.open ? UP_COLOR : DOWN_COLOR;
-
-            AddRect(x - 0.5f, yLow, 1f, Mathf.Max(1f, yHigh - yLow), c); // wick
-
-            float bottom = Mathf.Min(yOpen, yClose);
-            float bodyH  = Mathf.Max(1f, Mathf.Abs(yClose - yOpen));
-            AddRect(x - bodyW * 0.5f, bottom, bodyW, bodyH, c);          // body
-        }
-    }
-
-    void AddRect(float x, float y, float w, float h, Color c)
-    {
-        var go = new GameObject("c", typeof(RectTransform), typeof(Image));
-        go.transform.SetParent(_candleRoot, false);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0f, 0f);
-        rt.anchorMax = new Vector2(0f, 0f);
-        rt.pivot = new Vector2(0f, 0f);
-        rt.anchoredPosition = new Vector2(x, y);
-        rt.sizeDelta = new Vector2(w, h);
-        go.GetComponent<Image>().color = c;
     }
 
     // ---- AC4 poll-state decode (throwaway, inline; the durable decoder is untouched) ----

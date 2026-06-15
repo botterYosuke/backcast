@@ -82,15 +82,9 @@ public class ReplayChartHarness : MonoBehaviour
     bool   _errLogged;
     bool   _passLogged;
 
-    // runtime uGUI
-    RectTransform _chartArea;   // the plot rect (inside the axis margins)
-    RectTransform _candleRoot;  // candle rects parent (full-stretch over _chartArea)
-
-    // issue #44: chart colors source the theme (層2) — candle up/down = status.long/short.
-    static readonly Color BG_COLOR    = ThemeService.Current.colors.background;
-    static readonly Color AXIS_COLOR  = ThemeService.Current.colors.text_muted;
-    static readonly Color UP_COLOR    = ThemeService.Current.status.@long;
-    static readonly Color DOWN_COLOR  = ThemeService.Current.status.@short;
+    // runtime uGUI — the reusable production candlestick widget (#53). Candle/axis/title render
+    // (and #44 theme-follow) now live in ChartView, not in this harness.
+    ChartView _chartView;
 
     // SUPERSEDED by #11 ReplayPanelsHarness: that harness now OWNS Play (chart + 4
     // panels in one Play). This #10 auto-bootstrap is PRESERVED but flag-OFF so it
@@ -243,7 +237,7 @@ public class ReplayChartHarness : MonoBehaviour
                 ReplayBarFrame frame = ReplayBarDecoder.Decode(_lastPayload);
                 if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)
                 {
-                    RenderCandles(frame);
+                    _chartView.Render(frame);
                     _renderedCount = frame.Ohlc.Count;
                 }
             }
@@ -267,117 +261,14 @@ public class ReplayChartHarness : MonoBehaviour
         canvasGo.AddComponent<CanvasScaler>();
         canvasGo.AddComponent<GraphicRaycaster>();
 
-        // Plot area: full screen inset by axis margins (left 60 / bottom 40 / top 20 / right 20).
-        var areaGo = new GameObject("ChartArea", typeof(RectTransform), typeof(Image));
-        areaGo.transform.SetParent(canvasGo.transform, false);
-        _chartArea = areaGo.GetComponent<RectTransform>();
-        _chartArea.anchorMin = new Vector2(0f, 0f);
-        _chartArea.anchorMax = new Vector2(1f, 1f);
-        _chartArea.offsetMin = new Vector2(60f, 40f);
-        _chartArea.offsetMax = new Vector2(-20f, -20f);
-        areaGo.GetComponent<Image>().color = BG_COLOR;
-
-        // Price (left, vertical) axis line.
-        var yAxis = new GameObject("YAxis", typeof(RectTransform), typeof(Image));
-        yAxis.transform.SetParent(_chartArea, false);
-        var yrt = yAxis.GetComponent<RectTransform>();
-        yrt.anchorMin = new Vector2(0f, 0f);
-        yrt.anchorMax = new Vector2(0f, 1f);
-        yrt.pivot = new Vector2(0f, 0.5f);
-        yrt.sizeDelta = new Vector2(2f, 0f);
-        yrt.anchoredPosition = Vector2.zero;
-        yAxis.GetComponent<Image>().color = AXIS_COLOR;
-
-        // Time (bottom, horizontal) axis line.
-        var xAxis = new GameObject("XAxis", typeof(RectTransform), typeof(Image));
-        xAxis.transform.SetParent(_chartArea, false);
-        var xrt = xAxis.GetComponent<RectTransform>();
-        xrt.anchorMin = new Vector2(0f, 0f);
-        xrt.anchorMax = new Vector2(1f, 0f);
-        xrt.pivot = new Vector2(0.5f, 0f);
-        xrt.sizeDelta = new Vector2(0f, 2f);
-        xrt.anchoredPosition = Vector2.zero;
-        xAxis.GetComponent<Image>().color = AXIS_COLOR;
-
-        // Candle parent: full-stretch over the plot area; candle children are positioned in
-        // pixels from its bottom-left, so its rect == the plot rect.
-        var rootGo = new GameObject("Candles", typeof(RectTransform));
-        rootGo.transform.SetParent(_chartArea, false);
-        _candleRoot = rootGo.GetComponent<RectTransform>();
-        _candleRoot.anchorMin = new Vector2(0f, 0f);
-        _candleRoot.anchorMax = new Vector2(1f, 1f);
-        _candleRoot.offsetMin = Vector2.zero;
-        _candleRoot.offsetMax = Vector2.zero;
-        _candleRoot.pivot = new Vector2(0f, 0f);
-    }
-
-    void RenderCandles(ReplayBarFrame frame)
-    {
-        var pts = frame.Ohlc;
-        int n = pts.Count;
-
-        // Rebuild from scratch (<=68 candles, only on a new bar -> cheap).
-        for (int i = _candleRoot.childCount - 1; i >= 0; i--)
-        {
-            Destroy(_candleRoot.GetChild(i).gameObject);
-        }
-        if (n == 0) return;
-
-        double minLow = double.MaxValue, maxHigh = double.MinValue;
-        long   minT   = long.MaxValue,   maxT    = long.MinValue;
-        for (int i = 0; i < n; i++)
-        {
-            OhlcPoint p = pts[i];
-            if (p.low  < minLow)  minLow  = p.low;
-            if (p.high > maxHigh) maxHigh = p.high;
-            if (p.open_time_ms < minT) minT = p.open_time_ms;
-            if (p.open_time_ms > maxT) maxT = p.open_time_ms;
-        }
-
-        double priceRange = maxHigh - minLow;
-        if (priceRange <= 0) priceRange = 1.0;   // flat series guard
-        long timeRange = maxT - minT;
-
-        float w = _chartArea.rect.width;
-        float h = _chartArea.rect.height;
-        float bodyW = Mathf.Max(1f, (w / n) * 0.6f);
-
-        for (int i = 0; i < n; i++)
-        {
-            OhlcPoint p = pts[i];
-
-            float x = timeRange > 0
-                ? (float)((p.open_time_ms - minT) / (double)timeRange) * w
-                : (n > 1 ? (float)i / (n - 1) * w : w * 0.5f);
-
-            float yOpen  = (float)((p.open  - minLow) / priceRange) * h;
-            float yClose = (float)((p.close - minLow) / priceRange) * h;
-            float yHigh  = (float)((p.high  - minLow) / priceRange) * h;
-            float yLow   = (float)((p.low   - minLow) / priceRange) * h;
-
-            Color c = p.close >= p.open ? UP_COLOR : DOWN_COLOR;
-
-            // wick (high-low), 1px centered on x
-            AddRect(x - 0.5f, yLow, 1f, Mathf.Max(1f, yHigh - yLow), c);
-
-            // body (open-close)
-            float bottom = Mathf.Min(yOpen, yClose);
-            float bodyH  = Mathf.Max(1f, Mathf.Abs(yClose - yOpen));
-            AddRect(x - bodyW * 0.5f, bottom, bodyW, bodyH, c);
-        }
-    }
-
-    void AddRect(float x, float y, float w, float h, Color c)
-    {
-        var go = new GameObject("c", typeof(RectTransform), typeof(Image));
-        go.transform.SetParent(_candleRoot, false);
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0f, 0f);
-        rt.anchorMax = new Vector2(0f, 0f);
-        rt.pivot = new Vector2(0f, 0f);
-        rt.anchoredPosition = new Vector2(x, y);
-        rt.sizeDelta = new Vector2(w, h);
-        go.GetComponent<Image>().color = c;
+        // Full-screen chart; the production ChartView owns bg + axes + candles + title (#53).
+        var viewGo = new GameObject("ChartView", typeof(RectTransform));
+        var viewRt = viewGo.GetComponent<RectTransform>();
+        viewRt.SetParent(canvasGo.transform, false);
+        viewRt.anchorMin = Vector2.zero; viewRt.anchorMax = Vector2.one;
+        viewRt.offsetMin = Vector2.zero; viewRt.offsetMax = Vector2.zero;
+        _chartView = viewGo.AddComponent<ChartView>();
+        _chartView.Build(viewRt, showTitleBar: true);
     }
 
     void OnDestroy()

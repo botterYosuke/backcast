@@ -60,18 +60,16 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     string[] _runInstruments;
     string _runStart, _runEnd, _runGran, _runStrategy;
 
-    // chart render
-    RectTransform _candleRoot, _chartArea;
+    // chart render — the reusable production widget (#53) owns candle/axis render + #44 theme-follow.
+    RectTransform _chartArea;
+    ChartView _chartView;
     Text _statusText;
     Font _font;
     string _lastPayload;
     int _renderedCount;
     bool _errLogged;
 
-    // issue #44: chart colors source the theme (層2) — candle up/down = status.long/short.
-    static readonly Color BG = ThemeService.Current.colors.background;
-    static readonly Color UP = ThemeService.Current.status.@long;
-    static readonly Color DOWN = ThemeService.Current.status.@short;
+    // issue #44: the bars-count status text color sources the theme. Chart colors moved into ChartView (#53).
     static readonly Color TEXT = ThemeService.Current.colors.text;
 
     const bool AutoBootstrapEnabled = false; // owner flips ON to claim Play (single Play-owner rule)
@@ -316,7 +314,7 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             ReplayBarFrame frame = ReplayBarDecoder.Decode(state);
             if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)
             {
-                RenderCandles(frame);
+                _chartView.Render(frame);
                 _renderedCount = frame.Ohlc.Count;
                 if (_statusText != null && err == null) _statusText.text = $"bars: {_renderedCount}";
             }
@@ -358,9 +356,8 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
 
         var startupTile = new GameObject("startup", typeof(RectTransform)).GetComponent<RectTransform>();
         startupTile.SetParent(root, false);
-        var chartTile = new GameObject("chart", typeof(RectTransform), typeof(Image)).GetComponent<RectTransform>();
+        var chartTile = new GameObject("chart", typeof(RectTransform)).GetComponent<RectTransform>();
         chartTile.SetParent(root, false);
-        chartTile.GetComponent<Image>().color = BG;
 
         // Hakoniwa places the two tiles (slot 0 = startup, slot 1 = chart).
         new HakoniwaController(root,
@@ -368,11 +365,10 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             new[] { "startup", "chart" });
 
         _chartArea = chartTile;
-        var candlesGo = new GameObject("Candles", typeof(RectTransform));
-        _candleRoot = candlesGo.GetComponent<RectTransform>();
-        _candleRoot.SetParent(_chartArea, false);
-        Stretch(_candleRoot);
-        _candleRoot.pivot = Vector2.zero;
+        // production candlestick widget (#53) — owns bg + axes + candles (no title bar in the
+        // scenario tile). The bars-count status text is added AFTER, so it overlays on top.
+        _chartView = chartTile.gameObject.AddComponent<ChartView>();
+        _chartView.Build(_chartArea, showTitleBar: false);
 
         _statusText = MakeText(_chartArea, "idle", 12, TextAnchor.UpperRight);
 
@@ -390,44 +386,6 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         var t = go.GetComponent<Text>();
         t.font = _font; t.color = TEXT; t.text = text; t.fontSize = size; t.alignment = anchor;
         return t;
-    }
-
-    void RenderCandles(ReplayBarFrame frame)
-    {
-        var pts = frame.Ohlc;
-        int n = pts.Count;
-        for (int i = _candleRoot.childCount - 1; i >= 0; i--) Destroy(_candleRoot.GetChild(i).gameObject);
-        if (n == 0) return;
-
-        double minLow = double.MaxValue, maxHigh = double.MinValue;
-        for (int i = 0; i < n; i++) { if (pts[i].low < minLow) minLow = pts[i].low; if (pts[i].high > maxHigh) maxHigh = pts[i].high; }
-        double range = maxHigh - minLow; if (range <= 0) range = 1.0;
-
-        float w = _chartArea.rect.width, h = _chartArea.rect.height;
-        float bodyW = Mathf.Max(1f, (w / Mathf.Max(1, n)) * 0.6f);
-        for (int i = 0; i < n; i++)
-        {
-            var p = pts[i];
-            float x = n > 1 ? (float)i / (n - 1) * (w - bodyW) + bodyW * 0.5f : w * 0.5f;
-            float yOpen = (float)((p.open - minLow) / range) * h;
-            float yClose = (float)((p.close - minLow) / range) * h;
-            float yHigh = (float)((p.high - minLow) / range) * h;
-            float yLow = (float)((p.low - minLow) / range) * h;
-            Color c = p.close >= p.open ? UP : DOWN;
-            AddRect(x - 0.5f, yLow, 1f, Mathf.Max(1f, yHigh - yLow), c);
-            AddRect(x - bodyW * 0.5f, Mathf.Min(yOpen, yClose), bodyW, Mathf.Max(1f, Mathf.Abs(yClose - yOpen)), c);
-        }
-    }
-
-    void AddRect(float x, float y, float w, float h, Color c)
-    {
-        var go = new GameObject("c", typeof(RectTransform), typeof(Image));
-        var rt = go.GetComponent<RectTransform>();
-        rt.SetParent(_candleRoot, false);
-        rt.anchorMin = rt.anchorMax = rt.pivot = Vector2.zero;
-        rt.anchoredPosition = new Vector2(x, y);
-        rt.sizeDelta = new Vector2(w, h);
-        go.GetComponent<Image>().color = c;
     }
 
     static void Stretch(RectTransform rt)

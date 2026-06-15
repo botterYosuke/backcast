@@ -4,22 +4,27 @@
 // (DepthDecodeProbe). The probe value-asserts the durable DepthDecoder under -batchmode; this
 // harness lets the owner SEE the bid/ask ladder render on a real Unity frame AND watch it update
 // in real time as the mock venue streams fresh depth. It runs the SAME C#-owned InprocLiveServer
-// façade drive + mock injection (findings 0011 D2 / 0012), but instead of asserting + exiting it
-// renders the decoded DepthSnapshotView via OnGUI each frame.
+// façade drive + mock injection (findings 0011 D2 / 0012).
+//
+// #54 (findings 0024): the ladder render was extracted out of this harness's OnGUI into the
+// production uGUI component DepthLadderView. This harness now BUILDS a Canvas + DepthLadderView and
+// feeds it the decoded DepthSnapshotView each changed tick — OnGUI is fully removed (the diagnostic
+// status line is a uGUI Text now, mirroring how #53 left ScenarioStartupHitlHarness OnGUI-free).
 //
 // PLAY OWNERSHIP: spawned ONLY via Tools > Backcast > Depth Ladder HITL (no auto-bootstrap), so it
 // never collides with the single Play owner (mirrors LiveAdapterTracerHitlHarness). Enter Play mode,
 // run the menu, watch the ladder populate then drift each tick, then exit Play.
 //
 // RENDER NOTE: the decoder restores WIRE ORDER faithfully (bids 降順 / asks 昇順). For the
-// conventional ladder LOOK (best prices hugging the spread) this VIEW reverses the asks for display
-// only — a presentation choice, NOT a re-sort of the decoded data.
+// conventional ladder LOOK (best prices hugging the spread) DepthLadderView reverses the asks for
+// display only — a presentation choice, NOT a re-sort of the decoded data.
 using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.Text;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.UI;
 using Python.Runtime;
 using Debug = UnityEngine.Debug;
 
@@ -41,9 +46,13 @@ public class DepthLadderHitlHarness : MonoBehaviour
     volatile string _status = "starting…";
     volatile string _latestStateJson;
 
-    // decoded ladder snapshot — written on main (Pump in Update), read in OnGUI.
+    // decoded ladder snapshot — written on main (Pump in Update), rendered via DepthLadderView.
     DepthSnapshotView _ladder = DepthSnapshotView.Empty;
     int _updateCount;
+
+    // #54: production ladder widget + a uGUI status line (no OnGUI). Built on main in Start().
+    DepthLadderView _ladderView;
+    Text _statusText;
 
     Thread _drive, _poll;
     IntPtr _mainThreadState;
@@ -51,6 +60,7 @@ public class DepthLadderHitlHarness : MonoBehaviour
 
     void Start()
     {
+        BuildUi();   // #54: build the uGUI ladder + status line up front so init errors still show.
         try
         {
             // SINGLE PLAY-OWNER guard (mirrors LiveAdapterTracerHitlHarness): a second
@@ -86,44 +96,45 @@ public class DepthLadderHitlHarness : MonoBehaviour
 
     void Update() => Pump();
 
-    void OnGUI()
+    // #54: build the uGUI scene — a Canvas with the production DepthLadderView and a status line.
+    // Replaces the old OnGUI render (findings 0024). Built on main in Start().
+    void BuildUi()
     {
-        var title = new GUIStyle(GUI.skin.label) { fontSize = 16, richText = false };
-        // issue #44: ladder colors source the theme (層2) — OnGUI re-reads each frame so a switch is live.
-        var ask   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = ThemeService.Current.status.ask } };
-        var bid   = new GUIStyle(GUI.skin.label) { fontSize = 15, richText = false, normal = { textColor = ThemeService.Current.status.bid } };
-        var mid   = new GUIStyle(GUI.skin.label) { fontSize = 13, richText = false, normal = { textColor = ThemeService.Current.colors.text_muted } };
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-        GUI.Label(new Rect(20, 16, 1000, 24),
-            $"Depth Ladder HITL — mock venue / LiveAuto (backcast #26)   status: {_status}   updates: {_updateCount}", title);
+        var canvasGo = new GameObject("DepthLadderCanvas", typeof(Canvas), typeof(CanvasScaler), typeof(GraphicRaycaster));
+        canvasGo.transform.SetParent(transform, false);
+        canvasGo.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
 
-        float x = 30, y = 56, row = 20;
-        GUI.Label(new Rect(x, y, 400, row), $"{IID}    price          size", mid); y += row + 4;
+        var root = new GameObject("Root", typeof(RectTransform)).GetComponent<RectTransform>();
+        root.SetParent(canvasGo.transform, false);
+        root.anchorMin = Vector2.zero; root.anchorMax = Vector2.one;
+        root.offsetMin = Vector2.zero; root.offsetMax = Vector2.zero;
 
-        if (!_ladder.HasDepth)
-        {
-            GUI.Label(new Rect(x, y, 600, row), "(no board — Replay/None or not yet streamed)", mid);
-            return;
-        }
+        // status line (top strip) — uGUI Text. Color reads the ACTIVE theme at build (instance read,
+        // not a type-init static capture). This harness has no theme toggle, so there is no runtime
+        // switch to follow; the production ladder colors live in DepthLadderView, which self-subscribes.
+        var statusGo = new GameObject("status", typeof(RectTransform), typeof(Text));
+        var statusRt = statusGo.GetComponent<RectTransform>();
+        statusRt.SetParent(root, false);
+        statusRt.anchorMin = new Vector2(0f, 1f); statusRt.anchorMax = new Vector2(1f, 1f);
+        statusRt.pivot = new Vector2(0.5f, 1f);
+        statusRt.sizeDelta = new Vector2(-24f, 24f); statusRt.anchoredPosition = new Vector2(0f, -8f);
+        _statusText = statusGo.GetComponent<Text>();
+        _statusText.font = font; _statusText.fontSize = 15; _statusText.supportRichText = false;
+        _statusText.alignment = TextAnchor.MiddleLeft;
+        _statusText.horizontalOverflow = HorizontalWrapMode.Overflow;
+        _statusText.color = ThemeService.Current.colors.text;
 
-        // asks: reversed for display (highest ask top → lowest ask just above the spread).
-        for (int k = _ladder.Asks.Count - 1; k >= 0; k--)
-        {
-            var lv = _ladder.Asks[k];
-            GUI.Label(new Rect(x, y, 600, row),
-                string.Format(CultureInfo.InvariantCulture, "ASK   {0,10:0.0####}   {1,10:0.###}", lv.Price, lv.Size), ask);
-            y += row;
-        }
-        y += 6;
-        GUI.Label(new Rect(x, y, 600, row), "————— spread —————", mid); y += row + 6;
-        // bids: wire order (highest bid just below the spread, descending downward).
-        for (int k = 0; k < _ladder.Bids.Count; k++)
-        {
-            var lv = _ladder.Bids[k];
-            GUI.Label(new Rect(x, y, 600, row),
-                string.Format(CultureInfo.InvariantCulture, "BID   {0,10:0.0####}   {1,10:0.###}", lv.Price, lv.Size), bid);
-            y += row;
-        }
+        // ladder area below the status strip (left-aligned column).
+        var areaGo = new GameObject("ladder", typeof(RectTransform));
+        var area = areaGo.GetComponent<RectTransform>();
+        area.SetParent(root, false);
+        area.anchorMin = new Vector2(0.02f, 0f); area.anchorMax = new Vector2(0.5f, 1f);
+        area.offsetMin = new Vector2(0f, 8f); area.offsetMax = new Vector2(0f, -36f);
+        _ladderView = areaGo.AddComponent<DepthLadderView>();
+        _ladderView.Build(area);
+        _ladderView.Render(_ladder);   // initial "(no board)" until the first snapshot arrives.
     }
 
     // ---- drive: C# owns the live lifecycle, then streams an evolving ladder ----
@@ -250,15 +261,25 @@ public class DepthLadderHitlHarness : MonoBehaviour
         finally { _pollStopped = true; }
     }
 
-    // GIL-free on main: decode the latest polled state into the ladder view.
+    // GIL-free on main: decode the latest polled state and feed the production DepthLadderView.
     void Pump()
     {
+        if (_statusText != null)
+            _statusText.text = $"{IID} — mock venue / LiveAuto (backcast #54)   status: {_status}   updates: {_updateCount}";
+
         string s = _latestStateJson;
         if (string.IsNullOrEmpty(s)) return;
         DepthSnapshotView v = DepthDecoder.Decode(s, IID);
-        if (v.HasDepth && (v.TimestampMs != _ladder.TimestampMs || !_ladder.HasDepth))
-            _updateCount++;
+
+        // "board changed" vs the currently-shown _ladder (compared BEFORE reassigning). The mock
+        // advances timestamp_ms each tick (HITL observed updates:40), so this fires every drift tick;
+        // the HasDepth flip also catches the Live↔Replay (board↔no-board) transition.
+        bool changed = v.HasDepth != _ladder.HasDepth || v.TimestampMs != _ladder.TimestampMs;
+        if (v.HasDepth && changed) _updateCount++;
         _ladder = v;
+
+        // Retained uGUI: re-render only on a changed board (avoid per-frame rebuild).
+        if (_ladderView != null && changed) _ladderView.Render(v);
     }
 
     bool WaitFlag(Func<bool> cond, int ms)

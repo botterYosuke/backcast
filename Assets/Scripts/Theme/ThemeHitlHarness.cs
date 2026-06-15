@@ -110,11 +110,22 @@ public class ThemeHitlHarness : MonoBehaviour
         _samples["candle_up"] = _chartView.FirstCandle(bullish: true);
         _samples["candle_down"] = _chartView.FirstCandle(bullish: false);
 
-        // -- depth ladder (mid-right) — status.bid / status.ask --
-        var ladder = Panel(parent, "ladder", new Vector2(0.36f, 0.30f), new Vector2(1f, 0.53f));
-        _samples["ladder_bg"] = ladder.GetComponent<Image>();
-        _samples["ladder_ask"] = LadderRow(ladder, "ASK  101.5  x300", 0.55f);
-        _samples["ladder_bid"] = LadderRow(ladder, "BID  101.4  x250", 0.15f);
+        // -- depth ladder (mid-right) — the REAL production DepthLadderView (#54), not fake Text rows.
+        // A mock snapshot (one ask + one bid) gives ThemeProbe a real best-ask/best-bid of EACH side to
+        // sample, so AC③ verifies the PRODUCTION part's color switch (findings 0024). No Image on the
+        // host — DepthLadderView paints its own themed bg. (Plain RectTransform: Destroy in EditMode is
+        // illegal.) --
+        var ladderGo = new GameObject("ladder", typeof(RectTransform));
+        var ladderArea = ladderGo.GetComponent<RectTransform>();
+        ladderArea.SetParent(parent, false);
+        ladderArea.anchorMin = new Vector2(0.36f, 0.30f); ladderArea.anchorMax = new Vector2(1f, 0.53f);
+        ladderArea.offsetMin = new Vector2(4, 4); ladderArea.offsetMax = new Vector2(-4, -4);
+        var ladderView = ladderGo.AddComponent<DepthLadderView>();
+        ladderView.Build(ladderArea);
+        ladderView.Render(MockDepth());
+        _samples["ladder_bg"] = ladderView.Background;
+        _samples["ladder_ask"] = ladderView.BestAsk();
+        _samples["ladder_bid"] = ladderView.BestBid();
 
         // -- editor snippet (bottom-right) — syntax palette + editor bg/text --
         var editorBg = Panel(parent, "editor", new Vector2(0.36f, 0f), new Vector2(0.78f, 0.28f));
@@ -146,11 +157,9 @@ public class ThemeHitlHarness : MonoBehaviour
     public void ApplyTheme()
     {
         var t = ThemeService.Current;
-        // chart_bg / candle_up / candle_down are owned by ChartView (#53), which self-subscribes to
-        // ThemeService.Changed and re-paints itself — the montage no longer sets them here.
-        Set("ladder_bg", t.colors.surface_background);
-        Set("ladder_bid", t.status.bid);
-        Set("ladder_ask", t.status.ask);
+        // chart_bg / candle_up / candle_down are owned by ChartView (#53), and ladder_bg / ladder_bid /
+        // ladder_ask are owned by DepthLadderView (#54) — both self-subscribe to ThemeService.Changed
+        // and re-paint themselves, so the montage no longer sets them here.
         Set("editor_bg", t.colors.background);
         Set("code_text", t.colors.text);   // set before _syntax re-render (base color for uncovered glyphs)
         Set("accents_bg", t.colors.surface_background);
@@ -198,15 +207,13 @@ public class ThemeHitlHarness : MonoBehaviour
         return go.GetComponent<Image>();
     }
 
-    Text LadderRow(RectTransform parent, string label, float yMin)
+    // Deterministic 1×1 mock depth for the ladder strip: one ask + one bid so DepthLadderView's
+    // BestAsk()/BestBid() both resolve for ThemeProbe (#54, findings 0024).
+    static DepthSnapshotView MockDepth() => new DepthSnapshotView
     {
-        var go = new GameObject("row", typeof(RectTransform), typeof(Text));
-        var rt = go.GetComponent<RectTransform>();
-        rt.SetParent(parent, false);
-        rt.anchorMin = new Vector2(0.05f, yMin); rt.anchorMax = new Vector2(0.95f, yMin + 0.3f);
-        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
-        var t = go.GetComponent<Text>();
-        t.font = _font; t.fontSize = 14; t.text = label; t.alignment = TextAnchor.MiddleLeft;
-        return t;
-    }
+        HasDepth = true,
+        Asks = new[] { new DepthLevelView { Price = 101.5, Size = 300 } },
+        Bids = new[] { new DepthLevelView { Price = 101.4, Size = 250 } },
+        TimestampMs = 1,
+    };
 }

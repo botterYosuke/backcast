@@ -5,8 +5,8 @@
 //
 //   Tools > Backcast > Depth Ladder HITL
 //
-// Requires Play mode (the harness renders via OnGUI and runs pythonnet workers under a running
-// player loop). Spawns one harness and reuses it if already present.
+// Requires Play mode (the harness renders the uGUI DepthLadderView (#54) and runs pythonnet workers
+// under a running player loop). Spawns one harness and reuses it if already present.
 using UnityEditor;
 using UnityEngine;
 
@@ -21,7 +21,7 @@ public static class DepthLadderHitlMenu
         {
             EditorUtility.DisplayDialog(
                 "Depth Ladder HITL",
-                "Enter Play mode first — the harness renders via OnGUI and drives the live loop under a running player loop.",
+                "Enter Play mode first — the harness renders the uGUI ladder and drives the live loop under a running player loop.",
                 "OK");
             return;
         }

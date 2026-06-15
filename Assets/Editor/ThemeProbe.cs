@@ -165,8 +165,9 @@ public static class ThemeProbe
         Eq(eff.keyword, ThemeService.Current.syntax.keyword, "syntax effect keyword switched");
 
         // -- 4c ThemeHitlHarness montage (chart / ladder / accents) --
-        // chart_bg / candle_up / candle_down are now the REAL production ChartView graphics (#53),
-        // not throwaway swatches — so this kill proves the PRODUCTION part follows a theme switch (AC③).
+        // chart_bg / candle_up / candle_down are now the REAL production ChartView graphics (#53), and
+        // ladder_bg / ladder_bid / ladder_ask are the REAL production DepthLadderView graphics (#54) —
+        // so this kill proves the PRODUCTION parts follow a theme switch (AC③).
         ThemeService.ResetForTests();
         var mGo = Spawn("probe_montage", typeof(RectTransform));
         var harness = mGo.AddComponent<ThemeHitlHarness>();
@@ -174,10 +175,14 @@ public static class ThemeProbe
         var d = Theme.Dark();
         var candleUp = harness.Samples["candle_up"];
         var candleDown = harness.Samples["candle_down"];
+        var ladderBid = harness.Samples["ladder_bid"];   // #54: best-bid row Text (production)
+        var ladderAsk = harness.Samples["ladder_ask"];   // #54: best-ask row Text (production)
         // Guard BEFORE the .color reads: True() only records a fail (non-aborting), so without these
-        // short-circuits a null candle would NRE and crash the whole gate instead of failing cleanly.
+        // short-circuits a null sample would NRE and crash the whole gate instead of failing cleanly.
         True(candleUp != null, "ChartView produced a bullish candle to sample");
         True(candleDown != null, "ChartView produced a bearish candle to sample");
+        True(ladderBid != null, "DepthLadderView produced a best-bid row to sample");
+        True(ladderAsk != null, "DepthLadderView produced a best-ask row to sample");
         Eq(harness.Samples["chart_bg"].color, d.colors.background, "ChartView (production) chart_bg == dark background");
         if (candleUp != null) Eq(candleUp.color, d.status.@long, "ChartView (production) candle_up == dark long");
         if (candleDown != null) Eq(candleDown.color, d.status.@short, "ChartView (production) candle_down == dark short");
@@ -193,11 +198,12 @@ public static class ThemeProbe
             Eq(title.ChangeText.text, "+5.00%", "ChartView title change% == +5.00% (mock +5% gain)");
             Eq(title.ChangeText.color, d.status.@long, "ChartView title change% colored long (gain) under dark");
         }
-        Eq(harness.Samples["ladder_bid"].color, d.status.bid, "montage ladder_bid == dark bid");
-        Eq(harness.Samples["ladder_ask"].color, d.status.ask, "montage ladder_ask == dark ask");
+        if (ladderBid != null) Eq(ladderBid.color, d.status.bid, "DepthLadderView (production) ladder_bid == dark bid");
+        if (ladderAsk != null) Eq(ladderAsk.color, d.status.ask, "DepthLadderView (production) ladder_ask == dark ask");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
-        Eq(harness.Samples["ladder_bg"].color, d.colors.surface_background, "montage ladder_bg == dark surface");
+        // ladder_bg == colors.background (TTWR overlays_ladder.rs:206 pane bg parity, #54 findings 0024).
+        Eq(harness.Samples["ladder_bg"].color, d.colors.background, "DepthLadderView (production) ladder_bg == dark background");
         Eq(harness.Samples["editor_bg"].color, d.colors.background, "montage editor_bg == dark background");
         Eq(harness.Samples["accents_bg"].color, d.colors.surface_background, "montage accents_bg == dark surface");
         Eq(harness.Samples["code_text"].color, d.colors.text, "montage code_text == dark text");
@@ -206,7 +212,7 @@ public static class ThemeProbe
         ThemeService.SetTheme(Theme.NonDefault());
         harness.ApplyTheme();
         var nd = ThemeService.Current;
-        Eq(harness.Samples["ladder_bg"].color, nd.colors.surface_background, "montage ladder_bg switched");
+        Eq(harness.Samples["ladder_bg"].color, nd.colors.background, "DepthLadderView (production) ladder_bg switched");
         Eq(harness.Samples["editor_bg"].color, nd.colors.background, "montage editor_bg switched");
         Eq(harness.Samples["accents_bg"].color, nd.colors.surface_background, "montage accents_bg switched");
         Eq(harness.Samples["code_text"].color, nd.colors.text, "montage code_text switched");
@@ -215,8 +221,8 @@ public static class ThemeProbe
         if (candleDown != null) Eq(candleDown.color, nd.status.@short, "ChartView (production) candle_down switched");
         // title change% color must ALSO follow the switch (gain stays long, now NonDefault's long) (#53).
         if (title != null) Eq(title.ChangeText.color, nd.status.@long, "ChartView title change% recolors on switch");
-        Eq(harness.Samples["ladder_bid"].color, nd.status.bid, "montage ladder_bid switched");
-        Eq(harness.Samples["ladder_ask"].color, nd.status.ask, "montage ladder_ask switched");
+        if (ladderBid != null) Eq(ladderBid.color, nd.status.bid, "DepthLadderView (production) ladder_bid switched");
+        if (ladderAsk != null) Eq(ladderAsk.color, nd.status.ask, "DepthLadderView (production) ladder_ask switched");
         Eq(harness.Samples["accent_editor"].color, nd.players.Get(0), "montage accent_editor switched");
         Eq(harness.Samples["accent_order"].color, nd.players.Get(2), "montage accent_order switched");
         Eq(harness.SyntaxEffect.keyword, nd.syntax.keyword, "montage syntax keyword switched");

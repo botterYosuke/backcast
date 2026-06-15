@@ -226,6 +226,22 @@ document）と `Apply`（document → live）の 2 口。スキーマを RectTra
 _Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用の予約語。layout binder は UI⟷document
 変換で別物）／bridge、wrapper
 
+**Backcast workspace root（合体 scene / 本番 composition root）**:
+全 UI 表面（menu bar / sidebar / 中央 infinite canvas workspace / footer / Python floating editor）を
+**1 つの authored scene（`BackcastWorkspace.unity`）に合体**させ、通常 Play の **唯一の起動入口**にする
+production composition root。型は `BackcastWorkspaceRoot`（scene 上の root GameObject/component）。
+**single Play-owner**：root 有効時は root だけが Python engine を所有し、Replay 駆動は durable な
+`ReplayEngineHost`（engine lifecycle / launcher / poll / transport RPC）へ抽出する。root が UI authored View
+（[[Hakoniwa（split-grid surface）]] / [[floating window / FloatingWindowLayer / z-order]] / `MenuBarView` /
+`UniverseSidebarView` / footer）と Host を結線し、layout は [[layout binder]] 系の versioned スキーマで
+保存/復元する（ADR-0003）。**chrome（menu/sidebar/footer）は Content 外＝画面固定**、中央 workspace のみ
+infinite canvas（下記）。`Tools > Backcast` の per-part HITL ハーネスは引き続きメニューから個別起動でき、
+root 稼働中に Python 系 HITL を起動しても `PythonEngine.IsInitialized` 判定で安全に拒否される（engine を奪い合わない）。
+方針: **ADR-0005**（1:1 表面 parity）。
+_Avoid_: 「mainline」を恒久型名・正式 term に使うこと（移行期語）／`RuntimeInitializeOnLoadMethod`
+自動 bootstrap を production 起動入口と呼ぶこと（HITL 暫定手段・本線は scene authored）／root を engine
+orchestration の置き場にすること（駆動は `ReplayEngineHost` へ分離）
+
 **infinite canvas**:
 chart / status tiles（Hakoniwa）/ floating window が乗る、無限スクロール・ズーム可能な **同じ空間** の土台
 （CONTEXT 冒頭の「同じ空間」の具体物）。uGUI 実現は **固定 Viewport ＋ 単一 Content transform**：

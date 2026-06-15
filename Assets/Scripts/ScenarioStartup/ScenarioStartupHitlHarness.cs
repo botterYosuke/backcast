@@ -84,7 +84,11 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
     // issue #44: the bars-count status text color sources the theme. Chart colors moved into ChartView (#53).
     static readonly Color TEXT = ThemeService.Current.colors.text;
 
-    const bool AutoBootstrapEnabled = true; // owner flips ON to claim Play (single Play-owner rule)
+    // #59: DEMOTED. The Backcast workspace root (BackcastWorkspaceRoot, scene-authored) is now the
+    // single normal Play entry + Python owner (ADR-0009); the Replay engine path is extracted into
+    // the durable ReplayEngineHost. This throwaway harness no longer auto-claims Play (findings 0025
+    // §5). It is kept for reference; it is reachable only if re-enabled by hand.
+    const bool AutoBootstrapEnabled = false;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -112,6 +116,13 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
 
             if (!s_pythonBootstrapped)
             {
+                // #59 single Play-owner guard (findings 0025 §7): if another owner (the workspace
+                // root) already holds the interpreter, refuse rather than double-init (SIGSEGV).
+                if (PythonEngine.IsInitialized)
+                {
+                    Debug.LogWarning("[SCENARIO STARTUP HITL] PythonEngine already owned — refusing engine init (disable BackcastWorkspaceRoot to run this harness solo).");
+                    return;
+                }
                 PythonRuntimeLocator.ConfigureBeforeInitialize();
                 PythonEngine.Initialize();
                 PythonEngine.BeginAllowThreads();

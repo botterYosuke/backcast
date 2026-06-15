@@ -81,6 +81,43 @@ public class FloatingWindowController
         return rt;
     }
 
+    // Adopt a PRE-EXISTING window RectTransform (e.g. a scene-authored Strategy Editor) as a
+    // managed window WITHOUT the factory. The Backcast workspace root (findings 0025 §8) registers
+    // scene-authored editor windows this way and restores them IN PLACE — they are never
+    // destroyed+respawned. Re-parents under the layer and re-asserts the canonical top-left-pivot
+    // anchors so the authored anchoredPosition/sizeDelta carry the canvas-logical contract. Returns
+    // the existing rt (first wins) on a duplicate id; null for a null/empty id or null rt.
+    public RectTransform Adopt(string kind, string id, RectTransform rt)
+    {
+        if (string.IsNullOrEmpty(id) || rt == null) return null;
+        if (_windows.TryGetValue(id, out var existing)) return existing.rt;   // duplicate id -> keep first
+        rt.SetParent(_layer, false);
+        Vector2 pos = rt.anchoredPosition;
+        Vector2 size = rt.sizeDelta;
+        Place(rt, pos.x, pos.y, size.x, size.y);   // idempotent when already canonical-authored
+        rt.SetAsLastSibling();
+        _windows[id] = new Entry { rt = rt, kind = kind, id = id };
+        return rt;
+    }
+
+    // Apply position/size/visibility to an ALREADY-REGISTERED window from a persisted layout,
+    // WITHOUT the full-replacement remove/spawn pass of Apply(). The workspace root uses this to
+    // restore adopted (scene-authored) windows in place and to reposition windows it spawns,
+    // because the mainline restore must NEVER destroy the scene-authored editor (findings 0025 §8).
+    // No-op (returns false) for a null layout or an unknown id.
+    public bool ApplyGeometry(FloatingWindowLayout w)
+    {
+        if (w == null || string.IsNullOrEmpty(w.id)) return false;
+        if (!_windows.TryGetValue(w.id, out var e) || e.rt == null) return false;
+        if (_catalog.TryGet(e.kind, out FloatingWindowSpec spec))
+        {
+            Vector2 size = ClampSize(spec, w.w, w.h);
+            Place(e.rt, w.x, w.y, size.x, size.y);
+        }
+        e.rt.gameObject.SetActive(w.visible);
+        return true;
+    }
+
     // Move a window by a CANVAS-LOGICAL delta (the input boundary already divided the viewport
     // delta by zoom). y is up-positive, matching anchoredPosition. No-op for an unknown id.
     public void MoveByLogical(string id, Vector2 logicalDelta)

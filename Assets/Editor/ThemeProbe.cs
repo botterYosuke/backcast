@@ -113,6 +113,7 @@ public static class ThemeProbe
         Ne(nd.status.@short, dark.status.@short, "NonDefault.short != dark");
         Ne(nd.status.bid, dark.status.bid, "NonDefault.bid != dark");
         Ne(nd.status.ask, dark.status.ask, "NonDefault.ask != dark");
+        Ne(nd.status.warning, dark.status.warning, "NonDefault.warning != dark");
         Ne(nd.syntax.keyword, dark.syntax.keyword, "NonDefault.keyword != dark");
         Ne(nd.players.Get(0), dark.players.Get(0), "NonDefault.players[0] != dark");
         Ne(nd.players.Get(2), dark.players.Get(2), "NonDefault.players[2] != dark");
@@ -177,12 +178,14 @@ public static class ThemeProbe
         var candleDown = harness.Samples["candle_down"];
         var ladderBid = harness.Samples["ladder_bid"];   // #54: best-bid row Text (production)
         var ladderAsk = harness.Samples["ladder_ask"];   // #54: best-ask row Text (production)
+        var ladderLast = harness.Samples["ladder_last"]; // #54 follow-up: TTWR LAST row Text (production)
         // Guard BEFORE the .color reads: True() only records a fail (non-aborting), so without these
         // short-circuits a null sample would NRE and crash the whole gate instead of failing cleanly.
         True(candleUp != null, "ChartView produced a bullish candle to sample");
         True(candleDown != null, "ChartView produced a bearish candle to sample");
         True(ladderBid != null, "DepthLadderView produced a best-bid row to sample");
         True(ladderAsk != null, "DepthLadderView produced a best-ask row to sample");
+        True(ladderLast != null, "DepthLadderView produced a LAST row to sample");
         Eq(harness.Samples["chart_bg"].color, d.colors.background, "ChartView (production) chart_bg == dark background");
         if (candleUp != null) Eq(candleUp.color, d.status.@long, "ChartView (production) candle_up == dark long");
         if (candleDown != null) Eq(candleDown.color, d.status.@short, "ChartView (production) candle_down == dark short");
@@ -200,6 +203,7 @@ public static class ThemeProbe
         }
         if (ladderBid != null) Eq(ladderBid.color, d.status.bid, "DepthLadderView (production) ladder_bid == dark bid");
         if (ladderAsk != null) Eq(ladderAsk.color, d.status.ask, "DepthLadderView (production) ladder_ask == dark ask");
+        if (ladderLast != null) Eq(ladderLast.color, d.status.warning, "DepthLadderView (production) ladder_last == dark warning");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
         // ladder_bg == colors.background (TTWR overlays_ladder.rs:206 pane bg parity, #54 findings 0024).
@@ -223,6 +227,7 @@ public static class ThemeProbe
         if (title != null) Eq(title.ChangeText.color, nd.status.@long, "ChartView title change% recolors on switch");
         if (ladderBid != null) Eq(ladderBid.color, nd.status.bid, "DepthLadderView (production) ladder_bid switched");
         if (ladderAsk != null) Eq(ladderAsk.color, nd.status.ask, "DepthLadderView (production) ladder_ask switched");
+        if (ladderLast != null) Eq(ladderLast.color, nd.status.warning, "DepthLadderView (production) ladder_last switched");
         Eq(harness.Samples["accent_editor"].color, nd.players.Get(0), "montage accent_editor switched");
         Eq(harness.Samples["accent_order"].color, nd.players.Get(2), "montage accent_order switched");
         Eq(harness.SyntaxEffect.keyword, nd.syntax.keyword, "montage syntax keyword switched");

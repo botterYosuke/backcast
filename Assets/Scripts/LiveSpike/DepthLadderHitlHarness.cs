@@ -278,8 +278,16 @@ public class DepthLadderHitlHarness : MonoBehaviour
         if (v.HasDepth && changed) _updateCount++;
         _ladder = v;
 
-        // Retained uGUI: re-render only on a changed board (avoid per-frame rebuild).
-        if (_ladderView != null && changed) _ladderView.Render(v);
+        // Retained uGUI: re-render only on a changed board (avoid per-frame rebuild). The mock streams
+        // DEPTH (no trades), so there is no real LAST trade price — feed the best bid/ask MID as a
+        // visual stand-in so the TTWR LAST row is exercised and drifts with the board (#54 follow-up).
+        if (_ladderView != null && changed)
+        {
+            double? mid = (v.HasDepth && v.Bids.Count > 0 && v.Asks.Count > 0)
+                ? (v.Bids[0].Price + v.Asks[0].Price) / 2.0
+                : (double?)null;
+            _ladderView.Render(v, mid);
+        }
     }
 
     bool WaitFlag(Func<bool> cond, int ms)

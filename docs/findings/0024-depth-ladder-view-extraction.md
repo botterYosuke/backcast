@@ -93,8 +93,8 @@ follow-up」と決めた規律を踏襲。
 
 ## follow-up（みなしご防止・別 issue 起票候補）
 
-1. **TTWR ladder parity の追加要素**: 21 行固定・LAST 中央行・段不足 `---` プレースホルダ・bid/ask 薄塗り背景
-   （alpha 0.22）・pane bg の alpha 0.95（`overlays_ladder.rs`）。A案で scope 外にした分。
+1. ~~**TTWR ladder parity の追加要素**: 21 行固定・LAST 中央行・段不足 `---`・bid/ask 薄塗り背景（alpha 0.22）~~
+   → **実装済み（下記「追補」）**。owner 指示で A案 deferral を解除。pane bg の alpha 0.95 のみ未移植（不透明継続）。
 2. **本線 scene への載せ替え**: floating window / hakoniwa 上の depth パネル化（findings 0012 §4 deferral）。
    立花 demo の実 depth を本番 ladder で見る AC④ の「demo venue HITL」leg は、この本線 consumer が
    存在しないと回せない（HITL harness は venue=`"MOCK"`・IID `8918.TSE` ハードコードのため）。①と同梱で起票。
@@ -132,3 +132,32 @@ mock の 5×5 板が `status: streaming depth… / updates:` 増加とともに 
 HITL harness は MOCK ハードコードで、`DepthLadderView` の本線 consumer も未配置（上記 follow-up ①②）。
 AC④ の「demo venue で HITL 検証」は本線載せ替えスライスに同梱する。**#54 のスコープ（抽出＋harness＋montage）は
 Step 1/2a/2b で実機確定済み**（描画・theme・realtime 経路は本スライスで完結）。
+
+## 追補（2026-06-15）: TTWR ladder parity 追加要素を実装（A案 deferral の解除）
+
+owner 指示（#54 マージ後・同セッション）で follow-up ①② の実行に着手し、**② を実装**（① は本線 host 未整備の
+ため別スライス・後述）。これにより上記「逸脱の記録 3」「follow-up 1」の A案 scope-out を**解除**する。#54 本体の
+「抽出」史は上の記述のまま残し、本追補が parity 拡張の記録。
+
+実装（`DepthLadderView` を TTWR `overlays_ladder.rs` 準拠へ）:
+- **21 行固定 DOM ladder**: ask[9..0]（reverse・worst 上→best が LAST 直上）＋ **LAST 中央行** ＋ bid[0..9]
+  （best が LAST 直下→worst 下）。段不足は **`---`**（常に 21 行・TTWR Caveat #37）。
+- **per-side alpha 行背景**: ask=`status.ask`@0.22 / bid=`status.bid`@0.22（TTWR `ROW_BG_ALPHA`）。各行が bg Image
+  ＋ Text 子の構造に変更。
+- **LAST 行**: `element_background` 背景・`status.warning` テキスト（TTWR `spawn_ladder_last_row`）。価格は
+  `Render(snapshot, double? lastPrice = null)` の任意引数（`null`→`"LAST ---"`）。
+- **行高**: TTWR `ladder_height/21` に倣い container 高から動的算出（headless probe は rect 高 0 のため fallback 16px）。
+- seam 追加: `LastRow()`。montage は `Render(MockDepth(), 101.45)` で LAST 値を出し `_samples["ladder_last"]` を公開。
+
+検証（AC④・追加分も GREEN）:
+- `ThemeProbe.Run` GREEN（`theme_probe3.log`・`[THEME PASS] … wiring kill all green` / return 0 / `error CS` 0）。
+  Section4c に **`ladder_last`（`status.warning`）の dark＋switch assertion** を追加、Section2 に `warning≠dark` を追加して
+  switch-kill を非空虚化。bid/ask の switch-kill は従来どおり。
+- **未ゲート（既知・Low）**: per-side alpha 行背景 Image の色は、行 Text と同一 `ApplyTheme` の `RowKind` dispatch で
+  塗るため Text のゲートで代理（個別 bg は未 sample）。`---` プレースホルダ位置・LAST 値・21 行レイアウト幾何は
+  色のみ sample のため未検証（HITL 目視）。
+- 逸脱: pane bg の alpha 0.95 は引き続き未移植（不透明 `colors.background`・`ChartView` と同 scope 切り）。
+  色ロールも `status.bid/ask`（#44 既定逸脱）のまま。
+
+**LAST 行の last-price 供給**は本部品では任意引数止まり。HITL は現状 `null`（`LAST ---`）、本線 consumer が
+per-instrument last（TTWR `LastPrices` 相当＝`get_state_json` の `price`）を供給する配線は **follow-up ①（本線載せ替え）** で行う。

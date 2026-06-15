@@ -122,10 +122,11 @@ public class ThemeHitlHarness : MonoBehaviour
         ladderArea.offsetMin = new Vector2(4, 4); ladderArea.offsetMax = new Vector2(-4, -4);
         var ladderView = ladderGo.AddComponent<DepthLadderView>();
         ladderView.Build(ladderArea);
-        ladderView.Render(MockDepth());
+        ladderView.Render(MockDepth(), lastPrice: 101.45);   // mid → LAST row shows a value (#54 follow-up)
         _samples["ladder_bg"] = ladderView.Background;
         _samples["ladder_ask"] = ladderView.BestAsk();
         _samples["ladder_bid"] = ladderView.BestBid();
+        _samples["ladder_last"] = ladderView.LastRow();      // TTWR LAST row (status.warning)
 
         // -- editor snippet (bottom-right) — syntax palette + editor bg/text --
         var editorBg = Panel(parent, "editor", new Vector2(0.36f, 0f), new Vector2(0.78f, 0.28f));

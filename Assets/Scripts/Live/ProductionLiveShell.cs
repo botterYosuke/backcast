@@ -36,8 +36,13 @@ public class ProductionLiveShell : MonoBehaviour
     readonly LiveLogoutCoordinator _coord = new LiveLogoutCoordinator();
     readonly SecretModalController _modal = new SecretModalController();
     VenueMenuViewModel _menu;
+    MenuBarViewModel _menuBar;          // #42: global menu bar brain (composes _menu, AC③)
     LiveRpcLanes _lanes;
     string _venue;
+    enum TopMenu { None, File, Edit, Venue, Help }   // open dropdown (screen-fixed chrome)
+    TopMenu _openMenu = TopMenu.None;
+    volatile string _execMode = "Replay";  // last-sent execution mode (FileOpen side-effect source)
+    string _menuNotice = "";            // transient File→New refuse / menu hint
 
     // ── engine ──────────────────────────────────────────────────────────────
     volatile PyObject _server;
@@ -45,6 +50,7 @@ public class ProductionLiveShell : MonoBehaviour
     volatile string _status = "starting…";
     volatile string _error;
     volatile bool _loginRunning;
+    volatile bool _modeSending;         // single-flight guard for SendMode worker thread (#42 F2)
     volatile bool _teardownComplete;
     volatile string _finalStateJson;
     Thread _login;
@@ -72,6 +78,8 @@ public class ProductionLiveShell : MonoBehaviour
     public VenueConnectionViewModel Conn => _conn;
     public LivePanelViewModel Panel => _vm;
     public VenueMenuViewModel Menu => _menu;
+    public MenuBarViewModel MenuBar => _menuBar;
+    public string ExecMode => _execMode;
     public SecretModalController Modal => _modal;
     public LiveRpcLanes Lanes => _lanes;
     public string LastManualOrderId => _lastManualOrderId;
@@ -81,6 +89,13 @@ public class ProductionLiveShell : MonoBehaviour
     {
         _venue = TargetVenue;
         _menu = new VenueMenuViewModel(_conn, _coord);
+        // #42: the live shell hosts no replay run, so isReplayRunning is always false here; the
+        // full-workspace File→New clear is exercised by MenuBarHitlHarness. This shell wires the
+        // engine-touching slice (venue submenu + File-op mode side-effects, AC②/AC③).
+        _menuBar = new MenuBarViewModel(_menu, _conn,
+            currentMode: () => _execMode,
+            isLiveAutoRunning: () => !string.IsNullOrEmpty(_autoRunId),
+            isReplayRunning: () => false);
         try
         {
             if (PythonEngine.IsInitialized)
@@ -156,11 +171,17 @@ public class ProductionLiveShell : MonoBehaviour
         }
     }
 
-    // ── venue connect/disconnect (chrome) ────────────────────────────────────
-    public void Connect()
+    // ── venue connect/disconnect (now driven by the menu bar Venue submenu, #42) ──────
+    // Back-compat default: MOCK bring-up via the env hint the VM resolves (AFK harnesses).
+    public void Connect() => ConnectEnv(_venue, _menu.EnvironmentHintFor(_venue));
+
+    // The 4 menu Venue variants route here with an explicit (venue, env). Prod variants are
+    // gated by VenueMenuViewModel.CanConnectEnv at the menu layer; Python is the safety authority.
+    public void ConnectEnv(string venue, string env)
     {
         if (_loginRunning) return;
-        VenueConnectRequest req = _menu.BuildConnectRequest(_venue);
+        _venue = venue;
+        VenueConnectRequest req = _menu.BuildConnectRequest(venue, env);
         _loginRunning = true;
         _status = "login (enter credentials)…";
         _login = new Thread(() =>
@@ -176,7 +197,10 @@ public class ProductionLiveShell : MonoBehaviour
                     string ec = ok ? "" : res["error_code"].As<string>();
                     if (ok)
                         using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString("LiveManual")))
+                        {
                             if (!m["success"].As<bool>()) { ok = false; ec = "set_execution_mode: " + m["error_code"].As<string>(); }
+                            else _execMode = "LiveManual";
+                        }
                     _conn.ApplyLoginAck(ok, ec);
                     _status = ok ? "connected (LiveManual)" : ("login failed: " + ec);
                 }
@@ -204,6 +228,7 @@ public class ProductionLiveShell : MonoBehaviour
                 using (Py.GIL())
                 {
                     using (_server.InvokeMethod("set_execution_mode", new PyString("Replay"))) { }
+                    _execMode = "Replay";
                     using (_server.InvokeMethod("venue_logout")) { }
                     using (PyObject s = _server.InvokeMethod("get_state_json")) _finalStateJson = s.As<string>();
                 }
@@ -212,6 +237,59 @@ public class ProductionLiveShell : MonoBehaviour
             }
             catch (Exception e) { _error = "logout: " + e; }
         }) { IsBackground = true, Name = "ShellVenueLogout" }.Start();
+    }
+
+    // ── File menu: Layout + mode side-effects (#42 / findings 0017 §4-5) ───────────────
+    // The live shell holds no editor/scenario/canvas, so the FULL-workspace clear and the
+    // layout apply/round-trip are exercised by MenuBarHitlHarness. Here the engine-touching
+    // part — the File-op SetExecutionMode side-effects — is fully real (AC②).
+    public void FileNew()
+    {
+        FileNewDecision d = _menuBar.FileNew(out string modeReq, out string refuse);
+        if (d == FileNewDecision.RefusedRunning) { _menuNotice = refuse; return; }
+        _strategyFileText = "";                          // live shell's only "loaded strategy" state
+        _menuNotice = "New workspace";
+        if (modeReq != null) SendMode(modeReq);          // guarded LiveManual (null = observable no-op)
+    }
+
+    public void FileOpenLayout()
+    {
+        string side = _menuBar.FileOpenModeSideEffect(); // TTWR: Open WHILE Live → LiveAuto, BEFORE load
+        if (side != null) SendMode(side);
+        string path = LayoutPathResolver.DefaultPath();
+        LayoutStore.Load(path);                          // read-only seam exercise (fail-soft)
+        _menuNotice = "Opened layout: " + path;
+    }
+
+    public void FileSaveLayout()
+    {
+        // No canvas/LayoutBinder in the live shell → nothing to capture. Writing Default() would
+        // clobber a real layout, so save is a no-op here; the round-trip is in the harness.
+        _menuNotice = "Save layout: no canvas in live shell (see MenuBarHitlHarness)";
+    }
+
+    // Fire-and-forget guarded SetExecutionMode (menu side-effect; runs off-main like Connect).
+    void SendMode(string mode)
+    {
+        // single-flight: drop overlapping requests so two near-simultaneous menu mode-sets
+        // can't race the engine final mode against the _execMode label (#42 F2). Called on the
+        // Unity main thread, so this check-then-set is serial; the worker clears the flag.
+        if (_modeSending) return;
+        _modeSending = true;
+        new Thread(() =>
+        {
+            try
+            {
+                using (Py.GIL())
+                using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString(mode)))
+                {
+                    if (m["success"].As<bool>()) { _execMode = mode; _status = "mode → " + mode; }
+                    else _status = "set_execution_mode(" + mode + ") rejected: " + m["error_code"].As<string>();
+                }
+            }
+            catch (Exception e) { _error = "set_execution_mode: " + e; }
+            finally { _modeSending = false; }
+        }) { IsBackground = true, Name = "ShellSetMode" }.Start();
     }
 
     // ── manual Order ticket ──────────────────────────────────────────────────
@@ -321,25 +399,108 @@ public class ProductionLiveShell : MonoBehaviour
             }
         }
 
+        DrawMenuBar();
         DrawChrome();
         DrawPanels();
+        DrawOpenSubmenu();      // after chrome/panels so submenus aren't overpainted (#42 F1)
         DrawSecretModalOverlay();
+    }
+
+    // ── global menu bar (screen-fixed chrome — CONTEXT "menu bar"; TTWR File/Edit/Venue/Help) ──
+    void DrawMenuBar()
+    {
+        GUILayout.BeginArea(new Rect(0, 0, Screen.width, 22), GUI.skin.box);
+        GUILayout.BeginHorizontal();
+        if (GUILayout.Button("File", GUILayout.Width(48))) _openMenu = _openMenu == TopMenu.File ? TopMenu.None : TopMenu.File;
+        if (GUILayout.Button("Edit", GUILayout.Width(48))) _openMenu = _openMenu == TopMenu.Edit ? TopMenu.None : TopMenu.Edit;
+        if (GUILayout.Button("Venue", GUILayout.Width(56))) _openMenu = _openMenu == TopMenu.Venue ? TopMenu.None : TopMenu.Venue;
+        if (GUILayout.Button("Help", GUILayout.Width(48))) _openMenu = _openMenu == TopMenu.Help ? TopMenu.None : TopMenu.Help;
+        GUILayout.FlexibleSpace();
+        GUILayout.Label($"{_menu.BadgeText}   mode: {_execMode}");
+        GUILayout.EndHorizontal();
+        GUILayout.EndArea();
+    }
+
+    // Open submenu + transient notice are drawn AFTER chrome/panels so the chrome box
+    // (Rect 12,34,…) can't overpaint the y=22 submenus (#42 F1). Modal stays topmost (drawn later).
+    void DrawOpenSubmenu()
+    {
+        bool ready = _serverReady && !_teardownComplete;
+        if (_openMenu == TopMenu.File) DrawFileMenu(ready);
+        else if (_openMenu == TopMenu.Edit) DrawEditMenu();
+        else if (_openMenu == TopMenu.Venue) DrawVenueMenu(ready);
+        else if (_openMenu == TopMenu.Help) DrawHelpMenu();
+        if (!string.IsNullOrEmpty(_menuNotice))
+        {
+            GUI.Label(new Rect(Screen.width - 360, 2, 350, 18), "<color=orange>" + _menuNotice + "</color>");
+        }
+    }
+
+    // A greyed-out, non-actionable menu item (deferred/unavailable here). Self-contained so the
+    // GUI.enabled reset can never be forgotten and silently grey out following widgets.
+    static void DisabledItem(string label) { GUI.enabled = false; GUILayout.Button(label); GUI.enabled = true; }
+
+    void DrawFileMenu(bool ready)
+    {
+        GUILayout.BeginArea(new Rect(0, 22, 220, 92), GUI.skin.box);
+        GUI.enabled = ready;
+        if (GUILayout.Button("New")) { FileNew(); _openMenu = TopMenu.None; }
+        if (GUILayout.Button("Open  (layout)")) { FileOpenLayout(); _openMenu = TopMenu.None; }
+        if (GUILayout.Button("Save  (layout)")) { FileSaveLayout(); _openMenu = TopMenu.None; }
+        GUI.enabled = true;
+        DisabledItem("Save As…  (deferred)");        // follow-up: native file picker
+        GUILayout.EndArea();
+    }
+
+    void DrawEditMenu()
+    {
+        // Undo/Redo route to the active strategy editor (#16). The live shell hosts none, so
+        // they are disabled here; the harness wires them to a real editor's EditHistory.
+        GUILayout.BeginArea(new Rect(48, 22, 200, 50), GUI.skin.box);
+        DisabledItem("Undo  (no active editor)");
+        DisabledItem("Redo  (no active editor)");
+        GUILayout.EndArea();
+    }
+
+    void DrawVenueMenu(bool ready)
+    {
+        GUILayout.BeginArea(new Rect(96, 22, 260, 118), GUI.skin.box);
+        foreach (var v in VenueMenuViewModel.ConnectVariants)
+        {
+            // Prod variants grey out unless *_ALLOW_PROD is set (mirrors the login dialog; Python
+            // is the safety authority). All connect items disabled while connected/mid-auth.
+            GUI.enabled = ready && _menu.CanConnectEnv(v.Venue, v.Env) && !_loginRunning;
+            if (GUILayout.Button(v.Label)) { ConnectEnv(v.Venue, v.Env); _openMenu = TopMenu.None; }
+        }
+        GUI.enabled = ready && _menu.CanDisconnect;
+        if (GUILayout.Button("Disconnect")) { Disconnect(); _openMenu = TopMenu.None; }
+        GUI.enabled = true;
+        GUILayout.EndArea();
+    }
+
+    void DrawHelpMenu()
+    {
+        // ADR-0005 lists Settings as its own surface — item present, body deferred to that slice.
+        GUILayout.BeginArea(new Rect(144, 22, 220, 32), GUI.skin.box);
+        DisabledItem("Settings  (deferred slice)");
+        GUILayout.EndArea();
     }
 
     void DrawChrome()
     {
-        GUILayout.BeginArea(new Rect(12, 12, 440, 300), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(12, 34, 440, 300), GUI.skin.box);
         GUILayout.Label($"<b>Live — {_venue}</b>   badge: {_menu.BadgeText}");
         GUILayout.Label("status: " + _status);
         if (_menu.ShowReloginHint) GUILayout.Label("<color=orange>session lost — reconnect</color>");
         if (_error != null) GUILayout.Label("<color=red>" + _error + "</color>");
 
+        // Venue Connect/Disconnect moved to the menu bar Venue submenu (#42 AC③ — no duplicate).
+        // The Manual/Auto toggle stays here: it's the footer #39 surface (decorative ticket switch).
+        // While a menu is open, disable chrome's interactive controls so they can't steal the open
+        // submenu's MouseDown in the overlap band (#42 F1-residual). Disabled controls don't grab clicks.
+        bool menuOpen = _openMenu != TopMenu.None;
+        GUI.enabled = !menuOpen;
         GUILayout.BeginHorizontal();
-        GUI.enabled = _serverReady && _menu.CanConnect && !_loginRunning && !_teardownComplete;
-        if (GUILayout.Button("Connect")) Connect();
-        GUI.enabled = _serverReady && _menu.CanDisconnect && !_teardownComplete;
-        if (GUILayout.Button("Disconnect")) Disconnect();
-        GUI.enabled = true;
         Mode = GUILayout.Toggle(Mode == "Manual", "Manual", GUI.skin.button) ? "Manual" : "Auto";
         GUILayout.EndHorizontal();
 
@@ -349,9 +510,10 @@ public class ProductionLiveShell : MonoBehaviour
         _iidText = GUILayout.TextField(_iidText, GUILayout.Width(120));
         GUILayout.EndHorizontal();
 
-        bool canTrade = _serverReady && _conn.IsConnected && !_teardownComplete;
+        bool canTrade = _serverReady && _conn.IsConnected && !_teardownComplete && !menuOpen;
         if (Mode == "Manual") DrawManualTicket(canTrade);
         else DrawAutoControls(canTrade);
+        GUI.enabled = true;
         GUILayout.EndArea();
     }
 

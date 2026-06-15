@@ -185,6 +185,12 @@ def engine_run(*args, **kwargs):
     return run(*args, **kwargs)
 
 
+# Per-bar wallclock throttle for both production Replay runners (legacy catalog + DuckDB
+# kernel): releases the GIL between bars so the poll thread reads the bar-by-bar chart
+# (#29). Kept in one place so the two paths animate at the same cadence.
+_REPLAY_BAR_INTERVAL_SEC = 0.01
+
+
 # Phase 10 §2.9 / M6: 発注主体を示す OrderEvent.strategy_id のタグ規則。
 # - 手動発注（ManualOrderFacade 由来の unary 応答）→ "MANUAL-001"。
 # - 自動発注（auto 戦略の kernel bridge 由来）→ "LIVE-{run[:8]}"（host が採番）。
@@ -732,6 +738,14 @@ class DataEngineBackend:
                 error_message="start_engine requires config.strategy_file",
             )
 
+        # ADR-0006 (#49): when LoadReplayData resolved a J-Quants DuckDB root, run the Replay
+        # through the nautilus-free kernel runner instead of the catalog/BacktestEngine path.
+        # The runtime loads no nautilus_trader here (purity gate). The legacy catalog branch
+        # below is retained (un-wired) for #47/#48 equivalence tests until #50 removes it.
+        duckdb_root = self.engine.replay_duckdb_root
+        if duckdb_root:
+            return self._start_engine_duckdb(strategy_file, duckdb_root)
+
         try:
             from engine.strategy_runtime.strategy_loader import load as _load_strategy, StrategyLoadError
             _module, scenario, strategy_cls = _load_strategy(strategy_file)
@@ -838,8 +852,6 @@ class DataEngineBackend:
                 make_run_id,
                 get_run_buffer_base_dir,
             )
-            from engine.strategy_runtime.run_buffer_reader import RunBufferReader
-            from engine.strategy_runtime.summary import compute_summary, write_summary_json
 
             instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
             first_instrument = instruments[0] if instruments else "unknown"
@@ -880,19 +892,10 @@ class DataEngineBackend:
                     run_buffer=rb,
                     strategy_init_kwargs=None,
                     run_event=self.engine.run_event,
-                    bar_interval_sec=0.01,
+                    bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
                     on_bar=_stream_bar,
                 )
-                rb.finish()
-
-                from engine.strategy_runtime.portfolio import compute_portfolio
-                _reader = RunBufferReader(rb.run_dir)
-                summary = compute_summary(_reader.fills, _reader.equity_points)
-                write_summary_json(rb.run_dir, summary)
-                self.engine.last_portfolio = compute_portfolio(
-                    _reader.fills, _reader.equity_points, scenario
-                )
-
+                summary = self._finalize_run(rb, scenario)
                 logging.info(
                     "start_engine: run complete run_id=%s run_dir=%s summary=%r",
                     run_id,
@@ -923,6 +926,137 @@ class DataEngineBackend:
             run_id=run_id,
             summary_json=_json.dumps(summary, ensure_ascii=False),
         )
+
+    def _start_engine_duckdb(self, strategy_file, duckdb_root):
+        """ADR-0006 (#49): run the production Replay through the DuckDB→kernel path.
+
+        Same output seam as the legacy catalog path — per-bar apply_replay_event (reducer →
+        GetState polling) + RunBuffer fills/equity → compute_portfolio → get_portfolio — so the
+        C# decoder is unchanged. Differs only in source (DuckDB direct-read) and engine
+        (nautilus-free KernelRunner). Imports no nautilus_trader.
+        """
+        import json as _json
+
+        # Kernel-native strategy load: base_cls=engine.kernel.strategy.Strategy, so the loader
+        # never imports nautilus (D4) and only matches kernel-API strategies.
+        try:
+            from engine.kernel.strategy import Strategy as _KernelStrategy
+            from engine.strategy_runtime.strategy_loader import load as _load_strategy
+            _module, scenario, strategy_cls = _load_strategy(
+                strategy_file, base_cls=_KernelStrategy
+            )
+        except FileNotFoundError as exc:
+            logging.error(f"start_engine(duckdb): strategy file not found: {exc}")
+            return BacktestRunResult(
+                success=False, error_code="STRATEGY_FILE_NOT_FOUND", error_message=str(exc)
+            )
+        except Exception as exc:
+            logging.error(f"start_engine(duckdb): strategy load failed: {exc}")
+            return BacktestRunResult(
+                success=False, error_code="STRATEGY_LOAD_ERROR", error_message=str(exc)
+            )
+
+        instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
+        primary_id = instruments[0]
+        granularity = scenario["granularity"]
+        initial_cash = scenario.get("initial_cash", 10_000_000)
+        logging.info(
+            "start_engine(duckdb): cls=%r instruments=%r granularity=%r start=%r end=%r root=%r",
+            strategy_cls.__name__, instruments, granularity,
+            scenario.get("start"), scenario.get("end"), duckdb_root,
+        )
+
+        # The kernel construction contract (#25): strategy_cls(instrument_id=..., **params).
+        try:
+            strategy = strategy_cls(instrument_id=primary_id)
+        except Exception as exc:
+            logging.exception("start_engine(duckdb): strategy construction failed")
+            return BacktestRunResult(
+                success=False, error_code="STRATEGY_LOAD_ERROR", error_message=str(exc)
+            )
+
+        # Transition LOADED → RUNNING before the run so PauseReplay works mid-run.
+        se_ok, se_err = self.engine.start_engine()
+        if not se_ok:
+            return BacktestRunResult(
+                success=False, error_code="INVALID_STATE", error_message=se_err or ""
+            )
+
+        try:
+            from engine.strategy_runtime.run_buffer import (
+                RunBuffer,
+                make_run_id,
+                get_run_buffer_base_dir,
+            )
+            from engine.strategy_runtime.replay_kernel_observer import ReplayKernelObserver
+            from engine.kernel.runner import KernelRunner
+        except ImportError as exc:
+            self.engine.force_stop_replay()
+            logging.error("start_engine(duckdb): import failed: %s", exc)
+            return BacktestRunResult(
+                success=False, error_code="RUN_FAILED", error_message=str(exc)
+            )
+
+        run_id = make_run_id(strategy_file, primary_id)
+        rb = RunBuffer(
+            run_id=run_id,
+            strategy_file=str(strategy_file),
+            scenario=scenario,
+            base_dir=get_run_buffer_base_dir(),
+        )
+        observer = ReplayKernelObserver(engine=self.engine, run_buffer=rb)
+        try:
+            KernelRunner(
+                data_root=duckdb_root,
+                instrument_ids=list(instruments),
+                granularity=granularity,
+                start=scenario["start"],
+                end=scenario["end"],
+                initial_cash=initial_cash,
+                strategy=strategy,
+                sink=observer,
+                run_event=self.engine.run_event,
+                bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
+            ).run()
+            summary = self._finalize_run(rb, scenario)
+            logging.info(
+                "start_engine(duckdb): run complete run_id=%s run_dir=%s summary=%r",
+                run_id, rb.run_dir, summary,
+            )
+        except Exception as exc:
+            rb.abort()
+            self.engine.force_stop_replay()
+            logging.exception("start_engine(duckdb): kernel run failed")
+            return BacktestRunResult(
+                success=False, error_code="RUN_FAILED", error_message=str(exc)
+            )
+
+        self.engine.force_stop_replay()
+        return BacktestRunResult(
+            success=True,
+            run_id=run_id,
+            summary_json=_json.dumps(summary, ensure_ascii=False),
+        )
+
+    def _finalize_run(self, rb, scenario):
+        """Shared finalize tail for both Replay runners (legacy catalog + DuckDB kernel).
+
+        Flushes the RunBuffer, derives the summary, and rebuilds last_portfolio (the
+        get_portfolio source) from the same fills+equity — so both paths report an identical
+        portfolio/summary shape to the unchanged C# decoder. Returns the summary dict.
+        """
+        from engine.strategy_runtime.run_buffer_reader import RunBufferReader
+        from engine.strategy_runtime.summary import compute_summary, write_summary_json
+        from engine.strategy_runtime.portfolio import compute_portfolio
+
+        rb.finish()
+        reader = RunBufferReader(rb.run_dir)
+        summary = compute_summary(reader.fills, reader.equity_points)
+        write_summary_json(rb.run_dir, summary)
+        self.engine.last_portfolio = compute_portfolio(
+            reader.fills, reader.equity_points, scenario
+        )
+        return summary
 
     def get_portfolio(self):
         p = self.engine.last_portfolio

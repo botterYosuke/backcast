@@ -69,6 +69,20 @@ public sealed class ScenarioStartupController
         Errors = new ScenarioStartupErrors();
     }
 
+    // ---- CLEAR (File→New workspace reset; findings 0017 §4). In-memory ONLY: resets the
+    // editing buffer to an empty unbound state, empties the universe, and clears errors. Does
+    // NOT touch the on-disk sidecar (TTWR FileNewRequested is an in-memory reset; file deletion
+    // would be destructive over-reach). The strategy `.py` buffer / editor panel despawn and
+    // the (guarded) SetExecutionMode(LiveManual) are the menu bar's job — this owns only the
+    // #29 scenario projections. Unconditional: the dirty-guard does NOT apply (New is a
+    // deliberate discard, not an external re-sync). ----
+    public void Clear()
+    {
+        Params = new ScenarioStartupParams();      // empty, Dirty=false (not seeded — New is blank)
+        Universe.ReplaceAll(Array.Empty<string>());
+        Errors = new ScenarioStartupErrors();
+    }
+
     // ---- EDIT (each mutates the buffer and flips Dirty) ----
     public void SetStart(string v) { Params.Start = v; Params.Dirty = true; }
     public void SetEnd(string v) { Params.End = v; Params.Dirty = true; }

@@ -31,7 +31,7 @@ def _run_into(push_target) -> None:
     from spike.fixtures.strategies.kernel_spike_buy_sell import KernelSpikeBuySell
 
     KernelRunner(
-        catalog_path=scenario.CATALOG,
+        data_root=scenario.DUCKDB_ROOT,
         instrument_id=scenario.INSTRUMENT,
         start=scenario.START,
         end=scenario.END,

@@ -100,8 +100,13 @@ fill 数・価格 / position 数量 / realized PnL / 最終 cash・equity / **si
 （nautilus version・`PRECISION_BYTES`・strategy/catalog/scenario の hash）。golden は**計算で組み立てず必ず
 oracle 経路から記録**する（自己参照を避ける）。oracle subprocess と kernel subprocess を別プロセスで走らせ、
 `capture`（明示生成）／`verify`（read-only・差分で失敗）を分ける。方針: ADR-0004 案 C・記録: findings 0008。
+**runtime からの nautilus 完全排除（[[市場データソース（J-Quants DuckDB 直読み）]]・ADR-0006）に伴い、nautilus oracle は
+"生かし続ける比較相手" から退役**し、#24 で取得済みの golden を**凍結した正解表（回帰 fixture）**として残す（新規 capture に
+nautilus を起こさない）。新データ（DuckDB 直読み）の faithfulness は **既知銘柄の data-equivalence チェック**（例: 8918.TSE 日足の
+本数・OHLCV）で担保する。
 _Avoid_: golden を kernel と同じ仮定から計算すること（oracle ではなく期待値の自己照合になる）／
-生 JSON のバイト一致を parity 条件にすること（正規化値＋イベント順が正）
+生 JSON のバイト一致を parity 条件にすること（正規化値＋イベント順が正）／oracle 退役後に nautilus を runtime/CI 既定へ
+復帰させること（凍結 fixture ＋ data-equivalence が正・ADR-0006）
 
 **adapter（C# adapter 層）**:
 Unity(C#) 側で pythonnet を介し engine を駆動する単一の境界。engine の sink 口に C# 製 sink を
@@ -391,9 +396,13 @@ catalog_path は「このマシンのどこに市場データがあるか」＝*
 config 値で呼ぶ。scenario v3 スキーマに catalog キーは無く（書けば `_check_keys` が unknown key で reject）、絶対パスを
 sidecar に焼くと strategy+sidecar が非可搬になる。既存 harness の `const CATALOG_PATH = "/Users/sasac/..."`（Mac 絶対
 パス）こそ AC⑤「harness ハードコード依存解消」が消す対象で、#29 はこれを config 層の解決に置換する（ユーザー向け panel
-フィールドへの昇格ではない）。
+フィールドへの昇格ではない）。**ADR-0006（#49）以降、production Replay の市場データ源は [[市場データソース（J-Quants DuckDB
+直読み）]] へ移り、catalog_path の代わりに DuckDB ルート（`BACKCAST_JQUANTS_DUCKDB_ROOT`・`.env`）を同じ「環境/配置の関心」
+として env/config で解決する**（ctor 引数 > `.env`・panel/sidecar には焼かない）。未設定は hard error で、nautilus catalog への
+silent fallback は持たない（root が解決すれば catalog 引数より優先）。legacy catalog 解決は #50 の nautilus 撤去まで code として残る。
 _Avoid_: catalog を panel フィールド / scenario sidecar に入れること（環境設定・非可搬・engine が unknown key で reject）／
-catalog の真実源を per-run panel state にすること（config 層が正）
+catalog の真実源を per-run panel state にすること（config 層が正）／DuckDB root 未設定時に nautilus catalog へ fallback すること
+（runtime nautilus-free が env 依存で非決定的になる・ADR-0006）
 
 **ScenarioSidecarStore（merge-write seam）**:
 [[scenario（実行設定）/ scenario sidecar]] の `<strategy>.json` を**読み込み→`scenario` object の対象キーだけ更新→
@@ -438,6 +447,37 @@ follow-up）。**配色レイヤーのみ**移植（spacing/typography/elevation
 _Avoid_: テーマに spacing/typography 等の非配色トークンを含めると解釈すること（#44 は配色のみ）／切替伝播を TTWR parity と
 呼ぶこと（伝播は backcast 独自・TTWR は swap 未実装で Bevy change-detection に依存）／`ApplyTheme` を [[layout binder]] の
 Capture/Apply と混同すること（別系統・前者は配色再適用）／インライン配色を新規追加すること（theme 参照が正・静的ゲートで縛る）
+
+**menu bar（全体メニュー / screen-fixed chrome）**:
+アプリ全体の最上段メニュー。[[infinite canvas]] の Content **外**に置く screen-fixed chrome（pan/zoom 非追従）。TTWR
+`src/ui/menu_bar.rs` の 1:1 表面 parity（方針: ADR-0005）で、トップレベルは **File / Edit / Venue / Help**。**File は Layout 文書**
+（New / Open / Save / Save As・[[レイアウト parity（capability parity）]] / ADR-0003）を対象とし、**strategy `.py` の Open/Save では
+ない**（strategy 編集は [[Strategy Editor（code buffer）]]＝#16 が所有・menu bar は再実装しない。layout sidecar が strategy
+パスを参照し File→Open で間接復元する）。**[[ExecutionMode（実行モード）]] 切替は menu bar の独立 picker ではなく File 操作の
+副作用**：`File→New`→ loaded strategy/panel clear ＋ `SetExecutionMode(LiveManual)`、Live 中の `File→Open`→`SetExecutionMode(LiveAuto)`。
+明示的な Replay/LiveManual/LiveAuto picker と run 操作（▶/pause/step/speed）は **footer が所有**（mode 切替＋StartLiveAuto=#39・
+replay transport=#30）。Venue メニュー（Connect×venue / Disconnect）は既存 [[VenueMenuViewModel]]（#21）を**再利用合成**し重複実装
+しない（AC③）。mode 副作用は venue 未接続時に [[ExecutionMode（実行モード）]] の precondition（`ModeManager` が
+`CONNECTED`/`SUBSCRIBED` 以外を `EXECUTION_MODE_PRECONDITION` で拒否）に当たるため、menu bar 側で接続中のみ送信ガードし TTWR の
+**observable no-op** を再現する（clear 自体は無条件）。backcast に TTWR の `ForceStop`（走行中 replay 停止）等価は無く、replay-stop は
+#30 の責務（#42 は clear+LiveManual で先行）。実装は #42。
+_Avoid_: File を strategy `.py` opener と解釈すること（File=Layout・strategy 編集は #16）／menu bar に明示 mode picker / run 操作を
+持たせること（footer #39/#30 の責務）／venue ロジックを menu bar に再実装すること（[[VenueMenuViewModel]] 再利用が正）／mode 副作用を
+venue 未接続でも無条件送信すること（`EXECUTION_MODE_PRECONDITION` 例外＝接続中ガードで no-op 再現が正）
+
+**市場データソース（J-Quants DuckDB 直読み）**:
+backcast Replay の going-forward な市場データ at-rest 源＝`/Volumes/StockData/jp/` 配下の**銘柄別 DuckDB ファイル**
+（`stocks_daily/<code>.duckdb`・`stocks_minute/<code>.duckdb`・`listed_info.duckdb`＝銘柄マスタ）。Replay 実行時に
+`duckdb` で**直接クエリ**して [[Backcast Execution Kernel（kernel）]] へ bar を渡す（中間 catalog の生成・変換ステップを持たない）。
+これは TTWR 由来の **nautilus `ParquetDataCatalog`（precision-baked `fixed_size_binary` ＝ `nautilus_pyo3` ビルドに data が
+縛られる形式）を置換**し、runtime から nautilus を完全排除する（方針: ADR-0006・ADR-0004 案 C の Replay への延伸）。値段は
+**生(raw) OHLCV**（調整列は当面 NULL のため不使用）、銘柄IDは `<code>.TSE`（master の市場は全て東証）、当面は **bars（日足/分足）
+のみ**（`stocks_board` の歩み値/板は将来スライス）。`jquants_to_catalog.py`（nautilus 書き出し）/ `nautilus_catalog_loader.py`
+（nautilus 読み）/ `/Volumes/StockData/artifacts` parquet catalog は本決定で廃止対象。
+_Avoid_: 「catalog」と呼ぶこと（中間 parquet を作らない直読み・[[catalog_path（環境/配置の関心・scenario 外）]] の旧 nautilus
+catalog とは別物）／DuckDB から parquet へ一度変換する中間層を入れること（第二の真実源・変換ズレ）／調整済み価格を使うと
+仮定すること（当面は raw・調整は別スライス）／nautilus を oracle のため runtime に残すこと（[[golden 契約（Backcast vs Nautilus oracle）]]
+は凍結 fixture 化し runtime から nautilus を消す）
 
 ## Flagged ambiguities
 

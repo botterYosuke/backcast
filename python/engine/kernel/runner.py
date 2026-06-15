@@ -19,8 +19,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from engine.kernel.bars import Bar, load_bars
 from engine.kernel.broker import ReplayBroker
+from engine.kernel.duckdb_bars import Bar, load_universe_bars
 from engine.kernel.orders import (
     Order,
     OrderDenied,
@@ -106,34 +106,78 @@ class KernelRunner:
     def __init__(
         self,
         *,
-        catalog_path: str | Path,
-        instrument_id: str,
+        data_root: str | Path,
+        instrument_id: str | None = None,
+        instrument_ids: Optional[list[str]] = None,
+        granularity: str = "Daily",
         start: str,
         end: str,
         initial_cash: float,
         strategy: Strategy,
-        push_target,
+        push_target=None,
+        sink=None,
         rails: Optional[SafetyRails] = None,
+        run_event=None,
+        bar_interval_sec: float = 0.0,
     ) -> None:
-        self._catalog_path = catalog_path
-        self._instrument_id = instrument_id
+        self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/<table>/<code>.duckdb
+        # Single instrument (#47) or a universe (#48); universe is time-order-merged into one
+        # stream. instrument_id is kept for back-compat with existing single-instrument callers.
+        if instrument_ids is None:
+            if instrument_id is None:
+                raise ValueError("KernelRunner requires instrument_id or instrument_ids")
+            instrument_ids = [instrument_id]
+        if not instrument_ids:
+            raise ValueError("instrument_ids must be non-empty")
+        self._instrument_ids = list(instrument_ids)
+        self._granularity = granularity
         self._start = start
         self._end = end
         self._initial_cash = float(initial_cash)
         self._strategy = strategy
-        self._venue = instrument_id.split(".")[-1]
+        venues = {iid.split(".")[-1] for iid in self._instrument_ids}
+        if len(venues) != 1:
+            raise ValueError(f"universe must share a single venue, got {sorted(venues)}")
+        self._venue = venues.pop()
         self._risk = RiskEngine(rails)
         self._order_engine = OrderEngine(risk_engine=self._risk, venue=self._venue)
         self._portfolio = Portfolio(initial_cash=initial_cash)
         self._broker = ReplayBroker(self._order_engine)
-        self._sink = EventSink(push_target)
+        # Observer injection (#49): golden #24 callers pass `push_target` and get the
+        # default EventSink (RustBacktestSink JSON contract). The production Replay seam
+        # passes its own `sink` (ReplayKernelObserver → apply_replay_event + RunBuffer) so
+        # the SAME per-bar execution loop drives both, anti-divergence by construction.
+        # The kernel stays host-independent: it never imports the observer or its deps.
+        if sink is not None:
+            self._sink = sink
+        elif push_target is not None:
+            self._sink = EventSink(push_target)
+        else:
+            raise ValueError("KernelRunner requires either push_target or sink")
         self._ctx = _Context(order_engine=self._order_engine, portfolio=self._portfolio)
+        # Control seam (#49): run_event.wait() before each bar (pause/resume/stop, owned by
+        # the host's DataEngine), and an optional wallclock throttle that releases the GIL so
+        # a polling thread can read the bar-by-bar chart between bars. Both default-off →
+        # golden path runs straight through, byte-identical.
+        self._run_event = run_event
+        self._bar_interval_sec = bar_interval_sec
 
     def run(self) -> RunResult:
+        import time as _time
+
         from engine.strategy_runtime.summary import equity_curve_stats
 
-        bars: list[Bar] = load_bars(
-            self._catalog_path, self._instrument_id, start=self._start, end=self._end
+        # Resolved once: the production observer implements on_equity (per-bar cash →
+        # RunBuffer.write_equity); the golden EventSink does not, so this stays None and the
+        # golden contract/summary is untouched (byte-identical).
+        emit_equity = getattr(self._sink, "on_equity", None)
+
+        bars: list[Bar] = load_universe_bars(
+            self._data_root,
+            self._instrument_ids,
+            start=self._start,
+            end=self._end,
+            granularity=self._granularity,
         )
 
         self._strategy.register(self._ctx)
@@ -152,6 +196,12 @@ class KernelRunner:
         stopped_reason = ""
 
         for bar in bars:
+            # Pause/resume/stop gate (host-owned). Blocks here when the DataEngine clears the
+            # event (PauseReplay); force_stop sets it so a stopped run unblocks and runs out.
+            # Same single-Event semantics the legacy replay_runner consumes — no stop-flag.
+            if self._run_event is not None:
+                self._run_event.wait()
+
             self._sink.push_bar(bar)
 
             # MARKET は当該 bar close で約定するので、submit 時の参照価格 = この bar の close。
@@ -178,6 +228,11 @@ class KernelRunner:
 
             # Per-bar equity point (post-fill cash), mirroring the oracle's on_equity.
             equity_curve.append(self._portfolio.cash)
+            # Production observer mirrors this point into RunBuffer (per-bar, post-fill) so
+            # get_portfolio's last_portfolio is derived from the same equity cadence the
+            # legacy nautilus path recorded (account balance_total per bar). No-op for golden.
+            if emit_equity is not None:
+                emit_equity(bar.ts_event_ns // 1_000_000, self._portfolio.cash)
 
             # Post-trade rail on mark-to-market equity (skipped when rails are
             # unconfigured, so the golden tracer is untouched).
@@ -190,6 +245,12 @@ class KernelRunner:
                 if violation is not None:
                     stopped_reason = violation.kind
                     break
+
+            # Wallclock throttle (last in the body, like the legacy replay_runner): releases
+            # the GIL between bars so the host's poll thread reads the incrementally-streamed
+            # chart (issue #29 bar-by-bar following). Default 0 → golden runs straight through.
+            if self._bar_interval_sec > 0:
+                _time.sleep(self._bar_interval_sec)
 
         self._strategy.on_stop()
 

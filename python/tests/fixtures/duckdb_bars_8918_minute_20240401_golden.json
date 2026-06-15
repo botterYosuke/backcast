@@ -1,0 +1,961 @@
+{
+  "instrument_id": "8918.TSE",
+  "granularity": "Minute",
+  "date": "2024-04-01",
+  "source": "independent raw-SQL read + jquants_loader.py:24 (h,m,59,999999) JST ts convention for #48 minute data-equivalence",
+  "bar_count": 119,
+  "bars": [
+    {
+      "ts_event_ns": 1711929659999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 25441000.0
+    },
+    {
+      "ts_event_ns": 1711929719999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711929959999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 70000.0
+    },
+    {
+      "ts_event_ns": 1711930019999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 56300.0
+    },
+    {
+      "ts_event_ns": 1711930139999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 8.0,
+      "volume": 300.0
+    },
+    {
+      "ts_event_ns": 1711930199999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 1000.0
+    },
+    {
+      "ts_event_ns": 1711930259999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 1700.0
+    },
+    {
+      "ts_event_ns": 1711930319999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711930439999998976,
+      "open": 7.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 8.0,
+      "volume": 2400.0
+    },
+    {
+      "ts_event_ns": 1711930559999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711930919999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711930979999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 10000.0
+    },
+    {
+      "ts_event_ns": 1711931159999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711931219999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711931579999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 10000.0
+    },
+    {
+      "ts_event_ns": 1711931639999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711931699999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711931879999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 500.0
+    },
+    {
+      "ts_event_ns": 1711931999999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711932179999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711932359999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 600.0
+    },
+    {
+      "ts_event_ns": 1711932539999998976,
+      "open": 7.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 8.0,
+      "volume": 4100.0
+    },
+    {
+      "ts_event_ns": 1711932779999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 1000.0
+    },
+    {
+      "ts_event_ns": 1711932899999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711933079999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711933379999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 10000.0
+    },
+    {
+      "ts_event_ns": 1711933439999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 5000.0
+    },
+    {
+      "ts_event_ns": 1711933499999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 16000.0
+    },
+    {
+      "ts_event_ns": 1711933919999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711934039999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711934279999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 1000.0
+    },
+    {
+      "ts_event_ns": 1711934519999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 1000.0
+    },
+    {
+      "ts_event_ns": 1711934999999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711935479999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711935539999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711935659999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711935719999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711935839999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711936199999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 24100.0
+    },
+    {
+      "ts_event_ns": 1711936739999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 24000.0
+    },
+    {
+      "ts_event_ns": 1711936859999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711936979999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711937699999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711937759999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 2100.0
+    },
+    {
+      "ts_event_ns": 1711938659999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 10525900.0
+    },
+    {
+      "ts_event_ns": 1711942259999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 16561300.0
+    },
+    {
+      "ts_event_ns": 1711942679999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711942979999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4100.0
+    },
+    {
+      "ts_event_ns": 1711943099999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 26400.0
+    },
+    {
+      "ts_event_ns": 1711943159999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711943279999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 5800.0
+    },
+    {
+      "ts_event_ns": 1711943459999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711943579999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711943759999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711943819999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 1500.0
+    },
+    {
+      "ts_event_ns": 1711943939999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711944059999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 14000.0
+    },
+    {
+      "ts_event_ns": 1711944239999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711944359999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711944479999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 57500.0
+    },
+    {
+      "ts_event_ns": 1711944539999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711944719999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 6000.0
+    },
+    {
+      "ts_event_ns": 1711944779999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711944839999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711944959999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 1100.0
+    },
+    {
+      "ts_event_ns": 1711945019999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 5000.0
+    },
+    {
+      "ts_event_ns": 1711945139999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711945319999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 5000.0
+    },
+    {
+      "ts_event_ns": 1711945379999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711945439999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711945619999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711945799999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711945919999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711946099999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711946279999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 5000.0
+    },
+    {
+      "ts_event_ns": 1711946339999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 5000.0
+    },
+    {
+      "ts_event_ns": 1711946459999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 500.0
+    },
+    {
+      "ts_event_ns": 1711946579999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 4200.0
+    },
+    {
+      "ts_event_ns": 1711946699999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 20000.0
+    },
+    {
+      "ts_event_ns": 1711946759999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711946819999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 24000.0
+    },
+    {
+      "ts_event_ns": 1711947059999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711947239999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 200.0
+    },
+    {
+      "ts_event_ns": 1711947299999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4100.0
+    },
+    {
+      "ts_event_ns": 1711947479999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711947659999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 500.0
+    },
+    {
+      "ts_event_ns": 1711947719999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4100.0
+    },
+    {
+      "ts_event_ns": 1711947959999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711948079999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 54600.0
+    },
+    {
+      "ts_event_ns": 1711948199999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711948379999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711948619999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711948739999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711948799999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4500.0
+    },
+    {
+      "ts_event_ns": 1711948859999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 3000.0
+    },
+    {
+      "ts_event_ns": 1711948919999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 100.0
+    },
+    {
+      "ts_event_ns": 1711948979999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711949159999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711949219999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 500.0
+    },
+    {
+      "ts_event_ns": 1711949279999998976,
+      "open": 7.0,
+      "high": 7.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 500.0
+    },
+    {
+      "ts_event_ns": 1711949339999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711949399999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 10000.0
+    },
+    {
+      "ts_event_ns": 1711949519999998976,
+      "open": 7.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 8.0,
+      "volume": 4100.0
+    },
+    {
+      "ts_event_ns": 1711949699999998976,
+      "open": 7.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 8.0,
+      "volume": 9000.0
+    },
+    {
+      "ts_event_ns": 1711949819999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711949999999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 7.0,
+      "close": 7.0,
+      "volume": 6900.0
+    },
+    {
+      "ts_event_ns": 1711950119999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711950239999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711950419999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4200.0
+    },
+    {
+      "ts_event_ns": 1711950539999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711950659999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 3800.0
+    },
+    {
+      "ts_event_ns": 1711950719999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 3800.0
+    },
+    {
+      "ts_event_ns": 1711950779999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 700.0
+    },
+    {
+      "ts_event_ns": 1711950839999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 3800.0
+    },
+    {
+      "ts_event_ns": 1711950959999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711951019999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 4000.0
+    },
+    {
+      "ts_event_ns": 1711951079999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 17500.0
+    },
+    {
+      "ts_event_ns": 1711951139999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 5500.0
+    },
+    {
+      "ts_event_ns": 1711951259999998976,
+      "open": 8.0,
+      "high": 8.0,
+      "low": 8.0,
+      "close": 8.0,
+      "volume": 10190200.0
+    }
+  ]
+}

@@ -23,6 +23,8 @@ using System.IO;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using Python.Runtime;
 
 public class ScenarioStartupHitlHarness : MonoBehaviour
@@ -130,9 +132,12 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
             _catalogPath = System.IO.Path.Combine(artifacts, "jquants-catalog");
         }
 
-        // strategy: repo fixture (machine-independent) unless overridden.
+        // strategy: kernel-native repo fixture (machine-independent) unless overridden.
+        // ADR-0006 (#49): the production Replay now runs through the nautilus-free kernel, so
+        // the default must be a engine.kernel.strategy.Strategy subclass — the nautilus
+        // spike_buy_sell.py would fail the kernel loader and re-introduce nautilus.
         _strategyFile = EnvConfig.Get("BACKCAST_HITL_STRATEGY",
-            System.IO.Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "spike_buy_sell.py"));
+            System.IO.Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "kernel_spike_buy_sell.py"));
 
         Debug.Log($"[SCENARIO STARTUP HITL] catalog={_catalogPath} strategy={_strategyFile}");
     }
@@ -325,12 +330,26 @@ public class ScenarioStartupHitlHarness : MonoBehaviour
         canvasGo.transform.SetParent(transform, false);
         canvasGo.GetComponent<Canvas>().renderMode = RenderMode.ScreenSpaceOverlay;
 
-        // EventSystem for InputField interaction (HITL).
-        if (UnityEngine.EventSystems.EventSystem.current == null)
+        // EventSystem for InputField interaction (HITL). The project uses the new Input System
+        // (activeInputHandler=1), so a legacy StandaloneInputModule throws every frame and
+        // input never reaches the tile — use InputSystemUIInputModule like the other harnesses
+        // (Hakoniwa/FloatingWindow/StrategyEditor/InfiniteCanvas). The scene may carry MORE THAN
+        // ONE EventSystem (scene-owned + harness-owned), so disable EVERY legacy module — a single
+        // FindAnyObjectByType only fixes one of them and the others keep throwing.
+        foreach (var legacy in FindObjectsByType<StandaloneInputModule>(FindObjectsSortMode.None))
+            legacy.enabled = false;
+
+        var existing = FindAnyObjectByType<EventSystem>();
+        if (existing == null)
         {
-            var es = new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem),
-                typeof(UnityEngine.EventSystems.StandaloneInputModule));
-            es.transform.SetParent(transform, false);
+            var go = new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
+            go.transform.SetParent(transform, false);
+        }
+        else
+        {
+            var module = existing.GetComponent<InputSystemUIInputModule>();
+            if (module == null) module = existing.gameObject.AddComponent<InputSystemUIInputModule>();
+            module.enabled = true;
         }
 
         var root = new GameObject("HakoniwaRoot", typeof(RectTransform)).GetComponent<RectTransform>();

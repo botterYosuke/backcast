@@ -99,6 +99,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
     string _autoStatus = "-";
     string _lastFooterSig = "";
+    string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
 
     [Serializable] struct _StateLite { public string replay_state; }
 
@@ -201,7 +202,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         // sidebar (V-host): reuse the durable controller brain; mock candidate source for now.
         var provider = new MockAvailableInstrumentsProvider(new[] { "1301.TSE", "6758.TSE", "7203.TSE", "8918.TSE", "9432.TSE", "9984.TSE" });
-        _sidebarCtrl = new UniverseSidebarController(new InstrumentRegistry(), new SelectedSymbol(), new UniverseWriteback(), provider);
+        // Share ONE SelectedSymbol with the footer's LiveAuto VM, so a sidebar instrument selection
+        // actually reaches LiveAuto start (else _footerSelected stays empty and LiveAuto always uses
+        // universe[0] regardless of what the user picked).
+        _sidebarCtrl = new UniverseSidebarController(new InstrumentRegistry(), _footerSelected, new UniverseWriteback(), provider);
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, new BoundStrategyFileProvider(_strategyFile));
     }
 
@@ -350,7 +354,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (sr != 0) { _footerStartResult = 0; _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId); }
 
         string st = _host.LatestStateJson;
-        if (!string.IsNullOrEmpty(st)) { _footerMode.ApplyPoll(st); _host.Conn.ApplyStatePoll(st); }
+        if (!string.IsNullOrEmpty(st))
+        {
+            // FooterModeViewModel.ApplyPoll has no internal dedup (it parses JSON every call), so gate it
+            // on a changed payload to avoid a per-frame parse. Conn.ApplyStatePoll dedups internally.
+            if (st != _lastFooterPoll) { _lastFooterPoll = st; _footerMode.ApplyPoll(st); }
+            _host.Conn.ApplyStatePoll(st);
+        }
 
         _footerAuto.ObserveLifecycle();
 
@@ -379,6 +389,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // seam; Replay → the replay transport. step/stop/speed are Replay-only (the footer hides them in Live).
     void OnFooterPlayPause()
     {
+        // The ▶ is hidden in LiveManual (the view); guard the handler too so a stray click can't fall
+        // through to the Replay branch and start a REPLAY run while the engine mode is LiveManual.
+        if (_footerMode.DisplayMode == FooterModeViewModel.LiveManual) return;
         if (_footerMode.DisplayMode == FooterModeViewModel.LiveAuto)
         {
             var d = _footerAuto.PlayPauseDecision();

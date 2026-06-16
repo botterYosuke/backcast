@@ -87,7 +87,6 @@ public sealed class WorkspaceEngineHost
     Thread _launcher;
     bool _running;
     bool _runFinished;
-    bool _aborting;
     bool _serverReady;
     RunRequest _req;
 
@@ -96,6 +95,8 @@ public sealed class WorkspaceEngineHost
     bool _loginRunning;
 
     // ── teardown ──
+    const int TEARDOWN_DRAIN_MS = 2000;        // bounded wait for in-flight live RPCs before close
+    bool _closing;                             // teardown started: reject new RPCs + launcher must not start_engine
     bool _teardownComplete;
     string _finalStateJson;
     readonly OnceGate _stopGate = new OnceGate();
@@ -123,35 +124,45 @@ public sealed class WorkspaceEngineHost
     // default so the root's existing `_host.InitializePython()` call stays source-compatible.
     public void InitializePython(string venue = "MOCK")
     {
-        if (s_pythonBootstrapped) return;
+        // Guard on the INSTANCE (_serverReady), not the static bootstrap: a re-Play with domain reload
+        // disabled creates a FRESH host whose _de/_server/_lanes are null, while s_pythonBootstrapped
+        // (static) is still true from the prior Play. The static guard covers only PythonEngine.Initialize
+        // (one per process); the server/lanes are per-host and must be (re)built each time.
+        if (Volatile.Read(ref _serverReady)) return;
         _venue = string.IsNullOrEmpty(venue) ? "MOCK" : venue;
 
-        PythonRuntimeLocator.ConfigureBeforeInitialize();
-        PythonEngine.Initialize();
-
-        using (PyObject sys = Py.Import("sys"))
-        using (PyObject sp = sys.GetAttr("path"))
+        if (!s_pythonBootstrapped)
         {
-            sp.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.ProjectRoot)).Dispose();
-            sp.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.VenvSite)).Dispose();
+            PythonRuntimeLocator.ConfigureBeforeInitialize();
+            PythonEngine.Initialize();
+            PythonEngine.BeginAllowThreads();   // main GIL-free for the rest of the process
+            s_pythonBootstrapped = true;
         }
 
-        using (PyObject core = Py.Import("engine.core"))
-        using (PyObject deCls = core.GetAttr("DataEngine"))
-            _de = deCls.Invoke();
-        using (PyObject sinkPy = PyObject.FromManagedObject(_sink))
-            _de.InvokeMethod("set_rust_event_sink", sinkPy).Dispose();
-        using (PyObject inproc = Py.Import("engine.inproc_server"))
-        using (PyObject srvCls = inproc.GetAttr("InprocLiveServer"))
-            _server = srvCls.Invoke(_de, new PyString(_venue));
-        // NOTE: do NOT dispose _de — load_replay_data is called on it per run.
-
-        PythonEngine.BeginAllowThreads();   // main GIL-free from here
+        // Build the persistent live-configured server for THIS host under an explicit GIL acquire
+        // (main is GIL-free after BeginAllowThreads — works on both first Play and re-Play).
+        using (Py.GIL())
+        {
+            using (PyObject sys = Py.Import("sys"))
+            using (PyObject sp = sys.GetAttr("path"))
+            {
+                sp.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.ProjectRoot)).Dispose();
+                sp.InvokeMethod("insert", new PyInt(0), new PyString(PythonRuntimeLocator.VenvSite)).Dispose();
+            }
+            using (PyObject core = Py.Import("engine.core"))
+            using (PyObject deCls = core.GetAttr("DataEngine"))
+                _de = deCls.Invoke();
+            using (PyObject sinkPy = PyObject.FromManagedObject(_sink))
+                _de.InvokeMethod("set_rust_event_sink", sinkPy).Dispose();
+            using (PyObject inproc = Py.Import("engine.inproc_server"))
+            using (PyObject srvCls = inproc.GetAttr("InprocLiveServer"))
+                _server = srvCls.Invoke(_de, new PyString(_venue));
+            // NOTE: do NOT dispose _de — load_replay_data is called on it per run.
+        }
 
         _lanes = new LiveRpcLanes(_server, _coord);
         _lanes.Start();                      // poll (get_state_json) + venue/order/secret lanes
         Volatile.Write(ref _serverReady, true);
-        s_pythonBootstrapped = true;
         Debug.Log("[WorkspaceEngineHost] live-configured server built; main GIL-free; lanes polling.");
     }
 
@@ -205,7 +216,7 @@ public sealed class WorkspaceEngineHost
             if (Volatile.Read(ref _startError) != null) return;
 
             // Teardown requested during load: do NOT enter the blocking start_engine (findings 0025 §10).
-            if (Volatile.Read(ref _aborting)) return;
+            if (Volatile.Read(ref _closing)) return;
 
             using (Py.GIL())
             using (PyDict cfg = new PyDict())
@@ -278,8 +289,8 @@ public sealed class WorkspaceEngineHost
     // venue_login → on success set_execution_mode(LiveManual). Mirrors ProductionLiveShell.ConnectEnv.
     public void VenueLogin(string venue, string credentialsSource, string environmentHint, Action<bool, string> onResult)
     {
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady)) { onResult?.Invoke(false, "server not ready"); return; }
         if (Volatile.Read(ref _loginRunning)) return;
-        _venue = venue;
         Volatile.Write(ref _loginRunning, true);
         new Thread(() =>
         {
@@ -298,9 +309,10 @@ public sealed class WorkspaceEngineHost
                             if (!m["success"].As<bool>()) { ok = false; ec = "set_execution_mode: " + m["error_code"].As<string>(); }
                         }
                 }
-                _conn.ApplyLoginAck(ok, ec);
             }
             catch (Exception e) { ok = false; ec = "login: " + e.Message; }
+            // NOTE: do NOT touch _conn (a main-thread VM) from this worker. The caller applies the ack
+            // on the main thread from onResult — e.g. `_host.Conn.ApplyLoginAck(ok, ec)` in DriveFooter.
             finally { Volatile.Write(ref _loginRunning, false); onResult?.Invoke(ok, ec); }
         }) { IsBackground = true, Name = "WorkspaceVenueLogin" }.Start();
     }
@@ -335,19 +347,20 @@ public sealed class WorkspaceEngineHost
             {
                 using (Py.GIL())
                 {
-                    string sid;
+                    // Register first; only start if it succeeded. NO early return inside the try — the
+                    // single `finally` is the ONLY cleanup site (an inner return would double-run it,
+                    // double-clearing the single-flight and double-delivering the result).
+                    string sid = null;
                     using (PyObject r = _server.InvokeMethod("register_live_strategy",
                                new PyString(strategyFile), new PyString(originalPath ?? "")))
-                    {
-                        if (!r["success"].As<bool>()) { EndLiveRpc(); onResult?.Invoke(false, ""); return; }
-                        sid = r["strategy_id"].As<string>();
-                    }
-                    using (PyObject s = _server.InvokeMethod("start_live_strategy",
-                               new PyString(sid), new PyString(instrumentId), new PyString(venue)))
-                    {
-                        ok = s["success"].As<bool>();
-                        if (ok) runId = s["run_id"].As<string>();
-                    }
+                        if (r["success"].As<bool>()) sid = r["strategy_id"].As<string>();
+                    if (sid != null)
+                        using (PyObject s = _server.InvokeMethod("start_live_strategy",
+                                   new PyString(sid), new PyString(instrumentId), new PyString(venue)))
+                        {
+                            ok = s["success"].As<bool>();
+                            if (ok) runId = s["run_id"].As<string>();
+                        }
                 }
             }
             catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] register/start error: " + e.Message); ok = false; }
@@ -409,7 +422,8 @@ public sealed class WorkspaceEngineHost
     {
         lock (_rpcLock)
         {
-            if (!Volatile.Read(ref _serverReady) || Volatile.Read(ref _liveRpcInFlight)) return false;
+            if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady) || Volatile.Read(ref _liveRpcInFlight))
+                return false;
             Volatile.Write(ref _liveRpcInFlight, true);
             return true;
         }
@@ -425,7 +439,13 @@ public sealed class WorkspaceEngineHost
     public void Stop()
     {
         if (!_stopGate.TryEnter()) return;
-        Volatile.Write(ref _aborting, true);
+        // Reject NEW live RPCs / the launcher's start_engine immediately, while the server stays alive
+        // for ForceStop/snapshot/close below (_serverReady is cleared only AFTER close).
+        Volatile.Write(ref _closing, true);
+
+        // Let any IN-FLIGHT live-RPC / login worker finish (bounded) before we touch the server, so a
+        // worker that passed BeginLiveRpc just before _closing can't hit a closed server (use-after-close).
+        DrainInFlight(TEARDOWN_DRAIN_MS);
 
         // capture the final snapshot while the server is still alive (badge/footer converge on it).
         try
@@ -443,7 +463,12 @@ public sealed class WorkspaceEngineHost
         try { if (_lanes != null && !_lanes.StopAndJoin()) Debug.LogWarning("[WorkspaceEngineHost] lanes did not stop in time."); }
         catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] lanes.StopAndJoin failed: " + e.Message); }
 
-        // stop the live components (loop/runner/account-sync) owned by the server.
+        // Join the launcher BEFORE closing the server, so start_engine has fully exited the server
+        // before close() tears down the loop/runner/account-sync it is returning through.
+        if (_launcher != null && _launcher.IsAlive && !_launcher.Join(LAUNCHER_JOIN_MS))
+            Debug.LogWarning("[WorkspaceEngineHost] launcher thread did not join in time; not blocking.");
+
+        Volatile.Write(ref _serverReady, false);   // server about to close: nothing may InvokeMethod after this
         try
         {
             if (_server != null)
@@ -451,11 +476,21 @@ public sealed class WorkspaceEngineHost
         }
         catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] server.close failed (non-fatal): " + e.Message); }
 
-        if (_launcher != null && _launcher.IsAlive && !_launcher.Join(LAUNCHER_JOIN_MS))
-            Debug.LogWarning("[WorkspaceEngineHost] launcher thread did not join in time; not blocking.");
-
         Volatile.Write(ref _teardownComplete, true);
-        Debug.Log("[WorkspaceEngineHost] Stop: lanes+launcher joined (best-effort); interpreter left alive.");
+        Debug.Log("[WorkspaceEngineHost] Stop: drained + lanes/launcher joined; server closed; interpreter left alive.");
+    }
+
+    // Bounded spin until no live-RPC / login worker is in flight (teardown only; main thread, app quitting).
+    void DrainInFlight(int budgetMs)
+    {
+        int waited = 0;
+        while ((Volatile.Read(ref _liveRpcInFlight) || Volatile.Read(ref _loginRunning)) && waited < budgetMs)
+        {
+            Thread.Sleep(20);
+            waited += 20;
+        }
+        if (waited >= budgetMs)
+            Debug.LogWarning("[WorkspaceEngineHost] live RPC still in flight after drain budget; closing anyway.");
     }
 }
 

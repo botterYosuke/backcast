@@ -92,6 +92,38 @@ def test_replay_path_intact_on_live_configured_server(tmp_path) -> None:
     assert sink_calls == [], f"Replay streaming invoked the live event sink: {sink_calls}"
 
 
+def test_sequential_reruns_reset_streaming_state_on_persistent_server(tmp_path) -> None:
+    """Code-review F6: the unified host (#39→#59) keeps ONE persistent DataEngine/server across runs
+    (the old ReplayEngineHost built a fresh one per run). This pins what that change is responsible
+    for: a SECOND Replay run (load_replay_data + start_engine on the SAME engine/server) must reset the
+    STREAMING / chart state — load_replay_data re-inits the ReducerState (core.py), so run 2 streams a
+    FRESH _N_BARS, not 2x accumulated. This is the invariant the persistent-server decision must keep.
+
+    NOTE — pre-existing, NOT caused by this change: the *portfolio* (RunBuffer fills) DOES accumulate
+    across re-runs of the SAME strategy, because `make_run_id(strategy_file)` is deterministic so the
+    file-backed RunBuffer re-uses the same run_dir and APPENDS. That run_dir is process-global
+    (get_run_buffer_base_dir), independent of the DataEngine instance, so the OLD fresh-per-run host hit
+    it too. It is a RunBuffer/run_id concern (#30/#49 replay-run), filed separately — this test
+    deliberately does NOT assert portfolio reset so as not to mask it as fixed."""
+    from engine.core import DataEngine
+    from engine.inproc_server import InprocLiveServer
+
+    _build_synthetic_duckdb(tmp_path)
+    eng = DataEngine(duckdb_root=str(tmp_path))
+    eng.set_rust_event_sink(lambda *a, **k: None)
+    server = InprocLiveServer(eng, "MOCK")
+
+    for run in (1, 2):
+        ok, err = eng.load_replay_data(["8918.TSE"], "2024-10-01", "2025-01-10", "Daily")
+        assert ok, f"run {run}: load_replay_data failed: {err}"
+        res = server.start_engine({"strategy_file": _STRATEGY})
+        assert res["success"], f"run {run}: start_engine failed (carryover?): {res}"
+
+        # streaming/chart state is fresh each run (load_replay_data re-inits ReducerState) — NOT 2x.
+        assert len(eng._rs.ohlc_points) == _N_BARS, f"run {run}: ohlc carryover {len(eng._rs.ohlc_points)}"
+        assert len(eng._rs.per_id_ohlc_points["8918.TSE"]) == _N_BARS, f"run {run}: per-id carryover"
+
+
 if __name__ == "__main__":
     import pytest
 

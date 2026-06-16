@@ -32,7 +32,7 @@ public static class LiveDemoRoundtripMenu
     // #39 Slice 3 footer HITL: MOCK is the deterministic, closed-market-OK regression leg. The
     // footer (mode segments + LiveAuto ▶) drives the flow now — Connect → "Auto" segment → footer ▶
     // (register→start) → panel reflects the run → press "Replay"/"Manual" to stop-then-switch (the
-    // run is torn down FIRST, no orphan). findings 0025 §6.
+    // run is torn down FIRST, no orphan). findings 0026 §6.
     [MenuItem("Tools/Backcast/Footer LiveAuto HITL (MOCK)")]
     static void SpawnMock() => Spawn("MOCK", "8918.TSE");
 

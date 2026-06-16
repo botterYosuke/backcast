@@ -1,6 +1,10 @@
-# findings 0025 — footer LiveAuto 起動 + mode 切替（#39 Slice 3 / UI）
+# findings 0026 — footer LiveAuto 起動 + mode 切替（#39 Slice 3 / UI）＋ #59 workspace root 統合
 
-issue #39。親: #4（Step 2: Live/Auto parity）/ #5（Step 3: カットオーバー）。
+> **採番**: 当初 0025 で起票したが、origin/main が `0025-backcast-workspace-root.md`（#59）を先に main へ
+> 載せたため番号衝突。本書を **0026** へリネームして解消（2026-06-16）。本文中の旧「0025」自己参照は本書
+> （=0026）を指す。
+
+issue #39。親: #4（Step 2: Live/Auto parity）/ #5（Step 3: カットオーバー）/ #59（本線 workspace root）。
 方針: **ADR-0005（1:1 表面 parity・固定 decision）/ ADR-0001（in-proc 埋め込み・orphan 不在）**。
 `grill-with-docs`（2026-06-15）で導出。移植 oracle = TTWR `src/ui/footer.rs`（mode segment /
 `execution_mode_toggle_system` / `footer_pause_resume_system` の LiveAuto 枝 / 可視性 system 群）。
@@ -198,3 +202,40 @@ graceful cancel は best-effort・ローカル teardown は成立）。「user-l
 **LOW（未修正・記録のみ）**: lock 中 Replay セグメント無効化で abort 不可・lock タイムアウト無し・sig が ActiveRunId 欠落/_autoStatus
 余分・選択セグメントの lock 中 dim・ResolveInstrument の silent 代替（TTWR parity）。**owner 側 TODO**: 改変後の compile + `FooterLiveAutoVerify`
 再走（new gate の AFK 追補が望ましい）→ HITL。
+
+---
+
+## #39 → #59 統合（footer を本線 workspace root へ載せ替え・2026-06-16）
+
+origin/main の **#59「Backcast workspace root」**（scene-authored 合成ルート・`BackcastWorkspaceRoot` + `ReplayEngineHost` +
+findings 0025-backcast-workspace-root + ADR-0009）を merge したところ、#59 が footer を **Replay-only** で構築していた
+（`ReplayFooterView` の #30 コンストラクタ）。owner 決定（2026-06-16）: **#59 の枠を正準とし、#39 の footer 機能をそこへ載せ替える**。
+
+### 確定した方針（owner grill 2026-06-16）
+- **decision 1**: `ReplayEngineHost`（Replay 専用・Run ごと server 構築）を **一般化** し、起動時に **live 構成の永続 server を1本**
+  （`DataEngine` + `set_rust_event_sink` + `InprocLiveServer(de, venue)`）建てて Replay も Live も同じ server で回す。`InprocLiveServer` は
+  replay/live 両 RPC を同一 façade に持つ（inproc_server.py）。
+- **decision 2**: live seam（event sink / `LivePanelViewModel` / `VenueConnectionViewModel` / `SecretModalController` / `LiveRpcLanes` /
+  venue login / live strategy lifecycle）は **host が所有**、`BackcastWorkspaceRoot` は View/VM を配線するだけ。
+- **decision 3（退役順序）**: `ProductionLiveShell` は live seam 移植＋検証が GREEN になるまで削除しない。
+
+### 実装ステップと検証（GREEN）
+1. **Step 1（engine AFK）**: live 構成 server で Replay 経路が不変であることを pin（`test_live_configured_server_replay_intact.py`・GREEN）。
+2. **Step 2（host）**: `ReplayEngineHost` → **`WorkspaceEngineHost`**。永続 live server・poll は `LiveRpcLanes` に一本化・live seam 所有・
+   live RPC メソッド化（`VenueLogin`/`SetExecutionMode`/`RegisterAndStartLiveAuto`/`Pause|Resume|StopLiveStrategy`/`StopLiveThenSetMode`(D2)）・
+   `_liveRpcInFlight` 単一フライト。Replay API は完全保持。**headless compile GREEN・CS0420 0**。
+3. **Step 3/4（root 配線）**: `BackcastWorkspaceRoot` に mode-aware footer・menu Venue を host へ・`DrainLiveEvents`・`DriveFooter`
+   （#39 review fix 込み移植）・mode-routed `OnFooterPlayPause`/`OnFooterMode`/`FooterAutoStart`。**headless compile GREEN**＋
+   **engine AFK**（`test_live_auto_lifecycle_inproc_server.py`: venue_login MOCK→LiveAuto→register→start→stop→Replay・GREEN）。
+
+### スコープ境界（#59 が元々分離）
+- **prod venue submenu UI = #42** / **secret modal・manual order ticket・live panels = #23**。本統合（#39）の責務外で、workspace root
+  にはまだ無い。AFK は `host.VenueLogin` を直接駆動するため #39 検証に venue UI は不要。
+- **ProductionLiveShell の扱い**: #39 footer の重複に加え、**#23 の manual ticket / live panels / tachibana live-demo roundtrip HITL** を
+  内包する（mainline root には未移植）。全面退役は #23 再 home が前提＝**owner 判断待ち**（findings 末尾「未決」）。
+- **ADR-0009 昇格**: 統合 root の **owner HITL（workspace scene 実 Play）GREEN 後**に proposed→accepted。現状 proposed のまま。
+
+### 未決（owner 判断・session 末）
+- `ProductionLiveShell` の最終処遇（(a) #23 HITL harness として残置 /(b) 全面退役＋#23 喪失 /(c) #23 を root へ再 home）。
+- `ProductionLiveShell.cs` の owner 未コミット WIP（MOCK dev connect ボタン）の commit/discard。
+- owner HITL: workspace scene を実 Play し、Connect→Auto→▶→RUNNING→抜けて teardown を目視（MOCK・閉局可）。

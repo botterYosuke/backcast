@@ -54,6 +54,29 @@ public sealed class InstrumentRegistry
         return true;
     }
 
+    // System prune (#41): retain only ids in `allowed`, dropping universe-outside instruments.
+    // DELIBERATELY bypasses the Editable gate — Editable forbids USER edits, not a system prune
+    // (TTWR parity: prune_runs_even_when_editable_is_false; RegistryValidator::prune calls
+    // ids.retain regardless of editable). The caller (UniversePruneGate) already returns null
+    // unless a live/replay universe is CONFIRMED, so this only runs on a determined allowlist.
+    //
+    // Fail-closed double-defense for the #253 stale-snapshot regression: a null OR EMPTY allowlist
+    // is a no-op (never wipe the registry), and an empty registry is a no-op. Fires Changed once,
+    // only when the set actually shrank, so chart/depth (SyncChartTilesToUniverse) follow without
+    // churn. Returns true iff the set shrank.
+    public bool PruneRetain(ISet<string> allowed)
+    {
+        if (allowed == null) return false;
+        if (allowed.Count == 0) return false;   // callee-side guard: empty allowlist must not wipe
+        if (_ids.Count == 0) return false;
+
+        int before = _ids.Count;
+        _ids.RemoveAll(id => !allowed.Contains(id));
+        if (_ids.Count == before) return false;
+        Changed?.Invoke();
+        return true;
+    }
+
     // Wholesale replace with an order-preserving dedup of the input. Returns true if the
     // resulting set differs from the prior one (so a no-op replace_all does not churn the
     // writeback revision).

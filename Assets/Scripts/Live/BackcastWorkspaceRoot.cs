@@ -78,6 +78,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ── reused brains / VMs (findings 0025 §5) ──
     readonly ScenarioStartupController _scenario = new ScenarioStartupController();
     readonly ReplayLifecycle _lifecycle = new ReplayLifecycle();
+
+    // #41 instruments universe prune: change-gated, on-demand prune of universe-outside instruments.
+    // _pruneSource is a null source today (no live fetch / catalog producer yet — prune stays dormant
+    // in production until the real sources land, same shape-now/supply-later split as #31). The
+    // driver re-evaluates only when an input changed and prunes via InstrumentRegistry.PruneRetain;
+    // its Changed event drives SyncChartTilesToUniverse (downstream reflect), so the driver does NOT
+    // subscribe to Changed (no self-reentry). See docs/findings/0041.
+    readonly IUniversePruneSource _pruneSource = new NullUniversePruneSource();
+    UniversePruneDriver _pruneDriver;
     readonly StrategyProviderRegistry _registry = new StrategyProviderRegistry();
     ReplayTransportViewModel _transport;
 
@@ -277,6 +286,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow (#60)
         _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
+        _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
         // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
@@ -686,7 +696,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveFooter();
+        DrivePrune();          // #41: after DriveFooter (fresh DisplayMode); before depth so a pruned chart tile propagates first
         DriveDepthLadders();   // #57: after DriveFooter so _footerMode.DisplayMode is the fresh mode
+    }
+
+    // #41 instruments universe prune: assemble the gate inputs fresh from the current mode + prune
+    // source + venue state + scenario.end (on-demand re-resolve, no cache), then let the change-gated
+    // driver decide. Both Live segments (LiveManual/LiveAuto) fold to the Live gate via IsLiveShape.
+    // VenueState is the raw poll state — the gate applies its OWN stricter {CONNECTED,SUBSCRIBED}
+    // predicate (NOT Conn.IsConnected, which includes RECONNECTING for the badge band). findings 0041.
+    void DrivePrune()
+    {
+        if (_pruneDriver == null) return;
+
+        _pruneSource.LiveSnapshot(out var source, out var status, out var liveIds);
+        string end = _scenario.Params != null ? _scenario.Params.End : null;
+        AvailableInstrumentsResult catalog = _pruneSource.ReplayCatalog(end);
+
+        var inputs = new UniversePruneInputs
+        {
+            Mode = HakoniwaBaseTiles.IsLiveShape(_footerMode.DisplayMode)
+                ? UniverseSourceMode.Live : UniverseSourceMode.Replay,
+            LiveSource = source,
+            LiveStatus = status,
+            VenueState = _host.Conn.VenueState,
+            LiveIds = liveIds,
+            ScenarioEnd = end,
+            ReplayStatus = catalog.Kind,
+            ReplayIds = catalog.Ids,
+        };
+        _pruneDriver.Tick(inputs);
     }
 
     // ── #23 re-home: live data tiles (Orders / Positions / Run Result), fed by _host.Panel. Gate on

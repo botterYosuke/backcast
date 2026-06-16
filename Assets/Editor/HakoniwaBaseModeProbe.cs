@@ -22,6 +22,7 @@ using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 
 public static class HakoniwaBaseModeProbe
 {
@@ -38,7 +39,8 @@ public static class HakoniwaBaseModeProbe
             fail = Section1_ModeTileKinds()
                 ?? Section2_BaseOnlyRetilePreservesChartIdentity()
                 ?? Section3_LiveManualAutoNoOp()
-                ?? Section4_RestoreReassertsBaseOrderAndVisibility();
+                ?? Section4_RestoreReassertsBaseOrderAndVisibility()
+                ?? Section5_HonestReplayEmptyState();
         }
         catch (Exception e)
         {
@@ -234,6 +236,62 @@ public static class HakoniwaBaseModeProbe
             if (baseTiles.TryGetValue(id, out var rt) && rt != null && !rt.gameObject.activeSelf)
                 return "restore(visibility): base tile left hidden after restore: " + id;
         return null;
+    }
+
+    // ── 5. honest Replay empty-state (regression for the code-review HIGH fix, commit cdc09d4) ──
+    // _host.Panel (LivePanelViewModel) is MONOTONIC — never cleared. Inject a live AccountEvent, render
+    // the base panels in Live (they show the figure), then flip _baseLive=false and re-render: every base
+    // panel MUST read "(no data — Replay)" — NOT the stale live figure. This is the exact desync the fix
+    // closes, and the part of HITL checkpoint #4 we can take off the owner's plate (findings 0028 §3/§11).
+    static string Section5_HonestReplayEmptyState()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "empty-state: BackcastWorkspaceRoot missing";
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var host = ty.GetField("_host", BF).GetValue(root) as WorkspaceEngineHost;
+        var baseLiveField = ty.GetField("_baseLive", BF);
+        var push = ty.GetMethod("PushLiveTiles", BF);
+        var bpView = ty.GetField("_buyingPowerView", BF)?.GetValue(root);
+        if (host == null || baseLiveField == null || push == null || bpView == null)
+            return "empty-state: root internals not found (renamed?)";
+
+        // inject a live account snapshot with a recognizable buying_power.
+        host.Panel.Apply("{\"AccountEvent\":{\"cash\":777.0,\"buying_power\":12345.0,\"ts_ms\":1}}");
+        if (!host.Panel.HasAccount) return "empty-state: AccountEvent not applied to the VM";
+
+        // Live shape → the panel renders the live figure (and is NOT the empty sentinel).
+        baseLiveField.SetValue(root, true);
+        push.Invoke(root, null);
+        string liveText = ViewText(bpView);
+        if (liveText == LivePanelTileView.ReplayEmpty) return "empty-state(Live): BuyingPower shows the empty sentinel instead of live data";
+        if (liveText == null || !liveText.Contains("12345")) return "empty-state(Live): BuyingPower did not render the injected buying_power (got: " + liveText + ")";
+
+        // Replay shape → EVERY base panel must drop the stale live figure for the empty sentinel.
+        baseLiveField.SetValue(root, false);
+        push.Invoke(root, null);
+        foreach (var fn in new[] { "_buyingPowerView", "_ordersView", "_positionsView", "_runResultView" })
+        {
+            var v = ty.GetField(fn, BF)?.GetValue(root);
+            if (v == null) continue;   // _ordersView etc. are #23 scene tiles; absent only if scene-unwired
+            string t = ViewText(v);
+            if (t != LivePanelTileView.ReplayEmpty)
+                return "empty-state(Replay): " + fn + " shows '" + t + "' — stale live data leaked into Replay (cdc09d4 regressed)";
+        }
+        return null;
+    }
+
+    // read the rendered Text of a LivePanelTileView via its private _content field.
+    static string ViewText(object view)
+    {
+        if (view == null) return null;
+        var content = view.GetType().GetField("_content", BF)?.GetValue(view) as Text;
+        return content != null ? content.text : null;
     }
 
     // assert [startup, buying_power, orders, positions, run_result, chart…] with startup at slot 0.

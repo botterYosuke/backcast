@@ -133,3 +133,23 @@ AFK GREEN（Unity 6000.4.11f1 `-batchmode -nographics`）:
 - honest empty state は **mode-aware で維持**: `LivePanelViewModel`（`_host.Panel`）は monotonic（clear されない）ため、Live→Replay flip 後に live formatter をそのまま回すと**直前の live 口座/建玉/約定が Replay 画面に残り誤表示**になる（code-review high が検出）。→ `LivePanelTileView.ShowReplayEmpty()` を追加し、`PushLiveTiles` が `_baseLive==false` のとき 4 panel に "(no data — Replay)" を描画（live のときのみ formatter）。#61 の honest-empty 意図（§0/§3）を #23 wiring 上で復元。Replay 実データは follow-up #65 のまま。
 
 **AFK 再 GREEN（マージ後・Unity 6000.4.11f1 `-batchmode -nographics`）**: `HakoniwaBaseModeProbe`（Section1-4・`_basePanels` 参照を `_baseTiles` ベース検証に更新）→ `[HAKONIWA BASE MODE PASS]`。`BackcastWorkspaceProbe` / `WorkspaceLiveSeamProbe`（#23 回帰）も確認。**owner 実機 HITL（§10 末）は引き続き pending。**
+
+**独立再検証（2026-06-16・別セッション・HEAD `45ce071`）**: マージが #61 を退行させていないか裏取りするため 4 probe を fresh プロセスで直列再実行し全 PASS を確認（CS コンパイルエラー無し）:
+- `[HAKONIWA BASE MODE PASS]` mode tile kinds + base-only retile + chart identity + live-shape no-op（#61 ゲート）
+- `[BACKCAST WORKSPACE PASS]` all sections green（#23/#61 統合）
+- `[HAKONIWA CHART TILE PASS]` box-grow + per-id ohlc decode + dynamic tile round-trip（#60 回帰）
+- `[WORKSPACE LIVE SEAM PASS]` connect→badge / place→FILLED→panel / cancel-lane GIL-safe / teardown clean, maxStall=29ms（#23 回帰）
+
+これで残るゲートは **owner 実機 HITL のみ**（§10 末のチェックリスト）。
+
+### HITL の AFK 巻き取り（2026-06-16・残 HITL 最小化）
+
+owner の「手順が多い・自動化できる分は巻き取れ」を受け、HITL チェックリストのうち**挙動として検証可能な項目を AFK probe に移管**した。
+
+- **`HakoniwaBaseModeProbe.Section5`（新規・honest empty-state 回帰）**: `_host.Panel.Apply("{\"AccountEvent\":{...buying_power:12345...}}")` で**実 live イベントを注入** → `_baseLive=true` + `PushLiveTiles` で BuyingPower が "12345" を描画することを確認 → `_baseLive=false` + `PushLiveTiles` で **4 panel 全てが `LivePanelTileView.ReplayEmpty` に戻り stale live 値を残さない**ことを assert。これは cdc09d4（monotonic VM の Live→Replay 誤表示）を**実描画テキストで機械ロック**したもので、HITL チェックリスト#4 の中核を owner の手から外した。→ `[HAKONIWA BASE MODE PASS]`（Section1-5・CS エラー無し）。
+- **AFK で担保済み（owner 不要）**: base retile（#3, Section2）／LiveManual⇄LiveAuto no-op（#3, Section3）／chart identity（#5, Section2）／restore 衝突・canonical 復元・visibility（#6, Section4）／honest empty-state（#4, Section5）。
+- **owner 実機 Play に残す最小スモーク（AFK 不能＝実レンダリング/実 Python/実ジェスチャ依存）**: ① Play で 5 base タイル＋4 パネルが画面に正しく描画される目視。② menu bar `Venue→Connect MOCK (dev)` が実際に接続でき footer に Manual/Auto セグメントが出る。③（任意）実 LiveAuto/Manual セッションで実 wire イベントが panel に流れる。④（任意）zoom 下の header-drag swap の操作感。base retile / 順序 / empty-state のロジックは AFK 済みなので、③④で違和感が無ければ受入可。
+
+### owner-run HITL: **PASS（2026-06-16）**
+
+owner が実機 Play で残スモーク（①描画目視 ②MOCK 接続→footer Manual/Auto 出現）を確認し **PASS**。AFK 巻き取り済み項目（base retile / Manual⇄Auto no-op / chart identity / restore 衝突 / honest empty-state）と合わせ、**#61（stage② mode-conditional base tiles）受入完了**。次は stage③ #62（per-mode profile）。Replay パネル実データは follow-up #65。

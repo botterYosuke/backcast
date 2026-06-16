@@ -74,6 +74,8 @@ When domain relationships are being discussed, stress-test them with specific sc
 
 When the user states how something works, check whether the code agrees. If you find a contradiction, surface it: "Your code cancels entire Orders, but you just said partial cancellation is possible — which is right?"
 
+**REOPENED issue は本文 AC ではなく最新コメントが正本** — grill を始める前に `gh issue view #N --comments` で**コメントスレッド全体を読む**。reopen された issue の本文 AC は古く、実際のスコープは最新の reopen コメントにあることが多い（#23 実例: 本文は「demo venue で発注→約定→建玉表示」の done-gate だったが、#39→#59 完了後に reopen され、最新コメントの実スコープは「ProductionLiveShell の order ticket / live panels / secret modal を BackcastWorkspaceRoot へ *re-home* し shell を退役」という全く別の refactor だった。本文だけ読んで grill を始めると設計の的を外す）。本文 AC を額面で受ける前に、コメントで supersede されていないか・別 issue（例 #42）へ責務が切り出されていないかを確認する。
+
 **移植 parity スライス（ADR-0005 の 1:1 表面 parity = menu_bar / settings / theme / reconcile_modal / instruments_universe_prune 等）では、issue の AC を額面通り受けず、移植元 TTWR の実ソース（`D:\Documents\The-Trader-Was-Replaced\src\ui\*.rs`）を grill の最初に直接読んで「AC が実態の正確な言い換えか」を検証する。** issue 文は実態の不正確な圧縮であることがある（#42 実例: issue は「File: strategy の Open/Save」「実行モード picker で Replay/LiveManual/LiveAuto 切替」と書いたが、`menu_bar.rs` の実態は **File=Layout の Open/Save**・**mode は File 操作の副作用**（File→New=LiveManual / Live 中 File→Open=LiveAuto）で明示 picker は無く、strategy Open は別 issue #16、明示 mode/run picker は footer #39/#30 の責務だった）。oracle が「実配線済み（TransportCommand を実際に send している）」か「未配線 stub」かは call site を grep で確認する（[[ttwr-scaffolding-not-an-oracle]] の規律。配線済みなら oracle、stub なら oracle にならない）。食い違いを見つけたら「正すのは AC の文言であって ADR ではない」を原則に、決定を slice の `docs/findings/` に記録し ADR-0005 を参照する（ADR は自己保護条項で固定）。
 
 ### Update CONTEXT.md inline

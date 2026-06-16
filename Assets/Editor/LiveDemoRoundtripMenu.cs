@@ -19,6 +19,9 @@ using UnityEngine;
 
 public static class LiveDemoRoundtripMenu
 {
+    // The VENUE is selected by LIVE_VENUE env (one-per-server, bound at root Awake) — NOT by the menu.
+    // These items only preset the instrument and spawn the connect harness; the harness shows the real
+    // configured venue. Set LIVE_VENUE=TACHIBANA|KABU in .env BEFORE Play for a real-venue HITL.
     [MenuItem("Tools/Backcast/Live Demo Roundtrip (Tachibana demo)")]
     static void SpawnTachibana() => Spawn("TACHIBANA", "8918.TSE");
 
@@ -28,14 +31,16 @@ public static class LiveDemoRoundtripMenu
     [MenuItem("Tools/Backcast/Live Demo Roundtrip (MOCK)")]
     static void SpawnMock() => Spawn("MOCK", "8918.TSE");
 
-    static void Spawn(string venue, string instrumentId)
+    static void Spawn(string expectedVenue, string instrumentId)
     {
         if (!EditorApplication.isPlaying)
         {
             EditorUtility.DisplayDialog(
                 "Live Demo Roundtrip",
-                "Enter Play mode first (BackcastWorkspace scene) — the root owns Python and renders the " +
-                "live surfaces; this harness only drives venue connect.",
+                "1) Set LIVE_VENUE=" + expectedVenue + " in .env (default MOCK) — the venue is bound when the " +
+                "server is built, so it must be chosen before Play.\n" +
+                "2) Enter Play mode (BackcastWorkspace), then run this menu again.\n\n" +
+                "The root owns Python and renders the live surfaces; this harness only drives venue connect.",
                 "OK");
             return;
         }
@@ -48,13 +53,19 @@ public static class LiveDemoRoundtripMenu
             return;
         }
 
-        LiveDemoRoundtripHarness.TargetVenue = venue;
+        var root = Object.FindAnyObjectByType<BackcastWorkspaceRoot>();
+        if (root != null && root.ConfiguredVenue != expectedVenue)
+            Debug.LogWarning("[LIVE DEMO ROUNDTRIP] this item expects LIVE_VENUE=" + expectedVenue +
+                             " but the running server is configured for " + root.ConfiguredVenue +
+                             ". Connecting " + expectedVenue + " would hit VENUE_MISMATCH — set LIVE_VENUE in .env and re-Play.");
+
         LiveDemoRoundtripHarness.DefaultInstrumentId = instrumentId;
         var go = new GameObject("LiveDemoRoundtripHarness");
         go.AddComponent<LiveDemoRoundtripHarness>();
         Object.DontDestroyOnLoad(go);
         Selection.activeGameObject = go;
-        Debug.Log("[LIVE DEMO ROUNDTRIP] spawned root-based harness for " + venue + " (" + instrumentId + ").");
+        Debug.Log("[LIVE DEMO ROUNDTRIP] spawned harness — configured venue=" +
+                  (root != null ? root.ConfiguredVenue : "?") + " instrument preset=" + instrumentId + ".");
     }
 
     [MenuItem("Tools/Backcast/Record [LIVE DEMO ROUNDTRIP PASS]")]

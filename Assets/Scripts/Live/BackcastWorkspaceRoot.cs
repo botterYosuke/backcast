@@ -123,7 +123,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     FooterModeViewModel _footerMode;
     LiveAutoTransportViewModel _footerAuto;
     readonly SelectedSymbol _footerSelected = new SelectedSymbol();
-    string _venue = "MOCK";                 // live venue id (MOCK for AFK/HITL bring-up)
+    string _venue = "MOCK";                 // live venue id; resolved from LIVE_VENUE env in Awake (default MOCK)
     volatile bool _footerModeRejected;      // worker→main: a SetExecutionMode / stop-then-switch failed
     volatile int _footerStartResult;        // worker→main: 0 none / 1 ok / 2 fail (register→start)
     volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
@@ -138,6 +138,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (_font == null) _font = Resources.GetBuiltinResource<Font>("Arial.ttf");
 
+        // Live venue is one-per-server and bound at server build (the backend rejects a later
+        // venue_login for a different venue with VENUE_MISMATCH, live_orchestrator.py:684). So it must
+        // be chosen BEFORE InitializePython — resolve it from LIVE_VENUE env now (the documented live
+        // selector; default MOCK keeps the Replay mainline credential-less). A demo HITL sets
+        // LIVE_VENUE=TACHIBANA|KABU in .env before Play.
+        _venue = ResolveLiveVenue();
+
         ResolvePaths();
         BuildWorkspace();        // UI build ALWAYS runs (independent of _ownPlay / batchmode)
         _built = true;           // this root is the active layout owner regardless of Python ownership
@@ -147,7 +154,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _isOwner = WorkspaceOwnership.ShouldClaim(_ownPlay, Application.isBatchMode, PythonEngine.IsInitialized, _host.PythonInitialized);
         if (_isOwner)
         {
-            try { _host.InitializePython(); }
+            try { _host.InitializePython(_venue); }   // build the server for the configured venue (not always MOCK)
             catch (Exception e) { Debug.LogError("[BackcastWorkspaceRoot] Python init failed: " + e); _isOwner = false; }
         }
         else
@@ -594,15 +601,46 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // durable VenueMenuViewModel (request build) + host.VenueLogin (login → LiveManual), never
     // reimplementing the retired ProductionLiveShell.ConnectEnv logic. The login ack is marshalled to
     // Conn on the main thread (Update). ──
-    public void ConnectVenue(string venue, string env)
+    // Connect the CONFIGURED venue (the one the server was built with — connecting any other would hit
+    // VENUE_MISMATCH). The env hint comes from the durable VenueMenuViewModel; MOCK uses the credential-
+    // less "env" source. This is the only connect entry the HITL harness needs — there are no per-variant
+    // buttons, so the harness can't drive a venue the server isn't configured for.
+    public void ConnectConfigured()
     {
-        if (!_isOwner || !_host.ServerReady) return;
-        VenueConnectRequest req = _venueMenu.BuildConnectRequest(venue, env);
-        if (venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt subprocess)
+        if (!CanConnectConfigured()) return;
+        string env = _venueMenu.EnvironmentHintFor(_venue);
+        VenueConnectRequest req = _venueMenu.BuildConnectRequest(_venue, env);
+        if (_venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt subprocess)
         _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint, (ok, ec) =>
         {
-            _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;
+            _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;   // marshalled to Conn in Update
         });
+    }
+
+    // Gate for the harness connect affordance. MOCK is the credential-less dev venue (always connectable
+    // when ready); real venues defer to the durable CanConnectEnv, which greys out *prod* unless the
+    // matching *_ALLOW_PROD flag is set (the #42 prod-safety parity, not regressed by the harness).
+    public bool CanConnectConfigured()
+    {
+        if (!_isOwner || !_host.ServerReady || _host.Conn.IsConnected || _host.LoginRunning) return false;
+        if (_venue == "MOCK") return true;
+        return _venueMenu.CanConnectEnv(_venue, _venueMenu.EnvironmentHintFor(_venue));
+    }
+
+    // Focus the HITL target instrument so the manual Order ticket (ManualInstrument → SelectedSymbol) and
+    // the chart/depth point at it — the harness calls this so its configured instrument is actually used,
+    // not merely displayed.
+    public void FocusInstrument(string iid)
+    {
+        if (!string.IsNullOrEmpty(iid)) _footerSelected.Set(iid);
+    }
+
+    // LIVE_VENUE selects the live venue the server is built for; default MOCK. Whitelisted so a typo can't
+    // build a server for an unknown venue (it falls back to MOCK rather than failing opaquely).
+    static string ResolveLiveVenue()
+    {
+        string v = (EnvConfig.Get("LIVE_VENUE", "MOCK") ?? "MOCK").Trim().ToUpperInvariant();
+        return (v == "TACHIBANA" || v == "KABU") ? v : "MOCK";
     }
 
     // Read-only seams the root-based HITL harness observes (connect affordance gating + badge readout).
@@ -610,6 +648,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     public bool ServerReady => _host.ServerReady;
     public bool VenueConnected => _host.Conn.IsConnected;
     public string VenueId => _host.Conn.VenueId;
+    public string ConfiguredVenue => _venue;
 
     // ── #23 re-home: tile formatters (mirror the retired ProductionLiveShell.DrawPanels content) ──
     static string FormatOrders(LivePanelViewModel vm)

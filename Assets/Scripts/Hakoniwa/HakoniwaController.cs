@@ -21,8 +21,11 @@ using UnityEngine;
 
 public class HakoniwaController
 {
-    // The canonical default tile order (= #12 LayoutDocument.Default() slot order). chart is
-    // a Hakoniwa tile (findings 0007 §1: TTWR removed the floating chart; capability parity).
+    // The canonical default tile order (= #12 LayoutDocument.Default() slot order), used by
+    // NormalizeOrder to append known-but-unordered tiles in a sensible sequence. This is only a
+    // FALLBACK ordering for tiles handed to the constructor; the #61 workspace orchestrator drives
+    // the live base order explicitly via the constructor ids + Reorder (it does NOT read this), and
+    // the #14 HakoniwaProbe builds its generic 5-tile grid (chart/status/…) from this set.
     public static readonly string[] DEFAULT_ORDER =
         { "chart", "status", "positions", "orders", "run_result" };
 
@@ -97,6 +100,24 @@ public class HakoniwaController
         bool had = _tilesById.Remove(id);
         if (_order.Remove(id) || had) { Rebuild(); return true; }
         return false;
+    }
+
+    // Move `desiredPrefix` ids to the FRONT in the given order; every remaining KNOWN tile keeps its
+    // current relative order after them. Used by the membership orchestrator to restore the
+    // [base…, chart…] invariant after a base retile (#61/findings 0028 §1): the orchestrator passes
+    // the mode's canonical base order, and the chart tiles (unlisted) fall through, order-preserved.
+    // Unknown ids in `desiredPrefix` are skipped (tolerance, like Apply). Stays box-size-free.
+    public void Reorder(IList<string> desiredPrefix)
+    {
+        var result = new List<string>(_order.Count);
+        var seen = new HashSet<string>();
+        if (desiredPrefix != null)
+            foreach (var id in desiredPrefix)
+                if (!string.IsNullOrEmpty(id) && _tilesById.ContainsKey(id) && seen.Add(id)) result.Add(id);
+        foreach (var id in _order)
+            if (seen.Add(id)) result.Add(id);
+        _order = result;
+        Rebuild();
     }
 
     // root-local NORMALIZED point (0..1) -> grid slot, or -1 if outside every cell.

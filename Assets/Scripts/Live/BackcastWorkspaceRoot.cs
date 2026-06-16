@@ -77,6 +77,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly Dictionary<string, RectTransform> _chartTiles = new Dictionary<string, RectTransform>();
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
+    // #61 mode-conditional base tiles: the 4 always-present panels (BuyingPower/Orders/Positions/
+    // RunResult) live here; `startup` is the only mode-conditional base tile (Replay-only, ADR 0013)
+    // and toggles via SyncBaseTilesToMode. _baseLive caches the current base shape (false=Replay,
+    // true=Live) so DriveFooter retiles only when the shape actually flips (TTWR set-comparison).
+    readonly Dictionary<string, RectTransform> _baseTiles = new Dictionary<string, RectTransform>();
+    readonly Dictionary<string, HakoniwaBasePanelView> _basePanels = new Dictionary<string, HakoniwaBasePanelView>();
+    bool _baseLive;
+    long _lastPanelStamp = -1;
     ScenarioStartupTile _tile;
     ReplayFooterView _footer;
     MenuBarViewModel _menuBar;
@@ -172,6 +180,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             new Dictionary<string, RectTransform> { { "startup", _startupTile } },
             new[] { "startup" });
         startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
+        _baseTiles[HakoniwaBaseTiles.Startup] = _startupTile;   // track for restore re-assert + visibility
+
+        // #61 base panels: BuyingPower/Orders/Positions/RunResult are present in BOTH mode shapes, so
+        // spawn them ONCE here (after startup, before charts). `startup` is the only mode-conditional
+        // base tile (ADR 0013) — SyncBaseTilesToMode toggles it. Build defaults to the Replay shape
+        // (DisplayMode seeds to Replay), so startup is present and _baseLive = false.
+        SpawnBasePanel(HakoniwaBaseTiles.BuyingPower, HakoniwaBasePanelView.Kind.BuyingPower);
+        SpawnBasePanel(HakoniwaBaseTiles.Orders, HakoniwaBasePanelView.Kind.Orders);
+        SpawnBasePanel(HakoniwaBaseTiles.Positions, HakoniwaBasePanelView.Kind.Positions);
+        SpawnBasePanel(HakoniwaBaseTiles.RunResult, HakoniwaBasePanelView.Kind.RunResult);
+        _baseLive = false;
 
         SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow
         _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
@@ -261,24 +280,28 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ApplyBoxGrow();
     }
 
-    // Build one chart tile (chart:<id>) with the same chrome as the base tiles + its own ChartView,
-    // register it with the controller (appended as the new last slot), and wire header-drag swap.
+    // Build a Hakoniwa tile shell (GameObject under the root + panel chrome + header-drag swap +
+    // controller registration) shared by chart and base tiles. Returns the tile root; `body` is the
+    // content inset the caller fills with its view (ChartView / HakoniwaBasePanelView). box-size-free.
+    RectTransform BuildTileShell(string id, out RectTransform body)
+    {
+        var go = new GameObject(id, typeof(RectTransform), typeof(Image));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(_hakoniwaRoot, false);
+        body = BuildTileChrome(rt, id, out HakoniwaTileHeaderInput header);
+        _hako.AddTile(id, rt);                     // box-size-free Rebuild lays the new cell
+        header.Initialize(_hako, _hakoniwaRoot, id);
+        return rt;
+    }
+
+    // Build one chart tile (chart:<id>) with its own ChartView, appended as the new last slot.
     void SpawnChartTile(string instrumentId)
     {
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
         string tileId = "chart:" + instrumentId;
-
-        var go = new GameObject(tileId, typeof(RectTransform), typeof(Image));
-        var rt = (RectTransform)go.transform;
-        rt.SetParent(_hakoniwaRoot, false);
-
-        RectTransform body = BuildTileChrome(rt, tileId, out HakoniwaTileHeaderInput header);
+        var rt = BuildTileShell(tileId, out RectTransform body);
         var cv = body.gameObject.AddComponent<ChartView>();
         cv.Build(body, showTitleBar: false);
-
-        _hako.AddTile(tileId, rt);                 // box-size-free Rebuild lays the new cell
-        header.Initialize(_hako, _hakoniwaRoot, tileId);
-
         _chartTiles[instrumentId] = rt;
         _chartViews[instrumentId] = cv;
     }
@@ -290,6 +313,67 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _chartTiles.Remove(instrumentId);
         _chartViews.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
+    }
+
+    // ---- #61 mode-conditional base tiles: the base SET is owned by the mode (TTWR ExecutionMode) ----
+    // Build one always-present base panel tile (same chrome as chart tiles) + its HakoniwaBasePanelView,
+    // register it with the controller, and wire header-drag swap. Mirrors SpawnChartTile.
+    void SpawnBasePanel(string id, HakoniwaBasePanelView.Kind kind)
+    {
+        if (string.IsNullOrEmpty(id) || _basePanels.ContainsKey(id)) return;
+        var rt = BuildTileShell(id, out RectTransform body);
+        var view = body.gameObject.AddComponent<HakoniwaBasePanelView>();
+        view.Build(body, kind, _font);
+        _baseTiles[id] = rt;
+        _basePanels[id] = view;
+    }
+
+    // Base retile (TTWR reconcile_hakoniwa_tiles, base-only). The ONLY mode-conditional base tile is
+    // `startup` (Replay-only, ADR 0013), so this toggles startup presence then restores the
+    // [base…, chart…] order via Reorder (chart tiles keep identity — universe-owned, #169 split).
+    // The scene-authored startup tile is DEACTIVATED (never destroyed) when leaving Replay.
+    void SyncBaseTilesToMode(bool live)
+    {
+        bool wantStartup = !live;
+        bool hasStartup = _hako.SlotOf(HakoniwaBaseTiles.Startup) >= 0;
+        if (wantStartup && !hasStartup)
+        {
+            if (_startupTile != null) _startupTile.gameObject.SetActive(true);
+            _hako.AddTile(HakoniwaBaseTiles.Startup, _startupTile);
+        }
+        else if (!wantStartup && hasStartup)
+        {
+            _hako.RemoveTile(HakoniwaBaseTiles.Startup);
+            if (_startupTile != null) _startupTile.gameObject.SetActive(false);
+        }
+
+        _hako.Reorder(HakoniwaBaseTiles.Kinds(live));   // [base…, chart…] invariant restored
+        ApplyBoxGrow();                                 // grid = n_base + n_chart (derived box-grow, #60)
+        _baseLive = live;
+        RefreshBasePanels(live);                        // shape flip: repaint now (Live data ⇄ "(no data)")
+    }
+
+    // Re-assert the canonical [base…, chart…] order + base visibility after a layout restore. The
+    // persisted doc may predate the base panels (a #60-era [startup, chart:*] sinks base tiles behind
+    // charts), carry stale #12 ids, or COLLIDE with the base ids (LayoutDocument.Default() places
+    // orders/positions/run_result at legacy slots) — Apply would then scramble the base region, sink
+    // it behind charts, or (a stale visible=false) hide a panel. Reorder restores canonical base order
+    // (charts keep their restored relative order); base tiles are not closeable so force them visible.
+    // #61 is single-shared-layout: base order is canonical on restore (per-mode order persist is #62).
+    void ReassertBaseAfterRestore()
+    {
+        _hako.Reorder(HakoniwaBaseTiles.Kinds(_baseLive));
+        foreach (var id in HakoniwaBaseTiles.Kinds(_baseLive))
+            if (_baseTiles.TryGetValue(id, out var rt) && rt != null) rt.gameObject.SetActive(true);
+    }
+
+    // Push the live VM into the 4 base panels. In Replay the poll has no panel data → honest empty
+    // state (follow-up #65). Gated by the caller on a changed AppliedCount/shape so it's not per-frame.
+    void RefreshBasePanels(bool live)
+    {
+        var panel = _host.Panel;
+        foreach (var kv in _basePanels)
+            if (kv.Value != null) kv.Value.Render(panel, live);
     }
 
     // Destroy at runtime, DestroyImmediate in edit mode (the AFK probe drives spawn/despawn headlessly
@@ -468,6 +552,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _host.Conn.ApplyStatePoll(st);
         }
 
+        // #61 base retile: the poll is the mode SoT (DisplayMode). When the base SHAPE flips
+        // (Replay⇄Live — LiveManual⇄LiveAuto is the same Live shape, so no-op), retile base only;
+        // chart tiles keep identity. Cheap bool compare each frame; SyncBaseTilesToMode only on flip.
+        bool live = HakoniwaBaseTiles.IsLiveShape(_footerMode.DisplayMode);
+        if (live != _baseLive) SyncBaseTilesToMode(live);   // base retile; SyncBaseTilesToMode repaints on the flip
+
+        // base panel content: refresh only when the live VM advanced (AppliedCount) — avoids per-frame
+        // Text churn. A shape flip already repaints inside SyncBaseTilesToMode (above). DrainLiveEvents
+        // (in Update, before DriveFooter) updated the VM.
+        long applied = _host.Panel.AppliedCount;
+        if (applied != _lastPanelStamp) { _lastPanelStamp = applied; RefreshBasePanels(live); }
+
         _footerAuto.ObserveLifecycle();
 
         // G1: a venue drop does NOT stop a running LiveAuto run (engine emits VenueLogoutDetected only),
@@ -627,6 +723,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (doc == null) return;
         if (doc.canvasView != null) _canvas.ApplyView(doc.canvasView);
         _hako.Apply(doc);
+        ReassertBaseAfterRestore();   // #61: keep base canonical + visible + before charts (collision/legacy-safe)
         RestoreFloating(doc);
         RestoreEditors(doc);
     }

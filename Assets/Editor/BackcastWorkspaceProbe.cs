@@ -429,9 +429,12 @@ public static class BackcastWorkspaceProbe
         if (scenario == null || hako == null || chartViews == null || hakoRoot == null)
             return "charttile: root internals not found (renamed?)";
 
-        // base = [startup] only; the old fixed "chart" tile is retired (not in the controller order).
+        // #61: base = Replay shape [startup, buying_power, orders, positions, run_result] (5 tiles);
+        // the old fixed "chart" tile is retired (not in the controller order).
         if (hako.SlotOf("startup") < 0) return "charttile: base startup tile missing";
         if (hako.SlotOf("chart") >= 0) return "charttile: retired fixed 'chart' tile still in the grid";
+        foreach (var id in HakoniwaBaseTiles.PanelOrder)
+            if (hako.SlotOf(id) < 0) return "charttile: #61 base panel tile missing: " + id;
 
         // membership tracks the universe SoT: a known 2-instrument universe spawns 2 chart tiles.
         scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });
@@ -439,7 +442,8 @@ public static class BackcastWorkspaceProbe
             return "charttile: chart tiles not spawned for universe instruments (Changed not wired?)";
         if (!chartViews.Contains("AAA.TSE") || !chartViews.Contains("BBB.TSE"))
             return "charttile: ChartView not created per instrument";
-        if (hako.Count != 3) return "charttile: expected [startup, chart:AAA, chart:BBB] (3 tiles)";
+        // 5 base (Replay) + 2 chart = 7.
+        if (hako.Count != 7) return "charttile: expected 5 base + 2 chart = 7 tiles, got " + hako.Count;
 
         // box-grow: the box SIZE is derived from n (orchestrator-applied, NOT persisted).
         var min = new Vector2(280f, 180f); var def = new Vector2(700f, 450f);

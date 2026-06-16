@@ -246,6 +246,9 @@ public class ProductionLiveShell : MonoBehaviour
         if (_loginRunning) return;
         _venue = venue;
         VenueConnectRequest req = _menu.BuildConnectRequest(venue, env);
+        // MOCK is a credential-less dev venue: connect with the "env" source every MOCK harness uses
+        // (venue_login("MOCK","env","")) so the tkinter prompt subprocess never spawns (#39 HITL).
+        if (venue == "MOCK") req.CredentialsSource = "env";
         _loginRunning = true;
         _status = "login (enter credentials)…";
         _login = new Thread(() =>
@@ -703,7 +706,14 @@ public class ProductionLiveShell : MonoBehaviour
 
     void DrawVenueMenu(bool ready)
     {
-        GUILayout.BeginArea(new Rect(96, 22, 260, 118), GUI.skin.box);
+        GUILayout.BeginArea(new Rect(96, 22, 260, 140), GUI.skin.box);
+        // #39 HITL: MOCK is the credential-less dev venue — not a TTWR ConnectVariant, so surface a
+        // dev-only connect here when the shell was launched as MOCK (Footer LiveAuto HITL menu).
+        if (_venue == "MOCK")
+        {
+            GUI.enabled = ready && !_conn.IsConnected && !_loginRunning;
+            if (GUILayout.Button("Connect MOCK (dev)")) { ConnectEnv("MOCK", ""); _openMenu = TopMenu.None; }
+        }
         foreach (var v in VenueMenuViewModel.ConnectVariants)
         {
             // Prod variants grey out unless *_ALLOW_PROD is set (mirrors the login dialog; Python

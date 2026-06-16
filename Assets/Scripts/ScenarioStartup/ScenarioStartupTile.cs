@@ -75,6 +75,11 @@ public sealed class ScenarioStartupTile
         _cashErr = MakeError(tile, ref y, errH);
 
         _universeField = MakeField(tile, "Universe (ids, comma/space)", ref y, rowH, OnUniverseChanged);
+        // On blur/submit, re-pull the field from the SoT (never ReplaceAll the text). A field that
+        // went stale while focused (the focus-guarded skip path) otherwise survives, so the NEXT
+        // keystroke's OnUniverseChanged would ReplaceAll(stale ids) and erase a sidebar add
+        // (findings 0025 §12, Finding 2).
+        _universeField.onEndEdit.AddListener(_ => PullUniverseField());
         _universeErr = MakeError(tile, ref y, errH);
 
         y -= 6f;
@@ -83,6 +88,10 @@ public sealed class ScenarioStartupTile
 
         SyncFieldsFromController();
         Refresh();
+
+        // Keep the held-mode universe field live when the SHARED SoT is edited elsewhere (#31
+        // sidebar/picker). Dispose() unsubscribes — the owning host calls it on teardown.
+        _ctrl.Universe.Changed += OnUniverseRegistryChanged;
     }
 
     // Pull controller state into the fields (after Populate / restore).
@@ -91,8 +100,17 @@ public sealed class ScenarioStartupTile
         if (_startField != null) _startField.SetTextWithoutNotify(_ctrl.Params.Start ?? "");
         if (_endField != null) _endField.SetTextWithoutNotify(_ctrl.Params.End ?? "");
         if (_cashField != null) _cashField.SetTextWithoutNotify(_ctrl.Params.InitialCash ?? "");
-        if (_universeField != null) _universeField.SetTextWithoutNotify(string.Join(", ", _ctrl.Universe.Ids));
+        PullUniverseField();
         Refresh();
+    }
+
+    // Re-pull ONLY the universe text field from the shared SoT (never the reverse — this never
+    // mutates the registry). Used after build/restore, on focus-loss recovery (onEndEdit), and when
+    // the SoT changes elsewhere (#31 sidebar/picker, #59 one-universe-per-workspace).
+    void PullUniverseField()
+    {
+        if (_universeField != null)
+            _universeField.SetTextWithoutNotify(string.Join(", ", _ctrl.Universe.Ids));
     }
 
     void OnUniverseChanged(string raw)
@@ -103,6 +121,26 @@ public sealed class ScenarioStartupTile
         _ctrl.Universe.ReplaceAll(ids);
         _ctrl.Params.Dirty = true;
         Refresh();
+    }
+
+    // The universe SoT changed from ELSEWHERE (#31 sidebar/picker editing the SHARED
+    // InstrumentRegistry, #59 one-universe-per-workspace). Re-pull the held-mode text field so a
+    // subsequent edit here does not ReplaceAll(stale ids) and erase the sidebar's add. FOCUS-GUARD:
+    // skip the text rewrite while the user is typing in this field (the field is the live editor
+    // then — and our own OnUniverseChanged→ReplaceAll re-enters here; rewriting mid-type would
+    // reformat under the caret). Refresh() still re-derives error labels / Run enablement.
+    void OnUniverseRegistryChanged()
+    {
+        if (_universeField != null && !_universeField.isFocused)
+            PullUniverseField();
+        Refresh();
+    }
+
+    // Unsubscribe from the shared universe SoT so a destroyed tile leaves no orphan handler
+    // pinning the controller. Idempotent; the owning host calls this on teardown.
+    public void Dispose()
+    {
+        if (_ctrl?.Universe != null) _ctrl.Universe.Changed -= OnUniverseRegistryChanged;
     }
 
     void OnRunClicked()

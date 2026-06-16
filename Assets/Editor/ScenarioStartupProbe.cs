@@ -18,8 +18,10 @@
 
 using System;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
 public static class ScenarioStartupProbe
 {
@@ -39,7 +41,10 @@ public static class ScenarioStartupProbe
                 ?? Section2_Validation()
                 ?? Section3_InstrumentRegistry()
                 ?? Section4_ReadRoundTripAndNewSidecar()
-                ?? Section5_ControllerRoundTripAndRunGate();
+                ?? Section5_ControllerRoundTripAndRunGate()
+                ?? Section6_RegistryChangeNotifies()
+                ?? Section7_TileResyncsFromSharedUniverse()
+                ?? Section8_TileBlurResyncsStaleField();
         }
         catch (Exception e)
         {
@@ -306,6 +311,119 @@ public static class ScenarioStartupProbe
             return "controller: fallback not used when sidecar absent";
 
         return null;
+    }
+
+    // ---- 6. universe SoT change-notification (#59 完成形: registry → second-view sync) ----
+    // Changed fires ONLY on a real set change (the `return true` paths), never on a no-op — so a
+    // subscriber re-pulls exactly when it must and never churns on idempotent edits.
+    static string Section6_RegistryChangeNotifies()
+    {
+        var reg = new InstrumentRegistry();
+        int fires = 0;
+        reg.Changed += () => fires++;
+
+        if (!reg.Add("1301.TSE")) return "event: real Add returned false";
+        if (fires != 1) return "event: Changed did not fire on real Add";
+        reg.Add("1301.TSE");                                   // duplicate → no change
+        if (fires != 1) return "event: Changed fired on no-op duplicate Add";
+        reg.Remove("ZZZZ.TSE");                                // absent → no change
+        if (fires != 1) return "event: Changed fired on absent Remove";
+        if (!reg.Remove("1301.TSE")) return "event: real Remove returned false";
+        if (fires != 2) return "event: Changed did not fire on real Remove";
+        if (!reg.ReplaceAll(new[] { "A", "B" })) return "event: real ReplaceAll returned false";
+        if (fires != 3) return "event: Changed did not fire on real ReplaceAll";
+        reg.ReplaceAll(new[] { "A", "B" });                    // idempotent → no change
+        if (fires != 3) return "event: Changed fired on idempotent ReplaceAll";
+
+        reg.Editable = false;                                  // gated mutators never fire
+        reg.Add("Z"); reg.Remove("A"); reg.ReplaceAll(new[] { "X" });
+        if (fires != 3) return "event: Changed fired while not editable";
+        return null;
+    }
+
+    // ---- 7. startup tile re-syncs its (held-mode uGUI) universe field when the SHARED SoT is
+    // edited elsewhere (#31 sidebar) — the registry→tile one-directional gap. Without it the field
+    // stays stale and a later tile edit ReplaceAll(stale)s away the sidebar's add. ----
+    static string Section7_TileResyncsFromSharedUniverse()
+    {
+        var go = new GameObject("probe_tile", typeof(RectTransform));
+        try
+        {
+            var tileRt = (RectTransform)go.transform;
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            var ctrl = new ScenarioStartupController();
+            ctrl.Populate(Path.Combine(TempDir, "tile_strategy.py"), new DateTime(2026, 6, 14)); // empty universe
+            var tile = new ScenarioStartupTile(ctrl, null, font);
+            tile.Build(tileRt);
+
+            var fld = typeof(ScenarioStartupTile)
+                .GetField("_universeField", BindingFlags.NonPublic | BindingFlags.Instance)
+                .GetValue(tile) as InputField;
+            if (fld == null) return "tile: _universeField missing";
+
+            // a SIDEBAR-side add into the SHARED universe SoT (field is not focused headless).
+            ctrl.Universe.Add("9999.TSE");
+            if (!fld.text.Contains("9999.TSE"))
+                return "tile: universe field did NOT re-sync from registry Changed (一方向 sync gap)";
+
+            // and a removal propagates too.
+            ctrl.Universe.Remove("9999.TSE");
+            if (fld.text.Contains("9999.TSE")) return "tile: field not re-synced after remove";
+
+            // Dispose unsubscribes — no orphan handler keeps re-syncing a discarded tile.
+            tile.Dispose();
+            ctrl.Universe.Add("8888.TSE");
+            if (fld.text.Contains("8888.TSE")) return "tile: still re-syncing after Dispose (handler leaked)";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 8. held-mode universe field RE-PULLS on blur/submit (#59 focus-loss recovery). While the
+    // field is FOCUSED, OnUniverseRegistryChanged skips the rewrite (the field is the live editor),
+    // so a sidebar edit made mid-type leaves the field stale; without an onEndEdit re-pull the next
+    // keystroke ReplaceAll(stale)s and erases the sidebar's change. Headless: isFocused is always
+    // false, so we DIRECTLY stale the field, then fire onEndEdit (the REAL wiring, not the private
+    // helper) and assert it reconciles to the SoT WITHOUT re-committing the stale text. ----
+    static string Section8_TileBlurResyncsStaleField()
+    {
+        var go = new GameObject("probe_tile_blur", typeof(RectTransform));
+        try
+        {
+            var tileRt = (RectTransform)go.transform;
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            var ctrl = new ScenarioStartupController();
+            ctrl.Populate(Path.Combine(TempDir, "tile_blur_strategy.py"), new DateTime(2026, 6, 14));
+            ctrl.Universe.Add("A.TSE");                         // the SoT after a sidebar settled to [A]
+            var tile = new ScenarioStartupTile(ctrl, null, font);
+            tile.Build(tileRt);
+
+            var fld = typeof(ScenarioStartupTile)
+                .GetField("_universeField", BindingFlags.NonPublic | BindingFlags.Instance)
+                .GetValue(tile) as InputField;
+            if (fld == null) return "blur: _universeField missing";
+            if (fld.text != "A.TSE") return "blur: field not synced to SoT on build";
+
+            // a field that went STALE while focused (the focused-skip path): it still shows a phantom
+            // id the SoT no longer carries. NOTE: Unity 6000.4 legacy InputField.SetTextWithoutNotify
+            // STILL fires onValueChanged (verified via diag: SetTextWithoutNotify("A.TSE") ->
+            // OnUniverseChanged("A.TSE")), which would ReplaceAll and corrupt the registry. The REAL
+            // focus-skip path never writes the field at all (OnUniverseRegistryChanged skips while
+            // focused), leaving the SoT clean. So set the backing m_Text directly — no notify, no
+            // rebuild, no ReplaceAll — to model "field stale, registry clean" faithfully.
+            typeof(InputField).GetField("m_Text", BindingFlags.NonPublic | BindingFlags.Instance)
+                .SetValue(fld, "9999.TSE, A.TSE");
+
+            // blur/submit fires onEndEdit — the recovery wiring must re-pull the field from the SoT.
+            fld.onEndEdit.Invoke(fld.text);
+
+            if (fld.text != "A.TSE")
+                return "blur: onEndEdit did NOT re-pull field from SoT (stale survives -> next keystroke ReplaceAll(stale))";
+            if (ctrl.Universe.Count != 1 || ctrl.Universe.Ids[0] != "A.TSE")
+                return "blur: onEndEdit MUTATED the registry (must re-pull, never ReplaceAll the stale text)";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 
     static ScenarioStartupParams Clone(

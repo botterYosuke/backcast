@@ -25,14 +25,18 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Python.Runtime;
 
 public sealed class BackcastWorkspaceRoot : MonoBehaviour
 {
     const string WINDOW_ID = "strategy_editor:region_001";
+    const string ORDER_WINDOW_ID = "order:region_001";   // #23 re-home: singleton Order ticket window
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -58,6 +62,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _strategyEditorBody;
     [SerializeField] FloatingWindowTitleInput _strategyEditorTitleInput;
 
+    [Header("Live data Hakoniwa tiles (scene-authored, #23 re-home)")]
+    [SerializeField] RectTransform _ordersTile;
+    [SerializeField] RectTransform _positionsTile;
+    [SerializeField] RectTransform _runResultTile;
+
+    [Header("Order ticket floating window (scene-authored, adopted, #23 re-home)")]
+    [SerializeField] RectTransform _orderWindow;
+    [SerializeField] RectTransform _orderWindowBody;
+    [SerializeField] FloatingWindowTitleInput _orderWindowTitleInput;
+
     // ── durable orchestration (extracted) ──
     readonly WorkspaceEngineHost _host = new WorkspaceEngineHost();   // #39→#59 Step 2: generalized (Replay + Live seam)
 
@@ -79,6 +93,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     UniverseSidebarController _sidebarCtrl;
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
+
+    // ── #23 re-home: live surfaces (3 data tiles / Order ticket / secret modal) ──
+    LivePanelTileView _ordersView, _positionsView, _runResultView;
+    OrderTicketView _orderTicket;
+    SecretModalOverlay _secretOverlay;
+    bool _secretModalOpenPrev;
+    // Manual ticket status crosses worker→main: LiveRpcLanes invokes the result callback on a lane
+    // thread, but the OrderTicketView (uGUI) is main-only. Stash to volatiles; DriveOrderTicket applies.
+    volatile string _manualStatusLine = "-";   // pre-formatted on the worker; applied to the view on main
+    volatile string _manualOrderId = "";        // retained for the next "Cancel last"
+    volatile bool _manualStatusDirty;
+    long _lastPanelApplied = -1;                 // LivePanelViewModel.AppliedCount gate (skip idle tile re-format)
+    // Venue login ack crosses worker→main (host.VenueLogin onResult runs off-main); apply to Conn on main.
+    volatile bool _loginAckPending;
+    volatile bool _loginAckOk;
+    volatile string _loginAckEc = "";
 
     // ── runtime state ──
     bool _isOwner;       // owns the Python interpreter this Play
@@ -161,11 +191,32 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _chartView = chartBody.gameObject.AddComponent<ChartView>();
         _chartView.Build(chartBody, showTitleBar: false);
 
+        // #23 re-home: three live data tiles (Orders / Positions / Run Result), fed by _host.Panel
+        // (LivePanelViewModel — the SoT, findings 0011 D2 / 0014 RH2). Empty until live events arrive.
+        RectTransform ordersBody = BuildTileChrome(_ordersTile, "orders", out HakoniwaTileHeaderInput ordersHeader);
+        _ordersView = new LivePanelTileView(FormatOrders);
+        _ordersView.Build(ordersBody, _font);
+
+        RectTransform positionsBody = BuildTileChrome(_positionsTile, "positions", out HakoniwaTileHeaderInput positionsHeader);
+        _positionsView = new LivePanelTileView(FormatPositions);
+        _positionsView.Build(positionsBody, _font);
+
+        RectTransform runResultBody = BuildTileChrome(_runResultTile, "run_result", out HakoniwaTileHeaderInput runResultHeader);
+        _runResultView = new LivePanelTileView(FormatRunResult);
+        _runResultView.Build(runResultBody, _font);
+
         _hako = new HakoniwaController(_hakoniwaRoot,
-            new Dictionary<string, RectTransform> { { "startup", _startupTile }, { "chart", _chartTile } },
-            new[] { "startup", "chart" });
+            new Dictionary<string, RectTransform>
+            {
+                { "startup", _startupTile }, { "chart", _chartTile },
+                { "orders", _ordersTile }, { "positions", _positionsTile }, { "run_result", _runResultTile },
+            },
+            new[] { "startup", "chart", "orders", "positions", "run_result" });
         startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
         chartHeader.Initialize(_hako, _hakoniwaRoot, "chart");
+        ordersHeader.Initialize(_hako, _hakoniwaRoot, "orders");
+        positionsHeader.Initialize(_hako, _hakoniwaRoot, "positions");
+        runResultHeader.Initialize(_hako, _hakoniwaRoot, "run_result");
 
         // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
@@ -173,6 +224,34 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
         var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, WINDOW_ID, _registry, font: _font);
         if (editorView != null) _editors[WINDOW_ID] = editorView;
+
+        // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
+        // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
+        // visible ONLY while the footer mode is LiveManual (DriveOrderTicket). Place/Cancel route to the
+        // host RPC lanes; the result callbacks marshal to main via the _manual* volatiles.
+        if (_orderWindow != null)
+        {
+            _windows.Adopt(FloatingWindowCatalog.KIND_ORDER, ORDER_WINDOW_ID, _orderWindow);
+            if (_orderWindowTitleInput != null)
+                _orderWindowTitleInput.Initialize(_windows, _canvas, _viewport, ORDER_WINDOW_ID);
+            _orderTicket = new OrderTicketView();
+            _orderTicket.Build(_orderWindowBody, _font);
+            _orderTicket.PlaceRequested += OnManualPlace;
+            _orderTicket.CancelRequested += OnManualCancel;
+            _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
+        }
+
+        // #23 re-home: secret modal overlay (screen-fixed chrome on its OWN ScreenSpaceOverlay canvas,
+        // outside Content). Keystrokes drain char-by-char via the New Input System onTextInput inside the
+        // overlay; the root routes them into the host's SecretModalController (no plaintext managed string).
+        var secretGo = new GameObject("SecretModalOverlay");
+        secretGo.transform.SetParent(transform, false);
+        _secretOverlay = secretGo.AddComponent<SecretModalOverlay>();
+        _secretOverlay.Build(_font);
+        _secretOverlay.CharTyped += OnSecretChar;
+        _secretOverlay.BackspacePressed += OnSecretBackspace;
+        _secretOverlay.SubmitClicked += SubmitSecret;
+        _secretOverlay.CancelClicked += CancelSecret;
 
         // footer transport + #39 mode segment / LiveAuto ▶ (wired to the host live seam). The
         // mode-aware footer reuses the same view; modeVm/autoVm enable the Replay/Manual/Auto segments
@@ -219,6 +298,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // the SAME frame builder as the scene-authoring tool so adopted/spawned editors can't diverge.
     RectTransform BuildEditorWindowFrame(FloatingWindowSpec spec, string id)
     {
+        // #23 re-home: an Order window restored from a saved doc uses the Order frame (the singleton
+        // ticket is adopted, not spawned, so this only fires for a stray/legacy id — frame only).
+        if (spec.kind == FloatingWindowCatalog.KIND_ORDER)
+        {
+            var orderRoot = OrderTicketWindowFrame.Build(id, out var orderTitle, out _);
+            orderTitle.Initialize(_windows, _canvas, _viewport, id);
+            return orderRoot;
+        }
         var root = StrategyEditorWindowFrame.Build(id, out var titleInput, out var body);
         titleInput.Initialize(_windows, _canvas, _viewport, id);
         if (spec.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR)
@@ -347,11 +434,224 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
 
-        // #39: drain live push events into the Panel (footer run lifecycle authority), then drive the
-        // mode footer. (A SecretRequired event — live order 2nd password — would surface a secret modal;
-        // that modal is #23's surface, so here we only feed the Panel.)
-        _host.DrainLiveEvents();
+        // #23 re-home: apply a pending venue-login ack to Conn on the main thread (host.VenueLogin's
+        // onResult fired on a worker; Conn is a main-only VM).
+        if (_loginAckPending) { _loginAckPending = false; _host.Conn.ApplyLoginAck(_loginAckOk, _loginAckEc); }
+
+        // #39/#23: drain live push events into the Panel (footer run lifecycle authority); a NEW
+        // SecretRequired opens the secret modal (#23 re-home). Then refresh the live tiles + Order
+        // ticket from the Panel, and drive the mode footer.
+        bool newSecret = _host.DrainLiveEvents();
+        DriveSecretModal(newSecret);
+        RefreshLiveTiles();
+        DriveOrderTicket();
         DriveFooter();
+    }
+
+    // ── #23 re-home: live data tiles (Orders / Positions / Run Result), fed by _host.Panel. Gate on
+    // LivePanelViewModel.AppliedCount so the per-frame path costs one long compare (no string/StringBuilder
+    // allocation) while the live session is idle — the formatters only run when an event was applied. ──
+    void RefreshLiveTiles()
+    {
+        long applied = _host.Panel.AppliedCount;
+        if (applied == _lastPanelApplied) return;
+        _lastPanelApplied = applied;
+        LivePanelViewModel p = _host.Panel;
+        _ordersView?.Refresh(p);
+        _positionsView?.Refresh(p);
+        _runResultView?.Refresh(p);
+    }
+
+    // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
+    // gate the buttons on a live session; apply any worker-thread place/cancel status to the (main) view. ──
+    void DriveOrderTicket()
+    {
+        if (_orderTicket == null || _orderWindow == null) return;
+        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
+        if (_orderWindow.gameObject.activeSelf != liveManual) _orderWindow.gameObject.SetActive(liveManual);
+        if (liveManual) _orderTicket.SetInstrument(ManualInstrument());   // the operator must see what they'll trade
+        _orderTicket.SetInteractable(_host.ServerReady && _host.Conn.IsConnected && !_host.TeardownComplete);
+        if (_manualStatusDirty)
+        {
+            _manualStatusDirty = false;
+            _orderTicket.SetStatus(_manualStatusLine);
+        }
+    }
+
+    void OnManualPlace()
+    {
+        if (_orderTicket == null) return;
+        // Invariant-culture parse: the qty/price text must use '.' as the decimal point regardless of the
+        // machine locale, matching the numeric convention the wire path expects (no locale-dependent misparse).
+        if (!double.TryParse(_orderTicket.Qty, NumberStyles.Float, CultureInfo.InvariantCulture, out double qty) || qty <= 0)
+        { _orderTicket.SetStatus("invalid qty"); return; }
+        double? price = null;
+        if (_orderTicket.Limit)
+        {
+            if (!double.TryParse(_orderTicket.Price, NumberStyles.Float, CultureInfo.InvariantCulture, out double p) || p <= 0)
+            { _orderTicket.SetStatus("invalid limit price"); return; }
+            price = p;
+        }
+        if (!_host.ServerReady || !_host.Conn.IsConnected || _host.Lanes == null) { _orderTicket.SetStatus("connect a venue first"); return; }
+        // Live order safety: refuse rather than route to an arbitrary symbol when none is resolvable.
+        string iid = ManualInstrument();
+        if (string.IsNullOrEmpty(iid)) { _orderTicket.SetStatus("select an instrument (sidebar/universe) first"); return; }
+        string side = _orderTicket.SideBuy ? "BUY" : "SELL";
+        string type = _orderTicket.Limit ? "LIMIT" : "MARKET";
+        _orderTicket.SetStatus("placing " + side + " " + qty + " " + type + "…");
+        _host.Lanes.SubmitPlaceOrder(ManualVenue(), iid, side, qty, price, type, "DAY", res =>
+        {
+            if (res.Success && !string.IsNullOrEmpty(res.OrderId)) _manualOrderId = res.OrderId;
+            string status = res.Success ? res.Status : ("ERR " + res.ErrorCode);
+            _manualStatusLine = status + (string.IsNullOrEmpty(_manualOrderId) ? "" : " (" + _manualOrderId + ")");
+            _manualStatusDirty = true;
+        });
+    }
+
+    void OnManualCancel()
+    {
+        if (_orderTicket == null || _host.Lanes == null) { _orderTicket?.SetStatus("not connected"); return; }
+        string oid = !string.IsNullOrEmpty(_manualOrderId) ? _manualOrderId
+                   : (_host.Panel.HasOrder ? _host.Panel.LatestOrder.OrderId : "");
+        if (string.IsNullOrEmpty(oid)) { _orderTicket.SetStatus("no order to cancel"); return; }
+        _orderTicket.SetStatus("cancel " + oid + "…");
+        // ack-then-poll venue: PENDING_CANCEL = 取消受付（poll が終端 CANCELED を後追い・findings 0014）。
+        _host.Lanes.SubmitCancelOrder(ManualVenue(), oid, res =>
+        {
+            _manualStatusLine = res.Success ? res.Status : ("ERR " + res.ErrorCode);
+            _manualStatusDirty = true;
+        });
+    }
+
+    // venue: the connected session id (poll-canonical) if any, else the configured fallback.
+    string ManualVenue() => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue;
+
+    // instrument: the sidebar-focused symbol if any (shared SelectedSymbol), else universe[0]. Returns ""
+    // when nothing is resolvable — the live-order path REFUSES rather than default to an arbitrary symbol.
+    string ManualInstrument()
+    {
+        if (_footerSelected != null && _footerSelected.HasValue) return _footerSelected.Value;
+        var ids = _scenario.Universe.Ids;
+        if (ids != null && ids.Count > 0) return ids[0];
+        return "";
+    }
+
+    // ── #23 re-home: secret modal (second password). The overlay drains keystrokes char-by-char; the
+    // root routes them into the host SecretModalController and reads MaskedDisplay back. No plaintext
+    // managed string is ever formed (the buffer lives only in the controller's zeroable char[]). ──
+    void DriveSecretModal(bool newSecret)
+    {
+        SecretModalController modal = _host.Modal;
+        if (newSecret && !modal.IsOpen)
+        {
+            modal.Open(_host.Panel.LatestSecretRequired, Time.realtimeSinceStartup);
+            // Secret discipline: drop any focused uGUI InputField (e.g. the order qty field or the strategy
+            // editor) so the device-level onTextInput keystrokes don't ALSO land in its plaintext .text.
+            if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+        }
+        if (modal.IsOpen && modal.TickExpire(Time.realtimeSinceStartup))   // 25s absolute timeout (zeroizes)
+            _menuBarView?.ShowMessage("secret modal timed out (25s) — reconnect to retry.");
+        if (modal.IsOpen != _secretModalOpenPrev)
+        {
+            _host.Coord.SetSecretModalOpen(modal.IsOpen);   // hold off logout while awaiting the secret
+            _secretModalOpenPrev = modal.IsOpen;
+        }
+        if (_secretOverlay != null)
+        {
+            _secretOverlay.SetVisible(modal.IsOpen);
+            if (modal.IsOpen) _secretOverlay.SetMasked(modal.MaskedDisplay);
+        }
+    }
+
+    void OnSecretChar(char c) => _host.Modal.AppendChar(c);
+    void OnSecretBackspace() => _host.Modal.Backspace();
+
+    void SubmitSecret()
+    {
+        SecretModalController modal = _host.Modal;
+        // Use the request the modal OPENED with (not the newest LatestSecretRequired), so a second
+        // SecretRequired arriving mid-entry can't make us submit these keystrokes against the wrong id.
+        string reqId = modal.RequestId;
+        char[] payload = modal.Submit();        // one-shot; controller zeroizes its own copy
+        if (payload == null) return;
+        _host.Coord.SetSecretModalOpen(false);
+        _secretModalOpenPrev = false;
+        // Zeroize the plaintext if the lane is unavailable (else the secret char[] would linger un-cleared —
+        // the lane is the only consumer that zeroizes it, mirroring the retired path's contract).
+        if (_host.Lanes != null) _host.Lanes.SubmitSecret(reqId, payload, _ => { });
+        else Array.Clear(payload, 0, payload.Length);
+    }
+
+    void CancelSecret()
+    {
+        _host.Modal.Cancel();
+        _host.Coord.SetSecretModalOpen(false);
+        _secretModalOpenPrev = false;
+    }
+
+    // ── #23 re-home: venue connect SEAM (findings 0014 RH5). The mainline Venue submenu UI that drives
+    // this is #42; the #23 root-based HITL harness invokes it for the demo roundtrip. It REUSES the
+    // durable VenueMenuViewModel (request build) + host.VenueLogin (login → LiveManual), never
+    // reimplementing the retired ProductionLiveShell.ConnectEnv logic. The login ack is marshalled to
+    // Conn on the main thread (Update). ──
+    public void ConnectVenue(string venue, string env)
+    {
+        if (!_isOwner || !_host.ServerReady) return;
+        VenueConnectRequest req = _venueMenu.BuildConnectRequest(venue, env);
+        if (venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt subprocess)
+        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint, (ok, ec) =>
+        {
+            _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;
+        });
+    }
+
+    // Read-only seams the root-based HITL harness observes (connect affordance gating + badge readout).
+    public bool IsPythonOwner => _isOwner;
+    public bool ServerReady => _host.ServerReady;
+    public bool VenueConnected => _host.Conn.IsConnected;
+    public string VenueId => _host.Conn.VenueId;
+
+    // ── #23 re-home: tile formatters (mirror the retired ProductionLiveShell.DrawPanels content) ──
+    static string FormatOrders(LivePanelViewModel vm)
+    {
+        var sb = new StringBuilder();
+        if (vm.HasOrder)
+        {
+            LiveOrderEvent o = vm.LatestOrder;
+            sb.Append(o.ClientOrderId).Append("  ").Append(o.Status)
+              .Append("  filled=").Append(o.FilledQty).Append('@').Append(o.AvgPrice).Append('\n');
+        }
+        else sb.Append("(none)\n");
+        sb.Append("filled-order count: ").Append(vm.FilledOrderCount);
+        return sb.ToString();
+    }
+
+    static string FormatPositions(LivePanelViewModel vm)
+    {
+        if (vm.HasAccount && vm.LatestAccount.Positions != null && vm.LatestAccount.Positions.Count > 0)
+        {
+            var sb = new StringBuilder();
+            foreach (LivePosition p in vm.LatestAccount.Positions)
+                sb.Append(p.symbol).Append("  qty=").Append(p.qty).Append("  avg=").Append(p.avg_price)
+                  .Append("  uPnL=").Append(p.unrealized_pnl).Append('\n');
+            sb.Append("cash=").Append(vm.LatestAccount.Cash).Append("  bp=").Append(vm.LatestAccount.BuyingPower);
+            return sb.ToString();
+        }
+        return "(flat / no account snapshot)";
+    }
+
+    static string FormatRunResult(LivePanelViewModel vm)
+    {
+        var sb = new StringBuilder();
+        if (vm.HasLifecycle) sb.Append("run=").Append(vm.LatestLifecycle.RunId).Append("  ").Append(vm.LatestLifecycle.Status).Append('\n');
+        if (vm.HasTelemetry)
+        {
+            LiveTelemetryEvent t = vm.LatestTelemetry;
+            sb.Append("realized=").Append(t.RealizedPnl).Append("  unrealized=").Append(t.UnrealizedPnl)
+              .Append("  orders=").Append(t.OrderCount).Append("  fills=").Append(t.FillCount);
+        }
+        if (!vm.HasLifecycle && !vm.HasTelemetry) sb.Append("(no run)");
+        return sb.ToString();
     }
 
     // ---- #39: main-thread footer drive (ported from the retired ProductionLiveShell, with its review

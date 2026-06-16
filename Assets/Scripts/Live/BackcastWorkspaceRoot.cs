@@ -100,6 +100,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // retiles only when the shape actually flips (TTWR set-comparison).
     readonly Dictionary<string, RectTransform> _baseTiles = new Dictionary<string, RectTransform>();
     bool _baseLive;
+    // #57 depth ladder: each chart tile's body is split into a mode-resized chartArea (left) + a
+    // LADDER_WIDTH right strip holding a per-instrument DepthLadderView. Live shows the ladder (chart
+    // shrinks left); Replay hides it (chart reclaims full width) — depth is Live-only (findings 0028
+    // D1/D2). _depthRendered dedups the per-id 21-row rebuild by a depth+last signature.
+    const float LADDER_WIDTH = 120f;                 // TTWR viewstate::LADDER_WIDTH
+    readonly Dictionary<string, RectTransform> _chartAreas = new Dictionary<string, RectTransform>();
+    readonly Dictionary<string, DepthLadderView> _depthLadders = new Dictionary<string, DepthLadderView>();
+    readonly Dictionary<string, long> _depthRendered = new Dictionary<string, long>();
+    bool _lastLadderLive;                             // last applied Live/Replay geometry (dedup the rect flip)
+    string _lastDepthPayload;                         // last poll payload rendered into the ladders
     ScenarioStartupTile _tile;
     ReplayFooterView _footer;
     MenuBarViewModel _menuBar;
@@ -414,10 +424,38 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
         string tileId = "chart:" + instrumentId;
         var rt = BuildTileShell(tileId, out RectTransform body);
-        var cv = body.gameObject.AddComponent<ChartView>();
-        cv.Build(body, showTitleBar: false);
+
+        // #57: split the body into a chartArea (left, right-inset in Live so candles aren't covered) +
+        // a LADDER_WIDTH right strip hosting this instrument's DepthLadderView (TTWR overlays_ladder.rs
+        // right pane, findings 0028 D1). Apply the CURRENT mode immediately so a tile spawned while Live
+        // shows its ladder (TTWR Added<ChartInstrument>, D3).
+        var chartAreaGo = new GameObject("ChartArea", typeof(RectTransform));
+        var chartArea = (RectTransform)chartAreaGo.transform;
+        chartArea.SetParent(body, false);
+        chartArea.anchorMin = Vector2.zero; chartArea.anchorMax = Vector2.one;
+        chartArea.offsetMin = Vector2.zero;
+        chartArea.offsetMax = new Vector2(_lastLadderLive ? -LADDER_WIDTH : 0f, 0f);
+
+        var ladderAreaGo = new GameObject("LadderArea", typeof(RectTransform));
+        var ladderArea = (RectTransform)ladderAreaGo.transform;
+        ladderArea.SetParent(body, false);
+        ladderArea.anchorMin = new Vector2(1f, 0f); ladderArea.anchorMax = new Vector2(1f, 1f);
+        ladderArea.pivot = new Vector2(1f, 0.5f);
+        ladderArea.sizeDelta = new Vector2(LADDER_WIDTH, 0f);
+        ladderArea.anchoredPosition = Vector2.zero;
+        var ladder = ladderAreaGo.AddComponent<DepthLadderView>();
+        ladder.Build(ladderArea);
+        ladder.Render(DepthSnapshotView.Empty);    // show the "(no board)" placeholder until depth streams (no blank pane)
+        ladderAreaGo.SetActive(_lastLadderLive);   // depth is Live-only (hidden in Replay)
+
+        var cv = chartAreaGo.AddComponent<ChartView>();
+        cv.Build(chartArea, showTitleBar: false);
+
         _chartTiles[instrumentId] = rt;
         _chartViews[instrumentId] = cv;
+        _chartAreas[instrumentId] = chartArea;
+        _depthLadders[instrumentId] = ladder;
+        _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll, not the one after
     }
 
     void DespawnChartTile(string instrumentId)
@@ -427,6 +465,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _chartTiles.Remove(instrumentId);
         _chartViews.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
+        // #57: the ladder + chartArea are children of the destroyed tile (no separate destroy needed).
+        _chartAreas.Remove(instrumentId);
+        _depthLadders.Remove(instrumentId);
+        _depthRendered.Remove(instrumentId);
     }
 
     // ---- #61 mode-conditional base tiles: the base SET is owned by the mode (TTWR ExecutionMode) ----
@@ -570,6 +612,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!_isOwner) { _tile.ShowRunMessage("Not the Python owner — cannot run."); return; }
 
         _chartRendered.Clear();
+        _depthRendered.Clear();        // #57: a fresh run invalidates the cached per-id ladder renders
+        _lastDepthPayload = null;
         _lastPayload = null;
         _errLogged = false;
         _finishedHandled = false;
@@ -642,6 +686,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveFooter();
+        DriveDepthLadders();   // #57: after DriveFooter so _footerMode.DisplayMode is the fresh mode
     }
 
     // ── #23 re-home: live data tiles (Orders / Positions / Run Result), fed by _host.Panel. Gate on
@@ -679,6 +724,93 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _positionsView?.Refresh(p);
         _runResultView?.Refresh(p);
     }
+
+    // ── #57: per-frame depth ladder drive (TTWR overlays_ladder.rs mode_sync + render, findings 0028
+    // D3/D5). depth is Live-only: flip the per-tile geometry on a Live↔Replay change, then in Live decode
+    // each chart tile's OWN per_instrument[id].depth + .price and render it (skipped entirely in Replay). ──
+    void DriveDepthLadders()
+    {
+        // Track the applied geometry even with zero ladders, so a tile spawned LATER (e.g. the universe
+        // was empty when Live was entered) reads the correct _lastLadderLive at SpawnChartTile time.
+        bool isLive = _footerMode != null && _footerMode.DisplayMode != FooterModeViewModel.Replay;
+        if (isLive != _lastLadderLive)
+        {
+            ApplyDepthLadderMode(isLive);   // loops zero ladders harmlessly when the universe is empty
+            _lastLadderLive = isLive;
+            _depthRendered.Clear();   // re-render fresh boards when the ladders become visible again
+            _lastDepthPayload = null; // ...even if the payload string is unchanged since we last rendered
+        }
+        if (!isLive || _depthLadders.Count == 0) return;   // Replay or no tiles: no decode
+
+        string state = _host.LatestStateJson;
+        if (state == null || state == _lastDepthPayload) return;
+        _lastDepthPayload = state;
+        RenderDepthLadders(state);
+    }
+
+    // Show the ladders (chart shrinks left by LADDER_WIDTH) or hide them (chart reclaims full width).
+    // Touches rects only on a mode change (DriveDepthLadders dedups via _lastLadderLive).
+    void ApplyDepthLadderMode(bool isLive)
+    {
+        foreach (var kv in _depthLadders)
+        {
+            if (_chartAreas.TryGetValue(kv.Key, out var area) && area != null)
+                area.offsetMax = new Vector2(isLive ? -LADDER_WIDTH : 0f, area.offsetMax.y);
+            if (kv.Value != null && kv.Value.gameObject.activeSelf != isLive)
+                kv.Value.gameObject.SetActive(isLive);
+        }
+    }
+
+    // Decode + render every chart tile's per-instrument board from the poll payload. Per-id signature
+    // early-out: a tile whose depth+last is unchanged skips its 21-row rebuild even when another id moved
+    // (TTWR depth_signature). Malformed snapshot keeps the last render (mirrors the OHLC loop).
+    void RenderDepthLadders(string state)
+    {
+        foreach (var kv in _depthLadders)
+        {
+            if (kv.Value == null) continue;
+            // Per-id try so one instrument's malformed depth keeps its OWN last render without freezing
+            // the other tiles' boards for this payload (the grounded payload is normally valid JSON).
+            try
+            {
+                DepthSnapshotView snap = DepthDecoder.Decode(state, kv.Key);
+                double? last = InstrumentPriceDecoder.Decode(state, kv.Key);
+                long sig = DepthSignature(snap, last);
+                if (_depthRendered.TryGetValue(kv.Key, out long prev) && prev == sig) continue;
+                _depthRendered[kv.Key] = sig;
+                kv.Value.Render(snap, last);
+            }
+            catch { /* keep this id's last render; other tiles still update */ }
+        }
+    }
+
+    // A content signature over EXACTLY what the ladder draws — depth presence, per-level price/size, and
+    // LAST — so an unchanged board skips its 21-row rebuild while any drift (same count, different prices)
+    // re-renders (TTWR FnvHasher). Deliberately NOT TimestampMs: a venue that bumps the board timestamp
+    // every poll while bids/asks/last are byte-identical would otherwise defeat the early-out and rebuild
+    // all 21 rows every poll (nothing visible changed).
+    static long DepthSignature(DepthSnapshotView snap, double? last)
+    {
+        long h = snap.HasDepth ? 1469598103934665603L : 1L;   // FNV-ish seed, distinct for no-board
+        h = MixLevels(h, snap.Asks);
+        h = MixLevels(h, snap.Bids);
+        h = Mix(h, last.HasValue ? BitConverter.DoubleToInt64Bits(last.Value) : long.MinValue);
+        return h;
+    }
+
+    static long MixLevels(long h, IReadOnlyList<DepthLevelView> levels)
+    {
+        int n = levels != null ? levels.Count : 0;
+        h = Mix(h, n);
+        for (int i = 0; i < n; i++)
+        {
+            h = Mix(h, BitConverter.DoubleToInt64Bits(levels[i].Price));
+            h = Mix(h, BitConverter.DoubleToInt64Bits(levels[i].Size));
+        }
+        return h;
+    }
+
+    static long Mix(long h, long v) => (h ^ v) * 1099511628211L;   // FNV-1a prime
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
     // gate the buttons on a live session; apply any worker-thread place/cancel status to the (main) view. ──

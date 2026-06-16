@@ -57,6 +57,25 @@ public static class PerInstrumentJsonLocator
             throw new FormatException(what + " is not an object");
     }
 
+    // pos at the first char of a SCALAR value (number / true / false). Returns the end index
+    // (exclusive) — the next ',' '}' ']' or whitespace. The ONE scalar scanner (extracted so a
+    // member-scalar reader, e.g. InstrumentPriceDecoder for per_instrument[id].price, never mirrors
+    // the number-scan branch of the private ScanValue). The caller must have asserted pos is NOT a
+    // container/string start (those are not scalars); an empty span throws (a real malformed bug).
+    public static int ScanScalarEnd(string s, int pos)
+    {
+        int start = pos;
+        while (pos < s.Length)
+        {
+            char d = s[pos];
+            if (d == ',' || d == '}' || d == ']' ||
+                d == ' ' || d == '\t' || d == '\n' || d == '\r') break;
+            pos++;
+        }
+        if (pos == start) throw new FormatException("empty scalar value");
+        return pos;
+    }
+
     public static void RequireArrayStart(string s, int pos, string what)
     {
         if (pos >= s.Length || s[pos] != '[')
@@ -124,16 +143,7 @@ public static class PerInstrumentJsonLocator
         char c = s[i];
         if (c == '{' || c == '[') return ScanContainer(s, i);
         if (c == '"') return ScanString(s, i);
-        int start = i;                                   // number / true / false / null
-        while (i < s.Length)
-        {
-            char d = s[i];
-            if (d == ',' || d == '}' || d == ']' ||
-                d == ' ' || d == '\t' || d == '\n' || d == '\r') break;
-            i++;
-        }
-        if (i == start) throw new FormatException("empty value");
-        return i;
+        return ScanScalarEnd(s, i);                      // number / true / false / null (one scalar scanner)
     }
 
     // i at '{' or '['. Returns index just past the matching close bracket. String contents are

@@ -131,3 +131,21 @@ footer mode を **Auto** → **▶** で LiveAuto 起動 → panel 反映 → **
 - (a) `MenuBarView` の uGUI 化 / OnGUI 除去（本スライスは IMGUI 移植）。
 - (b) native file picker + `File→Save As` + 任意パス Open（multi-document layout surface・findings 0017 §9(a)）。
 - (c) slice 3（発注/建玉/Auto パネル移設・#23/#39/#57）/ slice 4（`ProductionLiveShell` 全面退役＋parity 仕上げ）。
+
+## 追記（2026-06-16・cutover slice 3/4 を #23 re-home が実現）
+
+本 findings の follow-up (c) に挙げた **cutover slice 3（発注/建玉/Auto パネル移設）と slice 4
+（`ProductionLiveShell` 全面退役）は、slice 2（本 findings）マージ後に landed した `#23` re-home で
+実現済み**（commit `381d58c`「feat(#23): re-home live trading surfaces into BackcastWorkspaceRoot;
+retire ProductionLiveShell」・現 HEAD `872739d`）。正本は **findings 0014 §「再 home スライス（#23
+再オープン・#59 統合後）」**（RH1〜RH5・AFK GREEN）。要点:
+
+- Orders/Positions/RunResult → 5タイル Hakoniwa の `LivePanelTileView`（`_host.Panel` 給電）。
+- 手動発注 → `OrderTicketView`（`KIND_ORDER` adopt 窓・LiveManual 限定・Place/Cancel→`host.Lanes`）。
+- secret modal → `SecretModalOverlay`（ScreenSpaceOverlay・`onTextInput` char-drain）。
+- **`ProductionLiveShell.cs`/`ProductionLiveShellProbe.cs` を削除**（capability loss なし・`WorkspaceLiveSeamProbe`
+  が cancel-lane GIL RED ガードを継承）。
+
+→ cutover「4 スライス」の旧 framing は #23 が slices 3+4 を吸収して**追い越した**。slice-3 近傍で残る
+OPEN は **#57（`DepthLadderView` の本線 chart tile mount・Live で板表示／Replay で隠す）** と owner
+実機 demo roundtrip HITL（#4 close・market-hours-gated）。本 findings（slice 2 = menu bar）の成果自体は不変。

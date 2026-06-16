@@ -85,11 +85,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     bool _built;         // BuildWorkspace ran (this root is the active layout owner) — independent of Python
     readonly OnceGate _teardownGate = new OnceGate();
     string _strategyFile;
-    string _execMode = "Replay";
     string _lastPayload;
     int _renderedCount;
     bool _errLogged, _finishedHandled;
-    ReplayPhase? _lastFooterPhase;
+
+    // ── #39: footer mode segment + LiveAuto ▶, wired to the host live seam (Step 3/4) ──
+    FooterModeViewModel _footerMode;
+    LiveAutoTransportViewModel _footerAuto;
+    readonly SelectedSymbol _footerSelected = new SelectedSymbol();
+    string _venue = "MOCK";                 // live venue id (MOCK for AFK/HITL bring-up)
+    volatile bool _footerModeRejected;      // worker→main: a SetExecutionMode / stop-then-switch failed
+    volatile int _footerStartResult;        // worker→main: 0 none / 1 ok / 2 fail (register→start)
+    volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
+    string _autoStatus = "-";
+    string _lastFooterSig = "";
 
     [Serializable] struct _StateLite { public string replay_state; }
 
@@ -164,16 +173,29 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, WINDOW_ID, _registry, font: _font);
         if (editorView != null) _editors[WINDOW_ID] = editorView;
 
-        // footer transport (the durable parity surface).
+        // footer transport + #39 mode segment / LiveAuto ▶ (wired to the host live seam). The
+        // mode-aware footer reuses the same view; modeVm/autoVm enable the Replay/Manual/Auto segments
+        // and the LiveAuto ▶ on top of the Replay transport (findings 0026 §4).
         _transport = new ReplayTransportViewModel(_lifecycle);
-        _footer = new ReplayFooterView(_transport, OnFooterPlayPause, OnFooterStep, OnFooterStop, OnFooterSpeed, _font);
+        _footerMode = new FooterModeViewModel();
+        _footerAuto = new LiveAutoTransportViewModel(
+            _host.Panel,                                              // run lifecycle authority
+            new BoundStrategyFileProvider(_strategyFile),
+            _footerSelected,
+            () => new List<string>(_scenario.Universe.Ids),          // scenario run universe
+            () => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue);
+        _footer = new ReplayFooterView(
+            _transport, OnFooterPlayPause, OnFooterStep, OnFooterStop, OnFooterSpeed, _font,
+            _footerMode, _footerAuto, OnFooterMode);
         _footer.Build(_footerContainer);
 
-        // menu bar (V-host): File = Layout New/Open/Save.
-        _venueMenu = new VenueMenuViewModel(new VenueConnectionViewModel(), new LiveLogoutCoordinator());
-        _menuBar = new MenuBarViewModel(_venueMenu, new VenueConnectionViewModel(),
-            currentMode: () => _execMode,
-            isLiveAutoRunning: () => false,
+        // menu bar (V-host): File = Layout; the Venue submenu reuses the host's durable Conn/Coord so a
+        // connect routes to host.VenueLogin (the prod Venue submenu UI is #42; secret modal is #23).
+        // mode/run now come from the live seam (footer DisplayMode + Panel lifecycle + the host run).
+        _venueMenu = new VenueMenuViewModel(_host.Conn, _host.Coord);
+        _menuBar = new MenuBarViewModel(_venueMenu, _host.Conn,
+            currentMode: () => _footerMode.DisplayMode,
+            isLiveAutoRunning: () => _footerAuto != null && _footerAuto.HasActiveRun,
             isReplayRunning: () => _host.IsRunning);
         if (_menuBarView != null) _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave);
 
@@ -308,22 +330,114 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
 
-        if (_footer != null)
-        {
-            ReplayPhase phase = _lifecycle.Phase;
-            if (_lastFooterPhase != phase) { _lastFooterPhase = phase; _footer.Refresh(); }
-        }
+        // #39: drain live push events into the Panel (footer run lifecycle authority), then drive the
+        // mode footer. (A SecretRequired event — live order 2nd password — would surface a secret modal;
+        // that modal is #23's surface, so here we only feed the Panel.)
+        _host.DrainLiveEvents();
+        DriveFooter();
     }
 
-    // ---- footer click handlers → Host transport ----
+    // ---- #39: main-thread footer drive (ported from the retired ProductionLiveShell, with its review
+    // fixes): consume worker→VM signals, overwrite the mode display from the poll (D1), release the
+    // start guard as the lifecycle catches up, honour venue-drop auto-replay (G1: stop the run, not just
+    // fall back to Replay), and Refresh only on a real state change. ----
+    void DriveFooter()
+    {
+        if (_footer == null || _footerMode == null) return;
+
+        if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); }
+        int sr = _footerStartResult;
+        if (sr != 0) { _footerStartResult = 0; _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId); }
+
+        string st = _host.LatestStateJson;
+        if (!string.IsNullOrEmpty(st)) { _footerMode.ApplyPoll(st); _host.Conn.ApplyStatePoll(st); }
+
+        _footerAuto.ObserveLifecycle();
+
+        // G1: a venue drop does NOT stop a running LiveAuto run (engine emits VenueLogoutDetected only),
+        // so an active run must be stopped first. Act (and consume the one-shot) only when no live RPC is
+        // in flight and we are not tearing down — level-triggered, so deferring a frame is safe.
+        if (!_host.TeardownComplete && !_host.LiveRpcInFlight && _footerMode.ShouldAutoReplay)
+        {
+            _footerMode.ConsumeAutoReplay();
+            if (_footerAuto.HasActiveRun)
+                _host.StopLiveThenSetMode(_footerAuto.ActiveRunId, FooterModeViewModel.Replay, ok => { if (!ok) _footerModeRejected = true; });
+            else
+                _host.SetExecutionMode(FooterModeViewModel.Replay, ok => { if (!ok) _footerModeRejected = true; });
+        }
+
+        // Refresh only when something the footer renders changed (DisplayMode/lock/venue/run/glyph/auto
+        // status, plus the Replay transport phase for the Replay-mode footer).
+        string sig = _footerMode.DisplayMode + "|" + _footerMode.Locked + "|" + _footerMode.VenueLive
+                   + "|" + _footerAuto.HasActiveRun + "|" + _footerAuto.PlayGlyph + "|" + _autoStatus
+                   + "|" + _lifecycle.Phase;
+        if (sig != _lastFooterSig) { _lastFooterSig = sig; _footer.Refresh(); }
+    }
+
+    // ---- footer click handlers → Host (mode-routed) ----
+    // ▶/⏸ is mode-routed (TTWR footer_pause_resume_system): LiveAuto → start/pause/resume on the live
+    // seam; Replay → the replay transport. step/stop/speed are Replay-only (the footer hides them in Live).
     void OnFooterPlayPause()
     {
+        if (_footerMode.DisplayMode == FooterModeViewModel.LiveAuto)
+        {
+            var d = _footerAuto.PlayPauseDecision();
+            switch (d.Action)
+            {
+                case LiveAutoAction.Start: FooterAutoStart(d.Start); break;
+                case LiveAutoAction.Pause: _host.PauseLiveStrategy(d.RunId, _ => { }); _autoStatus = "pausing…"; break;
+                case LiveAutoAction.Resume: _host.ResumeLiveStrategy(d.RunId, _ => { }); _autoStatus = "resuming…"; break;
+                case LiveAutoAction.None: _autoStatus = d.Message; break;
+            }
+            return;
+        }
         switch (_transport.PlayPauseIntent())
         {
             case ReplayTransportIntent.Run: OnRun(); break;
             case ReplayTransportIntent.Pause: _host.Pause(); break;
             case ReplayTransportIntent.Resume: _host.Resume(); break;
         }
+    }
+
+    // footer mode segment → SetExecutionMode (D1) / stop-then-switch on leaving LiveAuto (D2).
+    void OnFooterMode(string target)
+    {
+        // Block a mode switch while a live RPC (or a start awaiting its first lifecycle) is in flight, so
+        // set_execution_mode can't race start_live_strategy under the GIL and a StopRunThenSwitch can't
+        // lock the segment VM then no-op (the #39 review's High finding).
+        if (_host.LiveRpcInFlight || _footerAuto.IsStartInFlight)
+        {
+            _menuBarView?.ShowMessage("Live action in flight — wait before switching mode.");
+            return;
+        }
+        var req = _footerMode.RequestMode(target, _footerAuto.HasActiveRun);
+        switch (req.Kind)
+        {
+            case FooterModeRequestKind.SwitchImmediate:
+            case FooterModeRequestKind.SwitchLockedLive:
+                _host.SetExecutionMode(req.Target, ok => { if (!ok) _footerModeRejected = true; });
+                break;
+            case FooterModeRequestKind.StopRunThenSwitch:
+                _host.StopLiveThenSetMode(_footerAuto.ActiveRunId, req.Target, ok => { if (!ok) _footerModeRejected = true; });
+                break;
+            case FooterModeRequestKind.BlockedVenueNotLive:
+                _menuBarView?.ShowMessage(req.Message);
+                break;
+            case FooterModeRequestKind.Ignore:
+                break;
+        }
+    }
+
+    // LiveAuto ▶ at rest → register→start on the live seam. Pre-flight is already gated by the VM; the
+    // connection gate (the VM only checks a non-empty venue string) is re-asserted here.
+    void FooterAutoStart(LiveAutoStartRequest req)
+    {
+        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; return; }
+        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; return; }
+        _footerAuto.NotifyStartIssued();
+        _autoStatus = "register+start…";
+        _host.RegisterAndStartLiveAuto(req.StrategyFile, req.OriginalPath, req.InstrumentId, req.Venue,
+            (ok, runId) => { _footerStartedRunId = runId; _footerStartResult = ok ? 1 : 2; });
     }
 
     void OnFooterStep() => _host.Step();

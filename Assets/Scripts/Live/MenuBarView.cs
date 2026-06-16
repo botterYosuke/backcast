@@ -41,31 +41,40 @@ public sealed class MenuBarView : MonoBehaviour
         Rect rect = GuiRectUtil.GuiScreenRect(_container);
         if (rect.width <= 0f || rect.height <= 0f) return;
 
+        // draw the menu bar (and its File dropdown) ON TOP of the other OnGUI chrome (e.g. the
+        // sidebar, which would otherwise occlude a dropdown that opens over the left column).
+        int prevDepth = GUI.depth;
+        GUI.depth = -100;
+
         GUI.Box(rect, GUIContent.none);
-        GUILayout.BeginArea(rect);   // clip: nothing draws outside the authored container
+        GUILayout.BeginArea(rect);   // clip the BAR row to the authored container
         GUILayout.BeginHorizontal();
-
-        if (GUILayout.Button(_fileOpen ? "File ▴" : "File ▾", GUILayout.Width(64)))
-            _fileOpen = !_fileOpen;
-
+        bool fileClicked = GUILayout.Button(_fileOpen ? "File ▴" : "File ▾", GUILayout.Width(64));
         // Edit / Venue / Help are placeholders here — their contents are #42's responsibility.
         GUILayout.Label("Edit", GUILayout.Width(40));
         GUILayout.Label("Venue", GUILayout.Width(48));
         GUILayout.Label("Help", GUILayout.Width(40));
-
         GUILayout.FlexibleSpace();
         if (!string.IsNullOrEmpty(_message)) GUILayout.Label(_message);
         GUILayout.EndHorizontal();
+        GUILayout.EndArea();
 
+        if (fileClicked) _fileOpen = !_fileOpen;
+
+        // the dropdown is drawn in a SEPARATE area BELOW the bar — drawing it inside the bar's
+        // own (menu-height) BeginArea clipped it away (the bug HITL ④ hit).
         if (_fileOpen)
         {
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button("New", GUILayout.Width(64))) { _fileOpen = false; _onNew?.Invoke(); }
-            if (GUILayout.Button("Open", GUILayout.Width(64))) { _fileOpen = false; _onOpen?.Invoke(); }
-            if (GUILayout.Button("Save", GUILayout.Width(64))) { _fileOpen = false; _onSave?.Invoke(); }
-            GUILayout.EndHorizontal();
+            const float itemH = 24f;
+            var dd = new Rect(rect.x, rect.yMax, 120f, itemH * 3f + 8f);
+            GUI.Box(dd, GUIContent.none);
+            GUILayout.BeginArea(dd);
+            if (GUILayout.Button("New", GUILayout.Height(itemH - 2f))) { _fileOpen = false; _onNew?.Invoke(); }
+            if (GUILayout.Button("Open", GUILayout.Height(itemH - 2f))) { _fileOpen = false; _onOpen?.Invoke(); }
+            if (GUILayout.Button("Save", GUILayout.Height(itemH - 2f))) { _fileOpen = false; _onSave?.Invoke(); }
+            GUILayout.EndArea();
         }
 
-        GUILayout.EndArea();
+        GUI.depth = prevDepth;
     }
 }

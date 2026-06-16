@@ -110,7 +110,7 @@ public sealed class MenuBarView : MonoBehaviour
         if (GUILayout.Button("New", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onNew?.Invoke(); }
         if (GUILayout.Button("Open  (layout)", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onOpen?.Invoke(); }
         if (GUILayout.Button("Save  (layout)", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onSave?.Invoke(); }
-        DisabledItem("Save As…  (deferred)");   // follow-up: native file picker (findings 0027 §3)
+        DisabledItem("Save As…  (see #69)");   // deferred: native file picker + multi-doc layout (#69, findings 0027 §3)
         GUILayout.EndArea();
     }
 

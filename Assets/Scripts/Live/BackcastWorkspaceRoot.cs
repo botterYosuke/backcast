@@ -101,6 +101,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile bool _footerModeRejected;      // worker→main: a SetExecutionMode / stop-then-switch failed
     volatile int _footerStartResult;        // worker→main: 0 none / 1 ok / 2 fail (register→start)
     volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
+    volatile int _venueLoginResult;         // worker→main: 0 none / 1 ok / 2 fail (venue_login)
+    volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
+    volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
     string _autoStatus = "-";
     string _lastFooterSig = "";
     string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
@@ -207,7 +210,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             currentMode: () => _footerMode.DisplayMode,
             isLiveAutoRunning: () => _footerAuto != null && _footerAuto.HasActiveRun,
             isReplayRunning: () => _host.IsRunning);
-        if (_menuBarView != null) _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave);
+        if (_menuBarView != null)
+            _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave,
+                OnVenueConnect, OnVenueDisconnect,
+                () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
+                () => _footerMode.DisplayMode,                        // bar mode badge
+                _venue);                                              // "MOCK" → dev connect item (editor only)
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -457,7 +465,26 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); }
         int sr = _footerStartResult;
-        if (sr != 0) { _footerStartResult = 0; _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId); }
+        if (sr != 0)
+        {
+            _footerStartResult = 0;
+            _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId);
+            // No live panels on the mainline yet (slice 3), so surface a start failure as a menu notice.
+            if (sr == 2) _menuBarView?.ShowMessage("LiveAuto start failed (see Console)");
+        }
+
+        // venue login/logout acks (worker→main): apply the login ack to the poll-canonical Conn VM and
+        // surface a failure notice; the badge otherwise tracks the poll (findings 0027 D5).
+        int lr = _venueLoginResult;
+        if (lr != 0)
+        {
+            _venueLoginResult = 0;
+            _host.Conn.ApplyLoginAck(lr == 1, _venueLoginError);
+            // clear the transient "connecting…" on success (the badge alone shows Connected); surface
+            // the reason on failure.
+            _menuBarView?.ShowMessage(lr == 2 ? "login failed: " + _venueLoginError : null);
+        }
+        if (_venueLogoutFailed) { _venueLogoutFailed = false; _menuBarView?.ShowMessage("logout failed (write in flight?)"); }
 
         string st = _host.LatestStateJson;
         if (!string.IsNullOrEmpty(st))
@@ -551,8 +578,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // connection gate (the VM only checks a non-empty venue string) is re-asserted here.
     void FooterAutoStart(LiveAutoStartRequest req)
     {
-        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; return; }
-        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; return; }
+        // Surface the pre-flight block reason: _autoStatus is not rendered on the mainline (no live panel
+        // yet — slice 3), so a ▶ that silently no-ops (no instrument / no saved strategy / venue) was
+        // undiagnosable. Route it to the menu notice (findings 0027 §2.1 HITL observability).
+        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; _menuBarView?.ShowMessage("LiveAuto ▶: " + req.Message); return; }
+        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; _menuBarView?.ShowMessage("connect a venue before starting LiveAuto"); return; }
         _footerAuto.NotifyStartIssued();
         _autoStatus = "register+start…";
         _host.RegisterAndStartLiveAuto(req.StrategyFile, req.OriginalPath, req.InstrumentId, req.Venue,
@@ -566,25 +596,88 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ---- File = Layout (findings 0025 §9) ----
     void OnFileNew()
     {
-        var decision = _menuBar.FileNew(out _, out string refuse);
+        var decision = _menuBar.FileNew(out string modeReq, out string refuse);
         if (decision == FileNewDecision.RefusedRunning) { _menuBarView?.ShowMessage(refuse); return; }
-        // workspace clear: scenario buffer + universe (the in-memory clear the host owns).
+
+        // full TTWR in-memory reset (findings 0017 §4) that HONOURS the adopt invariant (findings 0025 §8):
+        // ADDITIONAL editor windows are destroyed + unregistered; the scene-authored adopted editor is
+        // reset IN PLACE (never destroyed — Apply(Default()) would destroy it, so close each additional
+        // window individually). canvas pan/zoom + Hakoniwa are NOT reset (§4 targets strategy/editor state).
+        var additional = new List<string>();
+        foreach (var id in _editors.Keys) if (id != WINDOW_ID) additional.Add(id);
+        foreach (var id in additional)
+        {
+            _windows.Close(id);
+            _registry.Unregister(id);
+            _editors.Remove(id);
+        }
+        if (_editors.TryGetValue(WINDOW_ID, out var adoptedEditor) && adoptedEditor != null)
+            adoptedEditor.ResetUnboundEmpty();
+
+        // scenario buffer + universe (the in-memory clear the host owns).
         _scenario.Clear();
         _tile?.SyncFieldsFromController();
+
+        // mode side-effect (findings 0027 D3): SetExecutionMode(LiveManual) ONLY when connected — the VM
+        // returns null otherwise (gap② guard, TTWR observable no-op). HITL-verified; the AFK probe runs
+        // disconnected so modeReq is null here and the host is never touched.
+        SendModeSideEffect(modeReq);
+
         _menuBarView?.ShowMessage("New: workspace cleared.");
     }
 
     void OnFileOpen()
     {
-        _ = _menuBar.FileOpenModeSideEffect();   // Live-mode side-effect (no-op in Replay mainline; #39/#42)
+        // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load (findings 0017 §1).
+        // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
+        SendModeSideEffect(_menuBar.FileOpenModeSideEffect());
         RestoreLayout();
         _menuBarView?.ShowMessage("Open: layout restored.");
+    }
+
+    // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op
+    // for a null mode (the VM returns null when disconnected / not in a Live mode — TTWR observable no-op).
+    void SendModeSideEffect(string mode)
+    {
+        if (mode != null) _host.SetExecutionMode(mode, ok => { if (!ok) _footerModeRejected = true; });
     }
 
     void OnFileSave()
     {
         SaveLayout();
         _menuBarView?.ShowMessage("Save: layout written.");
+    }
+
+    // ---- Venue submenu → host venue RPCs (findings 0027 D5). Connect builds the request via the reused
+    // VenueMenuViewModel (MOCK = credential-less dev venue → "env" source so no tkinter prompt spawns),
+    // routes to the host lane, and the login ack is marshalled to main in DriveFooter (worker→main). The
+    // host owns the GIL discipline; this root never touches _conn off the main thread. ----
+    void OnVenueConnect(string venue, string env)
+    {
+        _venue = venue;
+        VenueConnectRequest req = _venueMenu.BuildConnectRequest(venue, env);
+        if (venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (findings 0027 D2)
+        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint,
+            (ok, ec) => { _venueLoginError = ec; _venueLoginResult = ok ? 1 : 2; });
+        _menuBarView?.ShowMessage(venue == "MOCK" ? "connecting MOCK…" : "login (enter credentials)…");
+    }
+
+    void OnVenueDisconnect()
+    {
+        // Serialize against in-flight live RPCs (same guard as OnFooterMode) so logout can't interleave
+        // with a register→start / mode switch under the GIL (review High).
+        if (_host.LiveRpcInFlight || _footerAuto.IsStartInFlight)
+        {
+            _menuBarView?.ShowMessage("Live action in flight — wait before disconnecting.");
+            return;
+        }
+        // With an active LiveAuto run, stop it + leave Live (Replay) BEFORE venue_logout so the engine's
+        // _teardown_live_components can't race the footer's auto-replay recovery (review High, D2 ordering).
+        if (_footerAuto.HasActiveRun)
+            _host.StopLiveThenLogout(_footerAuto.ActiveRunId, ok => { if (!ok) _venueLogoutFailed = true; });
+        else
+            _host.VenueLogout(ok => { if (!ok) _venueLogoutFailed = true; });
+        _menuBarView?.ShowMessage("disconnecting…");
     }
 
     // ---- layout persistence (4 dimensions) ----

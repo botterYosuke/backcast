@@ -178,6 +178,17 @@ public class StrategyEditorView : MonoBehaviour
         SyncFromDocument();
     }
 
+    // File→New reset (findings 0027 D3): drop to unbound-empty WITHOUT destroying the view, so the
+    // scene-authored adopted editor is reset IN PLACE (findings 0025 §8). Text/path cleared, history
+    // dropped, and the InputField + token surface re-synced so nothing stale renders. Mirrors
+    // RestoreFrom's reset→clear→sync boundary so the InputField never diverges from the document.
+    public void ResetUnboundEmpty()
+    {
+        Document.ResetUnboundEmpty();
+        _history.Clear();
+        SyncFromDocument();
+    }
+
     // Push the document's current text into the InputField without recording, and reset the
     // snapshot to match (used after open/restore/unbound-empty).
     void SyncFromDocument()

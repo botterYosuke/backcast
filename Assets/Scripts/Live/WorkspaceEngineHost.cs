@@ -317,6 +317,71 @@ public sealed class WorkspaceEngineHost
         }) { IsBackground = true, Name = "WorkspaceVenueLogin" }.Start();
     }
 
+    // venue_logout (Venue→Disconnect; findings 0027 D5). Mirrors ProductionLiveShell.Disconnect: gated
+    // by the LiveLogoutCoordinator quiet-lane (D7 Wall 1) so it can't fire while a write is in flight,
+    // runs off-main under the GIL, and reuses _loginRunning so login/logout are mutually exclusive. The
+    // persistent server + replay survive (ADR-0010: venue_state and replay_state are independent); the
+    // continuous poll then reports DISCONNECTED and DriveFooter's G1 tears down any active LiveAuto run.
+    public void VenueLogout(Action<bool> onResult)
+    {
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady)) { onResult?.Invoke(false); return; }
+        if (!_coord.RequestLogout()) { onResult?.Invoke(false); return; }      // write in flight → defer
+        if (!_coord.ConsumePendingLogout()) { onResult?.Invoke(false); return; }
+        // Join the SAME single-flight as set/start/stop (not just _loginRunning) so a Disconnect can't
+        // interleave venue_logout with another live RPC under the GIL (review High). The disconnect path
+        // with an active run goes through StopLiveThenLogout instead.
+        if (!BeginLiveRpc()) { onResult?.Invoke(false); return; }
+        new Thread(() =>
+        {
+            bool ok = false;
+            try
+            {
+                // Match the shell: the venue_logout return is not contractually a {success} dict, so a
+                // clean (exception-free) invoke IS the success signal; the poll carries the new state.
+                using (Py.GIL())
+                using (_server.InvokeMethod("venue_logout")) { }
+                ok = true;
+            }
+            catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] venue_logout error: " + e.Message); }
+            finally { EndLiveRpc(); onResult?.Invoke(ok); }
+        }) { IsBackground = true, Name = "WorkspaceVenueLogout" }.Start();
+    }
+
+    // Disconnect WITH an active LiveAuto run (review High): stop the run, leave Live (Replay), THEN
+    // venue_logout — all on ONE worker under ONE single-flight + the logout quiet-lane gate. Sequencing
+    // it here means venue_logout's _teardown_live_components (live_orchestrator.py:848-851) can't race the
+    // footer's poll-driven auto-replay recovery, and logout can't interleave with another live RPC. The
+    // venue always leaves regardless of the graceful-stop result (venue_logout's teardown is the backstop);
+    // ok reports whether the whole disconnect completed without throwing.
+    public void StopLiveThenLogout(string runId, Action<bool> onResult)
+    {
+        if (string.IsNullOrEmpty(runId)) { VenueLogout(onResult); return; }
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady)) { onResult?.Invoke(false); return; }
+        if (!_coord.RequestLogout()) { onResult?.Invoke(false); return; }
+        if (!_coord.ConsumePendingLogout()) { onResult?.Invoke(false); return; }
+        if (!BeginLiveRpc()) { onResult?.Invoke(false); return; }
+        new Thread(() =>
+        {
+            bool ok = false;
+            try
+            {
+                using (Py.GIL())
+                {
+                    bool stopped;
+                    using (PyObject s = _server.InvokeMethod("stop_live_strategy", new PyString(runId)))
+                        stopped = s["success"].As<bool>();
+                    if (!stopped) Debug.LogWarning("[WorkspaceEngineHost] disconnect: graceful stop_live_strategy failed; venue_logout teardown is the backstop");
+                    // Leave Live + drop the venue regardless — the user asked to disconnect.
+                    using (_server.InvokeMethod("set_execution_mode", new PyString("Replay"))) { }
+                    using (_server.InvokeMethod("venue_logout")) { }
+                    ok = true;
+                }
+            }
+            catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] stop-then-logout error: " + e.Message); }
+            finally { EndLiveRpc(); onResult?.Invoke(ok); }
+        }) { IsBackground = true, Name = "WorkspaceStopThenLogout" }.Start();
+    }
+
     // set_execution_mode (footer mode segment; D1). onResult(ok) on the worker thread.
     public void SetExecutionMode(string mode, Action<bool> onResult)
     {
@@ -353,13 +418,22 @@ public sealed class WorkspaceEngineHost
                     string sid = null;
                     using (PyObject r = _server.InvokeMethod("register_live_strategy",
                                new PyString(strategyFile), new PyString(originalPath ?? "")))
+                    {
                         if (r["success"].As<bool>()) sid = r["strategy_id"].As<string>();
+                        else Debug.LogWarning("[WorkspaceEngineHost] register_live_strategy failed: " + r["error_code"].As<string>()
+                                              + " — " + r["error_message"].As<string>());
+                    }
                     if (sid != null)
                         using (PyObject s = _server.InvokeMethod("start_live_strategy",
                                    new PyString(sid), new PyString(instrumentId), new PyString(venue)))
                         {
                             ok = s["success"].As<bool>();
                             if (ok) runId = s["run_id"].As<string>();
+                            // A clean success=false (no exception) was previously SILENT — surface the
+                            // engine's reason so a footer ▶ that doesn't start is diagnosable.
+                            else Debug.LogWarning("[WorkspaceEngineHost] start_live_strategy failed (iid=" + instrumentId +
+                                                  ", venue=" + venue + "): " + s["error_code"].As<string>()
+                                                  + " — " + s["error_message"].As<string>());
                         }
                 }
             }

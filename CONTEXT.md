@@ -278,6 +278,10 @@ slot を入れ替える操作（**swap であって自由配置ではない**・
 比率変更・ADR 0015 parity）と box 移動（root の canvas 位置永続化）は #14 **外**＝将来 slice の additive 拡張。
 _Avoid_: slot を rect から導く／rect を split 比率や root 位置の正本に流用すること（slot が正本・rect は派生）
 
+**chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）**:
+**chart tile family** = Hakoniwa の chart を「固定 1 枚（id `chart`）」から **universe 登録銘柄ごとの動的な tile 集合**へ拡張したもの。各 chart tile の id は `chart:<instrument-id>`。**どの chart が存在するか（メンバーシップ）の正本は universe（`InstrumentRegistry`）**で、universe と**常に同期**する（銘柄 add/remove で即 spawn/despawn＝`InstrumentRegistry.Changed`）。layout doc は **並び順（slot）だけ**を保存し、メンバーは universe から導出する（doc にあって universe に無い id は skip、universe にあって doc に無い id は末尾へ＝既存 tolerance を流用・スキーマ追加 0）。**base tile** = 銘柄に紐づかない常駐 tile（`startup` 等）で、chart tile の**前**に並ぶ。box は銘柄数 n から決定的に grow する（TTWR `compute_hakoniwa_box_size` の port・**位置/サイズは persist しない**＝derived）。TTWR の `InstrumentRegistry`→chart tile sync（ADR 0011 Update／#169）の capability parity。base tile を**モード別**にする（Replay=設定込み／Live=設定無し・ADR 0013）と **per-mode profile**（Replay/Live で別レイアウト）、box 位置/サイズの**永続化＋drag-handle 移動/リサイズ**は、それぞれ別の後続 additive slice。
+_Avoid_: chart の集合を layout doc 側の正本にすること（正本は universe）／`chart:<id>` を base tile と同じ「固定 id」前提で persist すること（chart はメンバーが動的）／box の derived-grow を box 位置/サイズの永続化（将来 slice）と混ぜること
+
 **floating window / FloatingWindowLayer / z-order**:
 infinite canvas の Content 上を **自由配置（free placement）**で漂う window（Strategy Editor / Order 等）。Hakoniwa の
 **tile swap とは別物**（tile は grid slot を占めるだけ・自由配置不可。floating window は canvas 論理座標で position+size を

@@ -57,7 +57,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section6_OnceGate()
                 ?? Section7_Ownership()
                 ?? Section8_SharedUniverse()
-                ?? Section9_RunCommitRePrimesWriteback();
+                ?? Section9_RunCommitRePrimesWriteback()
+                ?? Section10_ChartTileFamily();
         }
         catch (Exception e)
         {
@@ -403,6 +404,55 @@ public static class BackcastWorkspaceProbe
         if (afterRemove == null) return "reprime: sidecar missing after remove";
         if (afterRemove.Instruments.Count != 1 || afterRemove.Instruments[0] != "A.TSE")
             return "reprime: sidebar × did NOT flush (writeback stale: _lastFlushed not re-primed at Commit -> phantom B on disk)";
+        return null;
+    }
+
+    // ── 10. chart tile family (#60): chart:<id> tiles track the universe SoT (spawn/despawn on
+    // InstrumentRegistry.Changed), base is [startup] only (the fixed "chart" tile is retired), and the
+    // membership orchestrator grows the box derived from n. Drives the REAL root headlessly. ──
+    static string Section10_ChartTileFamily()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "charttile: BackcastWorkspaceRoot missing";
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
+        var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
+        var chartViews = ty.GetField("_chartViews", BF).GetValue(root) as System.Collections.IDictionary;
+        var hakoRoot = ty.GetField("_hakoniwaRoot", BF).GetValue(root) as RectTransform;
+        if (scenario == null || hako == null || chartViews == null || hakoRoot == null)
+            return "charttile: root internals not found (renamed?)";
+
+        // base = [startup] only; the old fixed "chart" tile is retired (not in the controller order).
+        if (hako.SlotOf("startup") < 0) return "charttile: base startup tile missing";
+        if (hako.SlotOf("chart") >= 0) return "charttile: retired fixed 'chart' tile still in the grid";
+
+        // membership tracks the universe SoT: a known 2-instrument universe spawns 2 chart tiles.
+        scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });
+        if (hako.SlotOf("chart:AAA.TSE") < 0 || hako.SlotOf("chart:BBB.TSE") < 0)
+            return "charttile: chart tiles not spawned for universe instruments (Changed not wired?)";
+        if (!chartViews.Contains("AAA.TSE") || !chartViews.Contains("BBB.TSE"))
+            return "charttile: ChartView not created per instrument";
+        if (hako.Count != 3) return "charttile: expected [startup, chart:AAA, chart:BBB] (3 tiles)";
+
+        // box-grow: the box SIZE is derived from n (orchestrator-applied, NOT persisted).
+        var min = new Vector2(280f, 180f); var def = new Vector2(700f, 450f);
+        var expected = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
+        if ((hakoRoot.sizeDelta - expected).sqrMagnitude > EPS)
+            return "charttile: box-grow not applied (got " + hakoRoot.sizeDelta + ", expected " + expected + ")";
+
+        // remove one instrument -> its chart tile despawns; box re-derives.
+        scenario.Universe.Remove("AAA.TSE");
+        if (hako.SlotOf("chart:AAA.TSE") >= 0) return "charttile: removed instrument's chart tile still present";
+        if (chartViews.Contains("AAA.TSE")) return "charttile: removed instrument's ChartView not cleared";
+        var expected2 = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
+        if ((hakoRoot.sizeDelta - expected2).sqrMagnitude > EPS) return "charttile: box-grow not re-applied after despawn";
         return null;
     }
 

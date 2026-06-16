@@ -33,6 +33,21 @@ public static class HakoniwaGridMath
         rows = (n + cols - 1) / cols;   // ceil(n / cols)
     }
 
+    // box-grow (#60, TTWR compute_hakoniwa_box_size / ADR 0011): the absolute HakoniwaRoot box size
+    // for n tiles, grown so NO tile shrinks below minTile in the ceil(√n) grid. n<=0 -> def (the
+    // empty-grid short-circuit, symmetric with CellRects). dragHeight reserves the box's top drag
+    // strip (0 in #60 — no box drag handle yet; #63 supplies the real height). The box POSITION is
+    // fixed and the size is DERIVED from n every membership change (NOT persisted) — the membership
+    // orchestrator (BackcastWorkspaceRoot) applies it; HakoniwaController.Rebuild stays box-size-free.
+    public static Vector2 ComputeBoxSize(int n, Vector2 minTile, float dragHeight, Vector2 def)
+    {
+        if (n <= 0) return def;
+        GridDims(n, out int cols, out int rows);
+        return new Vector2(
+            Mathf.Max(def.x, cols * minTile.x),
+            Mathf.Max(def.y, rows * minTile.y + dragHeight));
+    }
+
     // n cells, row-major, equal fractions, normalized 0..1 within the root (Y up). Cell i:
     // col = i % cols, row = i / cols. Returns EXACTLY n rects (an empty trailing cell in the
     // ceil(√n) grid is simply not generated).

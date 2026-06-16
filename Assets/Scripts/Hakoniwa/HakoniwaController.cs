@@ -73,6 +73,32 @@ public class HakoniwaController
         return true;
     }
 
+    // Runtime tile add/remove (#60 chart tile family): the controller was construction-static; the
+    // membership orchestrator (BackcastWorkspaceRoot, on InstrumentRegistry.Changed) now adds/removes
+    // chart:<id> tiles at runtime. Rebuild stays box-size-free (box-grow is the orchestrator's job,
+    // findings 0027 §6) — these only mutate _tilesById/_order then re-lay the normalized cells.
+
+    // Register a new tile and append it to the end of the order (a new last grid slot). A known id
+    // is a no-op for the order (its RectTransform mapping is refreshed). Returns true if newly added.
+    public bool AddTile(string id, RectTransform rt)
+    {
+        if (string.IsNullOrEmpty(id) || rt == null) return false;
+        bool isNew = !_tilesById.ContainsKey(id);
+        _tilesById[id] = rt;
+        if (isNew) _order.Add(id);
+        Rebuild();
+        return isNew;
+    }
+
+    // Unregister a tile (the caller owns destroying its GameObject). Returns true if it was present.
+    public bool RemoveTile(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return false;
+        bool had = _tilesById.Remove(id);
+        if (_order.Remove(id) || had) { Rebuild(); return true; }
+        return false;
+    }
+
     // root-local NORMALIZED point (0..1) -> grid slot, or -1 if outside every cell.
     public int SlotAtNormalized(Vector2 pointNormalized) =>
         HakoniwaGridMath.SlotAt(HakoniwaGridMath.CellRects(_order.Count), pointNormalized);

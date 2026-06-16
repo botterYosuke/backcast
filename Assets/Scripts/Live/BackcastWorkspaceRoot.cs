@@ -71,7 +71,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     InfiniteCanvasController _canvas;
     FloatingWindowController _windows;
     HakoniwaController _hako;
-    ChartView _chartView;
+    // #60 chart tile family: one chart tile + ChartView per universe instrument (id "chart:<id>"),
+    // membership-synced from _scenario.Universe via InstrumentRegistry.Changed. _chartRendered dedups
+    // the per-id render by series length.
+    readonly Dictionary<string, RectTransform> _chartTiles = new Dictionary<string, RectTransform>();
+    readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
+    readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
     ScenarioStartupTile _tile;
     ReplayFooterView _footer;
     MenuBarViewModel _menuBar;
@@ -86,7 +91,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly OnceGate _teardownGate = new OnceGate();
     string _strategyFile;
     string _lastPayload;
-    int _renderedCount;
     bool _errLogged, _finishedHandled;
 
     // ── #39: footer mode segment + LiveAuto ▶, wired to the host live seam (Step 3/4) ──
@@ -157,15 +161,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _tile.Build(startupBody);
         _tile.SyncFieldsFromController();
 
-        RectTransform chartBody = BuildTileChrome(_chartTile, "chart", out HakoniwaTileHeaderInput chartHeader);
-        _chartView = chartBody.gameObject.AddComponent<ChartView>();
-        _chartView.Build(chartBody, showTitleBar: false);
+        // #60 chart tile family: base = [startup] only; chart tiles are dynamic (chart:<id> per
+        // universe instrument). The scene-authored single "chart" tile is retired (deactivated) — the
+        // dynamic family replaces it. Membership is owned by _scenario.Universe (the shared SoT, #59
+        // §12); InstrumentRegistry.Changed drives spawn/despawn, and THIS root (the membership
+        // orchestrator) owns box-grow (findings 0027 §6 — Rebuild stays box-size-free).
+        if (_chartTile != null) _chartTile.gameObject.SetActive(false);
 
         _hako = new HakoniwaController(_hakoniwaRoot,
-            new Dictionary<string, RectTransform> { { "startup", _startupTile }, { "chart", _chartTile } },
-            new[] { "startup", "chart" });
+            new Dictionary<string, RectTransform> { { "startup", _startupTile } },
+            new[] { "startup" });
         startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
-        chartHeader.Initialize(_hako, _hakoniwaRoot, "chart");
+
+        SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow
+        _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
 
         // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
@@ -227,6 +236,77 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (view != null) _editors[id] = view;
         }
         return root;
+    }
+
+    // ---- #60 chart tile family: keep Hakoniwa chart tiles == the universe SoT ----
+    // box-grow constants (TTWR HAKONIWA_BOX_GROW_MIN_TILE_SIZE / HAKONIWA_DEFAULT_SIZE). #60 has no
+    // box drag handle, so dragHeight = 0 (#63 supplies the real height with the box drag strip).
+    static readonly Vector2 HAKO_MIN_TILE = new Vector2(280f, 180f);
+    static readonly Vector2 HAKO_DEFAULT_BOX = new Vector2(700f, 450f);
+
+    // Reconcile the live chart tiles to _scenario.Universe (the membership SoT): despawn tiles whose
+    // instrument left the universe, spawn one for each newly-present instrument, then box-grow. Bound
+    // to InstrumentRegistry.Changed so a sidebar/tile/picker edit reflects immediately (no Run wait).
+    void SyncChartTilesToUniverse()
+    {
+        var ids = _scenario.Universe.Ids;
+        var desired = new HashSet<string>(ids);
+
+        var stale = new List<string>();
+        foreach (var id in _chartTiles.Keys) if (!desired.Contains(id)) stale.Add(id);
+        foreach (var id in stale) DespawnChartTile(id);
+
+        foreach (var id in ids) if (!_chartViews.ContainsKey(id)) SpawnChartTile(id);
+
+        ApplyBoxGrow();
+    }
+
+    // Build one chart tile (chart:<id>) with the same chrome as the base tiles + its own ChartView,
+    // register it with the controller (appended as the new last slot), and wire header-drag swap.
+    void SpawnChartTile(string instrumentId)
+    {
+        if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
+        string tileId = "chart:" + instrumentId;
+
+        var go = new GameObject(tileId, typeof(RectTransform), typeof(Image));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(_hakoniwaRoot, false);
+
+        RectTransform body = BuildTileChrome(rt, tileId, out HakoniwaTileHeaderInput header);
+        var cv = body.gameObject.AddComponent<ChartView>();
+        cv.Build(body, showTitleBar: false);
+
+        _hako.AddTile(tileId, rt);                 // box-size-free Rebuild lays the new cell
+        header.Initialize(_hako, _hakoniwaRoot, tileId);
+
+        _chartTiles[instrumentId] = rt;
+        _chartViews[instrumentId] = cv;
+    }
+
+    void DespawnChartTile(string instrumentId)
+    {
+        _hako.RemoveTile("chart:" + instrumentId);
+        if (_chartTiles.TryGetValue(instrumentId, out var rt) && rt != null) DestroyTileGo(rt.gameObject);
+        _chartTiles.Remove(instrumentId);
+        _chartViews.Remove(instrumentId);
+        _chartRendered.Remove(instrumentId);
+    }
+
+    // Destroy at runtime, DestroyImmediate in edit mode (the AFK probe drives spawn/despawn headlessly
+    // — Object.Destroy is a no-op-with-error outside play).
+    static void DestroyTileGo(GameObject go)
+    {
+        if (go == null) return;
+        if (Application.isPlaying) Destroy(go); else DestroyImmediate(go);
+    }
+
+    // box-grow: the box SIZE is derived from the tile count every membership change (NOT persisted);
+    // the box POSITION is fixed. Owned HERE (the membership orchestrator), not in the controller's
+    // box-size-free Rebuild (findings 0027 §0/§6 — TTWR sync-system-owns-box vs relayout-box-free).
+    void ApplyBoxGrow()
+    {
+        if (_hakoniwaRoot != null)
+            _hakoniwaRoot.sizeDelta = HakoniwaGridMath.ComputeBoxSize(_hako.Count, HAKO_MIN_TILE, 0f, HAKO_DEFAULT_BOX);
     }
 
     // ---- Hakoniwa tile chrome (panel bg + header swap handle), so tiles read against the field ----
@@ -299,7 +379,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         if (!_isOwner) { _tile.ShowRunMessage("Not the Python owner — cannot run."); return; }
 
-        _renderedCount = 0;
+        _chartRendered.Clear();
         _lastPayload = null;
         _errLogged = false;
         _finishedHandled = false;
@@ -339,12 +419,25 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             try { _lifecycle.ApplyPoll(JsonUtility.FromJson<_StateLite>(state).replay_state); }
             catch { /* malformed poll snapshot: keep the last phase */ }
 
-            ReplayBarFrame frame = ReplayBarDecoder.Decode(state);
-            if (frame.Ohlc != null && frame.Ohlc.Count != _renderedCount)
+            // per-id chart render (#60): each chart:<id> tile draws its OWN per_instrument[id].ohlc_points
+            // (NOT the aggregate/primary top-level ohlc_points). _chartRendered dedups by series length.
+            // Guarded like ApplyPoll above: InstrumentOhlcDecoder surfaces a malformed/partial snapshot as
+            // FormatException, so keep the last per-id render rather than throwing out of Update each frame.
+            try
             {
-                _chartView.Render(frame);
-                _renderedCount = frame.Ohlc.Count;
+                foreach (var kv in _chartViews)
+                {
+                    InstrumentOhlcFrame f = InstrumentOhlcDecoder.Decode(state, kv.Key);
+                    if (!f.HasSeries || kv.Value == null) continue;
+                    int cnt = f.Ohlc != null ? f.Ohlc.Count : 0;
+                    if (!_chartRendered.TryGetValue(kv.Key, out int prev) || prev != cnt)
+                    {
+                        kv.Value.Render(new ReplayBarFrame { Ohlc = f.Ohlc });
+                        _chartRendered[kv.Key] = cnt;
+                    }
+                }
             }
+            catch { /* malformed poll snapshot: keep the last per-id render */ }
         }
 
         // #39: drain live push events into the Panel (footer run lifecycle authority), then drive the
@@ -575,6 +668,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // it never reaches here, but a built-yet-non-Python-owner root must still persist its layout.
         if (_built) SaveLayout();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
+        _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

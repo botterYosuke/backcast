@@ -57,4 +57,16 @@ public sealed class LivePanelTileView
         _content.text = next;
         return true;
     }
+
+    // #61: honest empty state for the Replay shape. The base panels are mode-independent residents now,
+    // but LivePanelViewModel (_host.Panel) is monotonic — it is NEVER cleared, so a Live→Replay flip would
+    // otherwise leave the LAST live account/orders/fills on screen, misrepresenting Replay as carrying live
+    // figures. In Replay the caller paints this fixed "(no data — Replay)" instead of the live formatter.
+    public const string ReplayEmpty = "(no data — Replay)";
+    public void ShowReplayEmpty()
+    {
+        if (_content == null || _last == ReplayEmpty) return;
+        _last = ReplayEmpty;
+        _content.text = ReplayEmpty;
+    }
 }

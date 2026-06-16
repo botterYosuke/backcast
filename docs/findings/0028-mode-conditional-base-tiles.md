@@ -130,6 +130,6 @@ AFK GREEN（Unity 6000.4.11f1 `-batchmode -nographics`）:
 - **BuyingPower**: #23 には無い（scene タイルも無い）ため、**`SpawnBuyingPowerTile()` で動的生成**し、#23 と同じ `LivePanelTileView` + 新 `FormatBuyingPower` で配線。
 - **`HakoniwaBasePanelView.cs` は削除**（§10 の独自 uGUI View は `LivePanelTileView` に置換され重複・不要に）。§10 の「非修正 Low（format 重複）」は本統合で解消。
 - **mode-conditional 層（#61 の本体）は不変で存続**: `HakoniwaBaseTiles.Kinds`／`_baseTiles`（#23 の scene タイル + BuyingPower を追跡）／`SyncBaseTilesToMode`／`ReassertBaseAfterRestore`／`DriveFooter` の shape-flip フック。shape flip 時の即時再描画は `RefreshBasePanels` → **`ForceRefreshLiveTiles()`（gate 無視で 4 panel を `Refresh`）** に置換。冗長だった `_lastPanelStamp` poll は #23 の `_lastPanelApplied` gate に一本化。
-- honest empty state は #23 formatter の自然な空表示（"(none)"/"(flat / no account snapshot)"/"(no run)"）が担う（#61 の "(no data — Replay)" 文言は撤去・挙動は等価）。Replay 実データは follow-up #65 のまま。
+- honest empty state は **mode-aware で維持**: `LivePanelViewModel`（`_host.Panel`）は monotonic（clear されない）ため、Live→Replay flip 後に live formatter をそのまま回すと**直前の live 口座/建玉/約定が Replay 画面に残り誤表示**になる（code-review high が検出）。→ `LivePanelTileView.ShowReplayEmpty()` を追加し、`PushLiveTiles` が `_baseLive==false` のとき 4 panel に "(no data — Replay)" を描画（live のときのみ formatter）。#61 の honest-empty 意図（§0/§3）を #23 wiring 上で復元。Replay 実データは follow-up #65 のまま。
 
 **AFK 再 GREEN（マージ後・Unity 6000.4.11f1 `-batchmode -nographics`）**: `HakoniwaBaseModeProbe`（Section1-4・`_basePanels` 参照を `_baseTiles` ベース検証に更新）→ `[HAKONIWA BASE MODE PASS]`。`BackcastWorkspaceProbe` / `WorkspaceLiveSeamProbe`（#23 回帰）も確認。**owner 実機 HITL（§10 末）は引き続き pending。**

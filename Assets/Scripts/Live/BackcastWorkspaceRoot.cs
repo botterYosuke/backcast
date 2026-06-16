@@ -662,6 +662,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     void PushLiveTiles()
     {
+        // honest empty state in Replay: _host.Panel is monotonic (never cleared), so after a Live→Replay
+        // flip the live formatters would still render the LAST live account/orders/fills. In Replay the
+        // base panels show "(no data — Replay)" instead; real replay numbers are follow-up #65 (findings 0028).
+        if (!_baseLive)
+        {
+            _buyingPowerView?.ShowReplayEmpty();
+            _ordersView?.ShowReplayEmpty();
+            _positionsView?.ShowReplayEmpty();
+            _runResultView?.ShowReplayEmpty();
+            return;
+        }
         LivePanelViewModel p = _host.Panel;
         _buyingPowerView?.Refresh(p);
         _ordersView?.Refresh(p);

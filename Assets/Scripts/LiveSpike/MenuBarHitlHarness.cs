@@ -58,7 +58,17 @@ public class MenuBarHitlHarness : MonoBehaviour
             isReplayRunning: () => _replayRunning);
         try
         {
-            if (PythonEngine.IsInitialized) { _driveError = "double-init: PythonEngine already owned"; _status = "ERROR"; return; }
+            if (PythonEngine.IsInitialized)
+            {
+                // single Play-owner (findings 0025 §7): another owner (the Backcast workspace root)
+                // holds the interpreter — refuse rather than double-init. Log it so the refusal is
+                // observable in the Console (disable BackcastWorkspaceRoot to run this harness solo).
+                _driveError = "double-init: PythonEngine already owned";
+                _status = "ERROR";
+                Debug.LogWarning("[MENU BAR HITL] refused: PythonEngine already owned by another Play-owner " +
+                                 "(single Play-owner). Disable BackcastWorkspaceRoot to run this harness solo.");
+                return;
+            }
             PythonRuntimeLocator.ConfigureBeforeInitialize();
             PythonEngine.Initialize();
             _engineStarted = true;

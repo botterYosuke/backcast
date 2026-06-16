@@ -233,9 +233,17 @@ findings 0025-backcast-workspace-root + ADR-0009）を merge したところ、#
   にはまだ無い。AFK は `host.VenueLogin` を直接駆動するため #39 検証に venue UI は不要。
 - **ProductionLiveShell の扱い**: #39 footer の重複に加え、**#23 の manual ticket / live panels / tachibana live-demo roundtrip HITL** を
   内包する（mainline root には未移植）。全面退役は #23 再 home が前提＝**owner 判断待ち**（findings 末尾「未決」）。
-- **ADR-0009 昇格**: 統合 root の **owner HITL（workspace scene 実 Play）GREEN 後**に proposed→accepted。現状 proposed のまま。
+- **ADR-0009 昇格**: origin/main の #59 owner HITL 全 pass で **proposed→accepted 済み**（commit 96ea150）。本統合はその scene-authored composition root の上に乗る形で main へ統合（merge 0ae8376）。
 
-### 未決（owner 判断・session 末）
-- `ProductionLiveShell` の最終処遇（(a) #23 HITL harness として残置 /(b) 全面退役＋#23 喪失 /(c) #23 を root へ再 home）。
-- `ProductionLiveShell.cs` の owner 未コミット WIP（MOCK dev connect ボタン）の commit/discard。
-- owner HITL: workspace scene を実 Play し、Connect→Auto→▶→RUNNING→抜けて teardown を目視（MOCK・閉局可）。
+### HITL 結果（2026-06-16・実機・merge 0ae8376 上）
+
+owner が `origin/main`（#59 HITL all-pass）を本ブランチへ merge → headless compile GREEN（error CS 0）→ 実機 Play で **HITL PASS**。
+
+- **WorkspaceEngineHost 起動（実機 Mono/pythonnet）GREEN**: Console に `[WorkspaceEngineHost] live-configured server built; main GIL-free; lanes polling.`（WorkspaceEngineHost.cs:166 ← `BackcastWorkspaceRoot.Awake`）＝**Python init・永続 live 構成 server 構築・lanes polling** が実機で完走（compile でしか検証できなかった host bring-up が実機 GREEN）。Console エラー 0。
+- **scene 合体表示**: menu bar(File/Edit/Venue/Help)・sidebar・Hakoniwa(startup/chart)・footer(Replay セグメント＋transport) が1画面に描画。footer は venue 非live のため Replay セグメントのみ＝#39 の venue-gated 可視性が**正しく**動作。
+- main へ統合・push 済み（origin/main = 0ae8376）。
+
+### 未決（owner 判断・継続）
+- **(B) LiveAuto の実機 HITL**: workspace scene には venue 接続 UI が無い（#42）ため LiveAuto まで未到達。dev MOCK-connect 追加 or #42 の Venue 配線が要る。engine 側 RPC 列は Python AFK で GREEN（`test_live_auto_lifecycle_inproc_server`）。
+- `ProductionLiveShell` の最終処遇（(c) #23 HITL harness として残置で確定。全面退役は #23 再 home が前提の別スライス）。
+- `ProductionLiveShell.cs` の owner 未コミット WIP（MOCK dev connect ボタン）と untracked `kernel_spike_buy_sell.json`（HITL 生成 scenario sidecar）の扱いは owner 判断（ローカル温存中）。

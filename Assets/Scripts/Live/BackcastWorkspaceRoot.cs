@@ -3,7 +3,7 @@
 // The scene-authored Backcast workspace root (CONTEXT "Backcast workspace root"; ADR-0009): the
 // SINGLE normal Play entry that composes every UI surface — menu bar / sidebar / center infinite-
 // canvas workspace (Hakoniwa [startup, chart] + a floating Strategy Editor) / footer — into one
-// screen, and is the single Python owner. Orchestration is NOT here: the durable ReplayEngineHost
+// screen, and is the single Python owner. Orchestration is NOT here: the durable WorkspaceEngineHost
 // owns the engine lifecycle / launcher / poll / transport (findings 0025 §5); this root WIRES the
 // authored Views to the Host and the layout store, and drives ChartView / the footer from the
 // Host's published state. Demotes the throwaway ScenarioStartupHitlHarness (its AutoBootstrap is
@@ -59,7 +59,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] FloatingWindowTitleInput _strategyEditorTitleInput;
 
     // ── durable orchestration (extracted) ──
-    readonly ReplayEngineHost _host = new ReplayEngineHost();
+    readonly WorkspaceEngineHost _host = new WorkspaceEngineHost();   // #39→#59 Step 2: generalized (Replay + Live seam)
 
     // ── reused brains / VMs (findings 0025 §5) ──
     readonly ScenarioStartupController _scenario = new ScenarioStartupController();
@@ -266,7 +266,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _finishedHandled = false;
         _transport?.OnRunStarted();
 
-        var req = new ReplayEngineHost.RunRequest
+        var req = new WorkspaceEngineHost.RunRequest
         {
             Instruments = new List<string>(_scenario.Universe.Ids).ToArray(),
             Start = _scenario.Params.Start,

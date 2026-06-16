@@ -78,21 +78,26 @@ public sealed class WorkspaceEngineHost
     string _venue = "MOCK";
 
     // ── run state (Replay launcher; read on main) ──
+    // NOTE: these cross-thread flags use NO `volatile` keyword on purpose — every access goes through
+    // Volatile.Read/Write(ref …), which provides the acquire/release barrier. Marking the field
+    // `volatile` AND passing it by ref to Volatile.* is CS0420 (the ref drops volatility); the
+    // explicit Volatile.* calls are the modern, single-source barrier. (_de/_server stay `volatile`
+    // because they are read directly, never by ref.)
     string _startError;
     Thread _launcher;
-    volatile bool _running;
-    volatile bool _runFinished;
-    volatile bool _aborting;
-    volatile bool _serverReady;
+    bool _running;
+    bool _runFinished;
+    bool _aborting;
+    bool _serverReady;
     RunRequest _req;
 
     // ── live RPC single-flight (mode / auto lifecycle; venue login has its own _loginRunning) ──
-    volatile bool _liveRpcInFlight;
-    volatile bool _loginRunning;
+    bool _liveRpcInFlight;
+    bool _loginRunning;
 
     // ── teardown ──
-    volatile bool _teardownComplete;
-    volatile string _finalStateJson;
+    bool _teardownComplete;
+    string _finalStateJson;
     readonly OnceGate _stopGate = new OnceGate();
     readonly object _rpcLock = new object();   // guards the live-RPC single-flight check-and-set
 

@@ -25,6 +25,8 @@ class StrategyContext(Protocol):
 
     def log(self, message: str) -> None: ...  # noqa: E704
 
+    def buying_power(self) -> float: ...  # noqa: E704
+
 
 class Strategy:
     """Base strategy. Subclasses override the hooks they need.
@@ -61,6 +63,11 @@ class Strategy:
     def log(self, message: str) -> None:
         if self._ctx is not None:
             self._ctx.log(message)
+
+    def buying_power(self) -> float:
+        if self._ctx is None:
+            raise RuntimeError("buying_power called before register()")
+        return float(self._ctx.buying_power())
 
     # --- lifecycle hooks (no-op defaults) -------------------------------------
     def on_start(self) -> None: ...  # noqa: E704

@@ -78,6 +78,9 @@ class _Ctx:
     def log(self, message: str) -> None:
         self._driver._on_strategy_log(message)
 
+    def buying_power(self) -> float:
+        return self._driver._buying_power()
+
 
 class KernelLiveDriver:
     """1 run 分の kernel Strategy を live loop 上で駆動する（単一 run・§0.7）。"""
@@ -97,6 +100,7 @@ class KernelLiveDriver:
         is_run_gated: Optional[Callable[[], bool]] = None,
         on_safety_violation: Optional[Callable[[Any], None]] = None,
         on_strategy_error: Optional[Callable[[BaseException], None]] = None,
+        buying_power_provider: Optional[Callable[[], float]] = None,
         max_orders_per_minute: int = 0,
     ) -> None:
         self._strategy = strategy
@@ -117,6 +121,7 @@ class KernelLiveDriver:
         # 戦略 callback（on_bar/on_tick/on_order）が走行中に例外を投げたら、握り潰さず run を
         # 失敗させる経路（host.fail_run）へ伝える seam（#25 finding 5）。controller→orchestrator が注入。
         self._on_strategy_error = on_strategy_error
+        self._buying_power_provider = buying_power_provider
 
         self.ctx = _Ctx(self)
         self._intents: deque[_Intent] = deque()
@@ -133,6 +138,12 @@ class KernelLiveDriver:
         # monotonic 時刻を 60s 窓で保持し、超過を deny する（#25 finding 1）。0 は無効。
         self._max_orders_per_minute = int(max_orders_per_minute or 0)
         self._order_times: deque[float] = deque()
+
+    def _buying_power(self) -> float:
+        provider = self._buying_power_provider
+        if provider is None:
+            return float(self._portfolio.cash)
+        return float(provider())
 
     def set_telemetry_emitter(self, emit_telemetry: Callable[[], None]) -> None:
         """telemetry emitter を後から差す（controller が driver の counters を読む closure を渡す）。"""

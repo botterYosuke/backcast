@@ -32,7 +32,7 @@ from engine.kernel.portfolio import Portfolio
 from engine.kernel.risk import RiskEngine
 from engine.kernel.sink import EventSink
 from engine.kernel.strategy import Strategy
-from engine.live.safety_rails import RailViolation, SafetyRails
+from engine.live.safety_rails import KIND_NO_REFERENCE_PRICE, RailViolation, SafetyRails
 
 # Poll cadence for the paused gate (#30): while PAUSED (run_event cleared) the loop waits in
 # short slices so it can wake promptly on a step pulse OR a stop signal. 50ms is imperceptible
@@ -64,9 +64,11 @@ class _Context:
         self._client_seq = 0
         self.pending: list[Order] = []
         self.denials: list[OrderDenied] = []
-        # 現在 bar の参照価格（close）。on_bar 前に runner が更新し、submit_market が建玉上限の
-        # 約定後時価評価に使う（MARKET は当該 bar close で約定するため close が参照価格・#25 review）。
-        self.reference_price: float | None = None
+        # Latest close by instrument, with the current bar overlaid before on_bar. The
+        # order path uses the order instrument's price for pre-trade notional checks and
+        # replay fills; unknown prices are denied instead of leaking another symbol's close.
+        self.reference_prices: dict[str, float] = {}
+        self.ts_event_ns: int = 0
 
     def submit_market(
         self, *, strategy_id: str, instrument_id: str, side: OrderSide, quantity: float
@@ -79,11 +81,30 @@ class _Context:
             side=side,
             quantity=quantity,
         )
+        reference_price = self.reference_prices.get(instrument_id)
+        if reference_price is None:
+            self.denials.append(
+                OrderDenied(
+                    client_order_id=order.client_order_id,
+                    strategy_id=strategy_id,
+                    instrument_id=instrument_id,
+                    side=side,
+                    quantity=quantity,
+                    kind=KIND_NO_REFERENCE_PRICE,
+                    reason=(
+                        f"no reference price for {instrument_id}; "
+                        "cannot fill MARKET order before market data"
+                    ),
+                    ts_event_ns=self.ts_event_ns,
+                )
+            )
+            return
+
         violation: RailViolation | None = self._engine.submit(
             order,
             net_signed_qty=self._portfolio.net_signed_qty(instrument_id),
-            reference_price=self.reference_price,  # 当該 bar close（建玉上限の時価評価・#25 review）
-            order_notional_jpy=0.0,  # MARKET: price unknown at submit (matches live path)
+            reference_price=reference_price,
+            order_notional_jpy=reference_price * quantity,
         )
         if violation is not None:
             self.denials.append(
@@ -95,7 +116,7 @@ class _Context:
                     quantity=quantity,
                     kind=violation.kind,
                     reason=violation.detail,
-                    ts_event_ns=0,
+                    ts_event_ns=self.ts_event_ns,
                 )
             )
         else:
@@ -103,6 +124,9 @@ class _Context:
 
     def log(self, message: str) -> None:  # tracer: logging is a no-op sink
         pass
+
+    def buying_power(self) -> float:
+        return float(self._portfolio.cash)
 
 
 class KernelRunner:
@@ -238,8 +262,10 @@ class KernelRunner:
 
             self._sink.push_bar(bar)
 
-            # MARKET は当該 bar close で約定するので、submit 時の参照価格 = この bar の close。
-            self._ctx.reference_price = bar.close
+            # MARKET uses the order instrument's latest close. Overlay only the current
+            # instrument so single-symbol replay remains fill-at-current-bar-close.
+            self._ctx.reference_prices = {**last_prices, bar.instrument_id: bar.close}
+            self._ctx.ts_event_ns = bar.ts_event_ns
             self._strategy.on_bar(bar)
 
             # Risk-denied orders surface to on_order but never fill or touch the sink.
@@ -247,13 +273,18 @@ class KernelRunner:
                 self._strategy.on_order(denied)
             self._ctx.denials.clear()
 
-            # Accepted MARKET orders fill at this bar's close, in submission order.
+            # Accepted MARKET orders fill at the order instrument's latest close, in
+            # submission order. For the current bar's instrument this is bar.close.
             pending = self._ctx.pending
             self._ctx.pending = []
             for order in pending:
                 if order.status is not OrderStatus.ACCEPTED:
                     continue
-                fill = self._broker.fill_market(order, bar)
+                fill = self._broker.fill_market(
+                    order,
+                    price=self._ctx.reference_prices[order.instrument_id],
+                    ts_event_ns=bar.ts_event_ns,
+                )
                 self._portfolio.apply_fill(fill)
                 self._strategy.on_order(fill)
                 self._sink.push_order(fill)

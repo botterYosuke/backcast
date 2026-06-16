@@ -288,5 +288,105 @@ owner 手動で `Tools > Backcast > Live Demo Roundtrip (Tachibana demo)` を ma
   「live event sink」）が本スライスの語彙を既に所有。新 term 追加は不要（実装で sharpen が出れば追記）。
 - backcast に FLOWS.md は無く、本 findings ＋ AFK probe ＋ owner HITL leg が behavior gate の等価物。
 - 新 ADR 不要（ADR-0001 / 0003 / 0004 が全決定を所有）。
-</content>
-</invoke>
+
+## 再 home スライス（#23 再オープン・#59 統合後・grill 2026-06-16 確定）
+
+#39→#59 完了で footer LiveAuto/mode segment は `BackcastWorkspaceRoot`（本線・ADR-0009）へ移管済み。
+残る `ProductionLiveShell`（workstream B の IMGUI 暫定 production composition）は **#23 固有資産**を未だ所有する:
+手動 order ticket / live panels（orders・positions・run-result）/ secret modal flow / demo roundtrip launcher・probe。
+本スライスは **これらを mainline root へ再 home し、capability loss なしで `ProductionLiveShell` を退役**させる。
+`ProductionLiveShell` は元から **Editor 起動の HITL harness**であり mainline normal-Play 面ではない（mainline =
+`BackcastWorkspace` scene → root）。よって退役で mainline 能力は失われない（harness 接続経路のみ置換が要る）。
+
+### RH1. D1 を mainline root で uGUI 実現し切る（IMGUI 持ち込みは不採用）
+
+`ProductionLiveShell` は D1 の配置（tile / floating / chrome）を **IMGUI 固定 Rect で暫定実装**し、tile 結線を
+「remaining additive integration」として先送りしていた。本線 root は完全 uGUI（scene-authored）なので、再 home は
+**D1 を uGUI で realize する好機**。B案（IMGUI lift-and-shift）は「終わったように見えて再実装」になるため不採用。
+TTWR `src/ui/{orders,positions,run_result_panel,order_panel,secret_modal}.rs` の分割パネル構成への忠実移植に当たる。
+
+### RH2. Orders / Positions / Run Result = Hakoniwa 常設3タイル（D1 再確認・TTWR 両モード一致）
+
+- TTWR `hakoniwa.rs` の `hakoniwa_tile_kinds(mode)`: Replay=`[Startup,BuyingPower,Orders,Positions,RunResult]` /
+  Live=Startup 無しの4枚。**Orders/Positions/RunResult は両モードに存在**＝常設タイルが parity 忠実（D1 の「Hakoniwa tile」を裏取り）。
+- backcast Hakoniwa を `[startup, chart]` → **`[startup, chart, orders, positions, run_result]` の5タイル**へ拡張。1枚集約は不採用（IMGUI 暫定の名残）。
+- **mode 別 Hakoniwa 切替（TTWR の Startup 有無）は今回やらない**（backcast に無い機能・スコープ膨張回避）。
+- **`BuyingPower` タイルは今回対象外**＝intentional divergence（将来スライス）。reopen スコープ・D1 とも非対象。
+- tile id は **`orders` / `positions` / `run_result`**（durable `LayoutDocument.Default()` / `HakoniwaController.DEFAULT_ORDER` /
+  `HakoniwaProbe` の golden が既に期待する id と完全一致＝テスト改変ゼロ）。`startup` は据え置き（`status` への
+  リネームは #14 golden を壊すため不可）。
+- **size 配分**: `HakoniwaGridMath` の `ceil(√n)` 均等分割（5→3×2・slot0=左上・6セル目空）。個別サイズ不可（divider resize は将来・findings 0007 §0）。
+- **layout migration**: `HakoniwaController.Apply` が未知 id 無視・欠落 id 後追記する tolerance を持つため**自動**。
+  旧 `[startup,chart]` 保存は新3タイルが後ろに append。**version bump / migration コード不要**。fresh load の並びは
+  durable `Default()` 由来で `chart,positions,orders,run_result,startup`（startup 末尾）だが cosmetic（header swap で並べ替え→保存可）＝本スライスでは直さない。
+
+### RH3. タイルは scene-authored placeholder（startup/chart と対称）
+
+`BackcastWorkspaceSceneBuilder` に `NewRect("orders"/"positions"/"run_result", hakoniwaRoot)` を追加 →
+root に `_ordersTile`/`_positionsTile`/`_runResultTile` の SerializedField を追加 → `BackcastWorkspaceProbe` の
+serialized-ref assert に3つ追加（構造破損で headless 落ち）。中身は runtime `BuildTileChrome` + uGUI View。
+
+### RH4. 再 home する3 surface の作り方
+
+- **タイル中身**: 再利用1クラス `LivePanelTileView` を3回 Build し、tile ごとに整形 delegate を差す。権威は
+  `_host.Panel`（`LivePanelViewModel`）。signature 比較で**変化時のみ Refresh**（footer 同様）。
+- **Order ticket**: Strategy Editor と対称＝scene-authored frame → `_windows.Adopt(FloatingWindowCatalog.KIND_ORDER, …)`
+  （`KIND_ORDER` は catalog 既存）→ 中身 uGUI `OrderTicketView`（BUY/SELL・qty・LIMIT・price・Place/Cancel）。
+  `_host.Lanes.SubmitPlaceOrder/SubmitCancelOrder` 結線。**`LiveManual` の時のみ visible**（footer DisplayMode）。
+- **Secret modal**: screen-fixed uGUI overlay（ScreenSpaceOverlay・Content 外・最前面・入力ブロック）。秘匿規律を
+  uGUI で守るため **New Input System `Keyboard.current.onTextInput`（`Action<char>`）でモーダル中だけ1文字ずつ
+  `SecretModalController.AppendChar`**、Backspace は `Keyboard.current.backspaceKey.wasPressedThisFrame`。
+  `Input.inputString` 不使用・平文 managed string を作らない。Submit=`_host.Lanes.SubmitSecret`、
+  Cancel=`_host.Modal.Cancel()`+`_host.Coord.SetSecretModalOpen(false)`。**`onTextInput` の購読解除を破棄/閉鎖時に必ず実施**（漏れ事故防止）。hybrid OnGUI は不採用（本線 root uGUI 方針）。
+
+### RH5. venue 接続駆動と退役順（#42 境界）
+
+- secret modal は login の `SecretRequired` で開くので roundtrip に venue 接続が要る。ただし **mainline グローバル
+  メニューの Venue submenu UI は #42（OPEN）の責務**。よって:
+  - **mainline root には #23 で接続 UI を足さない**（#42 を先取りして境界を濁さない）。root は seam＋surface を持つ。
+  - **root-based HITL harness（新規）に接続アフォーダンスだけ**を置く（reopen の "drive the root **or a root-based
+    harness**"）。**durable `VenueMenuViewModel.ConnectVariants` + `_host.VenueLogin` を再利用し、ProductionLiveShell の
+    Connect UI ロジックは再実装しない**。MOCK / TACHIBANA / KABU を指して roundtrip 駆動。
+  - `LiveDemoRoundtripMenu` を root-based harness spawn に張り替え。
+- **AFK probe**: `ProductionLiveShellProbe` 相当を `WorkspaceEngineHost` seam 駆動に置換（MOCK で
+  connect→place→FILLED→panel→**cancel-lane GIL 安全**→teardown、main GIL-free を assert）。**cancel-lane RED ガード
+  （本書 §fix）を必ず引き継ぐ**。
+- **退役**: root-based HITL path ＋ MOCK AFK probe が GREEN になったら **#23 内で `ProductionLiveShell` ＋
+  `ProductionLiveShellProbe` を削除**し menu 張り替え。mainline は元々 ProductionLiveShell 非依存＝capability loss なし。
+  #42 は本線 Venue submenu の描画/接続 UI を引き続き担当。
+
+### RH 実装＋AFK 検証結果（2026-06-16）
+
+新規 uGUI View: `LivePanelTileView`（再利用1クラス・3タイル）/ `OrderTicketView` / `OrderTicketWindowFrame`（`KIND_ORDER` 共有フレーム）/ `SecretModalOverlay`（ScreenSpaceOverlay・`onTextInput` char-drain・破棄時 unsubscribe）。`BackcastWorkspaceRoot` に5タイル化・Order 窓 adopt・secret modal 配線・`ConnectVenue` seam（host.VenueLogin 再利用）を追加。`BackcastWorkspaceSceneBuilder` が3タイル＋Order 窓を authored・6 ref 配線。HITL は `LiveDemoRoundtripHarness`（接続アフォーダンスのみ・root surface を駆動）＋`LiveDemoRoundtripMenu` 張替。AFK gate は `WorkspaceLiveSeamProbe`（`ProductionLiveShellProbe` 置換・cancel-lane RED ガード継承）。`ProductionLiveShell` ＋ `ProductionLiveShellProbe` を削除（外部参照はコメントのみ＝capability loss なし）。
+
+**AFK GREEN（Unity 6000.4.11f1・batchmode・2026-06-16）:**
+- compile gate（`-batchmode -quit`）exit 0・CS エラー無し。
+- `BackcastWorkspaceSceneBuilder.Build` 成功（`missing serialized field` 無し＝6 新 ref 全配線）。
+- `WorkspaceLiveSeamProbe.Run` → `[WORKSPACE LIVE SEAM PASS]`（connect→badge / place→FILLED→panel / cancel-lane GIL 安全 / teardown clean・main GIL-free maxStall=28ms）。cancel-lane は bogus order id で `success=False` だが segfault せず clean return＝RED ガード成立。
+- `BackcastWorkspaceProbe.Run` → `[BACKCAST WORKSPACE PASS] all sections green`（5タイル Hakoniwa・ref assert・layout 4 次元 round-trip・ownership 不変）。
+
+**残（owner 手動・market-hours-gated）:** 実 venue demo roundtrip（発注→約定→建玉反映・正常終了 resting 取消）を mainline workspace root ＋ `LiveDemoRoundtripHarness` で実走 → `[LIVE DEMO ROUNDTRIP PASS]` 記録 → #4 close。
+
+### RH5 修正（code-review High/Medium・2026-06-16）
+
+- **High（venue 結線）**: root が `_host.InitializePython()` を venue 無しで呼び `InprocLiveServer(..,"MOCK")` 固定だったため、後続 `venue_login("TACHIBANA"/"KABU")` が `VENUE_MISMATCH`（`live_orchestrator.py:684`）で弾かれ実 venue HITL が不能だった。**venue は one-per-server で server build 時に束縛**されるので、root.Awake で **`LIVE_VENUE` env（既定 MOCK・whitelist {MOCK,TACHIBANA,KABU}）**から解決し `InitializePython(_venue)` で正しい venue の server を建てるよう修正（tachibana skill の `LIVE_VENUE` 機構に準拠）。`.env.example` に `LIVE_VENUE`/`LIVE_INSTRUMENT` を追記。
+- **Medium（instrument）**: harness の instrument が display-only だった。`root.FocusInstrument(iid)` を追加し `SelectedSymbol` に Set → manual ticket / chart が実際にその銘柄を指す。instrument は `LIVE_INSTRUMENT` env（無ければ menu preset）。
+- **Medium（prod grey-out）**: harness が ConnectVariants 全件を無 gate で描画していた。**configured venue 1件の Connect ボタン**に集約し、`root.CanConnectConfigured()`＝`VenueMenuViewModel.CanConnectEnv`（prod は `*_ALLOW_PROD` 未設定で grey-out）で gate。per-variant / prod-bypass ボタンを撤去（#42 の prod-safety parity を回復、かつ server と異なる venue を harness から叩けない）。
+- AFK 再 GREEN（compile gate clean / `[WORKSPACE LIVE SEAM PASS]` / `[BACKCAST WORKSPACE PASS]`）。
+
+### §実証結果 — owner HITL 第1回（2026-06-16 火・Windows・Unity 6000.4.11f1・実 Tachibana demo）
+
+mainline `BackcastWorkspaceRoot`（#23 再 home 後の uGUI surface）＋ `LiveDemoRoundtripHarness` で実走。`LIVE_VENUE=TACHIBANA`（.env）。
+
+**HITL 中に発見＆修正したバグ（landed）:** **venue one-per-server の未配線**。root はデフォルト `_venue="MOCK"` で server を建てており、harness の「Connect Tachibana」は MOCK サーバへ TACHIBANA ログイン＝**VENUE_MISMATCH で未接続**だった（live_orchestrator が後発の別 venue login を拒否）。修正: root が **`LIVE_VENUE` env（whitelist: MOCK/TACHIBANA/KABU）を Awake で解決し `InitializePython(_venue)`** に渡す（`ResolveLiveVenue`）。harness は単一「Connect {ConfiguredVenue}」ボタン化（`ConnectConfigured`/`CanConnectConfigured`）＋ `LIVE_INSTRUMENT` を `FocusInstrument`→SelectedSymbol へ。menu は LIVE_VENUE 不一致を warn。EnvConfig は process env → `.env` の順で解決。
+
+**通過（✅）:**
+- **接続**: `LIVE_VENUE=TACHIBANA` → server が TACHIBANA で構築 → `Connect TACHIBANA` で **`Connected: TACHIBANA`**（badge・Positions・cash 取得）。
+- **発注→約定→建玉反映（#23 核心 AC）**: 8918.TSE を **MARKET BUY 100** → submit 同期応答 `ACCEPTED`（ack-then-poll）→ 数十秒で **Positions タイルに `8918 qty=100 avg=102`** 出現・`cash 20000000→19989824`。**実 venue の約定が re-home 後の uGUI Positions タイル（`LivePanelViewModel` 給電）に反映**されることを実機確認。
+
+**未達（market-hours-gated・翌場中へ）:**
+- **cancel-ACK happy-path（`PENDING_CANCEL`→poll `CANCELED`）**: resting 注文を作れず未観測。`BUY/SELL LIMIT @50` は **現値≈¥11（uPnL=-9100/qty100/avg102 から逆算）の値幅バンド（≈¥40・findings 上述 macOS 実証）超で REJECTED**。さらに 15:00 で場引け。→ **次の場中に in-band 非約定指値**（例 SELL @15–20 / BUY @8–9）で resting → Cancel → PENDING_CANCEL→CANCELED を観測する。cancel-ACK の**ロジックは pytest 191 passed で GREEN**、cancel-lane GIL 安全は `WorkspaceLiveSeamProbe` で GREEN。
+- **secret modal（第二暗証番号）**: 本走では未観測（session cache 認証済みの可能性）。`SecretModalM2Probe` / fresh-login HITL で別途。
+- **Auto roundtrip**（footer ▶ → graceful stop で resting 取消）: 未実施。
+
+**判定:** #23 の核心「発注→約定→建玉反映」は実 venue で達成。`[LIVE DEMO ROUNDTRIP PASS]` は cancel-ACK happy-path ＋ Auto を翌場中に観測後に記録 → #4 close。

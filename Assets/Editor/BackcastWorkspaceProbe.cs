@@ -112,6 +112,9 @@ public static class BackcastWorkspaceProbe
             "_viewport", "_content", "_inputSurface", "_hakoniwaRoot", "_startupTile",
             "_chartTile", "_floatingLayer", "_strategyEditorWindow", "_strategyEditorBody",
             "_strategyEditorTitleInput",
+            // #23 re-home: three live data tiles + the adopted Order ticket window.
+            "_ordersTile", "_positionsTile", "_runResultTile",
+            "_orderWindow", "_orderWindowBody", "_orderWindowTitleInput",
         };
         foreach (var r in refs)
         {

@@ -230,8 +230,8 @@ _Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用
 全 UI 表面（menu bar / sidebar / 中央 infinite canvas workspace / footer / Python floating editor）を
 **1 つの authored scene（`BackcastWorkspace.unity`）に合体**させ、通常 Play の **唯一の起動入口**にする
 production composition root。型は `BackcastWorkspaceRoot`（scene 上の root GameObject/component）。
-**single Play-owner**：root 有効時は root だけが Python engine を所有し、Replay 駆動は durable な
-`ReplayEngineHost`（engine lifecycle / launcher / poll / transport RPC）へ抽出する。root が UI authored View
+**single Play-owner**：root 有効時は root だけが Python engine を所有し、Replay/Live 駆動は durable な
+`WorkspaceEngineHost`（engine lifecycle / launcher / poll / transport+live RPC・**永続単一 server で Replay と Live を兼用**）へ抽出する（**ADR-0010** が ADR-0009 D4 の per-run `ReplayEngineHost` 所有モデルを supersede）。root が UI authored View
 （[[Hakoniwa（split-grid surface）]] / [[floating window / FloatingWindowLayer / z-order]] / `MenuBarView` /
 `UniverseSidebarView` / footer）と Host を結線し、layout は [[layout binder]] 系の versioned スキーマで
 保存/復元する（ADR-0003）。**chrome（menu/sidebar/footer）は Content 外＝画面固定**、中央 workspace のみ
@@ -240,7 +240,7 @@ root 稼働中に Python 系 HITL を起動しても `PythonEngine.IsInitialized
 方針: **ADR-0005**（1:1 表面 parity）。
 _Avoid_: 「mainline」を恒久型名・正式 term に使うこと（移行期語）／`RuntimeInitializeOnLoadMethod`
 自動 bootstrap を production 起動入口と呼ぶこと（HITL 暫定手段・本線は scene authored）／root を engine
-orchestration の置き場にすること（駆動は `ReplayEngineHost` へ分離）
+orchestration の置き場にすること（駆動は `WorkspaceEngineHost` へ分離・ADR-0010）／`ReplayEngineHost` を現行型名と呼ぶこと（ADR-0010 で `WorkspaceEngineHost` へ一般化済の旧名）
 
 **infinite canvas**:
 chart / status tiles（Hakoniwa）/ floating window が乗る、無限スクロール・ズーム可能な **同じ空間** の土台

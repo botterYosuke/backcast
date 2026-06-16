@@ -120,3 +120,16 @@ AFK GREEN（Unity 6000.4.11f1 `-batchmode -nographics`）:
 修正後 AFK 再 GREEN: `HakoniwaBaseModeProbe`（Section1-4・restore 衝突回帰込み）PASS／`BackcastWorkspaceProbe`（BuildTileShell リファクタ回帰）PASS。
 
 **owner-run HITL（pending）**: footer mode segment で Replay⇄LiveManual⇄LiveAuto → base retile（Replay で startup 出現／Live で消失・BP/O/P/RR は常駐）・chart tile が despawn しない・grid 再レイアウト・box grow。Live 接続中に各 base tile へ live account/order/telemetry 表示（Replay は "(no data)"）。zoom 下の base↔chart header swap。**Save→再 Play で base は canonical・chart は slot 復元**（owner の #60 世代 sidecar でも base が壊れないことを確認）。**owner 実機 Play で確認待ち。** Replay パネル実データは follow-up #65。
+
+## 11. origin/main マージでの #23 統合（2026-06-16・owner 確定）
+
+#61 WIP は #60（`e795b13`）から分岐しており、並行して **#23 re-home**（origin/main `872739d`・`23-rehome-live-surfaces-to-workspace`）が **Orders/Positions/RunResult を HITL PASS 済みの静的タイルとして** `BackcastWorkspaceRoot` に着地していた。両者は同じ live-panel 領域を別実装で再構築していたため `BackcastWorkspaceRoot.cs` がマージ衝突。
+
+**owner 決定（reconciliation）= #23 のテスト済み配線を正本にし、#61 はその上に mode-conditional 層だけを載せる**:
+- **Orders/Positions/RunResult**: #23 の **scene-authored タイル + `LivePanelTileView`（`FormatOrders`/`FormatPositions`/`FormatRunResult`）+ `RefreshLiveTiles`（`AppliedCount` gate）** をそのまま採用（HITL PASS 済みを温存）。
+- **BuyingPower**: #23 には無い（scene タイルも無い）ため、**`SpawnBuyingPowerTile()` で動的生成**し、#23 と同じ `LivePanelTileView` + 新 `FormatBuyingPower` で配線。
+- **`HakoniwaBasePanelView.cs` は削除**（§10 の独自 uGUI View は `LivePanelTileView` に置換され重複・不要に）。§10 の「非修正 Low（format 重複）」は本統合で解消。
+- **mode-conditional 層（#61 の本体）は不変で存続**: `HakoniwaBaseTiles.Kinds`／`_baseTiles`（#23 の scene タイル + BuyingPower を追跡）／`SyncBaseTilesToMode`／`ReassertBaseAfterRestore`／`DriveFooter` の shape-flip フック。shape flip 時の即時再描画は `RefreshBasePanels` → **`ForceRefreshLiveTiles()`（gate 無視で 4 panel を `Refresh`）** に置換。冗長だった `_lastPanelStamp` poll は #23 の `_lastPanelApplied` gate に一本化。
+- honest empty state は #23 formatter の自然な空表示（"(none)"/"(flat / no account snapshot)"/"(no run)"）が担う（#61 の "(no data — Replay)" 文言は撤去・挙動は等価）。Replay 実データは follow-up #65 のまま。
+
+**AFK 再 GREEN（マージ後・Unity 6000.4.11f1 `-batchmode -nographics`）**: `HakoniwaBaseModeProbe`（Section1-4・`_basePanels` 参照を `_baseTiles` ベース検証に更新）→ `[HAKONIWA BASE MODE PASS]`。`BackcastWorkspaceProbe` / `WorkspaceLiveSeamProbe`（#23 回帰）も確認。**owner 実機 HITL（§10 末）は引き続き pending。**

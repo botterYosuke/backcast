@@ -25,14 +25,18 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Python.Runtime;
 
 public sealed class BackcastWorkspaceRoot : MonoBehaviour
 {
     const string WINDOW_ID = "strategy_editor:region_001";
+    const string ORDER_WINDOW_ID = "order:region_001";   // #23 re-home: singleton Order ticket window
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -58,6 +62,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _strategyEditorBody;
     [SerializeField] FloatingWindowTitleInput _strategyEditorTitleInput;
 
+    [Header("Live data Hakoniwa tiles (scene-authored, #23 re-home)")]
+    [SerializeField] RectTransform _ordersTile;
+    [SerializeField] RectTransform _positionsTile;
+    [SerializeField] RectTransform _runResultTile;
+
+    [Header("Order ticket floating window (scene-authored, adopted, #23 re-home)")]
+    [SerializeField] RectTransform _orderWindow;
+    [SerializeField] RectTransform _orderWindowBody;
+    [SerializeField] FloatingWindowTitleInput _orderWindowTitleInput;
+
     // ── durable orchestration (extracted) ──
     readonly WorkspaceEngineHost _host = new WorkspaceEngineHost();   // #39→#59 Step 2: generalized (Replay + Live seam)
 
@@ -77,14 +91,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly Dictionary<string, RectTransform> _chartTiles = new Dictionary<string, RectTransform>();
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
-    // #61 mode-conditional base tiles: the 4 always-present panels (BuyingPower/Orders/Positions/
-    // RunResult) live here; `startup` is the only mode-conditional base tile (Replay-only, ADR 0013)
-    // and toggles via SyncBaseTilesToMode. _baseLive caches the current base shape (false=Replay,
-    // true=Live) so DriveFooter retiles only when the shape actually flips (TTWR set-comparison).
+    // #61 mode-conditional base tiles: id → tile RectTransform for the always-present base panels
+    // (buying_power/orders/positions/run_result) + the Replay-only `startup`. _baseTiles is the handle
+    // the base retile (SyncBaseTilesToMode) and restore re-assert (ReassertBaseAfterRestore) use to
+    // reorder/show the base region. orders/positions/run_result are the #23 scene tiles (rendered by the
+    // LivePanelTileView fields below); buying_power is spawned dynamically (SpawnBuyingPowerTile, also a
+    // LivePanelTileView). _baseLive caches the current base shape (false=Replay, true=Live) so DriveFooter
+    // retiles only when the shape actually flips (TTWR set-comparison).
     readonly Dictionary<string, RectTransform> _baseTiles = new Dictionary<string, RectTransform>();
-    readonly Dictionary<string, HakoniwaBasePanelView> _basePanels = new Dictionary<string, HakoniwaBasePanelView>();
     bool _baseLive;
-    long _lastPanelStamp = -1;
     ScenarioStartupTile _tile;
     ReplayFooterView _footer;
     MenuBarViewModel _menuBar;
@@ -92,6 +107,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     UniverseSidebarController _sidebarCtrl;
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
+
+    // ── #23 re-home: live surfaces (3 data tiles / Order ticket / secret modal) ──
+    // #61 adds _buyingPowerView (the 4th base panel, dynamically spawned — no scene tile) using the same
+    // LivePanelTileView wiring as the 3 #23 tiles.
+    LivePanelTileView _ordersView, _positionsView, _runResultView, _buyingPowerView;
+    OrderTicketView _orderTicket;
+    SecretModalOverlay _secretOverlay;
+    bool _secretModalOpenPrev;
+    // Manual ticket status crosses worker→main: LiveRpcLanes invokes the result callback on a lane
+    // thread, but the OrderTicketView (uGUI) is main-only. Stash to volatiles; DriveOrderTicket applies.
+    volatile string _manualStatusLine = "-";   // pre-formatted on the worker; applied to the view on main
+    volatile string _manualOrderId = "";        // retained for the next "Cancel last"
+    volatile bool _manualStatusDirty;
+    long _lastPanelApplied = -1;                 // LivePanelViewModel.AppliedCount gate (skip idle tile re-format)
+    // Venue login ack crosses worker→main (host.VenueLogin onResult runs off-main); apply to Conn on main.
+    volatile bool _loginAckPending;
+    volatile bool _loginAckOk;
+    volatile string _loginAckEc = "";
 
     // ── runtime state ──
     bool _isOwner;       // owns the Python interpreter this Play
@@ -105,10 +138,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     FooterModeViewModel _footerMode;
     LiveAutoTransportViewModel _footerAuto;
     readonly SelectedSymbol _footerSelected = new SelectedSymbol();
-    string _venue = "MOCK";                 // live venue id (MOCK for AFK/HITL bring-up)
+    string _venue = "MOCK";                 // live venue id; resolved from LIVE_VENUE env in Awake (default MOCK)
     volatile bool _footerModeRejected;      // worker→main: a SetExecutionMode / stop-then-switch failed
     volatile int _footerStartResult;        // worker→main: 0 none / 1 ok / 2 fail (register→start)
     volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
+    volatile int _venueLoginResult;         // worker→main: 0 none / 1 ok / 2 fail (venue_login)
+    volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
+    volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
     string _autoStatus = "-";
     string _lastFooterSig = "";
     string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
@@ -120,6 +156,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (_font == null) _font = Resources.GetBuiltinResource<Font>("Arial.ttf");
 
+        // Live venue is one-per-server and bound at server build (the backend rejects a later
+        // venue_login for a different venue with VENUE_MISMATCH, live_orchestrator.py:684). So it must
+        // be chosen BEFORE InitializePython — resolve it from LIVE_VENUE env now (the documented live
+        // selector; default MOCK keeps the Replay mainline credential-less). A demo HITL sets
+        // LIVE_VENUE=TACHIBANA|KABU in .env before Play.
+        _venue = ResolveLiveVenue();
+
         ResolvePaths();
         BuildWorkspace();        // UI build ALWAYS runs (independent of _ownPlay / batchmode)
         _built = true;           // this root is the active layout owner regardless of Python ownership
@@ -129,7 +172,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _isOwner = WorkspaceOwnership.ShouldClaim(_ownPlay, Application.isBatchMode, PythonEngine.IsInitialized, _host.PythonInitialized);
         if (_isOwner)
         {
-            try { _host.InitializePython(); }
+            try { _host.InitializePython(_venue); }   // build the server for the configured venue (not always MOCK)
             catch (Exception e) { Debug.LogError("[BackcastWorkspaceRoot] Python init failed: " + e); _isOwner = false; }
         }
         else
@@ -176,23 +219,53 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // orchestrator) owns box-grow (findings 0027 §6 — Rebuild stays box-size-free).
         if (_chartTile != null) _chartTile.gameObject.SetActive(false);
 
-        _hako = new HakoniwaController(_hakoniwaRoot,
-            new Dictionary<string, RectTransform> { { "startup", _startupTile } },
-            new[] { "startup" });
-        startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
-        _baseTiles[HakoniwaBaseTiles.Startup] = _startupTile;   // track for restore re-assert + visibility
+        // #23 re-home: three live data tiles (Orders / Positions / Run Result), fed by _host.Panel
+        // (LivePanelViewModel — the SoT, findings 0011 D2 / 0014 RH2). Empty until live events arrive.
+        RectTransform ordersBody = BuildTileChrome(_ordersTile, "orders", out HakoniwaTileHeaderInput ordersHeader);
+        _ordersView = new LivePanelTileView(FormatOrders);
+        _ordersView.Build(ordersBody, _font);
 
-        // #61 base panels: BuyingPower/Orders/Positions/RunResult are present in BOTH mode shapes, so
-        // spawn them ONCE here (after startup, before charts). `startup` is the only mode-conditional
+        RectTransform positionsBody = BuildTileChrome(_positionsTile, "positions", out HakoniwaTileHeaderInput positionsHeader);
+        _positionsView = new LivePanelTileView(FormatPositions);
+        _positionsView.Build(positionsBody, _font);
+
+        RectTransform runResultBody = BuildTileChrome(_runResultTile, "run_result", out HakoniwaTileHeaderInput runResultHeader);
+        _runResultView = new LivePanelTileView(FormatRunResult);
+        _runResultView.Build(runResultBody, _font);
+
+        // Merge of #60 (dynamic chart tile family) + #23 (re-homed live tiles) + #61 (mode-conditional
+        // base): the scene-authored base tiles are [startup, orders, positions, run_result] — the single
+        // "chart" tile is retired (deactivated above) and replaced by the dynamic chart:<id> family driven
+        // from the universe (#60). The 3 live data tiles are fed by _host.Panel (#23 RH2). #61 (below)
+        // adds the BuyingPower tile and reorders to the canonical mode-conditional base set.
+        _hako = new HakoniwaController(_hakoniwaRoot,
+            new Dictionary<string, RectTransform>
+            {
+                { "startup", _startupTile },
+                { "orders", _ordersTile }, { "positions", _positionsTile }, { "run_result", _runResultTile },
+            },
+            new[] { "startup", "orders", "positions", "run_result" });
+        startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
+        ordersHeader.Initialize(_hako, _hakoniwaRoot, "orders");
+        positionsHeader.Initialize(_hako, _hakoniwaRoot, "positions");
+        runResultHeader.Initialize(_hako, _hakoniwaRoot, "run_result");
+
+        // #61 mode-conditional base: the base SET (the non-chart, mode-owned tiles) is [startup?,
+        // buying_power, orders, positions, run_result]. Orders/Positions/RunResult are the #23-built
+        // scene tiles (LivePanelTileView, already controller-registered above) — track them in _baseTiles
+        // so the base retile / restore re-assert can manage them. BuyingPower has NO scene tile, so spawn
+        // it dynamically with the SAME #23 LivePanelTileView wiring. `startup` is the only mode-conditional
         // base tile (ADR 0013) — SyncBaseTilesToMode toggles it. Build defaults to the Replay shape
         // (DisplayMode seeds to Replay), so startup is present and _baseLive = false.
-        SpawnBasePanel(HakoniwaBaseTiles.BuyingPower, HakoniwaBasePanelView.Kind.BuyingPower);
-        SpawnBasePanel(HakoniwaBaseTiles.Orders, HakoniwaBasePanelView.Kind.Orders);
-        SpawnBasePanel(HakoniwaBaseTiles.Positions, HakoniwaBasePanelView.Kind.Positions);
-        SpawnBasePanel(HakoniwaBaseTiles.RunResult, HakoniwaBasePanelView.Kind.RunResult);
+        _baseTiles[HakoniwaBaseTiles.Startup]   = _startupTile;
+        _baseTiles[HakoniwaBaseTiles.Orders]    = _ordersTile;
+        _baseTiles[HakoniwaBaseTiles.Positions] = _positionsTile;
+        _baseTiles[HakoniwaBaseTiles.RunResult] = _runResultTile;
+        SpawnBuyingPowerTile();
+        _hako.Reorder(HakoniwaBaseTiles.Kinds(false));   // canonical [startup, buying_power, orders, positions, run_result]
         _baseLive = false;
 
-        SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow
+        SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow (#60)
         _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
 
         // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
@@ -201,6 +274,34 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
         var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, WINDOW_ID, _registry, font: _font);
         if (editorView != null) _editors[WINDOW_ID] = editorView;
+
+        // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
+        // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
+        // visible ONLY while the footer mode is LiveManual (DriveOrderTicket). Place/Cancel route to the
+        // host RPC lanes; the result callbacks marshal to main via the _manual* volatiles.
+        if (_orderWindow != null)
+        {
+            _windows.Adopt(FloatingWindowCatalog.KIND_ORDER, ORDER_WINDOW_ID, _orderWindow);
+            if (_orderWindowTitleInput != null)
+                _orderWindowTitleInput.Initialize(_windows, _canvas, _viewport, ORDER_WINDOW_ID);
+            _orderTicket = new OrderTicketView();
+            _orderTicket.Build(_orderWindowBody, _font);
+            _orderTicket.PlaceRequested += OnManualPlace;
+            _orderTicket.CancelRequested += OnManualCancel;
+            _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
+        }
+
+        // #23 re-home: secret modal overlay (screen-fixed chrome on its OWN ScreenSpaceOverlay canvas,
+        // outside Content). Keystrokes drain char-by-char via the New Input System onTextInput inside the
+        // overlay; the root routes them into the host's SecretModalController (no plaintext managed string).
+        var secretGo = new GameObject("SecretModalOverlay");
+        secretGo.transform.SetParent(transform, false);
+        _secretOverlay = secretGo.AddComponent<SecretModalOverlay>();
+        _secretOverlay.Build(_font);
+        _secretOverlay.CharTyped += OnSecretChar;
+        _secretOverlay.BackspacePressed += OnSecretBackspace;
+        _secretOverlay.SubmitClicked += SubmitSecret;
+        _secretOverlay.CancelClicked += CancelSecret;
 
         // footer transport + #39 mode segment / LiveAuto ▶ (wired to the host live seam). The
         // mode-aware footer reuses the same view; modeVm/autoVm enable the Replay/Manual/Auto segments
@@ -226,7 +327,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             currentMode: () => _footerMode.DisplayMode,
             isLiveAutoRunning: () => _footerAuto != null && _footerAuto.HasActiveRun,
             isReplayRunning: () => _host.IsRunning);
-        if (_menuBarView != null) _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave);
+        if (_menuBarView != null)
+            _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave,
+                OnVenueConnect, OnVenueDisconnect,
+                () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
+                () => _footerMode.DisplayMode,                        // bar mode badge
+                _venue);                                              // "MOCK" → dev connect item (editor only)
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -247,6 +353,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // the SAME frame builder as the scene-authoring tool so adopted/spawned editors can't diverge.
     RectTransform BuildEditorWindowFrame(FloatingWindowSpec spec, string id)
     {
+        // #23 re-home: an Order window restored from a saved doc uses the Order frame (the singleton
+        // ticket is adopted, not spawned, so this only fires for a stray/legacy id — frame only).
+        if (spec.kind == FloatingWindowCatalog.KIND_ORDER)
+        {
+            var orderRoot = OrderTicketWindowFrame.Build(id, out var orderTitle, out _);
+            orderTitle.Initialize(_windows, _canvas, _viewport, id);
+            return orderRoot;
+        }
         var root = StrategyEditorWindowFrame.Build(id, out var titleInput, out var body);
         titleInput.Initialize(_windows, _canvas, _viewport, id);
         if (spec.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR)
@@ -282,7 +396,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // Build a Hakoniwa tile shell (GameObject under the root + panel chrome + header-drag swap +
     // controller registration) shared by chart and base tiles. Returns the tile root; `body` is the
-    // content inset the caller fills with its view (ChartView / HakoniwaBasePanelView). box-size-free.
+    // content inset the caller fills with its view (ChartView / LivePanelTileView). box-size-free.
     RectTransform BuildTileShell(string id, out RectTransform body)
     {
         var go = new GameObject(id, typeof(RectTransform), typeof(Image));
@@ -316,16 +430,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // ---- #61 mode-conditional base tiles: the base SET is owned by the mode (TTWR ExecutionMode) ----
-    // Build one always-present base panel tile (same chrome as chart tiles) + its HakoniwaBasePanelView,
-    // register it with the controller, and wire header-drag swap. Mirrors SpawnChartTile.
-    void SpawnBasePanel(string id, HakoniwaBasePanelView.Kind kind)
+    // BuyingPower base tile. Unlike Orders/Positions/RunResult (scene-authored, #23) there is no scene
+    // tile for BuyingPower, so build it dynamically (BuildTileShell = chrome + controller add + header
+    // swap, mirrors SpawnChartTile) and render it with the SAME #23 LivePanelTileView wiring the other
+    // base panels use (FormatBuyingPower), fed from _host.Panel via RefreshLiveTiles.
+    void SpawnBuyingPowerTile()
     {
-        if (string.IsNullOrEmpty(id) || _basePanels.ContainsKey(id)) return;
-        var rt = BuildTileShell(id, out RectTransform body);
-        var view = body.gameObject.AddComponent<HakoniwaBasePanelView>();
-        view.Build(body, kind, _font);
-        _baseTiles[id] = rt;
-        _basePanels[id] = view;
+        if (_buyingPowerView != null) return;
+        var rt = BuildTileShell(HakoniwaBaseTiles.BuyingPower, out RectTransform body);
+        _buyingPowerView = new LivePanelTileView(FormatBuyingPower);
+        _buyingPowerView.Build(body, _font);
+        _baseTiles[HakoniwaBaseTiles.BuyingPower] = rt;
     }
 
     // Base retile (TTWR reconcile_hakoniwa_tiles, base-only). The ONLY mode-conditional base tile is
@@ -350,7 +465,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _hako.Reorder(HakoniwaBaseTiles.Kinds(live));   // [base…, chart…] invariant restored
         ApplyBoxGrow();                                 // grid = n_base + n_chart (derived box-grow, #60)
         _baseLive = live;
-        RefreshBasePanels(live);                        // shape flip: repaint now (Live data ⇄ "(no data)")
+        ForceRefreshLiveTiles();                        // shape flip: repaint the base panels now (#23 wiring)
     }
 
     // Re-assert the canonical [base…, chart…] order + base visibility after a layout restore. The
@@ -365,15 +480,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _hako.Reorder(HakoniwaBaseTiles.Kinds(_baseLive));
         foreach (var id in HakoniwaBaseTiles.Kinds(_baseLive))
             if (_baseTiles.TryGetValue(id, out var rt) && rt != null) rt.gameObject.SetActive(true);
-    }
-
-    // Push the live VM into the 4 base panels. In Replay the poll has no panel data → honest empty
-    // state (follow-up #65). Gated by the caller on a changed AppliedCount/shape so it's not per-frame.
-    void RefreshBasePanels(bool live)
-    {
-        var panel = _host.Panel;
-        foreach (var kv in _basePanels)
-            if (kv.Value != null) kv.Value.Render(panel, live);
     }
 
     // Destroy at runtime, DestroyImmediate in edit mode (the AFK probe drives spawn/despawn headlessly
@@ -524,11 +630,279 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             catch { /* malformed poll snapshot: keep the last per-id render */ }
         }
 
-        // #39: drain live push events into the Panel (footer run lifecycle authority), then drive the
-        // mode footer. (A SecretRequired event — live order 2nd password — would surface a secret modal;
-        // that modal is #23's surface, so here we only feed the Panel.)
-        _host.DrainLiveEvents();
+        // #23 re-home: apply a pending venue-login ack to Conn on the main thread (host.VenueLogin's
+        // onResult fired on a worker; Conn is a main-only VM).
+        if (_loginAckPending) { _loginAckPending = false; _host.Conn.ApplyLoginAck(_loginAckOk, _loginAckEc); }
+
+        // #39/#23: drain live push events into the Panel (footer run lifecycle authority); a NEW
+        // SecretRequired opens the secret modal (#23 re-home). Then refresh the live tiles + Order
+        // ticket from the Panel, and drive the mode footer.
+        bool newSecret = _host.DrainLiveEvents();
+        DriveSecretModal(newSecret);
+        RefreshLiveTiles();
+        DriveOrderTicket();
         DriveFooter();
+    }
+
+    // ── #23 re-home: live data tiles (Orders / Positions / Run Result), fed by _host.Panel. Gate on
+    // LivePanelViewModel.AppliedCount so the per-frame path costs one long compare (no string/StringBuilder
+    // allocation) while the live session is idle — the formatters only run when an event was applied. ──
+    void RefreshLiveTiles()
+    {
+        long applied = _host.Panel.AppliedCount;
+        if (applied == _lastPanelApplied) return;
+        _lastPanelApplied = applied;
+        PushLiveTiles();
+    }
+
+    // Repaint all base panel tiles unconditionally (bypass the AppliedCount gate). #61 base retile uses
+    // this on a Replay⇄Live shape flip so the panels redraw immediately (the gate would otherwise skip
+    // an unchanged AppliedCount). _buyingPowerView is the #61 4th panel; the other three are #23 tiles.
+    void ForceRefreshLiveTiles() => PushLiveTiles();
+
+    void PushLiveTiles()
+    {
+        LivePanelViewModel p = _host.Panel;
+        _buyingPowerView?.Refresh(p);
+        _ordersView?.Refresh(p);
+        _positionsView?.Refresh(p);
+        _runResultView?.Refresh(p);
+    }
+
+    // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
+    // gate the buttons on a live session; apply any worker-thread place/cancel status to the (main) view. ──
+    void DriveOrderTicket()
+    {
+        if (_orderTicket == null || _orderWindow == null) return;
+        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
+        if (_orderWindow.gameObject.activeSelf != liveManual) _orderWindow.gameObject.SetActive(liveManual);
+        if (liveManual) _orderTicket.SetInstrument(ManualInstrument());   // the operator must see what they'll trade
+        _orderTicket.SetInteractable(_host.ServerReady && _host.Conn.IsConnected && !_host.TeardownComplete);
+        if (_manualStatusDirty)
+        {
+            _manualStatusDirty = false;
+            _orderTicket.SetStatus(_manualStatusLine);
+        }
+    }
+
+    void OnManualPlace()
+    {
+        if (_orderTicket == null) return;
+        // Invariant-culture parse: the qty/price text must use '.' as the decimal point regardless of the
+        // machine locale, matching the numeric convention the wire path expects (no locale-dependent misparse).
+        if (!double.TryParse(_orderTicket.Qty, NumberStyles.Float, CultureInfo.InvariantCulture, out double qty) || qty <= 0)
+        { _orderTicket.SetStatus("invalid qty"); return; }
+        double? price = null;
+        if (_orderTicket.Limit)
+        {
+            if (!double.TryParse(_orderTicket.Price, NumberStyles.Float, CultureInfo.InvariantCulture, out double p) || p <= 0)
+            { _orderTicket.SetStatus("invalid limit price"); return; }
+            price = p;
+        }
+        if (!_host.ServerReady || !_host.Conn.IsConnected || _host.Lanes == null) { _orderTicket.SetStatus("connect a venue first"); return; }
+        // Live order safety: refuse rather than route to an arbitrary symbol when none is resolvable.
+        string iid = ManualInstrument();
+        if (string.IsNullOrEmpty(iid)) { _orderTicket.SetStatus("select an instrument (sidebar/universe) first"); return; }
+        string side = _orderTicket.SideBuy ? "BUY" : "SELL";
+        string type = _orderTicket.Limit ? "LIMIT" : "MARKET";
+        _orderTicket.SetStatus("placing " + side + " " + qty + " " + type + "…");
+        _host.Lanes.SubmitPlaceOrder(ManualVenue(), iid, side, qty, price, type, "DAY", res =>
+        {
+            if (res.Success && !string.IsNullOrEmpty(res.OrderId)) _manualOrderId = res.OrderId;
+            string status = res.Success ? res.Status : ("ERR " + res.ErrorCode);
+            _manualStatusLine = status + (string.IsNullOrEmpty(_manualOrderId) ? "" : " (" + _manualOrderId + ")");
+            _manualStatusDirty = true;
+        });
+    }
+
+    void OnManualCancel()
+    {
+        if (_orderTicket == null || _host.Lanes == null) { _orderTicket?.SetStatus("not connected"); return; }
+        string oid = !string.IsNullOrEmpty(_manualOrderId) ? _manualOrderId
+                   : (_host.Panel.HasOrder ? _host.Panel.LatestOrder.OrderId : "");
+        if (string.IsNullOrEmpty(oid)) { _orderTicket.SetStatus("no order to cancel"); return; }
+        _orderTicket.SetStatus("cancel " + oid + "…");
+        // ack-then-poll venue: PENDING_CANCEL = 取消受付（poll が終端 CANCELED を後追い・findings 0014）。
+        _host.Lanes.SubmitCancelOrder(ManualVenue(), oid, res =>
+        {
+            _manualStatusLine = res.Success ? res.Status : ("ERR " + res.ErrorCode);
+            _manualStatusDirty = true;
+        });
+    }
+
+    // venue: the connected session id (poll-canonical) if any, else the configured fallback.
+    string ManualVenue() => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue;
+
+    // instrument: the sidebar-focused symbol if any (shared SelectedSymbol), else universe[0]. Returns ""
+    // when nothing is resolvable — the live-order path REFUSES rather than default to an arbitrary symbol.
+    string ManualInstrument()
+    {
+        if (_footerSelected != null && _footerSelected.HasValue) return _footerSelected.Value;
+        var ids = _scenario.Universe.Ids;
+        if (ids != null && ids.Count > 0) return ids[0];
+        return "";
+    }
+
+    // ── #23 re-home: secret modal (second password). The overlay drains keystrokes char-by-char; the
+    // root routes them into the host SecretModalController and reads MaskedDisplay back. No plaintext
+    // managed string is ever formed (the buffer lives only in the controller's zeroable char[]). ──
+    void DriveSecretModal(bool newSecret)
+    {
+        SecretModalController modal = _host.Modal;
+        if (newSecret && !modal.IsOpen)
+        {
+            modal.Open(_host.Panel.LatestSecretRequired, Time.realtimeSinceStartup);
+            // Secret discipline: drop any focused uGUI InputField (e.g. the order qty field or the strategy
+            // editor) so the device-level onTextInput keystrokes don't ALSO land in its plaintext .text.
+            if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+        }
+        if (modal.IsOpen && modal.TickExpire(Time.realtimeSinceStartup))   // 25s absolute timeout (zeroizes)
+            _menuBarView?.ShowMessage("secret modal timed out (25s) — reconnect to retry.");
+        if (modal.IsOpen != _secretModalOpenPrev)
+        {
+            _host.Coord.SetSecretModalOpen(modal.IsOpen);   // hold off logout while awaiting the secret
+            _secretModalOpenPrev = modal.IsOpen;
+        }
+        if (_secretOverlay != null)
+        {
+            _secretOverlay.SetVisible(modal.IsOpen);
+            if (modal.IsOpen) _secretOverlay.SetMasked(modal.MaskedDisplay);
+        }
+    }
+
+    void OnSecretChar(char c) => _host.Modal.AppendChar(c);
+    void OnSecretBackspace() => _host.Modal.Backspace();
+
+    void SubmitSecret()
+    {
+        SecretModalController modal = _host.Modal;
+        // Use the request the modal OPENED with (not the newest LatestSecretRequired), so a second
+        // SecretRequired arriving mid-entry can't make us submit these keystrokes against the wrong id.
+        string reqId = modal.RequestId;
+        char[] payload = modal.Submit();        // one-shot; controller zeroizes its own copy
+        if (payload == null) return;
+        _host.Coord.SetSecretModalOpen(false);
+        _secretModalOpenPrev = false;
+        // Zeroize the plaintext if the lane is unavailable (else the secret char[] would linger un-cleared —
+        // the lane is the only consumer that zeroizes it, mirroring the retired path's contract).
+        if (_host.Lanes != null) _host.Lanes.SubmitSecret(reqId, payload, _ => { });
+        else Array.Clear(payload, 0, payload.Length);
+    }
+
+    void CancelSecret()
+    {
+        _host.Modal.Cancel();
+        _host.Coord.SetSecretModalOpen(false);
+        _secretModalOpenPrev = false;
+    }
+
+    // ── #23 re-home: venue connect SEAM (findings 0014 RH5). The mainline Venue submenu UI that drives
+    // this is #42; the #23 root-based HITL harness invokes it for the demo roundtrip. It REUSES the
+    // durable VenueMenuViewModel (request build) + host.VenueLogin (login → LiveManual), never
+    // reimplementing the retired ProductionLiveShell.ConnectEnv logic. The login ack is marshalled to
+    // Conn on the main thread (Update). ──
+    // Connect the CONFIGURED venue (the one the server was built with — connecting any other would hit
+    // VENUE_MISMATCH). The env hint comes from the durable VenueMenuViewModel; MOCK uses the credential-
+    // less "env" source. This is the only connect entry the HITL harness needs — there are no per-variant
+    // buttons, so the harness can't drive a venue the server isn't configured for.
+    public void ConnectConfigured()
+    {
+        if (!CanConnectConfigured()) return;
+        string env = _venueMenu.EnvironmentHintFor(_venue);
+        VenueConnectRequest req = _venueMenu.BuildConnectRequest(_venue, env);
+        if (_venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt subprocess)
+        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint, (ok, ec) =>
+        {
+            _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;   // marshalled to Conn in Update
+        });
+    }
+
+    // Gate for the harness connect affordance. MOCK is the credential-less dev venue (always connectable
+    // when ready); real venues defer to the durable CanConnectEnv, which greys out *prod* unless the
+    // matching *_ALLOW_PROD flag is set (the #42 prod-safety parity, not regressed by the harness).
+    public bool CanConnectConfigured()
+    {
+        if (!_isOwner || !_host.ServerReady || _host.Conn.IsConnected || _host.LoginRunning) return false;
+        if (_venue == "MOCK") return true;
+        return _venueMenu.CanConnectEnv(_venue, _venueMenu.EnvironmentHintFor(_venue));
+    }
+
+    // Focus the HITL target instrument so the manual Order ticket (ManualInstrument → SelectedSymbol) and
+    // the chart/depth point at it — the harness calls this so its configured instrument is actually used,
+    // not merely displayed.
+    public void FocusInstrument(string iid)
+    {
+        if (!string.IsNullOrEmpty(iid)) _footerSelected.Set(iid);
+    }
+
+    // LIVE_VENUE selects the live venue the server is built for; default MOCK. Whitelisted so a typo can't
+    // build a server for an unknown venue (it falls back to MOCK rather than failing opaquely).
+    static string ResolveLiveVenue()
+    {
+        string v = (EnvConfig.Get("LIVE_VENUE", "MOCK") ?? "MOCK").Trim().ToUpperInvariant();
+        return (v == "TACHIBANA" || v == "KABU") ? v : "MOCK";
+    }
+
+    // Read-only seams the root-based HITL harness observes (connect affordance gating + badge readout).
+    public bool IsPythonOwner => _isOwner;
+    public bool ServerReady => _host.ServerReady;
+    public bool VenueConnected => _host.Conn.IsConnected;
+    public string VenueId => _host.Conn.VenueId;
+    public string ConfiguredVenue => _venue;
+
+    // ── #23 re-home: tile formatters (mirror the retired ProductionLiveShell.DrawPanels content) ──
+    // #61 BuyingPower base panel (no #23 formatter — BuyingPower was not one of the 3 re-homed tiles).
+    static string FormatBuyingPower(LivePanelViewModel vm)
+    {
+        if (vm.HasAccount)
+        {
+            var sb = new StringBuilder();
+            sb.Append("bp=").Append(vm.LatestAccount.BuyingPower).Append("  cash=").Append(vm.LatestAccount.Cash);
+            return sb.ToString();
+        }
+        return "(no account snapshot)";
+    }
+
+    static string FormatOrders(LivePanelViewModel vm)
+    {
+        var sb = new StringBuilder();
+        if (vm.HasOrder)
+        {
+            LiveOrderEvent o = vm.LatestOrder;
+            sb.Append(o.ClientOrderId).Append("  ").Append(o.Status)
+              .Append("  filled=").Append(o.FilledQty).Append('@').Append(o.AvgPrice).Append('\n');
+        }
+        else sb.Append("(none)\n");
+        sb.Append("filled-order count: ").Append(vm.FilledOrderCount);
+        return sb.ToString();
+    }
+
+    static string FormatPositions(LivePanelViewModel vm)
+    {
+        if (vm.HasAccount && vm.LatestAccount.Positions != null && vm.LatestAccount.Positions.Count > 0)
+        {
+            var sb = new StringBuilder();
+            foreach (LivePosition p in vm.LatestAccount.Positions)
+                sb.Append(p.symbol).Append("  qty=").Append(p.qty).Append("  avg=").Append(p.avg_price)
+                  .Append("  uPnL=").Append(p.unrealized_pnl).Append('\n');
+            sb.Append("cash=").Append(vm.LatestAccount.Cash).Append("  bp=").Append(vm.LatestAccount.BuyingPower);
+            return sb.ToString();
+        }
+        return "(flat / no account snapshot)";
+    }
+
+    static string FormatRunResult(LivePanelViewModel vm)
+    {
+        var sb = new StringBuilder();
+        if (vm.HasLifecycle) sb.Append("run=").Append(vm.LatestLifecycle.RunId).Append("  ").Append(vm.LatestLifecycle.Status).Append('\n');
+        if (vm.HasTelemetry)
+        {
+            LiveTelemetryEvent t = vm.LatestTelemetry;
+            sb.Append("realized=").Append(t.RealizedPnl).Append("  unrealized=").Append(t.UnrealizedPnl)
+              .Append("  orders=").Append(t.OrderCount).Append("  fills=").Append(t.FillCount);
+        }
+        if (!vm.HasLifecycle && !vm.HasTelemetry) sb.Append("(no run)");
+        return sb.ToString();
     }
 
     // ---- #39: main-thread footer drive (ported from the retired ProductionLiveShell, with its review
@@ -541,7 +915,26 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); }
         int sr = _footerStartResult;
-        if (sr != 0) { _footerStartResult = 0; _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId); }
+        if (sr != 0)
+        {
+            _footerStartResult = 0;
+            _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId);
+            // No live panels on the mainline yet (slice 3), so surface a start failure as a menu notice.
+            if (sr == 2) _menuBarView?.ShowMessage("LiveAuto start failed (see Console)");
+        }
+
+        // venue login/logout acks (worker→main): apply the login ack to the poll-canonical Conn VM and
+        // surface a failure notice; the badge otherwise tracks the poll (findings 0027 D5).
+        int lr = _venueLoginResult;
+        if (lr != 0)
+        {
+            _venueLoginResult = 0;
+            _host.Conn.ApplyLoginAck(lr == 1, _venueLoginError);
+            // clear the transient "connecting…" on success (the badge alone shows Connected); surface
+            // the reason on failure.
+            _menuBarView?.ShowMessage(lr == 2 ? "login failed: " + _venueLoginError : null);
+        }
+        if (_venueLogoutFailed) { _venueLogoutFailed = false; _menuBarView?.ShowMessage("logout failed (write in flight?)"); }
 
         string st = _host.LatestStateJson;
         if (!string.IsNullOrEmpty(st))
@@ -558,11 +951,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         bool live = HakoniwaBaseTiles.IsLiveShape(_footerMode.DisplayMode);
         if (live != _baseLive) SyncBaseTilesToMode(live);   // base retile; SyncBaseTilesToMode repaints on the flip
 
-        // base panel content: refresh only when the live VM advanced (AppliedCount) — avoids per-frame
-        // Text churn. A shape flip already repaints inside SyncBaseTilesToMode (above). DrainLiveEvents
-        // (in Update, before DriveFooter) updated the VM.
-        long applied = _host.Panel.AppliedCount;
-        if (applied != _lastPanelStamp) { _lastPanelStamp = applied; RefreshBasePanels(live); }
+        // base panel content is refreshed by RefreshLiveTiles (Update, before DriveFooter) — gated on the
+        // VM AppliedCount so idle frames cost one long compare. A shape flip force-repaints inside
+        // SyncBaseTilesToMode (above).
 
         _footerAuto.ObserveLifecycle();
 
@@ -647,8 +1038,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // connection gate (the VM only checks a non-empty venue string) is re-asserted here.
     void FooterAutoStart(LiveAutoStartRequest req)
     {
-        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; return; }
-        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; return; }
+        // Surface the pre-flight block reason: _autoStatus is not rendered on the mainline (no live panel
+        // yet — slice 3), so a ▶ that silently no-ops (no instrument / no saved strategy / venue) was
+        // undiagnosable. Route it to the menu notice (findings 0027 §2.1 HITL observability).
+        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; _menuBarView?.ShowMessage("LiveAuto ▶: " + req.Message); return; }
+        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; _menuBarView?.ShowMessage("connect a venue before starting LiveAuto"); return; }
         _footerAuto.NotifyStartIssued();
         _autoStatus = "register+start…";
         _host.RegisterAndStartLiveAuto(req.StrategyFile, req.OriginalPath, req.InstrumentId, req.Venue,
@@ -662,25 +1056,88 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ---- File = Layout (findings 0025 §9) ----
     void OnFileNew()
     {
-        var decision = _menuBar.FileNew(out _, out string refuse);
+        var decision = _menuBar.FileNew(out string modeReq, out string refuse);
         if (decision == FileNewDecision.RefusedRunning) { _menuBarView?.ShowMessage(refuse); return; }
-        // workspace clear: scenario buffer + universe (the in-memory clear the host owns).
+
+        // full TTWR in-memory reset (findings 0017 §4) that HONOURS the adopt invariant (findings 0025 §8):
+        // ADDITIONAL editor windows are destroyed + unregistered; the scene-authored adopted editor is
+        // reset IN PLACE (never destroyed — Apply(Default()) would destroy it, so close each additional
+        // window individually). canvas pan/zoom + Hakoniwa are NOT reset (§4 targets strategy/editor state).
+        var additional = new List<string>();
+        foreach (var id in _editors.Keys) if (id != WINDOW_ID) additional.Add(id);
+        foreach (var id in additional)
+        {
+            _windows.Close(id);
+            _registry.Unregister(id);
+            _editors.Remove(id);
+        }
+        if (_editors.TryGetValue(WINDOW_ID, out var adoptedEditor) && adoptedEditor != null)
+            adoptedEditor.ResetUnboundEmpty();
+
+        // scenario buffer + universe (the in-memory clear the host owns).
         _scenario.Clear();
         _tile?.SyncFieldsFromController();
+
+        // mode side-effect (findings 0027 D3): SetExecutionMode(LiveManual) ONLY when connected — the VM
+        // returns null otherwise (gap② guard, TTWR observable no-op). HITL-verified; the AFK probe runs
+        // disconnected so modeReq is null here and the host is never touched.
+        SendModeSideEffect(modeReq);
+
         _menuBarView?.ShowMessage("New: workspace cleared.");
     }
 
     void OnFileOpen()
     {
-        _ = _menuBar.FileOpenModeSideEffect();   // Live-mode side-effect (no-op in Replay mainline; #39/#42)
+        // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load (findings 0017 §1).
+        // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
+        SendModeSideEffect(_menuBar.FileOpenModeSideEffect());
         RestoreLayout();
         _menuBarView?.ShowMessage("Open: layout restored.");
+    }
+
+    // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op
+    // for a null mode (the VM returns null when disconnected / not in a Live mode — TTWR observable no-op).
+    void SendModeSideEffect(string mode)
+    {
+        if (mode != null) _host.SetExecutionMode(mode, ok => { if (!ok) _footerModeRejected = true; });
     }
 
     void OnFileSave()
     {
         SaveLayout();
         _menuBarView?.ShowMessage("Save: layout written.");
+    }
+
+    // ---- Venue submenu → host venue RPCs (findings 0027 D5). Connect builds the request via the reused
+    // VenueMenuViewModel (MOCK = credential-less dev venue → "env" source so no tkinter prompt spawns),
+    // routes to the host lane, and the login ack is marshalled to main in DriveFooter (worker→main). The
+    // host owns the GIL discipline; this root never touches _conn off the main thread. ----
+    void OnVenueConnect(string venue, string env)
+    {
+        _venue = venue;
+        VenueConnectRequest req = _venueMenu.BuildConnectRequest(venue, env);
+        if (venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (findings 0027 D2)
+        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint,
+            (ok, ec) => { _venueLoginError = ec; _venueLoginResult = ok ? 1 : 2; });
+        _menuBarView?.ShowMessage(venue == "MOCK" ? "connecting MOCK…" : "login (enter credentials)…");
+    }
+
+    void OnVenueDisconnect()
+    {
+        // Serialize against in-flight live RPCs (same guard as OnFooterMode) so logout can't interleave
+        // with a register→start / mode switch under the GIL (review High).
+        if (_host.LiveRpcInFlight || _footerAuto.IsStartInFlight)
+        {
+            _menuBarView?.ShowMessage("Live action in flight — wait before disconnecting.");
+            return;
+        }
+        // With an active LiveAuto run, stop it + leave Live (Replay) BEFORE venue_logout so the engine's
+        // _teardown_live_components can't race the footer's auto-replay recovery (review High, D2 ordering).
+        if (_footerAuto.HasActiveRun)
+            _host.StopLiveThenLogout(_footerAuto.ActiveRunId, ok => { if (!ok) _venueLogoutFailed = true; });
+        else
+            _host.VenueLogout(ok => { if (!ok) _venueLogoutFailed = true; });
+        _menuBarView?.ShowMessage("disconnecting…");
     }
 
     // ---- layout persistence (4 dimensions) ----

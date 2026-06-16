@@ -118,6 +118,17 @@ public class FloatingWindowController
         return true;
     }
 
+    // Destroy + deregister a SINGLE window by id (returns false for an unknown id). Unlike Apply()'s
+    // full-replacement pass, this targets ONE window so the caller can drop an ADDITIONAL window while
+    // leaving the scene-authored adopted window untouched (File→New, findings 0027 D3 / findings 0025 §8).
+    public bool Close(string id)
+    {
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var e)) return false;
+        _windows.Remove(id);
+        if (e.rt != null) _destroy(e.rt.gameObject);
+        return true;
+    }
+
     // Move a window by a CANVAS-LOGICAL delta (the input boundary already divided the viewport
     // delta by zoom). y is up-positive, matching anchoredPosition. No-op for an unknown id.
     public void MoveByLogical(string id, Vector2 logicalDelta)

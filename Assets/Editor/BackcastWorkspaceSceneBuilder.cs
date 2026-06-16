@@ -25,6 +25,7 @@ public static class BackcastWorkspaceSceneBuilder
     const float FOOTER_H = 40f;
     const float SIDEBAR_W = 200f;
     const string WINDOW_ID = "strategy_editor:region_001";
+    const string ORDER_WINDOW_ID = "order:region_001";   // #23 re-home: adopted Order ticket window
 
     [MenuItem("Tools/Backcast/Build Workspace Scene")]
     public static void Build()
@@ -73,6 +74,10 @@ public static class BackcastWorkspaceSceneBuilder
         hakoniwaRoot.sizeDelta = new Vector2(1000f, 640f);   // a bounded box on the canvas for the grid
         var startupTile = NewRect("startup", hakoniwaRoot);
         var chartTile = NewRect("chart", hakoniwaRoot);
+        // #23 re-home: three live data tiles (authored placeholders; runtime fills chrome + view).
+        var ordersTile = NewRect("orders", hakoniwaRoot);
+        var positionsTile = NewRect("positions", hakoniwaRoot);
+        var runResultTile = NewRect("run_result", hakoniwaRoot);
 
         var floatingLayer = NewRect("FloatingWindowLayer", content);
         Identity(floatingLayer);
@@ -85,6 +90,15 @@ public static class BackcastWorkspaceSceneBuilder
         window.pivot = new Vector2(0f, 1f);                  // top-left pivot (canvas-logical contract)
         window.anchoredPosition = new Vector2(-300f, 220f);
         window.sizeDelta = new Vector2(620f, 460f);
+
+        // ── #23 re-home: scene-authored Order ticket window (ADOPTED, KIND_ORDER) ──
+        // Same shared-frame discipline as the editor; runtime injects OrderTicketView into the body.
+        var orderWindow = OrderTicketWindowFrame.Build(ORDER_WINDOW_ID, out var orderTitleInput, out var orderBody);
+        orderWindow.SetParent(floatingLayer, false);
+        orderWindow.anchorMin = orderWindow.anchorMax = new Vector2(0.5f, 0.5f);
+        orderWindow.pivot = new Vector2(0f, 1f);
+        orderWindow.anchoredPosition = new Vector2(40f, -40f);
+        orderWindow.sizeDelta = new Vector2(360f, 300f);
 
         // ── root GameObject/component + serialized reference wiring ──
         var rootGo = new GameObject("BackcastWorkspaceRoot");
@@ -104,6 +118,12 @@ public static class BackcastWorkspaceSceneBuilder
         SetRef(so, "_strategyEditorWindow", window);
         SetRef(so, "_strategyEditorBody", body);
         SetRef(so, "_strategyEditorTitleInput", titleInput);
+        SetRef(so, "_ordersTile", ordersTile);
+        SetRef(so, "_positionsTile", positionsTile);
+        SetRef(so, "_runResultTile", runResultTile);
+        SetRef(so, "_orderWindow", orderWindow);
+        SetRef(so, "_orderWindowBody", orderBody);
+        SetRef(so, "_orderWindowTitleInput", orderTitleInput);
         so.ApplyModifiedPropertiesWithoutUndo();
 
         // ── save scene + make it the only enabled build scene ──

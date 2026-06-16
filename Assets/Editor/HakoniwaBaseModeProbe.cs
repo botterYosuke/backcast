@@ -94,16 +94,20 @@ public static class HakoniwaBaseModeProbe
         var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
         var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
         var chartTiles = ty.GetField("_chartTiles", BF).GetValue(root) as IDictionary<string, RectTransform>;
-        var basePanels = ty.GetField("_basePanels", BF).GetValue(root) as System.Collections.IDictionary;
+        var baseTiles = ty.GetField("_baseTiles", BF).GetValue(root) as IDictionary<string, RectTransform>;
         var hakoRoot = ty.GetField("_hakoniwaRoot", BF).GetValue(root) as RectTransform;
         var sync = ty.GetMethod("SyncBaseTilesToMode", BF);
-        if (scenario == null || hako == null || chartTiles == null || basePanels == null || hakoRoot == null || sync == null)
+        if (scenario == null || hako == null || chartTiles == null || baseTiles == null || hakoRoot == null || sync == null)
             return "retile: root internals not found (renamed?)";
 
-        // build defaults to the Replay shape: 5 base present, startup at front, 4 panels built.
-        if (basePanels.Count != 4) return "retile: expected 4 base panel views built at construction";
-        foreach (var id in HakoniwaBaseTiles.PanelOrder)
-            if (hako.SlotOf(id) < 0) return "retile: base panel tile missing at build: " + id;
+        // build defaults to the Replay shape: all 5 base tiles tracked in _baseTiles + present in the
+        // controller, startup at front. orders/positions/run_result are the #23 scene tiles (LivePanelTileView)
+        // and buying_power is the #61 dynamically-spawned LivePanelTileView.
+        foreach (var id in HakoniwaBaseTiles.Kinds(false))
+        {
+            if (!baseTiles.ContainsKey(id)) return "retile: base tile not tracked in _baseTiles at build: " + id;
+            if (hako.SlotOf(id) < 0) return "retile: base tile missing from the controller at build: " + id;
+        }
 
         // 2 chart tiles; capture their EXACT RectTransform instances to prove identity across retile.
         scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });

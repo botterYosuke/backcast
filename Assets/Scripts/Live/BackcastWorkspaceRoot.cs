@@ -200,12 +200,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             isReplayRunning: () => _host.IsRunning);
         if (_menuBarView != null) _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave);
 
-        // sidebar (V-host): reuse the durable controller brain; mock candidate source for now.
-        var provider = new MockAvailableInstrumentsProvider(new[] { "1301.TSE", "6758.TSE", "7203.TSE", "8918.TSE", "9432.TSE", "9984.TSE" });
-        // Share ONE SelectedSymbol with the footer's LiveAuto VM, so a sidebar instrument selection
-        // actually reaches LiveAuto start (else _footerSelected stays empty and LiveAuto always uses
+        // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
+        // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
+        // (#31 designed controller.Registry to be host-wired; the cutover shell wires it here, #59).
+        // SelectedSymbol is the SHARED _footerSelected so a sidebar instrument selection reaches the
+        // footer's LiveAuto start (#39; else _footerSelected stays empty and LiveAuto always uses
         // universe[0] regardless of what the user picked).
-        _sidebarCtrl = new UniverseSidebarController(new InstrumentRegistry(), _footerSelected, new UniverseWriteback(), provider);
+        // The candidate source is still a mock (real supply = #46 kabu list / #41 prune / DuckDB).
+        var provider = new MockAvailableInstrumentsProvider(new[] { "1301.TSE", "6758.TSE", "7203.TSE", "8918.TSE", "9432.TSE", "9984.TSE" });
+        _sidebarCtrl = new UniverseSidebarController(_scenario.Universe, _footerSelected, new UniverseWriteback(), provider);
+        // Populate (ResolvePaths) already restored the universe into the shared registry, so prime the
+        // sidebar's fresh writeback to that set — the restored ids are not an unsaved edit (#31 D4).
+        _sidebarCtrl.PrimeWritebackFromCurrent();
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, new BoundStrategyFileProvider(_strategyFile));
     }
 
@@ -283,6 +289,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         catch (Exception e) { _tile.ShowRunMessage("Could not save scenario: " + e.Message); Debug.LogError("[BackcastWorkspaceRoot] commit failed: " + e); return; }
         if (!gate.IsReady) { _tile.ShowRunMessage(gate.Message); Debug.LogWarning("[BackcastWorkspaceRoot] run blocked: " + gate.Message); return; }
         _tile.ShowRunMessage(null);
+
+        // Commit just wrote the sidecar to the CURRENT universe; re-prime the sidebar writeback's
+        // _lastFlushed to match, so a later sidebar ×/add (the only path that flushes) diffs against
+        // what is actually on disk. Without this, a tile-added id committed at Run leaves _lastFlushed
+        // stale -> the next sidebar edit sees no diff -> Flush SKIPS -> phantom id persists on disk
+        // (findings 0025 §12, Finding 1).
+        _sidebarCtrl.PrimeWritebackFromCurrent();
 
         if (!_isOwner) { _tile.ShowRunMessage("Not the Python owner — cannot run."); return; }
 
@@ -561,6 +574,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // ownership: a yielded root (GameObject disabled before Play) never ran Awake/BuildWorkspace so
         // it never reaches here, but a built-yet-non-Python-owner root must still persist its layout.
         if (_built) SaveLayout();
+        _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

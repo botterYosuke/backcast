@@ -38,7 +38,7 @@ proxy。proxy が代理していた真の不変条件は 2 つ（①ADR-0001 orp
 | AC | 結果 | 一言 |
 |---|---|---|
 | **F1**（reachability）| ✅ GREEN | headless で `running_in_notebook()`→True、`App.embed()` が reactive 分岐、2 seed で再計算実証 |
-| **AC1**（per-tick 性能）| 🔴 **構造的に重い** | embed reactive drain ≈ **4.4ms/bar**。50k bar = **235s** vs 現 `KernelRunner` **0.060s ＝ ≈3,900x**（production 比）。※「直 trivial on_bar 比 ≈16,800x」は孤立 dispatch 税の診断値で、production の遅さ指標ではない |
+| **AC1**（per-tick 性能）| ⚠️→✅ **再設計で GREEN（§8）** | 文書化 `AppKernelRunner.run` 経由は ≈4.4ms/bar（235s/50k）だが、その遅さは **marimo `Kernel.run` オーケストレーションの per-bar 重複**が原因。**host-owned 痩せ drain で ~0.04–0.18s/50k = native 速度を達成**（§8）。reactive モデル自体はゼロコスト |
 | **AC2**（mo.state 反応性 / stale drain）| ✅ GREEN | `set_bar()`→`runner.run({cell})` で UI 操作なしに per-bar 再走を確立。**close を固定したまま K 回 drain して cell が K 回再走**＝change-elision を host 強制 drain が打ち破ることを実証。never-run も維持 |
 | **AC3-CPython**（async 直列化）| ✅ GREEN | 単一 loop で bar/edit が submission 順に直列化（順序問題・データ競合なし）、50 concurrent drain が deadlock なく完走 |
 | **AC3-Mono**（import graph load）| ✅ GREEN | loro(Rust 拡張) 含む marimo import graph が Mono+pythonnet で load+1 drain、crash/フレーム停止なし（maxStall 8ms）|
@@ -185,6 +185,59 @@ genuine な新規リスク（spike-0 residual (a)）: **loro（Rust 拡張）/ m
      技術的ブロッカーは AC1 性能のみ。
 - **AC1 の N×ゲートは未確定**: owner が定常 median 4.4ms/bar を見て許容倍率を確定する（本 doc がその材料）。
 
+> ⚠️ **§8（spike-2 再設計）が本節の結論を覆した。** AC1 の遅さは reactive モデルの本質ではなく
+> marimo `Kernel.run` オーケストレーションの per-bar 重複実行が原因で、**痩せ drain で native 速度を達成**。
+> 「却下 / Replay-Live 分離」はいずれも不要になり、AC1 は **GREEN（解決可能）** に転じた。最新の正本は §8。
+
+---
+
+## 8. AC1 再設計（spike-2）— host-owned 痩せ drain で **native 速度**（`ac1_thin_drain.py`）
+
+`uv run --group spike python -m spike.marimo_embed.ac1_thin_drain` → `AC1-THIN PASS`
+
+AC1 の 4.4ms/bar をプロファイルした結果、**93% が `importlib.metadata.entry_points()` のディスク走査**
+（`cell_runner.Runner.__init__`→`get_executor()`→`registry.get_all()` が cell 実行ごとに全 dist-info を
+未キャッシュで読み直す）。残りも graph mutation / lint(`check_for_multiple_definitions`) / topological_sort /
+execution-context install を**静的グラフなのに毎 drain やり直す**分。**いずれも static cell-DAG なら per-bar に不要**。
+
+「executor ＋ dirty cell を一度だけ計算 → per-bar は `executor.execute_cell(cell, glbls, graph)`
+（＝`exec(cell.body, glbls); eval(cell.last_expr, glbls)`）を直接呼ぶ」host-owned 痩せ drain の実測:
+
+| 経路 | per-bar median | 50k 換算 |
+|---|---|---|
+| 現 `AppKernelRunner.run` | 4537µs | 235s |
+| entry_points キャッシュのみ | 161µs | 9.1s |
+| **host-owned 痩せ drain** | **~0.6–3µs** | **~0.04–0.18s**（現 `KernelRunner` 0.060s と同等＝native）|
+
+→ **reactive モデル自体は本質的にゼロコスト**。Replay を native 速度で reactive 実行でき、§6 AC4 の
+「Replay と Live を分ける」想定は不要。
+
+### hot-path 契約の境界（owner 実測・probe で regression 固定）
+痩せ drain は per-cell の execution-context を張らないため、per-bar cell が使えるものに非対称な境界がある:
+
+| per-bar cell が触るもの | 痩せ drain hot path |
+|---|---|
+| bar/state 読み + compute + injected global(`submit_market`/`portfolio`) | ✅ OK（native）|
+| `mo.state` **read/write**（`set_xxx()`）| ✅ OK（thread-level context 在中＝**reactivity の本体は保たれる**）|
+| `mo.output` / `mo.md` | ⚠️ **silent no-op**（crash せず描画もしない＝footgun）|
+| `mo.ui.slider` 等 UI element | ❌ **hard error**（`MarimoRuntimeException`／`BaseException` 派生＝fail-closed）|
+
+### 決定（grill / owner 確定）
+- **per-bar cell = pure compute のみ**（bar/state 読み・injected global・`mo.state` read/write）。`mo` UI/output/virtual-file は
+  **cold path（初期起動・live-edit）専用**。#64 構想の per-bar は元々 pure compute なので適合。
+- 契約の自己強制が**非対称**（`mo.ui`=hard error で気づける／`mo.output`=silent で気づけない）。
+  → **hot path で output/UI を fail-closed に倒す guard（または最低限の明文化）を契約に含める**。
+- この「per-bar cell = pure compute」契約は strategy 著述モデルの核なので **ADR 候補**（#76 方針どおり起案は実装 epic で）。
+
+### 実装 epic へ持ち越す未解決分岐（本 spike では設計のみ）
+1. 痩せ drain の host API 化と marimo private 依存（`executor.execute_cell` / `CellImpl.body` / `last_expr`）の安定性。
+2. **dirty-set + topo の正しい precompute**: prototype は 1 cell 直打ち。実装は marimo の dataflow で「bar-state 変化時に
+   dirty な cell 集合」を一度計算し topo 順に exec する（静的グラフ＝固定）。
+3. **cold↔hot path 遷移**: live-edit でグラフが変わったら full `Kernel.run` で再コンパイル → dirty-set/topo 再計算 →
+   hot path 再開、の境界 trigger。
+4. fail-closed guard（`mo.output`/`mo.ui` の hot-path footgun 封じ）。
+5. entry_points 未キャッシュは marimo 本体の perf bug（cold path のみ影響＝低頻度なら放置可。upstream 候補）。
+
 ---
 
 ## 7. 成果物
@@ -193,7 +246,8 @@ genuine な新規リスク（spike-0 residual (a)）: **loro（Rust 拡張）/ m
 - `python/spike/marimo_embed/context_standup.py`（headless KernelRuntimeContext + orphan-free assert）
 - `python/spike/marimo_embed/synthetic.py`（共有 bar 生成器 + 最小 strategy/sink）
 - `python/spike/marimo_embed/spike0_context_standup.py`（F1）
-- `python/spike/marimo_embed/ac1_perf.py`（AC1）
+- `python/spike/marimo_embed/ac1_perf.py`（AC1 当初計測）
+- `python/spike/marimo_embed/ac1_thin_drain.py`（AC1 再設計 spike-2: 痩せ drain native 速度 + hot-path 契約境界）
 - `python/spike/marimo_embed/ac2_reactivity.py`（AC2）
 - `python/spike/marimo_embed/ac3_async.py`（AC3 CPython）
 - `python/spike/marimo_embed/mono_smoke.py` ＋ `Assets/Editor/MarimoEmbedAc3MonoProbe.cs`（AC3 Mono）

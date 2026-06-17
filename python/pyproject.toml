@@ -59,3 +59,7 @@ packages = ["engine"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    # #76 S1: gates that need the spike-only marimo dependency (skipped otherwise).
+    "marimo: requires the spike-group marimo dependency (thin-drain runtime gates)",
+]

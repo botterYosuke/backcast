@@ -58,7 +58,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section7_Ownership()
                 ?? Section8_SharedUniverse()
                 ?? Section9_RunCommitRePrimesWriteback()
-                ?? Section10_ChartTileFamily();
+                ?? Section10_ChartTileFamily()
+                ?? Section11_PerModeProfileFlipAndRestore();
         }
         catch (Exception e)
         {
@@ -460,6 +461,88 @@ public static class BackcastWorkspaceProbe
         if (chartViews.Contains("AAA.TSE")) return "charttile: removed instrument's ChartView not cleared";
         var expected2 = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
         if ((hakoRoot.sizeDelta - expected2).sqrMagnitude > EPS) return "charttile: box-grow not re-applied after despawn";
+        return null;
+    }
+
+    // ── 11. per-mode layout profile flip + restore (#62, findings 0029 §7) — integration smoke ──
+    // On the REAL root: a user swaps base order in Replay, flips to Live and swaps DIFFERENTLY, then
+    // flips back — each mode's own arrangement is restored (AC1). Then the real CaptureLayout →
+    // LayoutStore round-trip → ApplyLayout restores the current mode's profile from disk (AC1/AC2).
+    static string Section11_PerModeProfileFlipAndRestore()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "profile: BackcastWorkspaceRoot missing";
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
+        var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
+        var sync = ty.GetMethod("SyncBaseTilesToMode", BF);
+        var capture = ty.GetMethod("CaptureLayout", BF);
+        var applyLayout = ty.GetMethod("ApplyLayout", BF);
+        if (scenario == null || hako == null || sync == null || capture == null || applyLayout == null)
+            return "profile: root internals not found (renamed?)";
+
+        scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });   // Replay shape: 5 base + 2 chart
+
+        // (1) Replay: swap buying_power <-> orders → a distinct Replay arrangement.
+        if (!hako.Swap(hako.SlotOf("buying_power"), hako.SlotOf("orders"))) return "profile: Replay base swap failed";
+        var replayWanted = new[] { "startup", "orders", "buying_power", "positions", "run_result" };
+        string e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(Replay swap): " + e;
+
+        // (2) → Live: stashes the Replay profile; canonical Live base. Make a DIFFERENT Live swap
+        // (run_result to the front).
+        sync.Invoke(root, new object[] { true });
+        if (hako.SlotOf("startup") >= 0) return "profile→Live: startup must leave";
+        if (!hako.Swap(hako.SlotOf("run_result"), hako.SlotOf("buying_power"))) return "profile: Live base swap failed";
+        var liveWanted = new[] { "run_result", "orders", "positions", "buying_power" };
+        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(Live swap): " + e;
+
+        // (3) → Replay: the Replay profile must be RESTORED (not canonical, not the Live order).
+        sync.Invoke(root, new object[] { false });
+        e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(Replay restored): " + e;
+
+        // (4) → Live again: the Live profile must be RESTORED independently.
+        sync.Invoke(root, new object[] { true });
+        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(Live restored): " + e;
+
+        // (5) disk path: capture (active = Live) → save → load → ApplyLayout adopts BOTH profiles.
+        var doc = capture.Invoke(root, null) as LayoutDocument;
+        if (doc == null || doc.hakoniwaProfiles == null) return "profile: CaptureLayout did not emit hakoniwaProfiles";
+        string path = System.IO.Path.Combine(Application.temporaryCachePath, "workspace_profile_probe.json");
+        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
+        LayoutStore.Save(doc, path);
+        var loaded = LayoutStore.Load(path);
+        // perturb the live order, then restore from disk and adopt the per-mode profiles.
+        hako.Swap(0, 1);
+        applyLayout.Invoke(root, new object[] { loaded });
+        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(disk restore Live): " + e;
+        // NON-VACUOUS: the doc's `panels` mirror equals the Live order, so flipping to Replay and getting
+        // replayWanted back can ONLY come from the persisted hakoniwaProfiles.replay sub-profile (a dropped
+        // field would seed Replay from the Live mirror → liveWanted, failing here). Then back to Live.
+        sync.Invoke(root, new object[] { false });
+        e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(disk restore Replay — distinct per-mode persisted): " + e;
+        sync.Invoke(root, new object[] { true });
+        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(disk re-flip Live): " + e;
+        System.IO.File.Delete(path);
+        return null;
+    }
+
+    // assert the base tiles (non-chart) appear in EXACTLY `wanted` order at the front, charts after.
+    static string AssertBaseOrder(HakoniwaController hako, string[] wanted)
+    {
+        for (int i = 0; i < wanted.Length; i++)
+            if (hako.SlotOf(wanted[i]) != i)
+                return wanted[i] + " expected slot " + i + ", got " + hako.SlotOf(wanted[i]) + " (order [" + string.Join(",", hako.Order) + "])";
+        // every chart id must sit after the base region.
+        for (int i = 0; i < hako.Order.Count; i++)
+            if (HakoniwaBaseTiles.IsChartId(hako.Order[i]) && i < wanted.Length)
+                return "chart tile " + hako.Order[i] + " sits inside the base region";
         return null;
     }
 

@@ -39,7 +39,7 @@ public static class HakoniwaBaseModeProbe
             fail = Section1_ModeTileKinds()
                 ?? Section2_BaseOnlyRetilePreservesChartIdentity()
                 ?? Section3_LiveManualAutoNoOp()
-                ?? Section4_RestoreReassertsBaseOrderAndVisibility()
+                ?? Section4_RestoreAppliesPerModeProfile()
                 ?? Section5_HonestReplayEmptyState();
         }
         catch (Exception e)
@@ -173,12 +173,15 @@ public static class HakoniwaBaseModeProbe
         return null;
     }
 
-    // ── 4. restore re-asserts canonical base order + visibility (collision/legacy-safe) ──
-    // Regression for the review's HIGH finding: LayoutDocument.Default() (and pre-#61 / #60-era
-    // sidecars) carry ids that collide with or omit the base panel ids, so _hako.Apply(doc) scrambles
-    // the base region / sinks base tiles behind charts / hides a panel. ReassertBaseAfterRestore (run
-    // inside ApplyLayout) must repair it. We reproduce the scramble with Apply, then call the re-assert.
-    static string Section4_RestoreReassertsBaseOrderAndVisibility()
+    // ── 4. restore applies the per-mode profile: collision/legacy → canonical, valid → honored ──
+    // #62 (findings 0029 §3) generalizes #61's ReassertBaseAfterRestore (always-canonical) into
+    // ApplyProfileOrder (validated honor / canonical). This locks BOTH halves on the REAL root:
+    //   - the #61 collision regression: LayoutDocument.Default() / #60-era sidecars / stale visible=false
+    //     have a base id set that does NOT match the mode → invalid → canonical base order + base visible
+    //     (the HIGH review fix stays GREEN);
+    //   - the #62 new capability: a VALID Replay profile with a user-swapped base order is HONORED.
+    // We drive ApplyProfileOrder by seeding _profiles (the restore path), exactly as ApplyLayout does.
+    static string Section4_RestoreAppliesPerModeProfile()
     {
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
@@ -192,21 +195,30 @@ public static class HakoniwaBaseModeProbe
         var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
         var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
         var baseTiles = ty.GetField("_baseTiles", BF).GetValue(root) as IDictionary<string, RectTransform>;
-        var reassert = ty.GetMethod("ReassertBaseAfterRestore", BF);
-        if (scenario == null || hako == null || baseTiles == null || reassert == null)
+        var profilesField = ty.GetField("_profiles", BF);
+        var apply = ty.GetMethod("ApplyProfileOrder", BF);
+        if (scenario == null || hako == null || baseTiles == null || profilesField == null || apply == null)
             return "restore: root internals not found (renamed?)";
 
         scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });   // Replay shape: 5 base + 2 chart
 
+        // Seed _profiles from a legacy single-panels doc and apply the Replay (false) profile.
+        System.Action<LayoutDocument> seedAndApply = doc =>
+        {
+            var profiles = new HakoniwaLayoutProfiles();
+            profiles.SeedFromLegacy(doc.panels);
+            profilesField.SetValue(root, profiles);
+            apply.Invoke(root, new object[] { false });
+        };
+
         // (a) the REAL collision source: LayoutDocument.Default() has orders/positions/run_result at
-        // legacy slots and no startup/buying_power → Apply scrambles base order + drops startup off slot 0.
-        hako.Apply(LayoutDocument.Default());
-        reassert.Invoke(root, null);
+        // legacy slots and no startup/buying_power → base set mismatch → invalid → canonical.
+        seedAndApply(LayoutDocument.Default());
         string err = AssertCanonicalReplayBase(hako); if (err != null) return "restore(Default collision): " + err;
 
-        // (b) a #60-era sidecar [startup, chart:AAA, chart:BBB] → Apply sinks the 4 base panels BEHIND
-        // the charts; re-assert must pull them back in front.
-        var legacy = new LayoutDocument
+        // (b) a #60-era sidecar [startup, chart:AAA, chart:BBB] → base set {startup} ≠ Kinds(Replay) →
+        // invalid → canonical (the 4 base panels are pulled back in front of the charts).
+        seedAndApply(new LayoutDocument
         {
             version = LayoutDocument.CURRENT_VERSION,
             panels = new System.Collections.Generic.List<PanelLayout>
@@ -215,13 +227,11 @@ public static class HakoniwaBaseModeProbe
                 new PanelLayout("chart:AAA.TSE", 1, true, new LayoutRect(0, 0, 1, 1)),
                 new PanelLayout("chart:BBB.TSE", 2, true, new LayoutRect(0, 0, 1, 1)),
             },
-        };
-        hako.Apply(legacy);
-        reassert.Invoke(root, null);
+        });
         err = AssertCanonicalReplayBase(hako); if (err != null) return "restore(#60-era sidecar): " + err;
 
         // (c) visibility: a stale visible=false on a colliding base id must NOT leave a base panel hidden.
-        var hidden = new LayoutDocument
+        seedAndApply(new LayoutDocument
         {
             version = LayoutDocument.CURRENT_VERSION,
             panels = new System.Collections.Generic.List<PanelLayout>
@@ -229,12 +239,31 @@ public static class HakoniwaBaseModeProbe
                 new PanelLayout("orders", 0, false, new LayoutRect(0, 0, 1, 1)),     // hide a base panel
                 new PanelLayout("positions", 1, false, new LayoutRect(0, 0, 1, 1)),
             },
-        };
-        hako.Apply(hidden);
-        reassert.Invoke(root, null);
+        });
         foreach (var id in new[] { "orders", "positions", "buying_power", "run_result", "startup" })
             if (baseTiles.TryGetValue(id, out var rt) && rt != null && !rt.gameObject.activeSelf)
                 return "restore(visibility): base tile left hidden after restore: " + id;
+
+        // (d) #62 NEW: a VALID Replay profile with a user-swapped base order (orders before buying_power)
+        // is HONORED — the base set matches Kinds(Replay) so is_valid_for passes. Charts stay after base.
+        var valid = new HakoniwaLayoutProfiles();
+        valid.Set(false, new System.Collections.Generic.List<PanelLayout>
+        {
+            new PanelLayout("startup", 0, true, new LayoutRect(0, 0, 1, 1)),
+            new PanelLayout("orders", 1, true, new LayoutRect(0, 0, 1, 1)),         // swapped ahead of buying_power
+            new PanelLayout("buying_power", 2, true, new LayoutRect(0, 0, 1, 1)),
+            new PanelLayout("positions", 3, true, new LayoutRect(0, 0, 1, 1)),
+            new PanelLayout("run_result", 4, true, new LayoutRect(0, 0, 1, 1)),
+            new PanelLayout("chart:AAA.TSE", 5, true, new LayoutRect(0, 0, 1, 1)),
+            new PanelLayout("chart:BBB.TSE", 6, true, new LayoutRect(0, 0, 1, 1)),
+        });
+        profilesField.SetValue(root, valid);
+        apply.Invoke(root, new object[] { false });
+        var expHonor = new[] { "startup", "orders", "buying_power", "positions", "run_result" };
+        for (int i = 0; i < expHonor.Length; i++)
+            if (hako.SlotOf(expHonor[i]) != i)
+                return "restore(valid honor): swapped base order not honored — " + expHonor[i] + " expected slot " + i + ", got " + hako.SlotOf(expHonor[i]);
+        string orderErr = AssertBaseBeforeChart(hako); if (orderErr != null) return "restore(valid honor): " + orderErr;
         return null;
     }
 

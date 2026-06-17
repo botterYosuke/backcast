@@ -102,7 +102,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
     // #61 mode-conditional base tiles: id → tile RectTransform for the always-present base panels
     // (buying_power/orders/positions/run_result) + the Replay-only `startup`. _baseTiles is the handle
-    // the base retile (SyncBaseTilesToMode) and restore re-assert (ReassertBaseAfterRestore) use to
+    // the base retile (SyncBaseTilesToMode) and restore (ApplyProfileOrder) use to
     // reorder/show the base region. orders/positions/run_result are the #23 scene tiles (rendered by the
     // LivePanelTileView fields below); buying_power is spawned dynamically (SpawnBuyingPowerTile, also a
     // LivePanelTileView). _baseLive caches the current base shape (false=Replay, true=Live) so DriveFooter
@@ -119,6 +119,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly Dictionary<string, long> _depthRendered = new Dictionary<string, long>();
     bool _lastLadderLive;                             // last applied Live/Replay geometry (dedup the rect flip)
     string _lastDepthPayload;                         // last poll payload rendered into the ladders
+    // #62 per-mode layout profile (findings 0029): Replay and Live each remember their own Hakoniwa tile
+    // order. Stashed on every flip (the OLD mode, before switching) and on save (the active mode) — TTWR
+    // reconcile_hakoniwa_tiles / build_hakoniwa_snapshot parity; replaced on restore by
+    // HakoniwaLayoutProfiles.FromDocument (per-mode, or seeded from the legacy single `panels`). _baseLive
+    // is the current-shape SoT (TTWR profiles.current is owned HERE, not duplicated into the profiles).
+    HakoniwaLayoutProfiles _profiles = new HakoniwaLayoutProfiles();
     ScenarioStartupTile _tile;
     ReplayFooterView _footer;
     MenuBarViewModel _menuBar;
@@ -501,6 +507,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // The scene-authored startup tile is DEACTIVATED (never destroyed) when leaving Replay.
     void SyncBaseTilesToMode(bool live)
     {
+        // #62 reconcile parity (TTWR reconcile_hakoniwa_tiles): stash the CURRENT layout into the OLD
+        // mode's profile BEFORE changing anything, switch the base membership, then load the NEW mode's
+        // profile (validated honor / canonical) via ApplyProfileOrder.
+        StashActiveProfile();
+
         bool wantStartup = !live;
         bool hasStartup = _hako.SlotOf(HakoniwaBaseTiles.Startup) >= 0;
         if (wantStartup && !hasStartup)
@@ -514,23 +525,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (_startupTile != null) _startupTile.gameObject.SetActive(false);
         }
 
-        _hako.Reorder(HakoniwaBaseTiles.Kinds(live));   // [base…, chart…] invariant restored
+        ApplyProfileOrder(live);                        // load new mode: chart order + [base…, chart…] honored/canonical
         ApplyBoxGrow();                                 // grid = n_base + n_chart (derived box-grow, #60)
         _baseLive = live;
         ForceRefreshLiveTiles();                        // shape flip: repaint the base panels now (#23 wiring)
     }
 
-    // Re-assert the canonical [base…, chart…] order + base visibility after a layout restore. The
-    // persisted doc may predate the base panels (a #60-era [startup, chart:*] sinks base tiles behind
-    // charts), carry stale #12 ids, or COLLIDE with the base ids (LayoutDocument.Default() places
-    // orders/positions/run_result at legacy slots) — Apply would then scramble the base region, sink
-    // it behind charts, or (a stale visible=false) hide a panel. Reorder restores canonical base order
-    // (charts keep their restored relative order); base tiles are not closeable so force them visible.
-    // #61 is single-shared-layout: base order is canonical on restore (per-mode order persist is #62).
-    void ReassertBaseAfterRestore()
+    // Apply a mode's per-mode profile to the live controller (#62, findings 0029 §2/§3). The unified
+    // path for BOTH a mode flip (SyncBaseTilesToMode) and a disk restore (ApplyLayout) — TTWR
+    // reconcile/apply_hakoniwa_restore_resources parity:
+    //   1. if the mode has a stored profile, Apply it (restores the per-mode CHART order; Apply's
+    //      tolerance reconciles universe membership — stale ids skipped, new charts appended);
+    //   2. Reorder by BaseOrderForMode(live): a VALID profile's base order is honored (user header-drag
+    //      swaps remembered per mode), an invalid/legacy/seeded one falls to canonical Kinds(live) —
+    //      the [base…, chart…] invariant and the #61 collision-safe behavior (LayoutDocument.Default() /
+    //      #60-era sidecars have a mismatched base set → canonical), generalized to validated honor;
+    //   3. base tiles are not closeable → force them visible (a stale visible=false must not hide one).
+    // This REPLACES #61's ReassertBaseAfterRestore (always-canonical) — empty profiles → canonical, so
+    // the #61 collision regression (HakoniwaBaseModeProbe Section4) still holds.
+    void ApplyProfileOrder(bool live)
     {
-        _hako.Reorder(HakoniwaBaseTiles.Kinds(_baseLive));
-        foreach (var id in HakoniwaBaseTiles.Kinds(_baseLive))
+        var stored = _profiles.Get(live);
+        if (stored != null)
+            _hako.Apply(new LayoutDocument { version = LayoutDocument.CURRENT_VERSION, panels = stored });
+        _hako.Reorder(_profiles.BaseOrderForMode(live));
+        foreach (var id in HakoniwaBaseTiles.Kinds(live))
             if (_baseTiles.TryGetValue(id, out var rt) && rt != null) rt.gameObject.SetActive(true);
     }
 
@@ -1323,12 +1342,23 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // ---- layout persistence (4 dimensions) ----
+    // Stash the ACTIVE mode's current controller layout into its profile (TTWR build_hakoniwa_snapshot /
+    // reconcile_hakoniwa_tiles parity). Shared by the mode flip (stash OLD before switching) and save
+    // (stash active). Set stores the list BY REFERENCE — callers that persist Clone() first.
+    void StashActiveProfile() => _profiles.Set(_baseLive, _hako.Capture().panels);
+
     LayoutDocument CaptureLayout()
     {
+        // #62 (findings 0029 §4): stash the ACTIVE mode (the other mode keeps its stored profile), then
+        // take ONE deep clone for the doc. hakoniwaProfiles is the SoT; `panels` mirrors the active mode
+        // FROM THE CLONE (back-compat for a pre-#62 reader) — never aliasing live _profiles state.
+        StashActiveProfile();
+        var profiles = _profiles.Clone();
         var doc = new LayoutDocument
         {
             version = LayoutDocument.CURRENT_VERSION,
-            panels = _hako.Capture().panels,
+            panels = profiles.Get(_baseLive),
+            hakoniwaProfiles = profiles,
             canvasView = _canvas.CaptureView(),
             floatingWindows = _windows.Capture().floatingWindows,
             strategyEditors = new List<StrategyEditorState>(),
@@ -1361,8 +1391,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (doc == null) return;
         if (doc.canvasView != null) _canvas.ApplyView(doc.canvasView);
-        _hako.Apply(doc);
-        ReassertBaseAfterRestore();   // #61: keep base canonical + visible + before charts (collision/legacy-safe)
+        // #62 (findings 0029 §4): adopt the per-mode profiles from disk, or SEED both from the legacy
+        // single `panels` when the doc predates #62 (forward-compat). Then apply the CURRENT mode's
+        // profile (build seeds _baseLive=Replay). ApplyProfileOrder subsumes #61's ReassertBaseAfterRestore
+        // (validated honor / canonical) — a legacy/colliding seed has a mismatched base set → canonical.
+        _profiles = HakoniwaLayoutProfiles.FromDocument(doc);
+        ApplyProfileOrder(_baseLive);
         RestoreFloating(doc);
         RestoreEditors(doc);
     }

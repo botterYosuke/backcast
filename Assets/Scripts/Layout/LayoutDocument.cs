@@ -242,6 +242,15 @@ public class LayoutDocument
     // identity-defaulting — the same forward-evolution tolerance as canvasView/floatingWindows).
     public List<StrategyEditorState> strategyEditors;
 
+    // Per-mode Hakoniwa tile order (issue #62, findings 0029). The NEW source of truth for Hakoniwa
+    // placement: Replay and Live each carry their own tile order (TTWR HakoniwaLayoutProfiles parity).
+    // ADDITIVE: an old single-`panels` doc (no hakoniwaProfiles) loads with panels intact and
+    // HakoniwaLayoutProfiles.FromDocument SEEDS both modes from `panels` (forward-compat). `panels`
+    // stays the active-mode MIRROR (back-compat for a pre-#62 reader) — read is always profiles-first.
+    // NOT a version bump (additive, null-defaulting — same tolerance as canvasView/floatingWindows).
+    // #63 grows HakoniwaProfile with cols/rows/box (the additive extension point, grill Q2).
+    public HakoniwaLayoutProfiles hakoniwaProfiles;
+
     // Default ctor leaves version at the UNSET SENTINEL 0 (NOT CURRENT_VERSION) on
     // purpose: JsonUtility's treatment of a JSON-absent field (keep ctor value vs.
     // zero-fill) is version-dependent, so a version-less sidecar must land on 0 EITHER
@@ -304,6 +313,7 @@ public class LayoutDocument
             foreach (var s in strategyEditors)
                 if (s != null) doc.strategyEditors.Add(s.Clone());
         }
+        doc.hakoniwaProfiles = hakoniwaProfiles?.Clone();
         return doc;
     }
 
@@ -378,17 +388,32 @@ public class LayoutDocument
             }
         }
 
-        int ca = a.panels?.Count ?? 0;
-        int cb = b.panels?.Count ?? 0;
+        // hakoniwaProfiles (issue #62) — per-mode Hakoniwa tile order. Compare replay/live panel lists by
+        // the same (id, slot, visible, rect) rule as `panels`. A null profiles / null sub-profile and an
+        // empty one are the SAME state (coalesced counts): a legacy doc lacks the field, a #62 doc may
+        // carry one mode null until visited, and JsonUtility may materialize an absent nested object as
+        // empty — all must compare equal to "no per-mode data".
+        if (!PanelsEqualById(a.hakoniwaProfiles?.replay?.panels, b.hakoniwaProfiles?.replay?.panels, eps)) return false;
+        if (!PanelsEqualById(a.hakoniwaProfiles?.live?.panels, b.hakoniwaProfiles?.live?.panels, eps)) return false;
+
+        return PanelsEqualById(a.panels, b.panels, eps);
+    }
+
+    // Structural value-equality of two panel lists matched BY id (list order incidental — `slot` is the
+    // semantic order field). null and empty coalesce to "no data". Slot/visible exact, rect epsilon.
+    // Shared by `panels` and the issue #62 per-mode profile lists.
+    static bool PanelsEqualById(List<PanelLayout> a, List<PanelLayout> b, float eps)
+    {
+        int ca = a?.Count ?? 0, cb = b?.Count ?? 0;
         if (ca != cb) return false;
         if (ca == 0) return true;
-        foreach (var pa in a.panels)
+        foreach (var pa in a)
         {
             if (pa == null) return false;
-            var pb = b.Find(pa.id);
+            PanelLayout pb = null;
+            foreach (var x in b) if (x != null && x.id == pa.id) { pb = x; break; }
             if (pb == null) return false;
-            if (pa.slot != pb.slot) return false;
-            if (pa.visible != pb.visible) return false;
+            if (pa.slot != pb.slot || pa.visible != pb.visible) return false;
             if (!LayoutRect.Approx(pa.rect, pb.rect, eps)) return false;
         }
         return true;

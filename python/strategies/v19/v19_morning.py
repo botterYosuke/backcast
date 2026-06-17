@@ -82,6 +82,8 @@ class V19MorningStrategy(Strategy):
         exit_time: str = "14:55",
         cash_gate: str = "1",
         cash_safety_margin: str = "0.95",
+        alloc_policy: str = "",
+        lot_size: str = "1",
         **params: str,
     ) -> None:
         super().__init__(strategy_id=strategy_id, instrument_id=instrument_id, **params)
@@ -97,6 +99,12 @@ class V19MorningStrategy(Strategy):
         self._exit_minute = self._parse_hhmm(exit_time)
         self._cash_gate = str(cash_gate).strip().lower() in ("1", "true", "yes", "on")
         self._cash_safety_margin = float(cash_safety_margin)
+        # Alloc policy (#75): "" → None = v0 cumulative-greedy (default, bit-exact);
+        # "A0_EQUAL_NOMINAL_E1" → equal-yen + lot-floor + +1-lot redistribute. _blacksheep
+        # reads these from env (V19LIVE_ALLOC_POLICY/V19LIVE_LOT_SIZE); the kernel port takes
+        # them as ctor params like every other v19 knob (findings 0029 dec.7).
+        self._alloc_policy = str(alloc_policy).strip() or None
+        self._lot_size = int(lot_size)
 
         # Artifacts loaded in on_start (cheap JSON); model deferred to first scoring.
         self._model = None
@@ -241,11 +249,20 @@ class V19MorningStrategy(Strategy):
         return float(snaps[-1]["close"]) if snaps else None
 
     def _cash_aware_picks(self, picks: list[str]) -> list[dict]:
-        """v0 cumulative-greedy reducer under buying_power * safety_margin (lot_size=1,
-        shares=order_qty). Gate disabled → every pick at order_qty (findings 0029 dec.5)."""
+        """Reduce rank-ordered picks under buying_power * safety_margin.
+
+        Gate disabled → every pick at order_qty (findings 0029 dec.5). Gate enabled →
+        dispatch on alloc_policy: None = v0 cumulative-greedy (default, bit-exact);
+        "A0_EQUAL_NOMINAL_E1" = equal-yen + lot-floor + +1-lot redistribute; unknown
+        policy → WARNING + v0 fallback (mirrors _blacksheep _cash_aware_pick_reducer)."""
         if not self._cash_gate:
             return [{"iid": iid, "shares": int(self._order_qty)} for iid in picks]
         budget = float(self.buying_power()) * float(self._cash_safety_margin)
+        if self._alloc_policy == "A0_EQUAL_NOMINAL_E1":
+            return self._alloc_a0_equal_nominal_e1(picks, budget, self._lot_size)
+        if self._alloc_policy is not None:
+            self.log(f"v19 unknown alloc_policy={self._alloc_policy!r} — v0 fallback")
+        # v0 path: cumulative-greedy, lot_size=1, shares=order_qty.
         submissions: list[dict] = []
         cum = 0.0
         order_qty = int(self._order_qty)
@@ -258,6 +275,50 @@ class V19MorningStrategy(Strategy):
                 submissions.append({"iid": iid, "shares": order_qty})
                 cum += notional
         return submissions
+
+    def _alloc_a0_equal_nominal_e1(
+        self, picks: list[str], budget: float, lot_size: int
+    ) -> list[dict]:
+        """A0_EQUAL_NOMINAL_E1 (verbatim port of _blacksheep _alloc_a0_equal_nominal_e1).
+
+        Pass 1: per_pick_budget = budget / K; for each iid in rank order, n_lots =
+        floor(per_pick_budget / (price*lot_size)); commit n_lots*lot_size shares, push the
+        leftover (incl. NO_PRICE / BELOW_1_LOT skips) into `remainder`.
+        Pass 2 (E1): while progress, add +1 lot to each affordable submission in rank order.
+        Returns [{iid, shares}] (kernel ignores the notional/skip detail _blacksheep keeps)."""
+        picks = list(picks)
+        K = len(picks)
+        if K == 0:
+            return []
+        per_pick_budget = float(budget) / float(K)
+        remainder = 0.0
+        submissions: list[dict] = []
+        for iid in picks:
+            price = self._current_price(iid)
+            lot_value = float(price) * float(lot_size) if (price and price > 0) else 0.0
+            if lot_value <= 0:
+                remainder += per_pick_budget  # NO_PRICE
+                continue
+            n_lots = int(per_pick_budget // lot_value)
+            if n_lots <= 0:
+                remainder += per_pick_budget  # BELOW_1_LOT
+                continue
+            shares = int(n_lots * int(lot_size))
+            submissions.append({"iid": iid, "shares": shares, "_price": float(price)})
+            remainder += per_pick_budget - shares * float(price)
+        # Pass 2 (E1): rank-order +1 lot redistribute.
+        progress = True
+        while progress and remainder > 0 and submissions:
+            progress = False
+            for sub in submissions:
+                lot_value = sub["_price"] * float(lot_size)
+                if lot_value <= 0:
+                    continue
+                if remainder + 1e-9 >= lot_value:
+                    sub["shares"] = int(sub["shares"]) + int(lot_size)
+                    remainder -= lot_value
+                    progress = True
+        return [{"iid": s["iid"], "shares": s["shares"]} for s in submissions]
 
     # ------------------------------------------------------------------ features (verbatim port)
     def _compute_features(self, iid: str) -> dict | None:

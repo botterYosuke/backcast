@@ -45,7 +45,8 @@ public static class ScenarioStartupProbe
                 ?? Section6_RegistryChangeNotifies()
                 ?? Section7_TileResyncsFromSharedUniverse()
                 ?? Section8_TileBlurResyncsStaleField()
-                ?? Section9_IndividualWritersAreMutateExistingOnly();
+                ?? Section9_IndividualWritersAreMutateExistingOnly()
+                ?? Section10_InlineReaderMatchesGolden();
         }
         catch (Exception e)
         {
@@ -480,5 +481,86 @@ public static class ScenarioStartupProbe
             Granularity = gran ?? p.Granularity,
             InitialCash = cash ?? p.InitialCash,
         };
+    }
+
+    // ---- 10. #66 cross-language pin (findings 0043 §2, Leg B): the pure-C# ScenarioInlineReader
+    // reproduces the committed golden — which Leg A (test_scenario_inline_golden.py) pins to the
+    // canonical Python load_scenario SoT. This is what guards the C# literal parser from drifting
+    // from the run-time loader. Also asserts the Absent vs Unparseable boundary (#66 D3): a .py with
+    // no SCENARIO is Absent (silent), a present-but-broken SCENARIO is Unparseable (loud). ----
+    [Serializable] class GoldenScenario { public string start, end, granularity; public long initial_cash; public string[] instruments; }
+    [Serializable] class GoldenEntry { public string path; public GoldenScenario scenario; }
+    [Serializable] class GoldenFile { public GoldenEntry[] fixtures; }
+
+    static string Section10_InlineReaderMatchesGolden()
+    {
+        // repo root = parent of <repo>/Assets (the golden + fixture paths are repo-relative).
+        string repoRoot = Directory.GetParent(Application.dataPath).FullName;
+        string goldenPath = Path.Combine(repoRoot,
+            "python", "tests", "golden", "scenario_inline_golden.json");
+        if (!File.Exists(goldenPath))
+            return "inline golden: missing " + goldenPath + " (run `python -m tests.capture_scenario_inline_golden`)";
+
+        GoldenFile golden;
+        try { golden = JsonUtility.FromJson<GoldenFile>(File.ReadAllText(goldenPath)); }
+        catch (Exception e) { return "inline golden: unreadable golden JSON: " + e.Message; }
+        if (golden?.fixtures == null || golden.fixtures.Length == 0)
+            return "inline golden: golden has no fixtures";
+
+        foreach (GoldenEntry entry in golden.fixtures)
+        {
+            string fixturePath = Path.Combine(repoRoot, entry.path.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(fixturePath)) return "inline golden: fixture not found: " + fixturePath;
+
+            ScenarioSnapshot snap = ScenarioInlineReader.Read(fixturePath, out ScenarioReadStatus status);
+            if (status != ScenarioReadStatus.Found || snap == null)
+                return "inline golden: " + entry.path + " expected Found, got " + status;
+
+            GoldenScenario g = entry.scenario;
+            if (snap.Start != g.start) return "inline golden: " + entry.path + " start " + snap.Start + " != " + g.start;
+            if (snap.End != g.end) return "inline golden: " + entry.path + " end " + snap.End + " != " + g.end;
+            if (snap.Granularity != g.granularity) return "inline golden: " + entry.path + " granularity " + snap.Granularity + " != " + g.granularity;
+            if (!snap.InitialCash.HasValue || snap.InitialCash.Value != g.initial_cash)
+                return "inline golden: " + entry.path + " initial_cash " + snap.InitialCash + " != " + g.initial_cash;
+            int gn = g.instruments != null ? g.instruments.Length : 0;
+            if (snap.Instruments.Count != gn) return "inline golden: " + entry.path + " instrument count " + snap.Instruments.Count + " != " + gn;
+            for (int i = 0; i < gn; i++)
+                if (snap.Instruments[i] != g.instruments[i])
+                    return "inline golden: " + entry.path + " instrument[" + i + "] " + snap.Instruments[i] + " != " + g.instruments[i];
+        }
+
+        // Absent vs Unparseable boundary (#66 D3). Use a scratch dir so we never touch the fixtures.
+        string absentPy = Path.Combine(TempDir, "no_scenario.py");
+        File.WriteAllText(absentPy, "x = 1\n# this strategy has no SCENARIO\n");
+        ScenarioInlineReader.Read(absentPy, out ScenarioReadStatus absentStatus);
+        if (absentStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a .py with no SCENARIO must be Absent, got " + absentStatus;
+
+        string brokenPy = Path.Combine(TempDir, "broken_scenario.py");
+        File.WriteAllText(brokenPy, "SCENARIO = {bad: @@@ not a literal}\n");
+        ScenarioInlineReader.Read(brokenPy, out ScenarioReadStatus brokenStatus);
+        if (brokenStatus != ScenarioReadStatus.Unparseable)
+            return "inline boundary: a present-but-broken SCENARIO must be Unparseable, got " + brokenStatus;
+
+        // a TRUNCATED / unbalanced dict (mid-edit) is Unparseable (loud), NOT Absent (silent no-op).
+        string truncPy = Path.Combine(TempDir, "trunc_scenario.py");
+        File.WriteAllText(truncPy, "SCENARIO = {\"start\": \"x\"\n");
+        ScenarioInlineReader.Read(truncPy, out ScenarioReadStatus truncStatus);
+        if (truncStatus != ScenarioReadStatus.Unparseable)
+            return "inline boundary: a truncated/unbalanced SCENARIO must be Unparseable, got " + truncStatus;
+
+        // a `SCENARIO = {...}` INSIDE a module docstring is prose, not an assignment → Absent.
+        string docPy = Path.Combine(TempDir, "docstring_scenario.py");
+        File.WriteAllText(docPy, "\"\"\"\nSCENARIO = {\"start\": \"BOGUS\"}\n\"\"\"\nimport os\n");
+        ScenarioInlineReader.Read(docPy, out ScenarioReadStatus docStatus);
+        if (docStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a SCENARIO inside a docstring must be Absent, got " + docStatus;
+
+        // a missing file is Absent (never throws — Awake-safe).
+        ScenarioInlineReader.Read(Path.Combine(TempDir, "does_not_exist.py"), out ScenarioReadStatus missingStatus);
+        if (missingStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a missing .py must be Absent, got " + missingStatus;
+
+        return null;
     }
 }

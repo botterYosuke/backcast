@@ -58,7 +58,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section7_Ownership()
                 ?? Section8_SharedUniverse()
                 ?? Section9_RunCommitRePrimesWriteback()
-                ?? Section10_ChartTileFamily();
+                ?? Section10_ChartTileFamily()
+                ?? Section11_InlineScenarioSeedsUniverse();
         }
         catch (Exception e)
         {
@@ -461,6 +462,79 @@ public static class BackcastWorkspaceProbe
         var expected2 = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
         if ((hakoRoot.sizeDelta - expected2).sqrMagnitude > EPS) return "charttile: box-grow not re-applied after despawn";
         return null;
+    }
+
+    // ── 11. #66 wiring gate: ResolvePaths seeds the universe from the strategy's inline .py SCENARIO
+    // when NO scenario sidecar exists (findings 0043). THE #66 kill — before the fix ResolvePaths called
+    // Populate with NO fallback, so a fresh-install / sidecar-deleted workspace had an EMPTY universe and
+    // footer LiveAuto ▶ was BlockedNoInstrument. Hermetic: points _strategyFile at a temp .py via the
+    // BACKCAST_HITL_STRATEGY env override (EnvConfig.Get reads process env first), so it never depends on
+    // the default fixture. Also asserts the sidecar still WINS over inline (Populate: ReadScenario ?? fallback). ──
+    static string Section11_InlineScenarioSeedsUniverse()
+    {
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+
+        string prev = Environment.GetEnvironmentVariable("BACKCAST_HITL_STRATEGY");
+        try
+        {
+            // (a) inline-only: a .py with an inline SCENARIO and NO sidecar → universe seeded from inline.
+            string inlinePy = Path.Combine(TempDir, "inline_only.py");
+            File.WriteAllText(inlinePy,
+                "SCENARIO = {\n" +
+                "    'schema_version': 2,\n" +
+                "    'instruments': ['WIRE.TSE', 'WIRE2.TSE'],\n" +
+                "    'start': '2024-01-01',\n" +
+                "    'end': '2024-02-01',\n" +
+                "    'granularity': 'Daily',\n" +
+                "    'initial_cash': 1_000_000,\n" +
+                "}\n");
+            string inlineSidecar = ScenarioSidecarStore.SidecarPathFor(inlinePy);
+            if (File.Exists(inlineSidecar)) File.Delete(inlineSidecar);   // ensure no sidecar shadows the inline
+            Environment.SetEnvironmentVariable("BACKCAST_HITL_STRATEGY", inlinePy);
+
+            EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+            var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+            if (root == null) return "inline-seed: BackcastWorkspaceRoot missing";
+            ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+
+            var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
+            if (scenario == null) return "inline-seed: could not read _scenario";
+            var ids = scenario.Universe.Ids;
+            if (ids.Count != 2 || ids[0] != "WIRE.TSE" || ids[1] != "WIRE2.TSE")
+                return "inline-seed: universe NOT seeded from inline SCENARIO (got [" + string.Join(",", ids) + "]) " +
+                       "— #66 regression: ResolvePaths did not pass the inline fallback to Populate";
+            // the window fields too (the fallback carries all 5 panel-owned keys, not just instruments).
+            if (scenario.Params.Start != "2024-01-01" || scenario.Params.End != "2024-02-01")
+                return "inline-seed: window not seeded from inline SCENARIO";
+
+            // (b) sidecar wins over inline (Populate: ReadScenario ?? fallback).
+            string bothPy = Path.Combine(TempDir, "sidecar_wins.py");
+            File.WriteAllText(bothPy,
+                "SCENARIO = {'schema_version': 2, 'instruments': ['INLINE.TSE'], 'start': '2020-01-01', " +
+                "'end': '2020-02-01', 'granularity': 'Daily', 'initial_cash': 1000000}\n");
+            ScenarioSidecarStore.SetStartupParamsAndInstruments(
+                bothPy, new StartupParamsForWrite("2030-01-01", "2030-02-01", "Minute", "9000000"),
+                new[] { "SIDECAR.TSE" });
+            Environment.SetEnvironmentVariable("BACKCAST_HITL_STRATEGY", bothPy);
+
+            EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+            var root2 = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+            if (root2 == null) return "inline-seed: BackcastWorkspaceRoot missing (sidecar-wins leg)";
+            ty.GetField("_font", BF).SetValue(root2, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            ty.GetMethod("ResolvePaths", BF).Invoke(root2, null);
+            var scenario2 = ty.GetField("_scenario", BF).GetValue(root2) as ScenarioStartupController;
+            if (scenario2 == null) return "inline-seed: could not read _scenario (sidecar-wins leg)";
+            var ids2 = scenario2.Universe.Ids;
+            if (ids2.Count != 1 || ids2[0] != "SIDECAR.TSE")
+                return "inline-seed: sidecar did NOT win over inline (got [" + string.Join(",", ids2) + "])";
+            return null;
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("BACKCAST_HITL_STRATEGY", prev);
+        }
     }
 
     // ── helpers ──

@@ -207,7 +207,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         _strategyFile = EnvConfig.Get("BACKCAST_HITL_STRATEGY",
             Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "kernel_spike_buy_sell.py"));
-        _scenario.Populate(_strategyFile, DateTime.Now);
+
+        // #66: seed the universe from the strategy's inline .py SCENARIO when no scenario sidecar
+        // exists, else a fresh-install / sidecar-deleted workspace leaves the universe empty and
+        // footer LiveAuto ▶ is BlockedNoInstrument (findings 0043 / 0027 §3(d)). The sidecar still
+        // wins (Populate: ReadScenario ?? fallback), matching the engine load_scenario order. The
+        // read is Python-free (Awake runs before InitializePython); an Unparseable SCENARIO is
+        // surfaced loudly via a menu notice rather than silently dropped (findings 0027).
+        ScenarioSnapshot inlineFallback = ScenarioInlineReader.Read(_strategyFile, out var inlineStatus);
+        _scenario.Populate(_strategyFile, DateTime.Now, inlineFallback);
+        if (inlineStatus == ScenarioReadStatus.Unparseable)
+            _menuBarView?.ShowMessage("strategy SCENARIO unreadable — save a scenario sidecar to set the universe");
     }
 
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----

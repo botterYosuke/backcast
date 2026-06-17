@@ -1,0 +1,30 @@
+{
+  "fixtures": [
+    {
+      "path": "python/spike/fixtures/strategies/kernel_spike_buy_sell.py",
+      "scenario": {
+        "end": "2025-01-10",
+        "granularity": "Daily",
+        "initial_cash": 10000000,
+        "instruments": [
+          "8918.TSE"
+        ],
+        "start": "2024-10-01"
+      }
+    },
+    {
+      "path": "python/spike/fixtures/strategies/scenario_inline_subset.py",
+      "scenario": {
+        "end": "2024-06-28",
+        "granularity": "Minute",
+        "initial_cash": 5000000,
+        "instruments": [
+          "7203.TSE",
+          "6758.TSE"
+        ],
+        "start": "2024-01-04"
+      }
+    }
+  ],
+  "schema_version": 1
+}

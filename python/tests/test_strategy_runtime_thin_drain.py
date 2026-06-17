@@ -150,14 +150,16 @@ def test_thin_drain_native_speed_and_hot_state_write():
 
 
 def _hot_path_behavior(kind: str) -> str:
-    """Drive a single cell through the bare ``executor.execute_cell`` primitive — the
-    exact context-less call the thin-drain hot path makes — and report its behavior.
+    """Drive a single cell through a BARE ``executor.execute_cell`` — no execution context
+    — and report its behavior. This is the CONTROL that motivates D6.
 
-    This deliberately does NOT cold-run the app: the contract is a property of the
-    context-less HOT path, and a full cold run would install an execution context that
-    masks it (and, for mo.ui/output cells, would not populate globals at all). It drives
-    the SAME ``_execute_hot_cell`` primitive ``StrategyRuntime.step`` uses, so the contract
-    cannot drift from the production drain. Mirrors the #76 spike ``_boundary`` probe.
+    It deliberately calls ``executor.execute_cell`` directly rather than the production
+    ``_execute_hot_cell`` primitive: post-D6 the primitive INSTALLS the context, so the
+    context-less footgun (silent ``mo.output`` / hard ``mo.ui`` error) is no longer what
+    production does — it survives here only as the control showing why D6 is needed. The
+    full cold run is avoided on purpose (it would install a context that masks this, and
+    for mo.ui/output cells would not populate globals at all). Mirrors the #76 spike
+    ``_boundary`` probe.
     """
     from marimo import App
     from marimo._runtime.executor import ExecutionConfig, get_executor
@@ -188,7 +190,7 @@ def _hot_path_behavior(kind: str) -> str:
         executor = get_executor(ExecutionConfig())
         cell = runner._kernel.graph.cells[cid]
         try:
-            _execute_hot_cell(executor, cell, runner.globals, runner._kernel.graph)
+            executor.execute_cell(cell, runner.globals, runner._kernel.graph)
             return "ran-no-error"
         except BaseException as exc:  # marimo raises MarimoRuntimeException(BaseException)
             return f"raised:{type(exc).__name__}"
@@ -197,14 +199,86 @@ def _hot_path_behavior(kind: str) -> str:
 
 
 def test_hot_path_contract_mo_output_silent():
-    """CONTRACT: ``mo.output`` from a per-bar cell is a SILENT no-op (no exec-context on
-    the thin drain) — a footgun S3 will fail-closed, here pinned as current behavior."""
+    """CONTROL (context-less, demoted): a BARE ``executor.execute_cell`` — no execution
+    context — drops ``mo.output`` silently. This is NOT what the production drain does
+    post-D6 (it installs the context); it is kept only to show WHY D6 is needed. It
+    therefore calls ``executor.execute_cell`` directly, not the production primitive."""
     assert _hot_path_behavior("output") == "ran-no-error"
 
 
 def test_hot_path_contract_mo_ui_hard_error():
-    """CONTRACT: ``mo.ui`` from a per-bar cell is a HARD error (fail-closed)."""
+    """CONTROL (context-less, demoted): a BARE ``executor.execute_cell`` hard-errors on
+    ``mo.ui``. Kept as the control that motivates D6 (see the sibling test)."""
     assert _hot_path_behavior("ui").startswith("raised:")
+
+
+def _production_hot_path(kind: str) -> dict:
+    """Drive a single cell through the PRODUCTION primitive ``_execute_hot_cell(ctx, ...)``
+    — the exact context-installing call ``StrategyRuntime.step`` makes per bar — and report
+    whether ``mo.output`` reached the kernel stream and whether it raised.
+
+    Cold-running an mo.output/mo.ui app does not populate globals (the cells fall over), so
+    — like the context-less control helper — this drives a single cell directly rather than
+    via ``open_runtime``. Routing through the SAME ``_execute_hot_cell`` the drain uses binds
+    this gate to production: if ``step`` stops installing the context, this goes RED. Output
+    is observed on the kernel stream (the user-visible publish), not on the internal
+    ``execution_context.output`` attribute, which is restored on block exit.
+    """
+    from marimo import App
+    from marimo._runtime.context.types import get_context
+    from marimo._runtime.executor import ExecutionConfig, get_executor
+
+    app = App()
+    if kind == "output":
+
+        @app.cell
+        def _c():
+            import marimo as mo
+
+            mo.output.replace("hello")
+            result = 1
+            return (result,)
+    else:  # "ui"
+
+        @app.cell
+        def _c():
+            import marimo as mo
+
+            result = mo.ui.slider(0, 10)
+            return (result,)
+
+    host = HeadlessKernel()
+    try:
+        runner = app._get_kernel_runner()
+        cid = next(c for c, _ in app._cell_manager.valid_cells())
+        executor = get_executor(ExecutionConfig())
+        cell = runner._kernel.graph.cells[cid]
+        ctx = get_context()
+        before = len(host.stream.messages)
+        try:
+            _execute_hot_cell(ctx, executor, cell, runner.globals, runner._kernel.graph)
+            behavior = "ran-no-error"
+        except BaseException as exc:  # marimo raises MarimoRuntimeException(BaseException)
+            behavior = f"raised:{type(exc).__name__}"
+        return {"behavior": behavior, "published": len(host.stream.messages) > before}
+    finally:
+        host.teardown()
+
+
+def test_production_context_publishes_mo_output():
+    """D6 production-output: the per-bar primitive ``step`` uses installs the execution
+    context, so ``mo.output`` reaches the kernel stream (published) — the footgun the
+    context-less control suffers is gone. Routes through the production primitive, so it
+    goes RED if production stops installing the context."""
+    r = _production_hot_path("output")
+    assert r["behavior"] == "ran-no-error", r
+    assert r["published"], "mo.output did not reach the kernel stream (context not installed?)"
+
+
+def test_production_context_mo_ui_no_hard_error():
+    """D6 production-ui: with the context installed, ``mo.ui`` behaves like a normal marimo
+    cell — no hard error (the context-less control hard-errors)."""
+    assert _production_hot_path("ui")["behavior"] == "ran-no-error"
 
 
 def test_precompute_hot_list_is_driver_rooted_topo_ordered():

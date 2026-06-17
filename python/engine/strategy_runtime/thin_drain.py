@@ -59,6 +59,7 @@ from marimo._runtime import patches
 from marimo._runtime.commands import AppMetadata
 from marimo._runtime.context import teardown_context
 from marimo._runtime.context.kernel_context import initialize_kernel_context
+from marimo._runtime.context.types import get_context
 from marimo._runtime.executor import ExecutionConfig, get_executor
 from marimo._runtime.input_override import input_override
 from marimo._runtime.marimo_pdb import MarimoPdb
@@ -211,14 +212,23 @@ class HeadlessKernel:
 # ---------------------------------------------------------------------------
 
 
-def _execute_hot_cell(executor: Any, cell: Any, glbls: dict[str, Any], graph: Any) -> None:
-    """The single context-less hot-path primitive: ``exec(body); eval(last_expr)``.
+def _execute_hot_cell(
+    ctx: Any, executor: Any, cell: Any, glbls: dict[str, Any], graph: Any
+) -> None:
+    """The single hot-path primitive: run one cell INSIDE the kernel's execution context.
 
-    Both ``StrategyRuntime.step`` and the contract gate route through this one function so
-    the gate can never silently drift from what the runtime actually does per bar — any
-    future change to how a hot cell is invoked (config, wrapping) lives here, in one place.
+    ``with_cell_id`` installs the per-cell execution context (D6, findings 0046 redesign
+    追補): with it, ``mo.output`` / ``mo.ui`` / ``mo.state`` behave exactly like a normal
+    marimo cell — there is no hot/cold behavioral split for the author. The install is
+    sub-microsecond (it builds one ``ExecutionContext`` and swaps an attribute) — NOT what
+    made ``Kernel.run`` slow (that was the entry-point scan + graph mutation + lint + topo).
+
+    ``StrategyRuntime.step`` and the D6 production gate route through this one function, so
+    the gate can never silently drift from what the runtime does per bar — if production
+    ever stopped installing the context, the footgun would return and the gate would go RED.
     """
-    executor.execute_cell(cell, glbls, graph)
+    with ctx.with_cell_id(cell.cell_id):
+        executor.execute_cell(cell, glbls, graph)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -318,11 +328,17 @@ class StrategyRuntime:
         return tuple(str(cell.cell_id) for cell in self._c.hot_cells)
 
     def step(self) -> None:
-        """Execute the precomputed hot cells once, in topological order."""
+        """Execute the precomputed hot cells once, in topological order.
+
+        Each cell runs inside the kernel's execution context (D6) so every cell behaves
+        like a normal marimo cell. The context is bound once per step (the install is the
+        same context object across cells) — never per cell — keeping the drain native-speed.
+        """
         c = self._c
         executor, glbls, graph = c.executor, c.glbls, c.graph
+        ctx = get_context()
         for cell in c.hot_cells:
-            _execute_hot_cell(executor, cell, glbls, graph)
+            _execute_hot_cell(ctx, executor, cell, glbls, graph)
 
     def drain(self, values: dict[str, Any]) -> None:
         """One bar: set every declared driver from ``values``, then step the cell-DAG."""

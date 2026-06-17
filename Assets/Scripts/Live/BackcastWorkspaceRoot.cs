@@ -149,7 +149,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     bool _isOwner;       // owns the Python interpreter this Play
     bool _built;         // BuildWorkspace ran (this root is the active layout owner) — independent of Python
     readonly OnceGate _teardownGate = new OnceGate();
-    string _strategyFile;
     string _lastPayload;
     bool _errLogged, _finishedHandled;
 
@@ -182,7 +181,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // LIVE_VENUE=TACHIBANA|KABU in .env before Play.
         _venue = ResolveLiveVenue();
 
-        ResolvePaths();
         BuildWorkspace();        // UI build ALWAYS runs (independent of _ownPlay / batchmode)
         _built = true;           // this root is the active layout owner regardless of Python ownership
 
@@ -203,19 +201,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RestoreLayout();         // restore the persisted 4 dimensions (Default on missing/corrupt)
     }
 
+    // #78: the universe is NO LONGER seeded from an env-default .py. There is ONE strategy source —
+    // the editor (findings 0044) — known only after RestoreEditors, so the real seed runs in
+    // SeedScenarioFromEditor at the END of ApplyLayout. ResolvePaths is retained as the "compose root
+    // headlessly" seam many probes drive (ResolvePaths + BuildWorkspace), and seeds from the editor if
+    // one is already bound — a no-op when unbound (fresh install / pre-restore), which is the #78
+    // "未ロード→走らない" guarantee. No env-default path remains.
     void ResolvePaths()
     {
-        _strategyFile = EnvConfig.Get("BACKCAST_HITL_STRATEGY",
-            Path.Combine(PythonRuntimeLocator.ProjectRoot, "spike", "fixtures", "strategies", "kernel_spike_buy_sell.py"));
+        SeedScenarioFromEditor();
+    }
 
-        // #66: seed the universe from the strategy's inline .py SCENARIO when no scenario sidecar
-        // exists, else a fresh-install / sidecar-deleted workspace leaves the universe empty and
-        // footer LiveAuto ▶ is BlockedNoInstrument (findings 0043 / 0027 §3(d)). The sidecar still
-        // wins (Populate: ReadScenario ?? fallback), matching the engine load_scenario order. The
-        // read is Python-free (Awake runs before InitializePython); an Unparseable SCENARIO is
-        // surfaced loudly via a menu notice rather than silently dropped (findings 0027).
-        ScenarioSnapshot inlineFallback = ScenarioInlineReader.Read(_strategyFile, out var inlineStatus);
-        _scenario.Populate(_strategyFile, DateTime.Now, inlineFallback);
+    // #78: the run layer's single strategy source — the editor, resolved LIVE through the registry by
+    // window id each call (findings 0044 §2-1). One cached immutable adapter so Run / LiveAuto / sidebar
+    // writeback / seed can never target different windows; a future multi-editor active-pick repoints
+    // this ONE field (the registry is readonly-initialised and WINDOW_ID is const, so lazy-init is safe
+    // from any seam, including the probes' reflective ResolvePaths-before-BuildWorkspace).
+    RegistryStrategyFileProvider _editorFileProvider;
+    RegistryStrategyFileProvider EditorFileProvider =>
+        _editorFileProvider ??= new RegistryStrategyFileProvider(_registry, WINDOW_ID);
+
+    // Seed the scenario panel from the editor's CURRENT strategy .py (sidecar ?? inline fallback —
+    // the #66 mechanism, re-homed from env-default to the LOADED editor, findings 0044 §2-3). When the
+    // editor is unbound (no restore / fresh install) the registry provider returns false and we seed
+    // NOTHING — universe stays empty and Run is blocked, which is the #78 "未ロード→走らない" guarantee.
+    void SeedScenarioFromEditor()
+    {
+        if (!EditorFileProvider.TryGetStrategyFile(out string strategyPath)) return;
+
+        ScenarioSnapshot inlineFallback = ScenarioInlineReader.Read(strategyPath, out var inlineStatus);
+        _scenario.Populate(strategyPath, DateTime.Now, inlineFallback);
         if (inlineStatus == ScenarioReadStatus.Unparseable)
             _menuBarView?.ShowMessage("strategy SCENARIO unreadable — save a scenario sidecar to set the universe");
     }
@@ -340,7 +355,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _footerMode = new FooterModeViewModel();
         _footerAuto = new LiveAutoTransportViewModel(
             _host.Panel,                                              // run lifecycle authority
-            new BoundStrategyFileProvider(_strategyFile),
+            EditorFileProvider,                                       // #78: run WHAT THE EDITOR SHOWS
             _footerSelected,
             () => new List<string>(_scenario.Universe.Ids),          // scenario run universe
             () => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue);
@@ -373,10 +388,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // The candidate source is still a mock (real supply = #46 kabu list / #41 prune / DuckDB).
         var provider = new MockAvailableInstrumentsProvider(new[] { "1301.TSE", "6758.TSE", "7203.TSE", "8918.TSE", "9432.TSE", "9984.TSE" });
         _sidebarCtrl = new UniverseSidebarController(_scenario.Universe, _footerSelected, new UniverseWriteback(), provider);
-        // Populate (ResolvePaths) already restored the universe into the shared registry, so prime the
-        // sidebar's fresh writeback to that set — the restored ids are not an unsaved edit (#31 D4).
+        // #78: at BuildWorkspace the editor is still UNBOUND (the .py binds later in RestoreEditors), so
+        // the universe is EMPTY here — this prime is against the empty set. The REAL writeback prime that
+        // matches the seeded universe happens at the END of ApplyLayout, right after SeedScenarioFromEditor
+        // (do NOT drop that re-prime: without it a later sidebar edit diffs against this stale empty set →
+        // phantom-id hazard, findings 0025 §12). Kept here so a no-restore compose path still has a primed
+        // writeback. The restored ids are not an unsaved edit (#31 D4).
         _sidebarCtrl.PrimeWritebackFromCurrent();
-        if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, new BoundStrategyFileProvider(_strategyFile));
+        if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, EditorFileProvider);   // #78: writeback targets the editor's .py sidecar
     }
 
     // window factory for ADDITIONAL saved editor windows (the scene-authored one is adopted). Uses
@@ -617,7 +636,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_host.IsRunning) return;
 
         RunGateResult gate;
-        try { gate = _scenario.TryStartRun(new BoundStrategyFileProvider(_strategyFile)); }
+        try { gate = _scenario.TryStartRun(EditorFileProvider); }
         catch (Exception e) { _tile.ShowRunMessage("Could not save scenario: " + e.Message); Debug.LogError("[BackcastWorkspaceRoot] commit failed: " + e); return; }
         if (!gate.IsReady) { _tile.ShowRunMessage(gate.Message); Debug.LogWarning("[BackcastWorkspaceRoot] run blocked: " + gate.Message); return; }
         _tile.ShowRunMessage(null);
@@ -1375,6 +1394,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ReassertBaseAfterRestore();   // #61: keep base canonical + visible + before charts (collision/legacy-safe)
         RestoreFloating(doc);
         RestoreEditors(doc);
+
+        // #78: the editor's .py is now bound (or unbound on fresh install) — seed the scenario from it,
+        // then (a) re-sync the Startup tile's Start/End/cash fields, which are written ONLY by
+        // SyncFieldsFromController and have NO Changed event (the build-time sync at BuildWorkspace ran
+        // against an empty Params, so without this the tile renders blank while Run uses the seeded
+        // Params — a WYSIWYR break), and (b) re-prime the sidebar writeback so its _lastFlushed matches
+        // the just-seeded universe (the BuildWorkspace prime ran against an empty universe; without this
+        // a later sidebar edit would diff against a stale empty set — phantom-id hazard, findings 0025 §12).
+        SeedScenarioFromEditor();
+        _tile?.SyncFieldsFromController();
+        _sidebarCtrl?.PrimeWritebackFromCurrent();
     }
 
     // floating: adopted/existing windows repositioned IN PLACE (never destroyed); only additional

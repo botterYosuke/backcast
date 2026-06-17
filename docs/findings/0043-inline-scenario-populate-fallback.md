@@ -1,5 +1,11 @@
 # findings 0043 — 本線 Populate に inline-.py SCENARIO fallback を配線（sidecar 不在で universe 空 → LiveAuto 不可を封鎖）
 
+> **後続更新（#78 / findings 0044, 2026-06-17）**: この inline-fallback 機構（`Populate: ReadScenario ?? fallback`）は
+> 不変だが、**seed の path 源が env 既定 `_strategyFile` から「ロード済み editor の `.py`」へ再ホーム**された。
+> seed は `ResolvePaths`（Awake）ではなく `ApplyLayout` 末尾の `SeedScenarioFromEditor` で走る。fresh install は
+> editor 未バインド＝universe 空＝Run 封鎖（#78「未ロード→走らない」）で、#66 の元動機（fresh-install で空にしない）は
+> #78 に吸収される。詳細は [findings 0044](0044-wysiwyr-run-reads-editor.md)。
+
 issue #66（bug）。元は findings 0027 §3 (d)（cutover slice 2 の follow-up・silent-drop 禁止項）。
 `grill-with-docs`（2026-06-17）で設計の木を導出。backcast に FLOWS.md は無いため、本 findings が
 RED→実装→GREEN→HITL の正本。方針参照: **ADR-0005（scenario sidecar の merge 規律）/ #29（scenario panel）/

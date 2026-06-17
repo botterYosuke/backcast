@@ -74,28 +74,53 @@ public class StrategyDocument : IStrategyFileProvider
     public bool Save()
     {
         if (_path == null) return false;
+        if (!WriteAtomic(_path, _text)) return false;   // text/path/dirty retained on failure
+        _dirty = false;
+        _openedOrSaved = true;
+        return true;
+    }
 
-        string dir = Path.GetDirectoryName(_path);
+    // Save As (#69): write the current buffer to a NEW .py path and REBIND to it (so the
+    // document forks to the new pair — findings 0048 D6). On any failure the document is
+    // UNCHANGED (still bound to the old path, dirty preserved). The caller derives the .json
+    // sidecar (scenario + layout keys) from the new path separately.
+    public bool SaveAs(string newPath)
+    {
+        if (string.IsNullOrEmpty(newPath)) return false;
+        string full;
+        try { full = Path.GetFullPath(newPath); }
+        catch { return false; }
+        if (!string.Equals(Path.GetExtension(full), ".py", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!WriteAtomic(full, _text)) return false;   // document unchanged on failure
+
+        _path = full;       // rebind: subsequent Save() targets the new path
+        _dirty = false;
+        _openedOrSaved = true;
+        return true;
+    }
+
+    // Atomic temp+replace write of `text` to `path` (temp in the same dir, then File.Replace/Move).
+    // Returns false on any IO failure, leaving the destination's prior content intact (findings 0010
+    // §3 — replace-failure preserves it). Shared by Save (bound path) and SaveAs (new path).
+    static bool WriteAtomic(string path, string text)
+    {
+        string dir = Path.GetDirectoryName(path);
         if (string.IsNullOrEmpty(dir)) return false;
 
-        string tmp = Path.Combine(dir, "." + Path.GetFileName(_path) + ".tmp-" + Guid.NewGuid().ToString("N"));
+        string tmp = Path.Combine(dir, "." + Path.GetFileName(path) + ".tmp-" + Guid.NewGuid().ToString("N"));
         try
         {
-            File.WriteAllText(tmp, _text, Utf8NoBom);
-            // Atomic replace: if the temp write or the replace throws, the destination is
-            // left with its prior content (findings 0010 §3 — replace-failure preserves it).
-            if (File.Exists(_path)) File.Replace(tmp, _path, /*destinationBackupFileName:*/ null);
-            else File.Move(tmp, _path);
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(tmp, text, Utf8NoBom);
+            if (File.Exists(path)) File.Replace(tmp, path, /*destinationBackupFileName:*/ null);
+            else File.Move(tmp, path);
+            return true;
         }
         catch
         {
             TryDelete(tmp);
-            return false;   // text/path/dirty retained
+            return false;
         }
-
-        _dirty = false;
-        _openedOrSaved = true;
-        return true;
     }
 
     // Restore-boundary reset to unbound-empty (findings 0010 §7). NOT a normal Open failure.

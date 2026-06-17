@@ -17,11 +17,15 @@
 // _ownPlay gates ONLY the Python auto-start, never the UI authoring/build (owner 2026-06-15).
 // isBatchMode suppresses Python init (the headless compile gate never inits Python or renders).
 //
-// LAYOUT (findings 0025 §8, ADR-0003): 4 dimensions (Hakoniwa panels / canvas pan+zoom / floating
-// windows / Strategy Editor open file) round-trip through LayoutPathResolver.DefaultPath(). Restore
-// order canvas→Hakoniwa→floating→editor; the scene-authored editor window is ADOPTED (never
-// destroyed+respawned) and only ADDITIONAL saved windows are spawned. Save triggers: File→Save,
-// OnApplicationQuit, OnDestroy (Editor Play-stop) — converged into one idempotent teardown.
+// LAYOUT (findings 0025 §8, ADR-0003; #69 multi-document, findings 0048): 4 dimensions (Hakoniwa
+// panels / canvas pan+zoom / floating windows / Strategy Editor open file) round-trip through the
+// "layout" key of the OPEN document's <strategy>.json (LayoutSidecarStore — coexisting with the
+// engine's "scenario" key, never clobbering it). The document is the (<strategy>.py, <strategy>.json)
+// pair; _currentLayoutPath is the open .py (the Save target / resume anchor). Restore order
+// canvas→Hakoniwa→floating→editor; the scene-authored editor window is ADOPTED (never
+// destroyed+respawned) and only ADDITIONAL saved windows are spawned. Save triggers: File→Save /
+// Save As (native picker), OnApplicationQuit, OnDestroy — quit autosaves into the open document, and
+// the last document is remembered across launches via a PlayerPrefs pointer (B2: no global layout file).
 
 using System;
 using System.Collections.Generic;
@@ -133,6 +137,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
 
+    // ── #69 multi-document layout surface (findings 0048) ──
+    // The document is the (<strategy>.py, <strategy>.json) pair; the .json carries the engine's
+    // "scenario" key (#29) AND the Unity "layout" key (LayoutSidecarStore), never clobbering each
+    // other. _currentLayoutPath is the OPEN document's .py (TTWR buffer.original_path): the Save
+    // target and resume anchor. "" = untitled (no document) -> File→Save delegates to Save As.
+    string _currentLayoutPath = "";
+    IFileDialog _fileDialog = new Win32FileDialog();   // native picker; AFK injects a StubFileDialog
+    const string ResumeKey = "backcast.lastDocument";  // PlayerPrefs resume pointer (B2: no global layout file)
+
+    // #69 AFK seam: a probe injects a StubFileDialog so Save As / Open round-trips run headless
+    // (the C# equivalent of TTWR's PendingFileDialog.inject_resolved).
+    public void SetFileDialog(IFileDialog dialog) { if (dialog != null) _fileDialog = dialog; }
+
     // ── #23 re-home: live surfaces (3 data tiles / Order ticket / secret modal) ──
     // #61 adds _buyingPowerView (the 4th base panel, dynamically spawned — no scene tile) using the same
     // LivePanelTileView wiring as the 3 #23 tiles.
@@ -210,7 +227,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                       ", batch=" + Application.isBatchMode + ", alreadyInit=" + PythonEngine.IsInitialized + ").");
         }
 
-        RestoreLayout();         // restore the persisted 4 dimensions (Default on missing/corrupt)
+        ResumeLastDocumentOrDefault();   // #69 (B2): re-open the last document or start untitled+default
     }
 
     // #78: the universe is NO LONGER seeded from an env-default .py. There is ONE strategy source —
@@ -443,7 +460,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             isLiveAutoRunning: () => _footerAuto != null && _footerAuto.HasActiveRun,
             isReplayRunning: () => _host.IsRunning);
         if (_menuBarView != null)
-            _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave,
+            _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave, OnFileSaveAs,
                 OnVenueConnect, OnVenueDisconnect,
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
@@ -1489,16 +1506,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // disconnected so modeReq is null here and the host is never touched.
         SendModeSideEffect(modeReq);
 
+        _currentLayoutPath = "";   // #69: New drops to untitled (TTWR handle_file_new_system: buffer=default)
         _menuBarView?.ShowMessage("New: workspace cleared.");
     }
 
     void OnFileOpen()
     {
+        // #69: native picker selects the document's .py (canonical identity, #78); the layout/scenario
+        // come from its <strategy>.json sidecar. Cancel = no-op.
+        string py = _fileDialog.OpenStrategy(InitialDir());
+        if (string.IsNullOrEmpty(py)) { _menuBarView?.ShowMessage("Open: cancelled."); return; }
+
+        // strict layout read FIRST: on a missing/malformed/no-layout-key sidecar, ABORT and keep the
+        // current workspace (findings 0048 D4 — boot's fail-soft→Default would wipe the user's work).
+        if (!LayoutSidecarStore.TryReadLayout(py, out var doc))
+        {
+            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' は無効な layout");
+            return;   // _currentLayoutPath + workspace unchanged
+        }
+
         // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load (findings 0017 §1).
         // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
         SendModeSideEffect(_menuBar.FileOpenModeSideEffect());
-        RestoreLayout();
-        _menuBarView?.ShowMessage("Open: layout restored.");
+
+        // the picked .py is the document identity — bind the adopted editor to it regardless of what the
+        // layout key recorded, then apply geometry/windows/profiles around it.
+        EnsureAdoptedEditorState(doc, py);
+        ApplyLayout(doc);
+        _currentLayoutPath = py;
+        PersistResumePointer(py);
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py));
     }
 
     // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op
@@ -1510,8 +1547,83 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     void OnFileSave()
     {
-        SaveLayout();
+        // #69: untitled (no document open) → delegate to Save As (TTWR dialogs.rs:272-275). Otherwise
+        // merge the layout key into the open document's <strategy>.json (the scenario key is preserved).
+        if (string.IsNullOrEmpty(_currentLayoutPath)) { OnFileSaveAs(); return; }
+        if (!TryWriteLayout(_currentLayoutPath)) { _menuBarView?.ShowMessage("Save failed (see log)."); return; }
         _menuBarView?.ShowMessage("Save: layout written.");
+    }
+
+    // #69: Save As forks the whole document to a new pair (findings 0048 D6): write <newname>.py
+    // (strategy), then the scenario + layout keys into <newname>.json, then rebind/track the new doc.
+    void OnFileSaveAs()
+    {
+        string newPy = _fileDialog.SaveStrategyAs(InitialDir(), InitialFileName());
+        if (string.IsNullOrEmpty(newPy)) { _menuBarView?.ShowMessage("Save As: cancelled."); return; }
+        if (!string.Equals(Path.GetExtension(newPy), ".py", StringComparison.OrdinalIgnoreCase))
+            newPy = Path.ChangeExtension(newPy, ".py");   // defensive; the dialog's defext usually adds it
+
+        // 1. fork the strategy .py + rebind the adopted editor (the new pair needs its own .py, else the
+        //    layout's strategyEditors[].filePath would dangle). #78/#79: run cwd becomes <newname> dir.
+        if (!_editors.TryGetValue(WINDOW_ID, out var editor) || editor == null)
+        { _menuBarView?.ShowMessage("Save As: no editor window."); return; }
+        if (!editor.SaveAs(newPy))
+        { _menuBarView?.ShowMessage("Save As: could not write " + Path.GetFileName(newPy)); return; }
+
+        // 2. scenario key into <newname>.json (best-effort: Commit writes nothing on an invalid buffer,
+        //    leaving a layout-only sidecar — which load_scenario tolerates, CONTEXT.md L380).
+        try { _scenario.Commit(newPy); }
+        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] Save As scenario writeback skipped: " + e.Message); }
+
+        // 3. layout key into <newname>.json (Newtonsoft merge preserves the scenario key just written).
+        if (!TryWriteLayout(newPy)) { _menuBarView?.ShowMessage("Save As failed (see log)."); return; }
+
+        // 4. the new pair is the open document now; re-seed (editor rebound) + remember it for resume.
+        _currentLayoutPath = newPy;
+        PersistResumePointer(newPy);
+        ReseedFromEditor();
+        _menuBarView?.ShowMessage("Saved as " + Path.GetFileName(newPy));
+    }
+
+    // #69: the picker's initial dir/filename follow the open document, else persistentDataPath.
+    string InitialDir() =>
+        string.IsNullOrEmpty(_currentLayoutPath) ? Application.persistentDataPath : Path.GetDirectoryName(_currentLayoutPath);
+    string InitialFileName() =>
+        string.IsNullOrEmpty(_currentLayoutPath) ? "strategy.py" : Path.GetFileName(_currentLayoutPath);
+
+    // #69: ensure the adopted editor entry in `doc` binds to the PICKED .py (document identity), so Open
+    // shows the strategy the user picked regardless of the layout key's recorded filePath.
+    void EnsureAdoptedEditorState(LayoutDocument doc, string py)
+    {
+        if (doc == null) return;
+        doc.strategyEditors ??= new List<StrategyEditorState>();
+        foreach (var s in doc.strategyEditors)
+            if (s != null && s.id == WINDOW_ID) { s.filePath = py; return; }
+        doc.strategyEditors.Add(new StrategyEditorState(WINDOW_ID, py));
+    }
+
+    // #69 (B2): the resume pointer lives in PlayerPrefs (app state, not a user file). No global
+    // layout.json — boot re-opens the last document; Save As / Open keep the pointer current.
+    void PersistResumePointer(string py)
+    {
+        PlayerPrefs.SetString(ResumeKey, py ?? "");
+        PlayerPrefs.Save();
+    }
+
+    // #69 (B2): boot resume — re-open the last document's layout from its <strategy>.json, or start
+    // untitled with the default workspace when there is no resumable document (fresh install / moved file).
+    void ResumeLastDocumentOrDefault()
+    {
+        string py = PlayerPrefs.GetString(ResumeKey, "");
+        if (!string.IsNullOrEmpty(py) && File.Exists(py) && LayoutSidecarStore.TryReadLayout(py, out var doc))
+        {
+            EnsureAdoptedEditorState(doc, py);
+            ApplyLayout(doc);
+            _currentLayoutPath = py;
+            return;
+        }
+        ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace, untitled
+        _currentLayoutPath = "";
     }
 
     // ---- Venue submenu → host venue RPCs (findings 0027 D5). Connect builds the request via the reused
@@ -1577,18 +1689,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return doc;
     }
 
-    void SaveLayout()
+    // #69 (B2): on quit, persist the layout into the OPEN document's <strategy>.json (TTWR autosave-to-
+    // original_path). Untitled (no document) persists nothing — under the 2-file model layout lives with
+    // a document, so there is no global scratch file to write (findings 0048 D7).
+    void AutosaveCurrentDocument()
     {
-        try { LayoutStore.Save(CaptureLayout(), LayoutPathResolver.DefaultPath()); }
-        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout save failed: " + e.Message); }
+        if (!string.IsNullOrEmpty(_currentLayoutPath)) TryWriteLayout(_currentLayoutPath);
     }
 
-    void RestoreLayout()
+    // #69: merge the current layout into `path`'s <strategy>.json, logging (not throwing) on failure.
+    // Shared by Save / Save As / quit autosave so the capture + try/catch + log live in one place.
+    bool TryWriteLayout(string path)
     {
-        LayoutDocument doc;
-        try { doc = LayoutStore.Load(LayoutPathResolver.DefaultPath()); }
-        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout load failed; using default: " + e.Message); doc = LayoutDocument.Default(); }
-        ApplyLayout(doc);
+        try { LayoutSidecarStore.WriteLayout(path, CaptureLayout()); return true; }
+        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout write failed: " + e.Message); return false; }
     }
 
     // restore order canvas → Hakoniwa → floating → Strategy Editor (findings 0025 §8).
@@ -1646,7 +1760,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // 2. save layout once while THIS root is the active layout owner. Gated on _built, NOT Python
         // ownership: a yielded root (GameObject disabled before Play) never ran Awake/BuildWorkspace so
         // it never reaches here, but a built-yet-non-Python-owner root must still persist its layout.
-        if (_built) SaveLayout();
+        if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown

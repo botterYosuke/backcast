@@ -37,7 +37,7 @@ public sealed class MenuBarView : MonoBehaviour
 
     RectTransform _container;
     MenuBarViewModel _vm;
-    Action _onNew, _onOpen, _onSave, _onDisconnect;
+    Action _onNew, _onOpen, _onSave, _onSaveAs, _onDisconnect;
     Action<string, string> _onConnect;     // (venue, env)
     Action<string> _onOpenStrategy;        // #80: open a strategy .py by absolute path
     Func<IReadOnlyList<StrategyPickerEntry>> _enumStrategies;   // #80: re-enumerated each time the menu opens (stale-safe)
@@ -67,7 +67,7 @@ public sealed class MenuBarView : MonoBehaviour
     // refuse-when-running gate and the venue logic (vm.Venue); the root performs the real clear/save/
     // restore and the venue login/logout RPCs (findings 0027 D3/D5).
     public void Bind(MenuBarViewModel vm,
-                     Action onNew, Action onOpen, Action onSave,
+                     Action onNew, Action onOpen, Action onSave, Action onSaveAs,
                      Action<string, string> onConnect, Action onDisconnect,
                      Func<bool> connectReady, Func<string> modeText, string devVenue, Font font,
                      Action<string> onOpenStrategy = null,
@@ -77,6 +77,7 @@ public sealed class MenuBarView : MonoBehaviour
         _onNew = onNew;
         _onOpen = onOpen;
         _onSave = onSave;
+        _onSaveAs = onSaveAs;
         _onConnect = onConnect;
         _onOpenStrategy = onOpenStrategy;
         _enumStrategies = enumStrategies;
@@ -196,9 +197,10 @@ public sealed class MenuBarView : MonoBehaviour
     {
         var dd = NewDropdown(OpenMenu.File, 0f, 150f, 4);
         MakeItem(dd, "New", () => { _open = OpenMenu.None; _onNew?.Invoke(); Refresh(); }, 0);
-        MakeItem(dd, "Open  (layout)", () => { _open = OpenMenu.None; _onOpen?.Invoke(); Refresh(); }, 1);
+        MakeItem(dd, "Open…  (document)", () => { _open = OpenMenu.None; _onOpen?.Invoke(); Refresh(); }, 1);
         MakeItem(dd, "Save  (layout)", () => { _open = OpenMenu.None; _onSave?.Invoke(); Refresh(); }, 2);
-        MakeDisabledItem(dd, "Save As…  (see #69)", 3);   // deferred: native file picker + multi-doc (#69)
+        // #69: native file picker + multi-document (Save As forks the <strategy>.py/.json pair).
+        MakeItem(dd, "Save As…  (document)", () => { _open = OpenMenu.None; _onSaveAs?.Invoke(); Refresh(); }, 3);
     }
 
     void BuildEditMenu()

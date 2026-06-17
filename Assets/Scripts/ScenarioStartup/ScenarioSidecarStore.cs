@@ -144,7 +144,7 @@ public static class ScenarioSidecarStore
         mutate(scenario);
 
         string json = root.ToString(Formatting.Indented);
-        AtomicWriteAllText(path, json);
+        AtomicFile.WriteAllText(path, json);
         return new WritebackOutcome(path, File.GetLastWriteTimeUtc(path));
     }
 
@@ -161,25 +161,8 @@ public static class ScenarioSidecarStore
         }
     }
 
-    // Write to a temp file in the same directory, then atomically replace — so a crash
-    // mid-write never leaves the user's strategy sidecar truncated.
-    static void AtomicWriteAllText(string path, string contents)
-    {
-        string dir = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-        string tmp = path + ".tmp";
-        File.WriteAllText(tmp, contents);
-        if (File.Exists(path))
-        {
-            // File.Replace preserves a single atomic swap on NTFS; no backup file kept.
-            File.Replace(tmp, path, null);
-        }
-        else
-        {
-            File.Move(tmp, path);
-        }
-    }
+    // Atomic temp+replace write is shared with LayoutSidecarStore via AtomicFile.WriteAllText
+    // (the scenario + layout keys land in the same <strategy>.json, written the same safe way).
 }
 
 // Validated-for-write projection (3-projection model; CONTEXT "scenario 編集の 3

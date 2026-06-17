@@ -140,10 +140,16 @@ class KernelLiveDriver:
         self._order_times: deque[float] = deque()
 
     def _buying_power(self) -> float:
+        # Live 買付余力は venue 権威（kabu /wallet/cash・tachibana CLMZanKaiKanougaku）を
+        # provider 経由で読む（#74）。provider 未設定、または venue snapshot 未取得（ログイン直後で
+        # last_snapshot が None 等）で provider が None を返したときは、attach 時に seed した kernel
+        # cash（CASH 口座のミラー）へ fall back する。
         provider = self._buying_power_provider
-        if provider is None:
-            return float(self._portfolio.cash)
-        return float(provider())
+        if provider is not None:
+            val = provider()
+            if val is not None:
+                return float(val)
+        return float(self._portfolio.cash)
 
     def set_telemetry_emitter(self, emit_telemetry: Callable[[], None]) -> None:
         """telemetry emitter を後から差す（controller が driver の counters を読む closure を渡す）。"""

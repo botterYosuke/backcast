@@ -61,6 +61,7 @@ class KernelLiveEngineController:
         run_gate_provider: Optional[Callable[[str], bool]] = None,
         regulation_provider: Optional[Callable[[], Any]] = None,
         on_strategy_error: Optional[Callable[[BaseException], None]] = None,
+        buying_power_provider: Optional[Callable[[], Optional[float]]] = None,
         attach_timeout_s: float = 60.0,
         trader_id: str = "LIVEHOST-001",
     ) -> None:
@@ -75,6 +76,9 @@ class KernelLiveEngineController:
         self._regulation_provider = regulation_provider
         # 走行中の戦略例外を run の障害（host.fail_run）へ伝える seam（#25 finding 5）。
         self._on_strategy_error = on_strategy_error
+        # Live 買付余力（venue 余力）の供給 seam（#74）。driver の ctx.buying_power() がこれを読む。
+        # 未設定なら driver は seed 済み kernel cash へ fall back する。
+        self._buying_power_provider = buying_power_provider
         self._attach_timeout_s = attach_timeout_s
         self._trader_id = trader_id
 
@@ -192,6 +196,7 @@ class KernelLiveEngineController:
             is_run_gated=self._make_is_run_gated(nautilus_strategy_id),
             on_safety_violation=self._on_safety_violation,
             on_strategy_error=self._on_strategy_error,
+            buying_power_provider=self._buying_power_provider,
             max_orders_per_minute=rails.limits.max_orders_per_minute,
         )
         # telemetry は driver の counters（order_count/fill_count）を読むため driver 確定後に差す。

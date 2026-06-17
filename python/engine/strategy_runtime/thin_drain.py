@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Sequence
 # marimo is a prod dependency since ADR-0012, so importing this module is fine — but the
 # runtime seam must not import it at module-load (lazy-import discipline) — proven by
 # tests/test_strategy_runtime_offline.py.
+from marimo import state as _mo_state  # public mo.state factory (aliased: _compile has a local `state`)
 from marimo._ast.app_config import _AppConfig
 from marimo._config.config import DEFAULT_CONFIG
 from marimo._messaging.print_override import print_override
@@ -257,6 +258,18 @@ class CompiledStrategy:
     setters: dict[str, Any]
 
 
+def _cell_clobbered_names(host_names: "dict[str, Any]", graph: Any) -> list[str]:
+    """Host-seed / inject names that a cell ALSO defines — a fail-closed clobber.
+
+    After the cold run a cell's own definition shadows the host's seeded driver State or
+    armed action callable, so the host would drive/arm an orphaned binding (a dead driver or
+    a silently-shadowed action). Both ``_compile`` guards reject on this set, each with a
+    role-specific message.
+    """
+    cell_defs = {d for cell in graph.cells.values() for d in cell.defs}
+    return sorted(set(host_names) & cell_defs)
+
+
 def _compile(
     app: "App",
     drivers: Sequence[str],
@@ -294,12 +307,10 @@ def _compile(
         runner.globals.update({name: _inert_action for name in inject})
     if driver_seeds:
         # Build host-owned driver States and seed their getters so free-ref reads resolve in
-        # the cold run AND the hot drain. mo.state() registers in the active kernel context
+        # the cold run AND the hot drain. state() registers in the active kernel context
         # (we are inside a HeadlessKernel), so this must run in-context, on its thread.
-        import marimo
-
         for name, initial in driver_seeds.items():
-            getter, _setter = marimo.state(initial)
+            getter, _setter = _mo_state(initial)
             runner.globals[name] = getter
     cells = list(app._cell_manager.valid_cells())
     # A stale-free graph + populated globals is the precondition compute_cells_to_run assumes.
@@ -313,9 +324,7 @@ def _compile(
         # name shadows the seeded State after the cold run, so the host's per-bar write would drive
         # an orphaned State (a dead driver that looks live). Reject — the host owns the canonical
         # driver names; the cell must read the driver as a free ref, not redefine it.
-        seed_clobbered = sorted(
-            set(driver_seeds) & {d for cell in graph.cells.values() for d in cell.defs}
-        )
+        seed_clobbered = _cell_clobbered_names(driver_seeds, graph)
         if seed_clobbered:
             raise ValueError(
                 f"host-seeded driver name(s) {seed_clobbered} are also defined by a cell — the cold "
@@ -326,7 +335,7 @@ def _compile(
         # Fail-closed: an injected name a cell also defines would be silently clobbered when we
         # arm — shadowing the author's value (corrupting downstream cells) or firing an action
         # where a pure helper was meant. Reject instead of clobbering.
-        clobbered = sorted(set(inject) & {d for cell in graph.cells.values() for d in cell.defs})
+        clobbered = _cell_clobbered_names(inject, graph)
         if clobbered:
             raise ValueError(
                 f"injected name(s) {clobbered} are also defined by a cell — arming would "

@@ -167,13 +167,20 @@ class PortfolioOrderInfo:
 
 @dataclass(frozen=True)
 class PortfolioResult:
-    """proto を持たない口座スナップショット応答（buying_power/cash/equity + positions/orders）。"""
+    """proto を持たない口座スナップショット応答（buying_power/cash/equity + positions/orders）。
+
+    #65: realized_pnl/unrealized_pnl は RunResult running-view（走行中）の pn: / unrlz: セル用。
+    Python 権威（realized は cost 履歴が要り C# 側導出不能）。完了後の確定 snapshot
+    (compute_portfolio) はこれらを持たないので 0.0 既定にフォールバックする。
+    """
     success: bool
     buying_power: float = 0.0
     cash: float = 0.0
     equity: float = 0.0
     positions: list[PortfolioPositionInfo] = field(default_factory=list)
     orders: list[PortfolioOrderInfo] = field(default_factory=list)
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
 
 
 # Per-bar wallclock throttle for both production Replay runners (legacy catalog + DuckDB
@@ -796,6 +803,11 @@ class DataEngineBackend:
             return BacktestRunResult(
                 success=False, error_code="INVALID_STATE", error_message=se_err or ""
             )
+        # #65: clear the previous run's portfolio so "loaded but not running" is honest-empty
+        # "(no data)". The observer republishes from bar 1's on_equity (initial cash / flat book),
+        # so the gap is only the instant before the first bar. Without this the stale prior-run
+        # snapshot would leak into the new run's pre-first-bar window.
+        self.engine.last_portfolio = None
 
         try:
             from engine.strategy_runtime.run_buffer import (
@@ -864,12 +876,23 @@ class DataEngineBackend:
         portfolio/summary shape to the unchanged C# decoder. Returns the summary dict.
         """
         from engine.strategy_runtime.run_buffer_reader import RunBufferReader
-        from engine.strategy_runtime.summary import compute_summary, write_summary_json
+        from engine.strategy_runtime.summary import (
+            compute_summary,
+            equity_curve_stats,
+            write_summary_json,
+        )
         from engine.strategy_runtime.portfolio import compute_portfolio
 
         rb.finish()
         reader = RunBufferReader(rb.run_dir)
         summary = compute_summary(reader.fills, reader.equity_points)
+        # #65 §4-a: union sharpe/sortino into the summary so the launcher's summary_json carries the
+        # full TTWR RunSummary {fills_count, equity_points, total_pnl, max_drawdown, sharpe, sortino}.
+        # max_drawdown stays SINGLE-SOURCED from compute_summary — equity_curve_stats recomputes it
+        # identically, so we take only sharpe/sortino to avoid two sources drifting (§4-a ⚠).
+        stats = equity_curve_stats([ep.equity for ep in reader.equity_points])
+        summary["sharpe"] = stats["sharpe"]
+        summary["sortino"] = stats["sortino"]
         write_summary_json(rb.run_dir, summary)
         self.engine.last_portfolio = compute_portfolio(
             reader.fills, reader.equity_points, scenario
@@ -908,6 +931,10 @@ class DataEngineBackend:
             equity=float(p.get("equity", 0.0)),
             positions=positions,
             orders=orders,
+            # #65: present in the running snapshot; absent in the post-run compute_portfolio dict
+            # (RunResult switches to full stats at completion), so default 0.0.
+            realized_pnl=float(p.get("realized_pnl", 0.0)),
+            unrealized_pnl=float(p.get("unrealized_pnl", 0.0)),
         )
 
     def list_instruments(self, source: str):

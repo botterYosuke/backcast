@@ -11,8 +11,20 @@ drives the **existing #29 production seam** unchanged:
   - `push_bar(bar)`   → `engine.apply_replay_event(KlineUpdate)`  (reducer → GetState polling)
   - `on_equity(...)`  → `run_buffer.write_equity(...)`           (per-bar cash, post-fill)
   - `push_order(fill)`→ `run_buffer.write_fill(...)`            (→ compute_portfolio → get_portfolio)
-  - `push_portfolio` / `push_run_complete` → no-op (last_portfolio is derived after the run
-    from the RunBuffer fills+equity by `compute_portfolio`).
+  - `push_run_complete` → no-op (the caller owns RunBuffer.finish() + finalize derivation).
+
+#65 — running portfolio snapshot (正本: `docs/findings/0044-replay-panel-real-data.md`): the three
+account hooks *additionally* maintain a live `self._snapshot` and atomic-swap the completed dict
+into `engine.last_portfolio`, so `get_portfolio` returns live values *during* the run (not just the
+post-run `compute_portfolio` snapshot). The RunBuffer writes above are kept verbatim so the golden
+#24 event stream stays byte-identical — this seam only adds the in-memory snapshot:
+  - `push_portfolio(portfolio)` → positions (`open_positions()`, qty int-rounded, `unrealized_pnl=0`)
+    + cash/buying_power (`portfolio.cash`) + `realized_pnl` (`portfolio.realized_pnl`). Equity is NOT
+    touched here (`Portfolio.equity == cash`, not MTM); `on_equity` owns equity.
+  - `on_equity(ts, equity, cash)` → equity (MTM) + cash/buying_power, and derives
+    `unrealized_pnl = (equity − cash) − Σ(qty×avg_px)`. Positions held (push owns them).
+The published dict matches `compute_portfolio`'s union so the finalize snapshot converges without a
+visible jump, and `get_portfolio` reads one source (`last_portfolio`) for both live and final.
 
 This lives in the adapter layer on purpose: the kernel (`engine.kernel.*`) stays
 host-independent and never imports `apply_replay_event` / `RunBuffer` / `_backend_impl`
@@ -35,6 +47,13 @@ class ReplayKernelObserver:
     def __init__(self, *, engine: Any, run_buffer: Any) -> None:
         self._engine = engine
         self._buf = run_buffer
+        # #65 running snapshot accumulators (published as a fresh dict via _publish_snapshot).
+        self._positions: list[dict] = []
+        self._orders: list[dict] = []
+        self._cash: float = 0.0
+        self._equity: float = 0.0
+        self._realized: float = 0.0
+        self._unrealized: float = 0.0
 
     # --- chart (reducer → GetState polling) ----------------------------------
     def push_bar(self, bar: Any) -> None:
@@ -68,6 +87,19 @@ class ReplayKernelObserver:
                 "ts_event_ms": fill.ts_event_ns // 1_000_000,
             }
         )
+        # #65: grow the running Orders panel source. Replay is MARKET-immediate, so every fill is a
+        # FILLED row (no resting orders) — shape matches compute_portfolio.orders / PortfolioOrderInfo.
+        self._orders.append(
+            {
+                "symbol": fill.instrument_id,
+                "side": fill.side.value,
+                "qty": float(fill.last_qty),
+                "price": float(fill.last_px),
+                "status": "FILLED",
+                "ts_ms": fill.ts_event_ns // 1_000_000,
+            }
+        )
+        self._publish_snapshot()
 
     # --- per-bar equity (RunBuffer; #49-added KernelRunner hook) ---------------
     def on_equity(self, ts_event_ms: int, equity: float, cash: float) -> None:
@@ -77,13 +109,48 @@ class ReplayKernelObserver:
         self._buf.write_equity(
             {"ts_event_ms": ts_event_ms, "equity": equity, "cash": cash}
         )
+        # #65: on_equity owns equity (MTM) + cash. Derive unrealized from cost basis:
+        # unrealized = market value − cost = (equity − cash) − Σ(qty×avg_px). NOTE (equity − cash)
+        # alone is the position market value, not the P&L (§4-b). Positions are held (push owns them).
+        self._equity = equity
+        self._cash = cash
+        cost_basis = sum(p["qty"] * p["avg_price"] for p in self._positions)
+        self._unrealized = (equity - cash) - cost_basis
+        self._publish_snapshot()
 
-    # --- intentionally inert in production ------------------------------------
+    # --- running portfolio snapshot (#65) -------------------------------------
     def push_portfolio(self, portfolio: Any) -> None:
-        # No-op: get_portfolio reads last_portfolio, computed once after the run from the
-        # RunBuffer fills+equity (compute_portfolio). Per-fill pushes would be discarded.
-        pass
+        # #65: positions + cash/buying_power + realized from the kernel Portfolio. unrealized_pnl is
+        # 0.0 here to match the finalize snapshot (strategy_runtime/portfolio.py hardcodes 0.0); the
+        # running running-view含み is carried on the snapshot top-level (_unrealized via on_equity).
+        # qty is int-rounded so it equals _net_positions' int(round()) — no 100.0→100 finalize jump.
+        self._positions = [
+            {
+                "symbol": p.instrument_id,
+                "qty": int(round(p.quantity)),
+                "avg_price": p.avg_px,
+                "unrealized_pnl": 0.0,
+            }
+            for p in portfolio.open_positions()
+        ]
+        self._cash = portfolio.cash
+        self._realized = portfolio.realized_pnl
+        self._publish_snapshot()
 
     def push_run_complete(self, run_id: str, summary: Any) -> None:
         # No-op: the caller owns RunBuffer.finish() + summary/portfolio derivation.
         pass
+
+    def _publish_snapshot(self) -> None:
+        # Atomic ref swap (build a fresh dict, never mutate in place) so a concurrent get_portfolio
+        # poll reads either the old or the new complete snapshot — never a half-updated one. Keys
+        # match compute_portfolio's union (+realized/unrealized) so get_portfolio has one read path.
+        self._engine.last_portfolio = {
+            "buying_power": self._cash,
+            "cash": self._cash,
+            "equity": self._equity,
+            "positions": list(self._positions),
+            "orders": list(self._orders),
+            "realized_pnl": self._realized,
+            "unrealized_pnl": self._unrealized,
+        }

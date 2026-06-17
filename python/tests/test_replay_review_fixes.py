@@ -248,3 +248,66 @@ def test_get_portfolio_equity_is_mark_to_market(tmp_path) -> None:
     )
     assert abs(pf.cash - expected_cash) < 1.0, f"cash={pf.cash} expected≈{expected_cash}"
     assert abs(pf.equity - expected_equity) < 1.0, f"equity={pf.equity} expected≈{expected_equity}"
+
+
+# --- #65: _finalize_run unions sharpe/sortino into summary_json --------------
+def test_finalize_run_summary_json_has_full_runsummary_union(tmp_path) -> None:
+    """#65 §4-a: the launcher reads start_engine's summary_json into the RunResult panel. It must
+    carry the full TTWR RunSummary union {fills_count, equity_points, total_pnl, max_drawdown,
+    sharpe, sortino}. Pre-#65 _finalize_run called only compute_summary (no sharpe/sortino)."""
+    import json
+
+    _build_synthetic_duckdb(tmp_path, n=50)
+    # A round-trip so the equity curve moves (non-degenerate sharpe/sortino).
+    body = (
+        "        if self.n_bars == 3:\n"
+        "            self.submit_market(self.instrument_id, OrderSide.BUY, 100)\n"
+        "        if self.n_bars == 30:\n"
+        "            self.submit_market(self.instrument_id, OrderSide.SELL, 100)"
+    )
+    strategy = _write_strategy(tmp_path, granularity="Daily", body_extra=body)
+
+    from engine.core import DataEngine
+    from engine._backend_impl import DataEngineBackend
+
+    eng = DataEngine(duckdb_root=str(tmp_path))
+    ok, err = eng.load_replay_data(["8918.TSE"], "2024-10-01", "2025-01-10", "Daily")
+    assert ok, err
+    backend = DataEngineBackend(engine=eng)
+    result = backend.start_engine(strategy)
+    assert result.success, f"{result.error_code}: {result.error_message}"
+
+    summary = json.loads(result.summary_json)
+    for key in ("fills_count", "equity_points", "total_pnl", "max_drawdown", "sharpe", "sortino"):
+        assert key in summary, f"summary_json missing RunSummary key {key!r}: {summary}"
+    # max_drawdown is single-sourced from compute_summary (we only graft sharpe/sortino), so it
+    # must be present and non-negative — not silently overwritten by equity_curve_stats' copy.
+    assert summary["max_drawdown"] >= 0.0
+
+
+# --- #65: run-start clears the prior run's portfolio (honest empty) ----------
+def test_start_engine_clears_last_portfolio_for_honest_empty(tmp_path) -> None:
+    """#65 §3: a stale prior-run snapshot must not leak into a new run's pre-first-bar window.
+    last_portfolio is cleared at the LOADED→RUNNING transition; a no-op (no fills, no bars
+    streamed before clear) still ends with a freshly-derived snapshot, never the injected stale one."""
+    _build_synthetic_duckdb(tmp_path, n=10)
+    strategy = _write_strategy(tmp_path, granularity="Daily")  # no orders
+
+    from engine.core import DataEngine
+    from engine._backend_impl import DataEngineBackend
+
+    eng = DataEngine(duckdb_root=str(tmp_path))
+    # Inject a stale snapshot as if a previous run left it behind.
+    eng.last_portfolio = {"buying_power": 999.0, "cash": 999.0, "equity": 999.0,
+                          "positions": [{"symbol": "STALE", "qty": 7, "avg_price": 1.0,
+                                         "unrealized_pnl": 0.0}], "orders": []}
+    ok, err = eng.load_replay_data(["8918.TSE"], "2024-10-01", "2025-01-10", "Daily")
+    assert ok, err
+    backend = DataEngineBackend(engine=eng)
+    result = backend.start_engine(strategy)
+    assert result.success, f"{result.error_code}: {result.error_message}"
+
+    pf = backend.get_portfolio()
+    # The stale "STALE" position must be gone — replaced by the real (flat) run snapshot.
+    assert all(p.symbol != "STALE" for p in pf.positions), "stale prior-run position leaked"
+    assert abs(pf.cash - 10_000_000) < 1.0, f"flat run should report initial cash, got {pf.cash}"

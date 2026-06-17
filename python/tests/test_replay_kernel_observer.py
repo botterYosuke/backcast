@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.kernel.duckdb_bars import Bar  # noqa: E402
 from engine.kernel.orders import OrderFilled, OrderSide  # noqa: E402
+from engine.kernel.portfolio import Portfolio  # noqa: E402
 from engine.reducer import KlineUpdate  # noqa: E402
 from engine.strategy_runtime.replay_kernel_observer import ReplayKernelObserver  # noqa: E402
 
@@ -21,9 +22,24 @@ from engine.strategy_runtime.replay_kernel_observer import ReplayKernelObserver 
 class _FakeEngine:
     def __init__(self) -> None:
         self.events: list = []
+        # #65: the observer swaps the running portfolio snapshot here each hook (atomic ref).
+        self.last_portfolio = None
 
     def apply_replay_event(self, event) -> None:
         self.events.append(event)
+
+
+def _fill(side: OrderSide, qty: float, px: float, ts_ns: int = 1_700_000_000_000_000_000):
+    return OrderFilled(
+        client_order_id="O-1",
+        strategy_id="spike-buy-sell",
+        venue_order_id="V-1",
+        instrument_id="8918.TSE",
+        side=side,
+        last_qty=qty,
+        last_px=px,
+        ts_event_ns=ts_ns,
+    )
 
 
 class _FakeBuf:
@@ -96,10 +112,79 @@ def test_on_equity_writes_runbuffer_equity_point() -> None:
     ]
 
 
-def test_push_portfolio_and_run_complete_are_inert() -> None:
+# --- #65: running portfolio snapshot (push_portfolio/push_order/on_equity → last_portfolio) ---
+
+_SNAPSHOT_KEYS = {
+    "buying_power", "cash", "equity", "positions", "orders",
+    "realized_pnl", "unrealized_pnl",
+}
+
+
+def test_push_portfolio_publishes_running_snapshot_positions_and_cash() -> None:
+    obs, eng, _ = _observer()
+    pf = Portfolio(initial_cash=1_000_000.0)
+    pf.apply_fill(_fill(OrderSide.BUY, 100.0, 1000.0))  # cash 1_000_000 → 900_000, pos 100@1000
+
+    obs.push_portfolio(pf)
+
+    snap = eng.last_portfolio
+    assert snap is not None, "push_portfolio must publish the running snapshot to last_portfolio"
+    assert set(snap.keys()) == _SNAPSHOT_KEYS, "snapshot must match compute_portfolio union (#65 §4)"
+    # cash/buying_power = portfolio.cash; equity is NOT touched by push (on_equity owns MTM).
+    assert snap["cash"] == 900_000.0
+    assert snap["buying_power"] == 900_000.0
+    assert snap["realized_pnl"] == 0.0
+    # positions built from open_positions(); qty int-rounded; unrealized_pnl=0.0 fixed (§3).
+    assert snap["positions"] == [
+        {"symbol": "8918.TSE", "qty": 100, "avg_price": 1000.0, "unrealized_pnl": 0.0}
+    ]
+    assert isinstance(snap["positions"][0]["qty"], int)
+
+
+def test_push_order_appends_filled_row_and_keeps_runbuffer_fill() -> None:
     obs, eng, buf = _observer()
-    obs.push_portfolio(object())
+    obs.push_order(_fill(OrderSide.BUY, 100.0, 1234.0))
+
+    # golden #24: the RunBuffer fill write is unchanged (event stream byte-identical).
+    assert len(buf.fills) == 1
+    # #65: orders grow live in the running snapshot (= TTWR replay Orders panel source).
+    snap = eng.last_portfolio
+    assert snap is not None
+    assert snap["orders"] == [
+        {
+            "symbol": "8918.TSE", "side": "BUY", "qty": 100.0, "price": 1234.0,
+            "status": "FILLED", "ts_ms": 1_700_000_000_000,
+        }
+    ]
+
+
+def test_on_equity_publishes_mtm_equity_and_derived_unrealized() -> None:
+    obs, eng, buf = _observer()
+    pf = Portfolio(initial_cash=1_000_000.0)
+    pf.apply_fill(_fill(OrderSide.BUY, 100.0, 1000.0))  # cash 900_000, pos 100@1000
+    obs.push_portfolio(pf)
+
+    # price 1000 → 1050: MTM equity = cash + 100*1050 = 900_000 + 105_000 = 1_005_000.
+    obs.on_equity(1_700_000_000_000, 1_005_000.0, 900_000.0)
+
+    # golden #24: the RunBuffer equity write is unchanged.
+    assert buf.equity[-1] == {
+        "ts_event_ms": 1_700_000_000_000, "equity": 1_005_000.0, "cash": 900_000.0
+    }
+    snap = eng.last_portfolio
+    assert snap["equity"] == 1_005_000.0
+    assert snap["cash"] == 900_000.0
+    # unrealized = (MTM_equity − cash) − Σ(qty×avg_px) = 105_000 − 100_000 = 5_000 (§4-b).
+    assert snap["unrealized_pnl"] == 5_000.0
+    # positions are held through on_equity (push owns them).
+    assert snap["positions"][0]["symbol"] == "8918.TSE"
+
+
+def test_run_complete_stays_inert() -> None:
+    obs, eng, buf = _observer()
     obs.push_run_complete("run-1", {"fills_count": 0})
+    # push_run_complete owns nothing: no snapshot publish, no reducer/RunBuffer writes.
+    assert eng.last_portfolio is None
     assert eng.events == [] and buf.fills == [] and buf.equity == []
 
 
@@ -107,5 +192,8 @@ if __name__ == "__main__":
     test_push_bar_emits_klineupdate_from_kernel_bar()
     test_push_order_writes_runbuffer_fill_with_reader_shape()
     test_on_equity_writes_runbuffer_equity_point()
-    test_push_portfolio_and_run_complete_are_inert()
+    test_push_portfolio_publishes_running_snapshot_positions_and_cash()
+    test_push_order_appends_filled_row_and_keeps_runbuffer_fill()
+    test_on_equity_publishes_mtm_equity_and_derived_unrealized()
+    test_run_complete_stays_inert()
     print("[REPLAY KERNEL OBSERVER PASS] all mappings match the #29 seam")

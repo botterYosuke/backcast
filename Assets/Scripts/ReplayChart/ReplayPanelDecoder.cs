@@ -13,13 +13,19 @@
 // touching consumers. No Newtonsoft is added (not in the manifest; premature).
 //
 // PAYLOAD sources (owner-verified):
-//   * order / portfolio handlers — python/engine/live/gui_bridge_actor.py.
+//   * order handler — python/engine/live/gui_bridge_actor.py (Live).
 //     order = { symbol, client_order_id, venue_order_id, strategy_id, side,
-//     status, qty, price, timestamp_ms }. portfolio = { buying_power, equity,
-//     positions: [ { symbol, qty, avg_price } ], orders }. orders is always []
-//     here so the DTO does not declare it.
-//   * run summary — python/engine/nautilus_backtest_runner.py. summary =
-//     { fills_count, equity_points, max_drawdown, sharpe, sortino }.
+//     status, qty, price, timestamp_ms }.
+//   * portfolio — #65: now the Replay get_portfolio_json poll source
+//     (python/engine/backend_service.get_portfolio_json), no longer just the live
+//     gui_bridge handler. portfolio = { buying_power, cash, equity,
+//     positions: [ { symbol, qty, avg_price, unrealized_pnl } ],
+//     orders: [ { symbol, side, qty, price, status, ts_ms } ],
+//     realized_pnl, unrealized_pnl }. orders is NON-empty in Replay (fills as
+//     FILLED rows — findings 0044 §5), so the DTO now declares it.
+//   * run summary — #65 unions sharpe/sortino into _finalize_run's summary
+//     (python/engine/strategy_runtime/summary.py). summary =
+//     { fills_count, equity_points, total_pnl, max_drawdown, sharpe, sortino }.
 //
 // JsonUtility binding rule this file depends on:
 //   * Binds by VERBATIM field name. Array-element DTOs (PositionRow) keep
@@ -39,9 +45,10 @@
 //     grounded payload is always valid json.dumps output, so a parse failure is
 //     a real bug we want surfaced (mirrors ReplayBarDecoder's discipline).
 //
-// INTERMEDIATE STATE: this file compiles but is UNUSED until the M2 probe drains
-// the JSON and calls the Decode methods. No .meta is authored here — Unity
-// generates ReplayPanelDecoder.cs.meta on the next import.
+// WIRED (#65): the Replay base panels poll get_portfolio_json / read the launcher's
+// summary_json and call these Decode methods (BackcastWorkspaceRoot.PushLiveTiles Replay
+// branch). Previously only the M2 AFK probe (KernelSinkDecodeProbe) drained the kernel
+// sink queue through here.
 
 using System;
 using System.Collections.Generic;
@@ -55,6 +62,21 @@ public struct PositionRow
     public string symbol;
     public double qty;
     public double avg_price;
+    public double unrealized_pnl;   // #65: was silently zero-filled (field absent) — now bound.
+}
+
+// #65 Replay Orders panel rows (get_portfolio_json.orders = fills as FILLED rows). JsonUtility
+// binds array elements by verbatim name → snake_case (same discipline as PositionRow; do NOT
+// PascalCase-rename or it silently zero-fills). Distinct from OrderRow (the live gui_bridge shape).
+[System.Serializable]
+public struct PortfolioOrderRow
+{
+    public string symbol;
+    public string side;
+    public double qty;
+    public double price;
+    public string status;
+    public long ts_ms;
 }
 
 // 以下 3 つは hand-map された consumer 向け値型 → PascalCase（#10 の ReplayBarFrame と同型）
@@ -76,12 +98,16 @@ public struct PortfolioSnapshot
     public double BuyingPower;
     public double Equity;
     public IReadOnlyList<PositionRow> Positions;
+    public IReadOnlyList<PortfolioOrderRow> Orders;   // #65
+    public double RealizedPnl;                        // #65 RunResult running-view
+    public double UnrealizedPnl;                      // #65 RunResult running-view
 }
 
 public struct RunResult
 {
     public long FillsCount;
     public long EquityPoints;
+    public double TotalPnl;     // #65: full-stats pnl: cell (run_result_panel.rs full-stats view).
     public double MaxDrawdown;
     public double Sharpe;
     public double Sortino;
@@ -107,13 +133,17 @@ public static class ReplayPanelDecoder
     {
         public double buying_power;
         public double equity;
-        public PositionRow[] positions;   // orders は常に [] なので宣言しない
+        public PositionRow[] positions;
+        public PortfolioOrderRow[] orders;   // #65: Replay の Orders 行（fills を FILLED 化）
+        public double realized_pnl;          // #65: RunResult running-view
+        public double unrealized_pnl;        // #65: RunResult running-view
     }
 
     [System.Serializable] class RunResultDto
     {
         public long fills_count;
         public long equity_points;
+        public double total_pnl;   // #65
         public double max_drawdown;
         public double sharpe;
         public double sortino;
@@ -150,6 +180,9 @@ public static class ReplayPanelDecoder
             BuyingPower = dto.buying_power,
             Equity = dto.equity,
             Positions = dto.positions ?? Array.Empty<PositionRow>(),
+            Orders = dto.orders ?? Array.Empty<PortfolioOrderRow>(),
+            RealizedPnl = dto.realized_pnl,
+            UnrealizedPnl = dto.unrealized_pnl,
         };
     }
 
@@ -162,6 +195,7 @@ public static class ReplayPanelDecoder
         {
             FillsCount = dto.fills_count,
             EquityPoints = dto.equity_points,
+            TotalPnl = dto.total_pnl,
             MaxDrawdown = dto.max_drawdown,
             Sharpe = dto.sharpe,
             Sortino = dto.sortino,

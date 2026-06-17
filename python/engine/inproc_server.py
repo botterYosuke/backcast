@@ -212,6 +212,10 @@ class InprocLiveServer:
     def get_portfolio(self) -> dict:
         return self._svc.get_portfolio()
 
+    def get_portfolio_json(self) -> str:
+        # #65: Replay poll lane (LiveRpcLanes) reads this; C# DecodePortfolio wants a JSON string.
+        return self._svc.get_portfolio_json()
+
     # ------------------------------------------------------------------
     # Replay transport (#30 footer: play / pause / step / speed / stop)
     # ------------------------------------------------------------------

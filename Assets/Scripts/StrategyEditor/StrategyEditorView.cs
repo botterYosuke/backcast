@@ -170,6 +170,15 @@ public class StrategyEditorView : MonoBehaviour
         return ok;
     }
 
+    // Save As (#69): write the buffer to a NEW .py and rebind the document to it (the editor
+    // now shows/edits the new file). History stays undoable across the boundary, like Save().
+    public bool SaveAs(string newPath)
+    {
+        bool ok = Document.SaveAs(newPath);
+        if (ok) _history.MarkSaveBoundary();
+        return ok;
+    }
+
     // Restore-boundary content apply (findings 0010 §7): full replacement, then refresh.
     public void RestoreFrom(StrategyEditorState state)
     {

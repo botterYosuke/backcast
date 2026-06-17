@@ -7,7 +7,10 @@
 // touching consumers.
 //
 // API (findings §2): Save(doc, path) / Load(path) take an EXPLICIT path so tests
-// pass a deterministic temp path; LayoutPathResolver owns the production path.
+// pass a deterministic temp path. Since #69 (findings 0048) PRODUCTION layout I/O goes
+// through LayoutSidecarStore (the "layout" key of <strategy>.json); Save/Load here are now
+// harness/probe-only, while LoadFromJson / TryLoadFromJson stay production-live as the
+// LayoutDocument <-> JSON parser that LayoutSidecarStore bridges the "layout" sub-object through.
 //
 // TRUST-BOUNDARY DEPARTURE from the decoder discipline (findings §8, owner-locked):
 // the decoders THROW on malformed JSON because engine payloads are always valid
@@ -77,57 +80,72 @@ public static class LayoutStore
 
     // The JSON -> document core, exposed so the AFK gate can inject raw JSON
     // (e.g. version:999 + unknown field/panel) without touching the filesystem.
-    // ALWAYS returns a usable, sanitized document (never null, never throws).
+    // FAIL-SOFT: ALWAYS returns a usable, sanitized document (never null, never throws) —
+    // empty/malformed/version<=0 collapse to Default(). Correct for BOOT (start-from-empty),
+    // NOT for the Open path: a caller that must DISTINGUISH "valid layout" from "junk" (so it
+    // can abort instead of wiping a live workspace) uses TryLoadFromJson (findings 0048 D4).
     public static LayoutDocument LoadFromJson(string json)
     {
+        return TryLoadFromJson(json, out var doc) ? doc : LayoutDocument.Default();
+    }
+
+    // STRICT JSON -> document core (issue #69, findings 0048 D4): returns FALSE (doc=null) for the
+    // cases LoadFromJson silently collapses to Default() — empty/blank, malformed, parsed-null,
+    // version<=0. A FUTURE or older version is a SUCCESS (best-effort, known fields). On success the
+    // doc is Sanitized. The Open path needs this so a present-but-corrupt "layout" key ABORTS the
+    // Open (keeping the current workspace) instead of degrading to Default() and wiping it.
+    public static bool TryLoadFromJson(string json, out LayoutDocument doc)
+    {
+        doc = null;
         if (string.IsNullOrWhiteSpace(json))
         {
-            Debug.LogWarning("[LAYOUT] Load: empty/blank JSON -> default layout.");
-            return LayoutDocument.Default();
+            Debug.LogWarning("[LAYOUT] Load: empty/blank JSON -> invalid.");
+            return false;
         }
 
-        LayoutDocument doc;
+        LayoutDocument parsed;
         try
         {
-            doc = JsonUtility.FromJson<LayoutDocument>(json);
+            parsed = JsonUtility.FromJson<LayoutDocument>(json);
         }
         catch (Exception e)
         {
             // malformed / non-numeric version / type mismatch.
-            Debug.LogWarning("[LAYOUT] Load: malformed JSON (" + e.Message + ") -> default layout.");
-            return LayoutDocument.Default();
+            Debug.LogWarning("[LAYOUT] Load: malformed JSON (" + e.Message + ") -> invalid.");
+            return false;
         }
 
-        if (doc == null)
+        if (parsed == null)
         {
-            Debug.LogWarning("[LAYOUT] Load: JSON parsed to null -> default layout.");
-            return LayoutDocument.Default();
+            Debug.LogWarning("[LAYOUT] Load: JSON parsed to null -> invalid.");
+            return false;
         }
 
-        if (doc.version <= 0)
+        if (parsed.version <= 0)
         {
             // missing version binds to 0 -> we refuse to treat a version-less file as
             // a valid v1 doc (prevents the required-version gate from passing vacuously).
-            Debug.LogWarning("[LAYOUT] Load: invalid version=" + doc.version + " (<=0/missing) -> default layout.");
-            return LayoutDocument.Default();
+            Debug.LogWarning("[LAYOUT] Load: invalid version=" + parsed.version + " (<=0/missing) -> invalid.");
+            return false;
         }
 
-        if (doc.version > LayoutDocument.CURRENT_VERSION)
+        if (parsed.version > LayoutDocument.CURRENT_VERSION)
         {
-            Debug.LogWarning("[LAYOUT] Load: future version=" + doc.version +
+            Debug.LogWarning("[LAYOUT] Load: future version=" + parsed.version +
                              " > CURRENT=" + LayoutDocument.CURRENT_VERSION +
                              " -> best-effort using known fields.");
             // fall through: keep the doc, bind known fields, ignore unknowns.
         }
-        else if (doc.version < LayoutDocument.CURRENT_VERSION)
+        else if (parsed.version < LayoutDocument.CURRENT_VERSION)
         {
-            Debug.LogWarning("[LAYOUT] Load: older version=" + doc.version +
+            Debug.LogWarning("[LAYOUT] Load: older version=" + parsed.version +
                              " < CURRENT=" + LayoutDocument.CURRENT_VERSION +
                              " -> using known fields (no migration needed yet).");
         }
 
-        Sanitize(doc);
-        return doc;
+        Sanitize(parsed);
+        doc = parsed;
+        return true;
     }
 
     // Drop entries that would break the binder (null entries, null id, null rect), and

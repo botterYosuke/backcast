@@ -116,6 +116,15 @@ AFK: `test_v19_auto_live_afk.py` が **同一 v19 戦略**を `KernelLiveEngineC
 
 残ゲート: **demo venue（立花/kabu）で owner が発注→約定→建玉表示を HITL 確認**（AC#5）。手順は別途。
 
+## #75(B) 配分ポリシー A0_EQUAL_NOMINAL_E1 移植（2026-06-17）
+
+owner 方針: #75 のうち **A0 配分のみ移植・テレメトリは見送り**（テレメトリは nautilus `on_order_filled` 結合の live-ops 計測で、kernel への再配線が必要・現状 測る課題なし → close）。
+
+- **dec.7（選択機構）**: `_blacksheep` は env（`V19LIVE_ALLOC_POLICY` / `V19LIVE_LOT_SIZE`）で選ぶが、kernel 港は他の全 v19 ノブ（order_qty/top_k/cash_gate/cash_safety_margin）同様 **ctor params** に統一（`alloc_policy=""`→None=v0、`lot_size="1"`）。env→param の発散は kernel 港が既に確立した規約で、ここでも踏襲。
+- **挙動**: `_cash_aware_picks` は gate 有効時に alloc_policy で分岐 — None=v0 累積グリーディ（既定・bit-exact）／`A0_EQUAL_NOMINAL_E1`=等金額×lot-floor×+1lot 再配分／不明=WARNING+v0 fallback（`_blacksheep _cash_aware_pick_reducer` と同型）。gate 無効時は従来どおり全 pick を order_qty。
+- **A0 アルゴリズム**（`_alloc_a0_equal_nominal_e1`、verbatim 港）: Pass1 per_pick=budget/K → 各 iid を `floor(per_pick/(price*lot))` 単元に切り捨て、NO_PRICE/BELOW_1_LOT の余りを remainder へ。Pass2(E1) remainder がある限りランク順に +1 lot 再配分。戻りは kernel 既存形 `[{iid,shares}]`（`_blacksheep` の notional/skip 詳細は kernel が消費しないので落とす）。
+- **数値一致テスト** `test_v19_alloc_a0.py`（6件 GREEN）: 手計算 golden（K=4・budget1M・lot100・NO_PRICE/BELOW_1_LOT/+1lot 再配分を全網羅 → A=600,C=800）を固定。空 picks・全 BELOW_1_LOT・gate 経由 dispatch・**v0 既定不変**・不明 policy fallback も固定。既存 v19/seam 9件 非破壊。
+
 ## faithfulness の限界（明示）
 
 データ源が別物（v19=kabu 配信の分足 / backcast Replay=J-Quants DuckDB 分足）かつ静的 prev_close のため、

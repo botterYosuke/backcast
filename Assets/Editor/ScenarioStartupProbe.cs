@@ -44,7 +44,8 @@ public static class ScenarioStartupProbe
                 ?? Section5_ControllerRoundTripAndRunGate()
                 ?? Section6_RegistryChangeNotifies()
                 ?? Section7_TileResyncsFromSharedUniverse()
-                ?? Section8_TileBlurResyncsStaleField();
+                ?? Section8_TileBlurResyncsStaleField()
+                ?? Section9_IndividualWritersAreMutateExistingOnly();
         }
         catch (Exception e)
         {
@@ -214,9 +215,11 @@ public static class ScenarioStartupProbe
         string fresh = Path.Combine(TempDir, "fresh_strategy.py");
         if (ScenarioSidecarStore.ReadScenario(fresh) != null) return "read: missing sidecar should be null";
 
-        // Brand-new sidecar created by the store gets schema_version 3 + the written fields.
-        ScenarioSidecarStore.SetStartupParams(fresh, new StartupParamsForWrite("2023-01-01", "2023-03-01", "Daily", "250000"));
-        ScenarioSidecarStore.SetInstruments(fresh, new[] { "6758.TSE" });
+        // Brand-new sidecar creation is OWNED ONLY by the combined Run-commit writer (#67): the
+        // individual setters are mutate-existing-only so neither can leave an incomplete sidecar.
+        // SetStartupParamsAndInstruments creates the full 5-key sidecar (schema_version 3 + fields).
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            fresh, new StartupParamsForWrite("2023-01-01", "2023-03-01", "Daily", "250000"), new[] { "6758.TSE" });
         string text = File.ReadAllText(ScenarioSidecarStore.SidecarPathFor(fresh));
         if (!text.Contains("\"schema_version\"") || !text.Contains("3")) return "read: new sidecar missing schema_version 3";
         var snap = ScenarioSidecarStore.ReadScenario(fresh);
@@ -294,8 +297,8 @@ public static class ScenarioStartupProbe
 
         // fallback precedence: sidecar wins over a pythonnet load_scenario fallback.
         string strat2 = Path.Combine(TempDir, "fallback_strategy.py");
-        ScenarioSidecarStore.SetStartupParams(strat2, new StartupParamsForWrite("2022-01-01", "2022-02-01", "Daily", "100000"));
-        ScenarioSidecarStore.SetInstruments(strat2, new[] { "6758.TSE" });
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            strat2, new StartupParamsForWrite("2022-01-01", "2022-02-01", "Daily", "100000"), new[] { "6758.TSE" });
         var fb = new ScenarioSnapshot { Start = "1999-01-01", End = "1999-02-01", Granularity = "Minute", InitialCash = 9 };
         fb.Instruments.Add("9999.TSE");
         var ctrl3 = new ScenarioStartupController();
@@ -424,6 +427,46 @@ public static class ScenarioStartupProbe
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 9. #67: the individual setters are MUTATE-EXISTING-ONLY. They must never create a fresh
+    // sidecar — an incomplete one (universe-only, or window-only) would shadow the inline .py
+    // SCENARIO (load_scenario prefers the sidecar) and break register_live_strategy /
+    // start_engine with STRATEGY_LOAD_FAILED. Mirrors TTWR set_instruments / set_startup_params
+    // (atomic_mutate_scenario_object errors "missing scenario object" rather than create). Only
+    // SetStartupParamsAndInstruments (Run-commit) may create, and it writes the full 5-key sidecar.
+    static string Section9_IndividualWritersAreMutateExistingOnly()
+    {
+        // (a) SetInstruments on a path with NO sidecar → skip (null), create NOTHING. THE kill:
+        // the old create-on-absent wrote {schema_version, instruments} and broke live load.
+        string uni = Path.Combine(TempDir, "uni_only_strategy.py");
+        var r1 = ScenarioSidecarStore.SetInstruments(uni, new[] { "7203.TSE" });
+        if (r1 != null) return "#67: SetInstruments created a sidecar with no existing one (must skip)";
+        if (File.Exists(ScenarioSidecarStore.SidecarPathFor(uni)))
+            return "#67: SetInstruments wrote an incomplete sidecar file from nothing";
+
+        // (b) SetStartupParams on a path with NO sidecar → also skip (window-only is incomplete too).
+        string win = Path.Combine(TempDir, "win_only_strategy.py");
+        var r2 = ScenarioSidecarStore.SetStartupParams(win, new StartupParamsForWrite("2024-01-01", "2024-02-01", "Daily", "500000"));
+        if (r2 != null) return "#67: SetStartupParams created a sidecar with no existing one (must skip)";
+        if (File.Exists(ScenarioSidecarStore.SidecarPathFor(win)))
+            return "#67: SetStartupParams wrote an incomplete sidecar file from nothing";
+
+        // (c) once a COMPLETE sidecar exists, SetInstruments mutates it (non-null) and preserves
+        // the startup window verbatim — the universe edit no longer destroys start/end/gran/cash.
+        string full = Path.Combine(TempDir, "full_strategy.py");
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            full, new StartupParamsForWrite("2023-06-01", "2023-09-01", "Minute", "777777"), new[] { "1301.TSE" });
+        var r3 = ScenarioSidecarStore.SetInstruments(full, new[] { "9984.TSE", "6758.TSE" });
+        if (r3 == null) return "#67: SetInstruments on an existing sidecar must mutate (returned null)";
+        var snap = ScenarioSidecarStore.ReadScenario(full);
+        if (snap == null) return "#67: ReadScenario null after mutate-existing";
+        if (snap.Instruments.Count != 2 || snap.Instruments[0] != "9984.TSE" || snap.Instruments[1] != "6758.TSE")
+            return "#67: mutate-existing did not replace instruments in order";
+        if (snap.Start != "2023-06-01" || snap.End != "2023-09-01" || snap.Granularity != "Minute" || snap.InitialCash != 777777)
+            return "#67: universe writeback clobbered the startup window (merge not preserved)";
+
+        return null;
     }
 
     static ScenarioStartupParams Clone(

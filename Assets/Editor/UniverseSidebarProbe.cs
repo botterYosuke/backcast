@@ -261,6 +261,11 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 7. writeback: content-diff + Replay gate + editable gate + path skip + Prime (D4) ----
+    // #67: universe-only writeback is MUTATE-EXISTING-ONLY (TTWR set_instruments parity). It must
+    // NOT create a fresh sidecar — a {schema_version, instruments}-only sidecar would shadow the
+    // inline .py SCENARIO (load_scenario prefers the sidecar) and break register_live_strategy with
+    // STRATEGY_LOAD_FAILED. So a flush before a complete sidecar exists SKIPS (edit stays in the
+    // in-memory registry, persisted later by #29's Run-commit which writes the full sidecar).
     static string Section7_Writeback()
     {
         var wb = new UniverseWriteback();
@@ -268,11 +273,27 @@ public static class UniverseSidebarProbe
         reg.ReplaceAll(new[] { "7203.TSE", "9984.TSE" });
         var sp = new StubStrategyProvider { Path = StrategyPath };
 
-        // Replay + editable + path → writes; sidecar carries the universe.
-        if (!wb.Flush(reg, sp, UniverseSourceMode.Replay)) return "first flush did not write";
+        // #67 RED: no sidecar yet → flush SKIPS without creating an incomplete sidecar (the kill:
+        // the old create-on-absent wrote {schema_version, instruments} and broke live load).
+        if (wb.Flush(reg, sp, UniverseSourceMode.Replay)) return "flush created a sidecar before one existed (incomplete-sidecar regression #67)";
+        if (File.Exists(SidecarPath)) return "universe-only flush created a sidecar file from nothing (#67)";
+
+        // Run-commit seeds the COMPLETE sidecar (the only creator). After it exists, the pending
+        // universe edit flushes by MUTATING it, preserving start/end/granularity/initial_cash.
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            StrategyPath,
+            new StartupParamsForWrite("2024-01-01", "2024-03-01", "Daily", "1000000"),
+            new[] { "7203.TSE", "9984.TSE" });
+
+        // a real universe change now mutates-existing; content-diff still coalesces no-ops.
+        reg.Add("8035.TSE");
+        if (!wb.Flush(reg, sp, UniverseSourceMode.Replay)) return "flush of pending change did not write into existing sidecar";
         var snap = ScenarioSidecarStore.ReadScenario(StrategyPath);
-        if (snap == null || snap.Instruments.Count != 2 || snap.Instruments[0] != "7203.TSE")
+        if (snap == null || snap.Instruments.Count != 3 || snap.Instruments[0] != "7203.TSE" || snap.Instruments[2] != "8035.TSE")
             return "sidecar instruments not persisted in order";
+        // mutate-existing PRESERVED the startup window (the whole point of #67).
+        if (snap.Start != "2024-01-01" || snap.End != "2024-03-01" || snap.Granularity != "Daily" || snap.InitialCash != 1000000)
+            return "universe writeback clobbered the startup window (merge not preserved, #67)";
 
         // content unchanged → coalesce (no write).
         if (wb.Flush(reg, sp, UniverseSourceMode.Replay)) return "unchanged content re-wrote";

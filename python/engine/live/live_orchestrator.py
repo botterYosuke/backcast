@@ -169,6 +169,7 @@ class LiveLoopManager:
                 on_strategy_log=self._on_auto_strategy_log,
                 run_gate_provider=self._is_run_gated,
                 on_strategy_error=self._on_auto_strategy_error,
+                buying_power_provider=self._live_buying_power,
             )
         # #23・(b): adapter の venue 非同期 event（poll/EC）を kernel broker FSM に転送するため
         # controller 参照を保持する（kernel 実体は apply_venue_async_event を持つ。test 注入の
@@ -1033,6 +1034,18 @@ class LiveLoopManager:
         )
         # Phase 10 §2.4: post-trade max_daily_loss を口座スナップショット毎に評価する。
         self._evaluate_post_trade_loss(snapshot)
+
+    def _live_buying_power(self) -> Optional[float]:
+        """Auto 戦略の `buying_power()` が読む venue 余力（#74）。
+
+        手動発注（`_place_*` の pre-trade gate, line ~1145）と **同一の権威ソース** ＝ AccountSync の最新
+        スナップショットの余力を読む。snapshot 未取得（未ログイン直後・初回 fetch 前）は None を返し、
+        driver 側で seed 済み kernel cash に fall back させる。live-loop thread から sync で呼ばれる
+        （cached 値の読み取りのみ・I/O 無し）。"""
+        acct = self._session.account_sync if self._session is not None else None
+        if acct is not None and acct.last_snapshot is not None:
+            return acct.last_snapshot.buying_power
+        return None
 
     def _publish_account_sync_error(self, record) -> None:
         """AccountSync on_error callback: LiveErrorRecord → BackendError → backend stream.

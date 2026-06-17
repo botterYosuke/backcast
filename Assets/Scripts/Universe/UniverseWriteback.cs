@@ -59,7 +59,20 @@ public sealed class UniverseWriteback
 
         try
         {
-            ScenarioSidecarStore.SetInstruments(path, cur);
+            // #67: SetInstruments is mutate-existing-only. null = no complete sidecar yet, so it
+            // wrote NOTHING (an instruments-only sidecar would shadow the inline .py SCENARIO and
+            // break live register). Skip WITHOUT advancing _lastFlushed — the edit persists later
+            // when Run-commit writes the full sidecar. Not surfaced as LastError (deferred, not a
+            // failure), same as the unresolvable-path skip above.
+            WritebackOutcome? outcome = ScenarioSidecarStore.SetInstruments(path, cur);
+            if (outcome == null)
+            {
+                // No complete sidecar yet → deferred, not a failure. Clear any stale error so a
+                // prior corrupt-file error (since fixed by deleting the file) does not linger on
+                // the sidebar label while we simply wait for Run-commit.
+                LastError = null;
+                return false;
+            }
             _lastFlushed = new List<string>(cur);
             LastError = null;
             return true;

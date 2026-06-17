@@ -44,7 +44,9 @@ public static class ScenarioStartupProbe
                 ?? Section5_ControllerRoundTripAndRunGate()
                 ?? Section6_RegistryChangeNotifies()
                 ?? Section7_TileResyncsFromSharedUniverse()
-                ?? Section8_TileBlurResyncsStaleField();
+                ?? Section8_TileBlurResyncsStaleField()
+                ?? Section9_IndividualWritersAreMutateExistingOnly()
+                ?? Section10_InlineReaderMatchesGolden();
         }
         catch (Exception e)
         {
@@ -214,9 +216,11 @@ public static class ScenarioStartupProbe
         string fresh = Path.Combine(TempDir, "fresh_strategy.py");
         if (ScenarioSidecarStore.ReadScenario(fresh) != null) return "read: missing sidecar should be null";
 
-        // Brand-new sidecar created by the store gets schema_version 3 + the written fields.
-        ScenarioSidecarStore.SetStartupParams(fresh, new StartupParamsForWrite("2023-01-01", "2023-03-01", "Daily", "250000"));
-        ScenarioSidecarStore.SetInstruments(fresh, new[] { "6758.TSE" });
+        // Brand-new sidecar creation is OWNED ONLY by the combined Run-commit writer (#67): the
+        // individual setters are mutate-existing-only so neither can leave an incomplete sidecar.
+        // SetStartupParamsAndInstruments creates the full 5-key sidecar (schema_version 3 + fields).
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            fresh, new StartupParamsForWrite("2023-01-01", "2023-03-01", "Daily", "250000"), new[] { "6758.TSE" });
         string text = File.ReadAllText(ScenarioSidecarStore.SidecarPathFor(fresh));
         if (!text.Contains("\"schema_version\"") || !text.Contains("3")) return "read: new sidecar missing schema_version 3";
         var snap = ScenarioSidecarStore.ReadScenario(fresh);
@@ -294,8 +298,8 @@ public static class ScenarioStartupProbe
 
         // fallback precedence: sidecar wins over a pythonnet load_scenario fallback.
         string strat2 = Path.Combine(TempDir, "fallback_strategy.py");
-        ScenarioSidecarStore.SetStartupParams(strat2, new StartupParamsForWrite("2022-01-01", "2022-02-01", "Daily", "100000"));
-        ScenarioSidecarStore.SetInstruments(strat2, new[] { "6758.TSE" });
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            strat2, new StartupParamsForWrite("2022-01-01", "2022-02-01", "Daily", "100000"), new[] { "6758.TSE" });
         var fb = new ScenarioSnapshot { Start = "1999-01-01", End = "1999-02-01", Granularity = "Minute", InitialCash = 9 };
         fb.Instruments.Add("9999.TSE");
         var ctrl3 = new ScenarioStartupController();
@@ -426,6 +430,46 @@ public static class ScenarioStartupProbe
         finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 
+    // ---- 9. #67: the individual setters are MUTATE-EXISTING-ONLY. They must never create a fresh
+    // sidecar — an incomplete one (universe-only, or window-only) would shadow the inline .py
+    // SCENARIO (load_scenario prefers the sidecar) and break register_live_strategy /
+    // start_engine with STRATEGY_LOAD_FAILED. Mirrors TTWR set_instruments / set_startup_params
+    // (atomic_mutate_scenario_object errors "missing scenario object" rather than create). Only
+    // SetStartupParamsAndInstruments (Run-commit) may create, and it writes the full 5-key sidecar.
+    static string Section9_IndividualWritersAreMutateExistingOnly()
+    {
+        // (a) SetInstruments on a path with NO sidecar → skip (null), create NOTHING. THE kill:
+        // the old create-on-absent wrote {schema_version, instruments} and broke live load.
+        string uni = Path.Combine(TempDir, "uni_only_strategy.py");
+        var r1 = ScenarioSidecarStore.SetInstruments(uni, new[] { "7203.TSE" });
+        if (r1 != null) return "#67: SetInstruments created a sidecar with no existing one (must skip)";
+        if (File.Exists(ScenarioSidecarStore.SidecarPathFor(uni)))
+            return "#67: SetInstruments wrote an incomplete sidecar file from nothing";
+
+        // (b) SetStartupParams on a path with NO sidecar → also skip (window-only is incomplete too).
+        string win = Path.Combine(TempDir, "win_only_strategy.py");
+        var r2 = ScenarioSidecarStore.SetStartupParams(win, new StartupParamsForWrite("2024-01-01", "2024-02-01", "Daily", "500000"));
+        if (r2 != null) return "#67: SetStartupParams created a sidecar with no existing one (must skip)";
+        if (File.Exists(ScenarioSidecarStore.SidecarPathFor(win)))
+            return "#67: SetStartupParams wrote an incomplete sidecar file from nothing";
+
+        // (c) once a COMPLETE sidecar exists, SetInstruments mutates it (non-null) and preserves
+        // the startup window verbatim — the universe edit no longer destroys start/end/gran/cash.
+        string full = Path.Combine(TempDir, "full_strategy.py");
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            full, new StartupParamsForWrite("2023-06-01", "2023-09-01", "Minute", "777777"), new[] { "1301.TSE" });
+        var r3 = ScenarioSidecarStore.SetInstruments(full, new[] { "9984.TSE", "6758.TSE" });
+        if (r3 == null) return "#67: SetInstruments on an existing sidecar must mutate (returned null)";
+        var snap = ScenarioSidecarStore.ReadScenario(full);
+        if (snap == null) return "#67: ReadScenario null after mutate-existing";
+        if (snap.Instruments.Count != 2 || snap.Instruments[0] != "9984.TSE" || snap.Instruments[1] != "6758.TSE")
+            return "#67: mutate-existing did not replace instruments in order";
+        if (snap.Start != "2023-06-01" || snap.End != "2023-09-01" || snap.Granularity != "Minute" || snap.InitialCash != 777777)
+            return "#67: universe writeback clobbered the startup window (merge not preserved)";
+
+        return null;
+    }
+
     static ScenarioStartupParams Clone(
         ScenarioStartupParams p, string start = null, string end = null,
         GranularityChoice? gran = null, string cash = null)
@@ -437,5 +481,86 @@ public static class ScenarioStartupProbe
             Granularity = gran ?? p.Granularity,
             InitialCash = cash ?? p.InitialCash,
         };
+    }
+
+    // ---- 10. #66 cross-language pin (findings 0043 §2, Leg B): the pure-C# ScenarioInlineReader
+    // reproduces the committed golden — which Leg A (test_scenario_inline_golden.py) pins to the
+    // canonical Python load_scenario SoT. This is what guards the C# literal parser from drifting
+    // from the run-time loader. Also asserts the Absent vs Unparseable boundary (#66 D3): a .py with
+    // no SCENARIO is Absent (silent), a present-but-broken SCENARIO is Unparseable (loud). ----
+    [Serializable] class GoldenScenario { public string start, end, granularity; public long initial_cash; public string[] instruments; }
+    [Serializable] class GoldenEntry { public string path; public GoldenScenario scenario; }
+    [Serializable] class GoldenFile { public GoldenEntry[] fixtures; }
+
+    static string Section10_InlineReaderMatchesGolden()
+    {
+        // repo root = parent of <repo>/Assets (the golden + fixture paths are repo-relative).
+        string repoRoot = Directory.GetParent(Application.dataPath).FullName;
+        string goldenPath = Path.Combine(repoRoot,
+            "python", "tests", "golden", "scenario_inline_golden.json");
+        if (!File.Exists(goldenPath))
+            return "inline golden: missing " + goldenPath + " (run `python -m tests.capture_scenario_inline_golden`)";
+
+        GoldenFile golden;
+        try { golden = JsonUtility.FromJson<GoldenFile>(File.ReadAllText(goldenPath)); }
+        catch (Exception e) { return "inline golden: unreadable golden JSON: " + e.Message; }
+        if (golden?.fixtures == null || golden.fixtures.Length == 0)
+            return "inline golden: golden has no fixtures";
+
+        foreach (GoldenEntry entry in golden.fixtures)
+        {
+            string fixturePath = Path.Combine(repoRoot, entry.path.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(fixturePath)) return "inline golden: fixture not found: " + fixturePath;
+
+            ScenarioSnapshot snap = ScenarioInlineReader.Read(fixturePath, out ScenarioReadStatus status);
+            if (status != ScenarioReadStatus.Found || snap == null)
+                return "inline golden: " + entry.path + " expected Found, got " + status;
+
+            GoldenScenario g = entry.scenario;
+            if (snap.Start != g.start) return "inline golden: " + entry.path + " start " + snap.Start + " != " + g.start;
+            if (snap.End != g.end) return "inline golden: " + entry.path + " end " + snap.End + " != " + g.end;
+            if (snap.Granularity != g.granularity) return "inline golden: " + entry.path + " granularity " + snap.Granularity + " != " + g.granularity;
+            if (!snap.InitialCash.HasValue || snap.InitialCash.Value != g.initial_cash)
+                return "inline golden: " + entry.path + " initial_cash " + snap.InitialCash + " != " + g.initial_cash;
+            int gn = g.instruments != null ? g.instruments.Length : 0;
+            if (snap.Instruments.Count != gn) return "inline golden: " + entry.path + " instrument count " + snap.Instruments.Count + " != " + gn;
+            for (int i = 0; i < gn; i++)
+                if (snap.Instruments[i] != g.instruments[i])
+                    return "inline golden: " + entry.path + " instrument[" + i + "] " + snap.Instruments[i] + " != " + g.instruments[i];
+        }
+
+        // Absent vs Unparseable boundary (#66 D3). Use a scratch dir so we never touch the fixtures.
+        string absentPy = Path.Combine(TempDir, "no_scenario.py");
+        File.WriteAllText(absentPy, "x = 1\n# this strategy has no SCENARIO\n");
+        ScenarioInlineReader.Read(absentPy, out ScenarioReadStatus absentStatus);
+        if (absentStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a .py with no SCENARIO must be Absent, got " + absentStatus;
+
+        string brokenPy = Path.Combine(TempDir, "broken_scenario.py");
+        File.WriteAllText(brokenPy, "SCENARIO = {bad: @@@ not a literal}\n");
+        ScenarioInlineReader.Read(brokenPy, out ScenarioReadStatus brokenStatus);
+        if (brokenStatus != ScenarioReadStatus.Unparseable)
+            return "inline boundary: a present-but-broken SCENARIO must be Unparseable, got " + brokenStatus;
+
+        // a TRUNCATED / unbalanced dict (mid-edit) is Unparseable (loud), NOT Absent (silent no-op).
+        string truncPy = Path.Combine(TempDir, "trunc_scenario.py");
+        File.WriteAllText(truncPy, "SCENARIO = {\"start\": \"x\"\n");
+        ScenarioInlineReader.Read(truncPy, out ScenarioReadStatus truncStatus);
+        if (truncStatus != ScenarioReadStatus.Unparseable)
+            return "inline boundary: a truncated/unbalanced SCENARIO must be Unparseable, got " + truncStatus;
+
+        // a `SCENARIO = {...}` INSIDE a module docstring is prose, not an assignment → Absent.
+        string docPy = Path.Combine(TempDir, "docstring_scenario.py");
+        File.WriteAllText(docPy, "\"\"\"\nSCENARIO = {\"start\": \"BOGUS\"}\n\"\"\"\nimport os\n");
+        ScenarioInlineReader.Read(docPy, out ScenarioReadStatus docStatus);
+        if (docStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a SCENARIO inside a docstring must be Absent, got " + docStatus;
+
+        // a missing file is Absent (never throws — Awake-safe).
+        ScenarioInlineReader.Read(Path.Combine(TempDir, "does_not_exist.py"), out ScenarioReadStatus missingStatus);
+        if (missingStatus != ScenarioReadStatus.Absent)
+            return "inline boundary: a missing .py must be Absent, got " + missingStatus;
+
+        return null;
     }
 }

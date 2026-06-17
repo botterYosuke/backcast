@@ -1,4 +1,4 @@
-// MenuBarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the global menu bar, findings 0042)
+// MenuBarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the global menu bar, findings 0044)
 //
 // The scene-authored production HOST for the menu bar. It KEEPS the existing MenuBarViewModel brain and
 // renders the TTWR File/Edit/Venue/Help surface (ADR-0005 1:1 parity) as uGUI on its OWN nested,
@@ -12,7 +12,7 @@
 // dropdown can't bleed a click into the sidebar beneath it. A full-screen BACKDROP (BACKDROP_SORT,
 // between sidebar and menu) is active only while a menu is open: it closes the menu on an outside click
 // AND consumes that click so it never reaches the sidebar (desktop menu semantics). The secret modal's
-// Canvas (1000) stays above the menu, so it remains topmost (findings 0042).
+// Canvas (1000) stays above the menu, so it remains topmost (findings 0044).
 //
 //   * File = Layout (New / Open / Save) — forwards to the workspace root's layout I/O.
 //   * Venue = the reused VenueMenuViewModel (vm.Venue): 4 TTWR connect variants (prod grey-out) +
@@ -30,7 +30,7 @@ public sealed class MenuBarView : MonoBehaviour
 {
     enum OpenMenu { None, File, Edit, Venue, Help }
 
-    // chrome z-order contract (findings 0042): field/windows(0) < sidebar < BACKDROP < menu+dropdown
+    // chrome z-order contract (findings 0044): field/windows(0) < sidebar < BACKDROP < menu+dropdown
     // < secret modal(1000). Only the RELATIONS matter; these values just realise them.
     public const int MENU_SORT = 600;
     const int BACKDROP_SORT = MENU_SORT - 1;   // catches outside clicks above the sidebar, below the dropdown
@@ -46,6 +46,7 @@ public sealed class MenuBarView : MonoBehaviour
     string _message;
     Font _font;
     bool _built;
+    string _lastBadgeText, _lastMode, _lastMessage;   // badge source cache: rebuild the string only on change
 
     // top-level button widths (fixed so the submenu drop x-offsets line up under each button).
     const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
@@ -146,10 +147,18 @@ public sealed class MenuBarView : MonoBehaviour
         if (!_built) return;
         if (_badge != null)
         {
-            string badge = _vm != null ? $"{_vm.Venue.BadgeText}   mode: {ModeText()}" : "";
-            // the transient message keeps its orange highlight (parity with the retired OnGUI label).
-            if (!string.IsNullOrEmpty(_message)) badge += "    <color=orange>" + _message + "</color>";
-            _badge.text = badge;
+            // Refresh runs every frame (async venue poll), so only rebuild the interpolated/rich-text
+            // string when a source value actually changed — otherwise this leaks GC garbage per frame.
+            string badgeText = _vm != null ? _vm.Venue.BadgeText : "";
+            string mode = ModeText();
+            if (badgeText != _lastBadgeText || mode != _lastMode || _message != _lastMessage)
+            {
+                _lastBadgeText = badgeText; _lastMode = mode; _lastMessage = _message;
+                string badge = _vm != null ? $"{badgeText}   mode: {mode}" : "";
+                // the transient message keeps its orange highlight (parity with the retired OnGUI label).
+                if (!string.IsNullOrEmpty(_message)) badge += "    <color=orange>" + _message + "</color>";
+                _badge.text = badge;
+            }
         }
 
         foreach (var kv in _dropdowns)
@@ -306,6 +315,15 @@ public sealed class MenuBarView : MonoBehaviour
     {
         rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
         rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+    }
+
+    // The backdrop is a SEPARATE GO under the root canvas, so it isn't hidden when this view is disabled.
+    // Force-close the menu and hide it here — else a disable while a menu is open would leave a full-screen
+    // invisible click-blocker over the workspace. Update()/Refresh() re-syncs cleanly on re-enable (_open=None).
+    void OnDisable()
+    {
+        _open = OpenMenu.None;
+        if (_backdrop != null) _backdrop.SetActive(false);
     }
 
     void OnDestroy()

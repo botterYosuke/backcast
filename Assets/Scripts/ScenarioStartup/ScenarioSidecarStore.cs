@@ -59,20 +59,27 @@ public static class ScenarioSidecarStore
         return ScenarioSnapshot.FromJObject(scenario);
     }
 
-    // ---- WRITE: startup params (start/end/granularity/initial_cash). Merge into the
-    // "scenario" object, preserve siblings, stamp schema_version=3. initial_cash is
-    // written as an integer when the text parses, else null (TTWR write.rs parity: the
-    // validated-for-write projection carries text; the run gate blocks invalid values). ----
-    public static WritebackOutcome SetStartupParams(string strategyPath, StartupParamsForWrite p)
+    // ---- WRITE: startup params (start/end/granularity/initial_cash). MUTATE-EXISTING-ONLY
+    // (#67): merges into an EXISTING "scenario" object and preserves siblings; returns null
+    // (writes NOTHING) when no sidecar/scenario object exists. A window-only sidecar (no
+    // instruments) is just as incomplete as a universe-only one and would shadow the inline
+    // .py SCENARIO, so this never creates one. initial_cash is written as an integer when the
+    // text parses, else null (TTWR set_startup_params / atomic_mutate_scenario_object parity:
+    // the validated-for-write projection carries text; the run gate blocks invalid values). ----
+    public static WritebackOutcome? SetStartupParams(string strategyPath, StartupParamsForWrite p)
     {
-        return Mutate(strategyPath, scenario => ApplyStartupParams(scenario, p));
+        return Mutate(strategyPath, scenario => ApplyStartupParams(scenario, p), allowCreate: false);
     }
 
     // ---- WRITE: universe instruments (the InstrumentRegistry SoT → sidecar). Order
-    // preserved as supplied (caller dedups). ----
-    public static WritebackOutcome SetInstruments(string strategyPath, IReadOnlyList<string> ids)
+    // preserved as supplied (caller dedups). MUTATE-EXISTING-ONLY (#67): returns null and
+    // writes NOTHING when no sidecar/scenario object exists — an instruments-only sidecar
+    // would be missing the backtest window and break register_live_strategy / start_engine
+    // (STRATEGY_LOAD_FAILED). The edit stays in the in-memory registry, persisted later by
+    // Run-commit's full sidecar. Mirrors TTWR set_instruments. ----
+    public static WritebackOutcome? SetInstruments(string strategyPath, IReadOnlyList<string> ids)
     {
-        return Mutate(strategyPath, scenario => ApplyInstruments(scenario, ids));
+        return Mutate(strategyPath, scenario => ApplyInstruments(scenario, ids), allowCreate: false);
     }
 
     // ---- WRITE: startup params + instruments in ONE read-modify-write. The panel's Commit
@@ -80,6 +87,9 @@ public static class ScenarioSidecarStore
     // two separate writes would leave start/end/cash persisted but instruments stale, or vice
     // versa) and halves the I/O. SetStartupParams / SetInstruments remain for the deferred
     // registry-only writeback (#31 picker).
+    // This is the ONLY writer that may CREATE a sidecar (allowCreate: true), because it writes
+    // the full 5-key scenario in one shot — the result is always complete, never the partial
+    // sidecar #67 guards against. Always returns a value (the write always happens).
     public static WritebackOutcome SetStartupParamsAndInstruments(
         string strategyPath, StartupParamsForWrite p, IReadOnlyList<string> ids)
     {
@@ -87,7 +97,7 @@ public static class ScenarioSidecarStore
         {
             ApplyStartupParams(scenario, p);
             ApplyInstruments(scenario, ids);
-        });
+        }, allowCreate: true).Value;
     }
 
     static void ApplyStartupParams(JObject scenario, StartupParamsForWrite p)
@@ -110,13 +120,21 @@ public static class ScenarioSidecarStore
     }
 
     // ---- core read-modify-write (atomic_mutate_scenario_object parity) ----
-    static WritebackOutcome Mutate(string strategyPath, Action<JObject> mutate)
+    // allowCreate=false is MUTATE-EXISTING-ONLY (#67 / TTWR atomic_mutate_scenario_object): if
+    // the file is absent OR carries no "scenario" object, return null and write NOTHING — so an
+    // individual setter can never leave an incomplete sidecar that shadows the inline .py
+    // SCENARIO. allowCreate=true (the combined Run-commit writer only) seeds a fresh scenario.
+    static WritebackOutcome? Mutate(string strategyPath, Action<JObject> mutate, bool allowCreate)
     {
         string path = SidecarPathFor(strategyPath);
 
-        JObject root = File.Exists(path) ? ParseFile(path) : new JObject();
+        bool exists = File.Exists(path);
+        if (!exists && !allowCreate) return null;  // no sidecar to merge into (TTWR: IO error)
+
+        JObject root = exists ? ParseFile(path) : new JObject();
         if (!(root["scenario"] is JObject scenario))
         {
+            if (!allowCreate) return null;         // no scenario object (TTWR: "missing scenario object")
             scenario = new JObject();
             root["scenario"] = scenario;
         }

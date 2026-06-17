@@ -1,4 +1,4 @@
-// UniverseSidebarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the universe sidebar, findings 0042)
+// UniverseSidebarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the universe sidebar, findings 0044)
 //
 // The scene-authored production HOST for the instrument-picker / universe sidebar. It REUSES the durable
 // UniverseSidebarController brain and renders the screen-fixed left sidebar as uGUI on its OWN nested,
@@ -8,7 +8,7 @@
 // WHY uGUI (was OnGUI): #77 — the sidebar and the menu were BOTH IMGUI, and a single-camera Screen-Space
 // setup ignores GUI.depth, so the (later) sidebar OnGUI overpainted the menu dropdown. uGUI makes z-order
 // deterministic by sortingOrder: this sidebar sits BELOW the menu (MenuBarView.MENU_SORT) so the dropdown
-// draws in front, and the EventSystem routes clicks to the top raycaster (no input bleed). See findings 0042.
+// draws in front, and the EventSystem routes clicks to the top raycaster (no input bleed). See findings 0044.
 //
 // Python-FREE: the controller drives SelectedSymbol (the depth-target focus) and the universe writeback;
 // the candidate source is injected by the root (a separate issue owns the real DuckDB/venue universe).
@@ -24,7 +24,7 @@ using UnityEngine.UI;
 public sealed class UniverseSidebarView : MonoBehaviour
 {
     // below MenuBarView.MENU_SORT so the dropdown overlaps the sidebar, above the field/windows (0) so the
-    // sidebar chrome stays visible over the workspace (findings 0042).
+    // sidebar chrome stays visible over the workspace (findings 0044).
     public const int SIDEBAR_SORT = 500;
 
     const float PAD = 6f, ROW_H = 22f, TITLE_H = 22f, GAP = 2f, REMOVE_W = 24f;
@@ -109,7 +109,7 @@ public sealed class UniverseSidebarView : MonoBehaviour
         }
         if (_ctrl.Registry.Count == 0)
             MakeText(_rowsRoot, "No instruments", 11, t.colors.text_muted, TextAnchor.MiddleLeft, 0f, ROW_H);
-        float rowsH = Mathf.Max(1, n == 0 ? 1 : n) * ROW_H;
+        float rowsH = (n == 0 ? 1 : n) * ROW_H;   // 1 row of height reserved for the "No instruments" label
         _rowsRoot.sizeDelta = new Vector2(0f, rowsH);
 
         if (_addLabel != null) _addLabel.text = _ctrl.Picker.Visible ? "− Close" : "+ Add";
@@ -164,8 +164,8 @@ public sealed class UniverseSidebarView : MonoBehaviour
         _searchInput.onValueChanged.AddListener(q => { _ctrl.Picker.SetQuery(q); RebuildPickerList(); });
 
         _pickerListRoot = NewRect("PickerList", _pickerRoot); TopStrip(_pickerListRoot, -2f * ROW_H, 0f);
-        RebuildPickerList();
-        _pickerRoot.sizeDelta = new Vector2(0f, 2f * ROW_H + PickerListHeight());
+        RebuildPickerList();   // sets _pickerListRoot.sizeDelta.y to the list height — reuse it (no re-enumeration).
+        _pickerRoot.sizeDelta = new Vector2(0f, 2f * ROW_H + _pickerListRoot.sizeDelta.y);
     }
 
     // List-only rebuild (query change): leaves the persistent search field untouched.
@@ -199,13 +199,6 @@ public sealed class UniverseSidebarView : MonoBehaviour
             i++;
         }
         if (_pickerListRoot != null) _pickerListRoot.sizeDelta = new Vector2(0f, i * ROW_H);
-    }
-
-    float PickerListHeight()
-    {
-        int i = 0;
-        foreach (var _ in _ctrl.PickerList(_mode)) i++;
-        return i * ROW_H;
     }
 
     // Re-flow the add button + picker under the (variable-height) rows block.

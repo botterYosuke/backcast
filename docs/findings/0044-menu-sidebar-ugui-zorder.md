@@ -1,4 +1,4 @@
-# findings 0042 — menu dropdown z-order: chrome uGUI cutover (#77)
+# findings 0044 — menu dropdown z-order: chrome uGUI cutover (#77)
 
 方針: ADR-0005（1:1 表面 parity）。語彙: CONTEXT.md「chrome z-order 前面順序」。
 
@@ -35,7 +35,7 @@ View のみ OnGUI→uGUI に差し替え。
 | secret modal | **1000** | 独自 ScreenSpaceOverlay（既存・不変） |
 
 menu(600) > sidebar(500) なので dropdown は確定的に sidebar の前面。secret(1000) > menu(600) なので modal は
-最前面を維持。値は派生で、ガード（probe Section12）は**関係のみ**を assert（menu>sidebar>0、secret>menu）。
+最前面を維持。値は派生で、ガード（probe Section13）は**関係のみ**を assert（menu>sidebar>0、secret>menu）。
 container は authored RectTransform（top strip / left column）のまま＝描画領域は derived（hardcode 禁止を踏襲）。
 dropdown は 1 行 container の外へ伸びる（uGUI はマスク無しで子をクリップしない）。
 
@@ -56,9 +56,9 @@ sidebar の銘柄行・picker 候補は毎フレーム再生成せず、controll
 
 ## ゲート
 
-- **headless（正本 AFK・RED→GREEN 済）**: `BackcastWorkspaceProbe` Section12「chrome z-order layering」。
+- **headless（正本 AFK・RED→GREEN 済）**: `BackcastWorkspaceProbe` Section13「chrome z-order layering」。
   fix 前 RED＝`zorder: MenuBarView has no Canvas (still IMGUI?)`、fix 後 `[BACKCAST WORKSPACE PASS] all sections
-  green.`（全12 section）。構造契約（両 chrome が overrideSorting Canvas + GraphicRaycaster／menu>sidebar>0／
+  green.`（全13 section・origin/main merge 後）。構造契約（両 chrome が overrideSorting Canvas + GraphicRaycaster／menu>sidebar>0／
   secret>menu）を assert。pixel z-order とクリック貫通は owner HITL。
 - **owner HITL（manual-gate・PASS 2026-06-17）**: ① File/Edit/Venue/Help の dropdown が sidebar の前面に描かれ
   全項目クリック可、② dropdown 直下の sidebar 行が同クリックで発火しない、③ menu 外クリックで閉じる、
@@ -69,5 +69,5 @@ sidebar の銘柄行・picker 候補は毎フレーム再生成せず、controll
 - `Assets/Scripts/Live/MenuBarView.cs`（uGUI・`MENU_SORT`・backdrop・dropdown）
 - `Assets/Scripts/Universe/UniverseSidebarView.cs`（uGUI・`SIDEBAR_SORT`・retained rebuild）
 - `Assets/Scripts/Live/SecretModalOverlay.cs`（sortingOrder=1000 の実証パターン）
-- `Assets/Editor/BackcastWorkspaceProbe.cs` Section12
+- `Assets/Editor/BackcastWorkspaceProbe.cs` Section13（#62 統合 smoke は Section12 で温存）
 - 関連: #69（file picker / multi-doc・OnGUI 撤去 follow-up 群）、#62（本バグでブロックされていた HITL）

@@ -17,7 +17,12 @@ dependencies = [
     "httpx>=0.27",
     "websockets>=16.0",
     "joblib>=1.5.3",
-    "scikit-learn>=1.8.0",
+    # Pinned to the 1.8.x line: the v19 strategy model (#72) is saved by scikit-learn
+    # 1.8.0 and fails to unpickle under 1.9.x (`ModuleNotFoundError: No module named
+    # '_loss'`). The kernel/engine never import sklearn (strategy-only dep), so the
+    # blast radius is the strategy layer (findings 0029 decision 3). Re-training would be
+    # higher cost; pin instead.
+    "scikit-learn>=1.8,<1.9",
     "numpy>=2.4.4",
     "pandas>=2.3.3",
 ]

@@ -59,7 +59,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section8_SharedUniverse()
                 ?? Section9_RunCommitRePrimesWriteback()
                 ?? Section10_ChartTileFamily()
-                ?? Section11_PerModeProfileFlipAndRestore();
+                ?? Section11_PerModeProfileFlipAndRestore()
+                ?? Section12_ChromeZOrderLayering();
         }
         catch (Exception e)
         {
@@ -530,6 +531,63 @@ public static class BackcastWorkspaceProbe
         sync.Invoke(root, new object[] { true });
         e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(disk re-flip Live): " + e;
         System.IO.File.Delete(path);
+        return null;
+    }
+
+    // ── 12. chrome z-order layering (#77) — the menu dropdown must draw IN FRONT of the sidebar ──
+    // The #77 bug: menu + sidebar were BOTH OnGUI (IMGUI); GUI.depth is ignored in a single-camera
+    // Screen-Space setup, so the sidebar (later OnGUI) overpainted the dropdown. The fix uGUI-ifies
+    // BOTH chrome views onto their OWN nested ScreenSpaceOverlay-sorted Canvas (overrideSorting), so
+    // z-order is DETERMINISTIC via sortingOrder (uGUI), not IMGUI execution order. This asserts the
+    // structural contract that makes the dropdown render-in-front + the input-bleed class vanish:
+    //   field/windows(0) < sidebar < menu+dropdown < secret modal(1000).
+    // EventSystem resolves a click to the TOP raycaster only, so menu>sidebar also kills the bleed
+    // where the dropdown overlaps the sidebar. The pixel z-order + click-through is the owner HITL.
+    static string Section12_ChromeZOrderLayering()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "zorder: BackcastWorkspaceRoot missing";
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var menu = UnityEngine.Object.FindFirstObjectByType<MenuBarView>();
+        var side = UnityEngine.Object.FindFirstObjectByType<UniverseSidebarView>();
+        var secret = UnityEngine.Object.FindFirstObjectByType<SecretModalOverlay>();
+        if (menu == null) return "zorder: MenuBarView missing";
+        if (side == null) return "zorder: UniverseSidebarView missing";
+        if (secret == null) return "zorder: SecretModalOverlay missing";
+
+        // both chrome views must be uGUI (own overrideSorting Canvas + raycaster), NOT IMGUI.
+        string e = AssertChromeCanvas(menu.gameObject, "MenuBarView", out var menuCanvas); if (e != null) return e;
+        e = AssertChromeCanvas(side.gameObject, "UniverseSidebarView", out var sideCanvas); if (e != null) return e;
+
+        var secretCanvas = secret.GetComponent<Canvas>();
+        if (secretCanvas == null) return "zorder: SecretModalOverlay has no Canvas";
+
+        // the layering contract (findings 0042): sidebar > 0, menu > sidebar (dropdown over sidebar),
+        // secret modal > menu (modal stays topmost). Values are derived; only the RELATIONS are gated.
+        if (sideCanvas.sortingOrder <= 0)
+            return $"zorder: sidebar sortingOrder must be > 0 chrome layer (got {sideCanvas.sortingOrder})";
+        if (menuCanvas.sortingOrder <= sideCanvas.sortingOrder)
+            return $"zorder: menu sortingOrder ({menuCanvas.sortingOrder}) must be > sidebar ({sideCanvas.sortingOrder}) so the dropdown draws over the sidebar";
+        if (secretCanvas.sortingOrder <= menuCanvas.sortingOrder)
+            return $"zorder: secret modal sortingOrder ({secretCanvas.sortingOrder}) must be > menu ({menuCanvas.sortingOrder}) so the modal stays topmost";
+        return null;
+    }
+
+    // a chrome view is uGUI when its GameObject carries an override-sorting Canvas + a GraphicRaycaster
+    // (so the EventSystem hit-tests it and sortingOrder controls draw order — the #77 cure).
+    static string AssertChromeCanvas(GameObject go, string what, out Canvas canvas)
+    {
+        canvas = go.GetComponent<Canvas>();
+        if (canvas == null) return $"zorder: {what} has no Canvas (still IMGUI? #77 uGUI-ification missing)";
+        if (!canvas.overrideSorting) return $"zorder: {what} Canvas.overrideSorting must be true (else sortingOrder is ignored)";
+        if (go.GetComponent<UnityEngine.UI.GraphicRaycaster>() == null) return $"zorder: {what} has no GraphicRaycaster (clicks won't hit the uGUI chrome)";
         return null;
     }
 

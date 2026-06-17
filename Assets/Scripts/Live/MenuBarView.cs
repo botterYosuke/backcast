@@ -1,26 +1,39 @@
-// MenuBarView.cs — issue #42 cutover slice 2 (production host for the global menu bar, findings 0027)
+// MenuBarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the global menu bar, findings 0042)
 //
 // The scene-authored production HOST for the menu bar. It KEEPS the existing MenuBarViewModel brain and
-// renders the TTWR File/Edit/Venue/Help surface (ADR-0005 1:1 parity) via OnGUI, clipped to its scene-
-// authored container RectTransform (the draw region is DERIVED, never hardcoded). The proven IMGUI was
-// ported from ProductionLiveShell's DrawMenuBar/DrawVenueMenu (findings 0017 §8) — submenus draw AFTER
-// the bar so other OnGUI chrome can't overpaint them (the #42 F1 lesson).
+// renders the TTWR File/Edit/Venue/Help surface (ADR-0005 1:1 parity) as uGUI on its OWN nested,
+// override-sorting Canvas (sortingOrder MENU_SORT), clipped to its scene-authored container
+// RectTransform (the draw region is DERIVED, never hardcoded).
+//
+// WHY uGUI (was OnGUI): #77 — both this bar and the sidebar were IMGUI; GUI.depth is ignored in a
+// single-camera Screen-Space setup, so the (later) sidebar OnGUI overpainted the dropdown. uGUI makes
+// z-order DETERMINISTIC: the menu Canvas (MENU_SORT) sits above the sidebar Canvas (< MENU_SORT) so the
+// dropdown always draws in front, and the EventSystem routes a click to the TOP raycaster only, so the
+// dropdown can't bleed a click into the sidebar beneath it. A full-screen BACKDROP (BACKDROP_SORT,
+// between sidebar and menu) is active only while a menu is open: it closes the menu on an outside click
+// AND consumes that click so it never reaches the sidebar (desktop menu semantics). The secret modal's
+// Canvas (1000) stays above the menu, so it remains topmost (findings 0042).
 //
 //   * File = Layout (New / Open / Save) — forwards to the workspace root's layout I/O.
 //   * Venue = the reused VenueMenuViewModel (vm.Venue): 4 TTWR connect variants (prod grey-out) +
 //     Disconnect. MOCK is NOT a parity variant — it surfaces only as a dev-only connect in the editor
 //     (findings 0027 D2), used to reach the LiveAuto-on-mainline HITL.
 //   * Edit / Help — present for structure parity; bodies deferred to #16 / the settings slice (stub).
-//
-// V-host renders OnGUI; uGUI-ification and OnGUI removal are a follow-up issue (findings 0027 §3).
 
 using System;
+using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.UI;
 
 [RequireComponent(typeof(RectTransform))]
 public sealed class MenuBarView : MonoBehaviour
 {
     enum OpenMenu { None, File, Edit, Venue, Help }
+
+    // chrome z-order contract (findings 0042): field/windows(0) < sidebar < BACKDROP < menu+dropdown
+    // < secret modal(1000). Only the RELATIONS matter; these values just realise them.
+    public const int MENU_SORT = 600;
+    const int BACKDROP_SORT = MENU_SORT - 1;   // catches outside clicks above the sidebar, below the dropdown
 
     RectTransform _container;
     MenuBarViewModel _vm;
@@ -31,9 +44,19 @@ public sealed class MenuBarView : MonoBehaviour
     bool _showMockConnect;                 // dev-only MOCK connect item (editor only); derived at Bind
     OpenMenu _open;
     string _message;
+    Font _font;
+    bool _built;
 
     // top-level button widths (fixed so the submenu drop x-offsets line up under each button).
-    const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f;
+    const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
+
+    // retained uGUI graphics reflected by Refresh (no per-frame rebuild of the static tree).
+    Canvas _canvas;
+    Text _badge;
+    GameObject _backdrop;
+    readonly Dictionary<OpenMenu, GameObject> _dropdowns = new Dictionary<OpenMenu, GameObject>();
+    // venue items whose interactable state depends on live connection — refreshed each frame.
+    readonly List<(Button btn, Func<bool> enabled)> _venueItems = new List<(Button, Func<bool>)>();
 
     // Root wires the existing brain + the layout I/O and venue callbacks. The VM owns the File→New
     // refuse-when-running gate and the venue logic (vm.Venue); the root performs the real clear/save/
@@ -41,7 +64,7 @@ public sealed class MenuBarView : MonoBehaviour
     public void Bind(MenuBarViewModel vm,
                      Action onNew, Action onOpen, Action onSave,
                      Action<string, string> onConnect, Action onDisconnect,
-                     Func<bool> connectReady, Func<string> modeText, string devVenue)
+                     Func<bool> connectReady, Func<string> modeText, string devVenue, Font font)
     {
         _vm = vm;
         _onNew = onNew;
@@ -53,114 +76,243 @@ public sealed class MenuBarView : MonoBehaviour
         _modeText = modeText;
         _showMockConnect = devVenue == "MOCK";   // MOCK is the only credential-less dev venue (findings 0027 D2)
         _container = GetComponent<RectTransform>();
+        _font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        Build();
+        Refresh();
     }
 
-    public void ShowMessage(string msg) => _message = msg;
+    public void ShowMessage(string msg) { _message = msg; if (_built) Refresh(); }
 
-    void OnGUI()
+    void Build()
     {
-        if (_vm == null) return;
-        if (_container == null) _container = GetComponent<RectTransform>();
+        if (_built) return;
+        _built = true;
 
-        Rect rect = GuiRectUtil.GuiScreenRect(_container);
-        if (rect.width <= 0f || rect.height <= 0f) return;
+        // own override-sorting Canvas so the bar + dropdowns sit above the sidebar deterministically.
+        _canvas = gameObject.GetComponent<Canvas>();
+        if (_canvas == null) _canvas = gameObject.AddComponent<Canvas>();
+        _canvas.overrideSorting = true;
+        _canvas.sortingOrder = MENU_SORT;
+        if (gameObject.GetComponent<GraphicRaycaster>() == null) gameObject.AddComponent<GraphicRaycaster>();
 
-        // draw the bar (and its dropdowns) ON TOP of the other OnGUI chrome (e.g. the sidebar, which
-        // would otherwise occlude a dropdown that opens over the left column).
-        int prevDepth = GUI.depth;
-        GUI.depth = -100;
+        var c = ThemeService.Current.colors;
 
-        GUI.Box(rect, GUIContent.none);
-        GUILayout.BeginArea(rect);   // clip the BAR row to the authored container
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button("File", GUILayout.Width(W_FILE))) Toggle(OpenMenu.File);
-        if (GUILayout.Button("Edit", GUILayout.Width(W_EDIT))) Toggle(OpenMenu.Edit);
-        if (GUILayout.Button("Venue", GUILayout.Width(W_VENUE))) Toggle(OpenMenu.Venue);
-        if (GUILayout.Button("Help", GUILayout.Width(W_HELP))) Toggle(OpenMenu.Help);
-        GUILayout.FlexibleSpace();
-        GUILayout.Label($"{_vm.Venue.BadgeText}   mode: {ModeText()}");
-        if (!string.IsNullOrEmpty(_message)) GUILayout.Label("   <color=orange>" + _message + "</color>");
-        GUILayout.EndHorizontal();
-        GUILayout.EndArea();
+        // bar background fills the authored container (raycast target so clicks on the bar gutter don't
+        // fall through to the workspace beneath).
+        var barBg = NewImage("BarBg", _container, c.panel_background);
+        Stretch((RectTransform)barBg.transform);
 
-        // dropdowns draw in SEPARATE areas BELOW the bar (drawing them inside the bar's menu-height
-        // BeginArea clipped them away — the #42 F1 bug). x-offset lines up under the owning button.
-        switch (_open)
+        // full-screen backdrop on the ROOT canvas (own canvas between sidebar and menu): closes the menu
+        // on an outside click and consumes it so it never reaches the sidebar. Hidden unless a menu opens.
+        BuildBackdrop();
+
+        // top-level buttons (left), badge (fills the rest, right-aligned content).
+        float x = 0f;
+        MakeBarButton("File", W_FILE, x, () => Toggle(OpenMenu.File)); x += W_FILE;
+        MakeBarButton("Edit", W_EDIT, x, () => Toggle(OpenMenu.Edit)); x += W_EDIT;
+        MakeBarButton("Venue", W_VENUE, x, () => Toggle(OpenMenu.Venue)); x += W_VENUE;
+        MakeBarButton("Help", W_HELP, x, () => Toggle(OpenMenu.Help)); x += W_HELP;
+
+        _badge = MakeBadge(x + 8f);
+
+        // dropdowns hang BELOW the bar (no mask, so they spill past the 1-row container) at the owning
+        // button's x. Built once; shown/hidden by Refresh from _open.
+        BuildFileMenu();
+        BuildEditMenu();
+        BuildVenueMenu();
+        BuildHelpMenu();
+    }
+
+    void BuildBackdrop()
+    {
+        var rootCanvas = _canvas.rootCanvas != null ? _canvas.rootCanvas : _canvas;
+        var go = new GameObject("MenuBackdrop", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster), typeof(Image), typeof(Button));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(rootCanvas.transform, false);
+        Stretch(rt);
+        var cv = go.GetComponent<Canvas>();
+        cv.overrideSorting = true;
+        cv.sortingOrder = BACKDROP_SORT;
+        go.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);   // invisible, but a raycast target
+        go.GetComponent<Button>().onClick.AddListener(() => { _open = OpenMenu.None; Refresh(); });
+        go.SetActive(false);
+        _backdrop = go;
+    }
+
+    // Reflect VM/menu state into the retained widgets (cheap; no GameObject churn). Driven each frame
+    // because the badge/connect-ready follow the async venue poll.
+    void Refresh()
+    {
+        if (!_built) return;
+        if (_badge != null)
         {
-            case OpenMenu.File: DrawFileMenu(rect); break;
-            case OpenMenu.Edit: DrawEditMenu(rect); break;
-            case OpenMenu.Venue: DrawVenueMenu(rect); break;
-            case OpenMenu.Help: DrawHelpMenu(rect); break;
+            string badge = _vm != null ? $"{_vm.Venue.BadgeText}   mode: {ModeText()}" : "";
+            // the transient message keeps its orange highlight (parity with the retired OnGUI label).
+            if (!string.IsNullOrEmpty(_message)) badge += "    <color=orange>" + _message + "</color>";
+            _badge.text = badge;
         }
 
-        GUI.depth = prevDepth;
+        foreach (var kv in _dropdowns)
+            if (kv.Value != null) kv.Value.SetActive(_open == kv.Key);
+        if (_backdrop != null) _backdrop.SetActive(_open != OpenMenu.None);
+
+        foreach (var (btn, enabled) in _venueItems)
+            if (btn != null) btn.interactable = enabled();
     }
 
-    void Toggle(OpenMenu m) => _open = _open == m ? OpenMenu.None : m;
+    void Update() { if (_built) Refresh(); }
+
+    void Toggle(OpenMenu m) { _open = _open == m ? OpenMenu.None : m; Refresh(); }
     string ModeText() => _modeText != null ? _modeText() : "-";
     bool Ready() => _connectReady == null || _connectReady();
 
-    static void DisabledItem(string label) { GUI.enabled = false; GUILayout.Button(label); GUI.enabled = true; }
-
-    void DrawFileMenu(Rect bar)
+    void BuildFileMenu()
     {
-        var dd = new Rect(bar.x, bar.yMax, 150f, ITEM_H * 4f + 8f);
-        GUI.Box(dd, GUIContent.none);
-        GUILayout.BeginArea(dd);
-        if (GUILayout.Button("New", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onNew?.Invoke(); }
-        if (GUILayout.Button("Open  (layout)", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onOpen?.Invoke(); }
-        if (GUILayout.Button("Save  (layout)", GUILayout.Height(ITEM_H - 2f))) { _open = OpenMenu.None; _onSave?.Invoke(); }
-        DisabledItem("Save As…  (see #69)");   // deferred: native file picker + multi-doc layout (#69, findings 0027 §3)
-        GUILayout.EndArea();
+        var dd = NewDropdown(OpenMenu.File, 0f, 150f, 4);
+        MakeItem(dd, "New", () => { _open = OpenMenu.None; _onNew?.Invoke(); Refresh(); }, 0);
+        MakeItem(dd, "Open  (layout)", () => { _open = OpenMenu.None; _onOpen?.Invoke(); Refresh(); }, 1);
+        MakeItem(dd, "Save  (layout)", () => { _open = OpenMenu.None; _onSave?.Invoke(); Refresh(); }, 2);
+        MakeDisabledItem(dd, "Save As…  (see #69)", 3);   // deferred: native file picker + multi-doc (#69)
     }
 
-    void DrawEditMenu(Rect bar)
+    void BuildEditMenu()
     {
         // Undo/Redo route to the active strategy editor (#16); no active-editor concept wired here yet,
         // so they are disabled stubs (findings 0027 §3 follow-up).
-        var dd = new Rect(bar.x + W_FILE, bar.yMax, 200f, ITEM_H * 2f + 8f);
-        GUI.Box(dd, GUIContent.none);
-        GUILayout.BeginArea(dd);
-        DisabledItem("Undo  (no active editor)");
-        DisabledItem("Redo  (no active editor)");
-        GUILayout.EndArea();
+        var dd = NewDropdown(OpenMenu.Edit, W_FILE, 200f, 2);
+        MakeDisabledItem(dd, "Undo  (no active editor)", 0);
+        MakeDisabledItem(dd, "Redo  (no active editor)", 1);
     }
 
-    void DrawVenueMenu(Rect bar)
+    void BuildVenueMenu()
     {
-        bool ready = Ready();
         var venue = _vm.Venue;
-        var dd = new Rect(bar.x + W_FILE + W_EDIT, bar.yMax, 260f, ITEM_H * 6f + 10f);
-        GUI.Box(dd, GUIContent.none);
-        GUILayout.BeginArea(dd);
-
+        var items = new List<(string label, string v, string env)>();
         // dev-only MOCK connect (editor only): MOCK is a credential-less dev venue, NOT a TTWR parity
         // variant, surfaced so the LiveAuto-on-mainline HITL is reachable (findings 0027 D2).
-        if (Application.isEditor && _showMockConnect)
+        if (Application.isEditor && _showMockConnect) items.Add(("Connect MOCK (dev)", "MOCK", ""));
+        foreach (var v in VenueMenuViewModel.ConnectVariants) items.Add((v.Label, v.Venue, v.Env));
+
+        var dd = NewDropdown(OpenMenu.Venue, W_FILE + W_EDIT, 260f, items.Count + 1);
+        int row = 0;
+        foreach (var (label, v, env) in items)
         {
-            GUI.enabled = ready && venue.CanConnect;
-            if (GUILayout.Button("Connect MOCK (dev)")) { _open = OpenMenu.None; _onConnect?.Invoke("MOCK", ""); }
+            string venueId = v, envId = env;
+            var btn = MakeItem(dd, label, () => { _open = OpenMenu.None; _onConnect?.Invoke(venueId, envId); Refresh(); }, row++);
+            // MOCK is a plain dev connect (CanConnect); prod variants grey out unless *_ALLOW_PROD is set
+            // (mirrors the login dialog; Python is the safety authority). all disabled while connected/mid-auth.
+            if (venueId == "MOCK") _venueItems.Add((btn, () => Ready() && venue.CanConnect));
+            else _venueItems.Add((btn, () => Ready() && venue.CanConnectEnv(venueId, envId)));
         }
-        foreach (var v in VenueMenuViewModel.ConnectVariants)
-        {
-            // prod variants grey out unless *_ALLOW_PROD is set (mirrors the login dialog; Python is the
-            // safety authority). all connect items disabled while connected / mid-auth.
-            GUI.enabled = ready && venue.CanConnectEnv(v.Venue, v.Env);
-            if (GUILayout.Button(v.Label)) { _open = OpenMenu.None; _onConnect?.Invoke(v.Venue, v.Env); }
-        }
-        GUI.enabled = ready && venue.CanDisconnect;
-        if (GUILayout.Button("Disconnect")) { _open = OpenMenu.None; _onDisconnect?.Invoke(); }
-        GUI.enabled = true;
-        GUILayout.EndArea();
+        var dis = MakeItem(dd, "Disconnect", () => { _open = OpenMenu.None; _onDisconnect?.Invoke(); Refresh(); }, row);
+        _venueItems.Add((dis, () => Ready() && venue.CanDisconnect));
     }
 
-    void DrawHelpMenu(Rect bar)
+    void BuildHelpMenu()
     {
         // ADR-0005 lists Settings as its own surface — item present, body deferred to that slice.
-        var dd = new Rect(bar.x + W_FILE + W_EDIT + W_VENUE, bar.yMax, 220f, ITEM_H + 8f);
-        GUI.Box(dd, GUIContent.none);
-        GUILayout.BeginArea(dd);
-        DisabledItem("Settings  (deferred slice)");
-        GUILayout.EndArea();
+        var dd = NewDropdown(OpenMenu.Help, W_FILE + W_EDIT + W_VENUE, 220f, 1);
+        MakeDisabledItem(dd, "Settings  (deferred slice)", 0);
+    }
+
+    // ── uGUI builders ──
+
+    // A dropdown panel anchored to the container's bottom-left (pivot top-left) hanging down at x.
+    GameObject NewDropdown(OpenMenu key, float x, float w, int rows)
+    {
+        var go = NewImage("dd:" + key, _container, ThemeService.Current.colors.element_background);
+        var rt = (RectTransform)go.transform;
+        rt.anchorMin = rt.anchorMax = new Vector2(0f, 0f);   // container bottom-left
+        rt.pivot = new Vector2(0f, 1f);                       // top-left: hangs downward from the bar
+        rt.anchoredPosition = new Vector2(x, 0f);
+        rt.sizeDelta = new Vector2(w, rows * ITEM_H + 4f);
+        go.SetActive(false);
+        _dropdowns[key] = go;
+        return go;
+    }
+
+    Button MakeItem(GameObject dd, string label, Action onClick, int row)
+    {
+        var go = new GameObject("item:" + label, typeof(RectTransform), typeof(Image), typeof(Button));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(dd.transform, false);
+        rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f); rt.pivot = new Vector2(0.5f, 1f);
+        rt.offsetMin = new Vector2(2f, 0f); rt.offsetMax = new Vector2(-2f, 0f);
+        rt.sizeDelta = new Vector2(rt.sizeDelta.x, ITEM_H - 2f);
+        rt.anchoredPosition = new Vector2(0f, -row * ITEM_H - 2f);
+        go.GetComponent<Image>().color = ThemeService.Current.colors.element_background;
+        var btn = go.GetComponent<Button>();
+        btn.onClick.AddListener(() => onClick());
+        AddLabel(rt, label, TextAnchor.MiddleLeft, ThemeService.Current.colors.text);
+        return btn;
+    }
+
+    void MakeDisabledItem(GameObject dd, string label, int row)
+    {
+        var btn = MakeItem(dd, label, () => { }, row);
+        btn.interactable = false;
+    }
+
+    void MakeBarButton(string text, float w, float x, Action onClick)
+    {
+        var go = new GameObject("bar:" + text, typeof(RectTransform), typeof(Image), typeof(Button));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(_container, false);
+        rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 0.5f);
+        rt.sizeDelta = new Vector2(w, -V_MARGIN);
+        rt.anchoredPosition = new Vector2(x, 0f);
+        go.GetComponent<Image>().color = ThemeService.Current.colors.element_background;
+        go.GetComponent<Button>().onClick.AddListener(() => onClick());
+        AddLabel(rt, text, TextAnchor.MiddleCenter, ThemeService.Current.colors.text);
+    }
+
+    Text MakeBadge(float xLeft)
+    {
+        var go = new GameObject("badge", typeof(RectTransform), typeof(Text));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(_container, false);
+        rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(1f, 1f);
+        rt.offsetMin = new Vector2(xLeft, 0f); rt.offsetMax = new Vector2(-6f, 0f);
+        var t = go.GetComponent<Text>();
+        t.font = _font; t.fontSize = 12; t.color = ThemeService.Current.colors.text_muted;
+        t.alignment = TextAnchor.MiddleRight; t.supportRichText = true;   // <color=orange> message highlight
+        t.horizontalOverflow = HorizontalWrapMode.Overflow; t.verticalOverflow = VerticalWrapMode.Overflow;
+        return t;
+    }
+
+    GameObject NewImage(string name, RectTransform parent, Color color)
+    {
+        var go = new GameObject(name, typeof(RectTransform), typeof(Image));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(parent, false);
+        go.GetComponent<Image>().color = color;
+        return go;
+    }
+
+    void AddLabel(RectTransform parent, string text, TextAnchor anchor, Color color)
+    {
+        var go = new GameObject("t", typeof(RectTransform), typeof(Text));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(parent, false);
+        Stretch(rt);
+        rt.offsetMin = new Vector2(6f, 0f); rt.offsetMax = new Vector2(-4f, 0f);
+        var t = go.GetComponent<Text>();
+        t.font = _font; t.fontSize = 12; t.color = color; t.text = text;
+        t.alignment = anchor; t.supportRichText = false; t.raycastTarget = false;
+        t.horizontalOverflow = HorizontalWrapMode.Overflow; t.verticalOverflow = VerticalWrapMode.Overflow;
+    }
+
+    static void Stretch(RectTransform rt)
+    {
+        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+    }
+
+    void OnDestroy()
+    {
+        if (_backdrop != null)
+        {
+            if (Application.isPlaying) Destroy(_backdrop); else DestroyImmediate(_backdrop);
+        }
     }
 }

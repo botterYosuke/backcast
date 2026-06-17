@@ -358,7 +358,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 OnVenueConnect, OnVenueDisconnect,
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
-                _venue);                                              // "MOCK" → dev connect item (editor only)
+                _venue,                                               // "MOCK" → dev connect item (editor only)
+                _font);                                               // uGUI font (#77)
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -372,7 +373,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // Populate (ResolvePaths) already restored the universe into the shared registry, so prime the
         // sidebar's fresh writeback to that set — the restored ids are not an unsaved edit (#31 D4).
         _sidebarCtrl.PrimeWritebackFromCurrent();
-        if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, new BoundStrategyFileProvider(_strategyFile));
+        if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, new BoundStrategyFileProvider(_strategyFile), _font);
     }
 
     // window factory for ADDITIONAL saved editor windows (the scene-authored one is adopted). Uses

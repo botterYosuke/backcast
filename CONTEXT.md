@@ -307,6 +307,20 @@ _Avoid_: chart を floating window と呼ぶこと（Hakoniwa tile が正）／z
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
 resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）
 
+**chrome z-order 前面順序（画面固定 chrome のレイヤリング契約）**:
+[[infinite canvas]] の外に置く画面固定 chrome（menu bar / その dropdown / sidebar / footer / secret modal）の
+**前後関係の契約**。chrome はすべて uGUI（ScreenSpaceOverlay）で描き、順序は **`Canvas.sortingOrder` で決定的に**持つ。
+IMGUI（`OnGUI`）の `GUI.depth` は単一カメラ Screen-Space では無視され、IMGUI 同士の描画順は MonoBehaviour 実行順依存で
+制御不能（＝#77 の不具合源：menu と sidebar が両方 IMGUI で、後に走る sidebar が dropdown を上塗りした）。ゆえに
+chrome は IMGUI を撤去して uGUI 化する。契約の順序は **field/windows < sidebar < menu+dropdown < secret modal**：
+dropdown は sidebar の前面に描かれ、secret modal は常に最前面。**EventSystem はクリックを最前面 raycaster だけへ配送**
+するので、この順序が視覚 z-order と入力到達の両方を一意に決める（dropdown 直下の sidebar への取りこぼしクリックも構造的に
+消える）。menu 展開中は menu と sidebar の間に全画面 backdrop を一枚敷き、外側クリックで閉じつつ sidebar への到達を断つ。
+数値の `sortingOrder` は findings 0042。[[floating window / FloatingWindowLayer / z-order]]（Content 内の window 同士の
+前後）とは別レイヤ——あちらは pan/zoom 追従、こちらは画面固定。
+_Avoid_: chrome の前後を IMGUI の `GUI.depth` や MonoBehaviour 実行順で持つこと（単一カメラでは無効・#77）／secret modal
+より前面に menu を置くこと（modal は常に最前面）／Content 内の window z-order と画面固定 chrome の layering を同一視すること
+
 **Strategy Editor（code buffer）**:
 floating window kind `strategy_editor` の**実 content**。strategy `.py` を編集する code buffer（Python の lexical
 syntax highlight / undo-redo）。#15 は generic な window frame（spawn/move/z-order/persist）だけ立て、実 content を

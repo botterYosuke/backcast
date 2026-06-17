@@ -129,3 +129,15 @@ Unity 6000.4.11f1 実機 batchmode（この dev 環境に在る）。判定は `
 本線 `BackcastWorkspace.unity` Play → strategy 保存（inline SCENARIO・sidecar 無し）→ sidebar で universe 編集 →
 **STRATEGY_LOAD_FAILED が出ないこと**（編集は in-memory・Run-commit で完全 sidecar 化）→ LiveAuto ▶ 起動。
 findings 0027 §3(e) の回避策（完全 sidecar を手置き / Run-commit 先行）が不要になることを確認。
+
+### owner HITL 実機結果（2026-06-17・実機 Play・全レグ PASS）
+fixture `kernel_spike_buy_sell.py`（inline SCENARIO・sidecar 不在）。#66 修正（inline-.py SCENARIO seed・別 working tree）込みで実施:
+- **Step1**: Play で universe に `8918.TSE` が seed（#66 修正・startup tile 日付 2024-10-01〜2025-01-10 も inline 由来）。
+- **Step2（#67 核）**: sidebar picker で `7203.TSE` 追加（universe 2件）→ **`kernel_spike_buy_sell.json` が作られないことを FS で確認**
+  （旧コードなら `{schema_version, instruments:[…]}` の不完全 sidecar が出来ていた。`SetInstruments` の mutate-existing-only スキップを実証）。
+- **Step3**: Venue → Connect MOCK (dev) → `Connected: MOCK`。
+- **Step4（#67 統合）**: footer Auto → ▶ → run_result `RUNNING`・footer `LiveAuto: 436a4c9b…`・**STRATEGY_LOAD_FAILED 出ず**
+  （sidecar 不在のまま register が inline `.py` SCENARIO を読む正経路）。
+- **Step5**: footer Replay へ → base retile・orphan 無し、Venue → Disconnect → `Disconnected`、**Console error 0**。
+
+→ #67 はコード（AFK RED→GREEN）と実機 HITL の両方でクローズ。findings 0027 §3(e) ブロッカー解消。

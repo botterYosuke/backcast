@@ -80,6 +80,15 @@ if TYPE_CHECKING:
 _EXTERNAL = "__external__"
 
 
+def _inert_action(*_args: Any, **_kwargs: Any) -> None:
+    """No-op stand-in for an injected action callable during the cold compile run (S4).
+
+    The cold run executes every cell once; injected actions (``submit_market`` / ``log``) must
+    not fire then — only during the hot drain, where ``_compile`` arms the real callables.
+    """
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Headless marimo kernel stand-up (graduated from the #76 spike context_standup).
 #
@@ -248,16 +257,30 @@ class CompiledStrategy:
     setters: dict[str, Any]
 
 
-def _compile(app: "App", drivers: Sequence[str]) -> CompiledStrategy:
+def _compile(
+    app: "App", drivers: Sequence[str], inject: "dict[str, Any] | None" = None
+) -> CompiledStrategy:
     """Cold precompute. Must run inside a HeadlessKernel context, on its thread.
 
     Runs every cell once (so the state getters/setters land in ``runner.globals`` and
     the graph is built with no stale cells), then asks marimo which cells a host-driven
     state update must re-run, in topological order.
+
+    ``inject`` seeds host-provided names into the cell globals BEFORE the cold run (S4): a
+    cell that references an injected name (e.g. ``submit_market``) sees it as a free ref —
+    like a builtin — that resolves from globals in both the cold run and the hot drain. This
+    is how the cell-facing action API (engine.strategy_runtime.cell_api) reaches cells. Values
+    the host writes between bars are NOT injected here — they are driver mo.state (D5).
     """
     import asyncio
 
     runner = app._get_kernel_runner()
+    if inject:
+        # Seed INERT stubs before the cold run so cells referencing these names resolve, but
+        # action side effects DO NOT fire: the cold run executes every cell once (to populate
+        # globals + build the graph), so a live ``submit_market`` would place a spurious order
+        # before any bar. The real callables are armed only after the cold run, for the hot drain.
+        runner.globals.update({name: _inert_action for name in inject})
     cells = list(app._cell_manager.valid_cells())
     # A stale-free graph + populated globals is the precondition compute_cells_to_run assumes.
     asyncio.run(runner.run({cid for cid, _ in cells}))
@@ -265,6 +288,20 @@ def _compile(app: "App", drivers: Sequence[str]) -> CompiledStrategy:
     kernel = runner._kernel
     graph = kernel.graph
     glbls = runner.globals
+    if inject:
+        # Fail-closed: an injected name a cell also defines would be silently clobbered when we
+        # arm — shadowing the author's value (corrupting downstream cells) or firing an action
+        # where a pure helper was meant. Reject instead of clobbering.
+        clobbered = sorted(set(inject) & {d for cell in graph.cells.values() for d in cell.defs})
+        if clobbered:
+            raise ValueError(
+                f"injected name(s) {clobbered} are also defined by a cell — arming would "
+                "silently shadow the cell's definition with the injected callable. Rename the "
+                "cell variable or the injected name (injected names are the host action API)."
+            )
+        # Arm the real callables now that the cold run is done: the hot drain (same glbls)
+        # will call them per bar.
+        glbls.update(inject)
 
     # mo.state()'s getter IS the State object (State.__call__ returns the value), so
     # globals[name] is the State and State._set_value is its setter. roots are the cells
@@ -350,24 +387,29 @@ class StrategyRuntime:
 
 
 @contextlib.contextmanager
-def open_runtime(app: "App", *, drivers: Sequence[str]) -> Iterator[StrategyRuntime]:
+def open_runtime(
+    app: "App", *, drivers: Sequence[str], inject: "dict[str, Any] | None" = None
+) -> Iterator[StrategyRuntime]:
     """Open a thin-drain runtime for ``app``, owning the headless kernel's lifetime.
 
     Usage::
 
-        with open_runtime(app, drivers=["get_bar"]) as rt:
+        rt_inject = {"submit_market": make_submit_market(ctx, ...)}
+        with open_runtime(app, drivers=["get_bar"], inject=rt_inject) as rt:
             for bar in bars:
                 rt.drain({"get_bar": bar.close})
                 signal = rt.globals["signal"]
 
     ``drivers`` are the getter names of the host-driven (root) mo.state — exactly the
     states the host writes between bars (never auto-detect: a cell-written feedback state
-    must not become a root). The single try/finally guarantees the thread-local marimo
-    context is torn down even when the compile itself raises.
+    must not become a root). ``inject`` seeds host-provided names (the cell-facing ACTION
+    API — ``submit_market`` / ``log``) into the cell globals so per-bar cells can call them
+    (S4); host-written VALUES are driver mo.state, not injected. The single try/finally
+    guarantees the thread-local marimo context is torn down even when the compile itself raises.
     """
     host = HeadlessKernel()
     try:
-        runtime = StrategyRuntime(_compile(app, drivers))
+        runtime = StrategyRuntime(_compile(app, drivers, inject))
         yield runtime
     finally:
         host.teardown()

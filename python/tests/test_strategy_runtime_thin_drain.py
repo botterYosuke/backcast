@@ -31,6 +31,8 @@ import pytest
 
 pytest.importorskip("marimo", reason="defensive: marimo is a prod dep since ADR-0012")
 
+from engine.kernel.orders import OrderSide  # noqa: E402
+from engine.strategy_runtime.cell_api import make_submit_market  # noqa: E402
 from engine.strategy_runtime.thin_drain import (  # noqa: E402
     HeadlessKernel,
     _execute_hot_cell,
@@ -344,3 +346,145 @@ def test_dag_byte_identical_to_imperative_twin():
             got.append((rt.globals["signal"], rt.globals["qty"], rt.globals["new_pf"]))
 
     assert got == expected
+
+
+# --------------------------------------------------------------- S4 injected API
+
+
+class _RecordingCtx:
+    """Fake StrategyContext: records submit_market calls (the kernel per-bar contract
+    surface). S4 drives the adapter standalone — wiring the real kernel _Context is S6."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple] = []
+
+    def submit_market(self, *, strategy_id, instrument_id, side, quantity) -> None:
+        self.calls.append((instrument_id, side, quantity))
+
+
+def test_injected_callable_is_callable_from_cell():
+    """INJECT (S4): a host callable seeded via ``open_runtime(.., inject=...)`` lands in the
+    cell globals and a per-bar cell can call it (resolved in both the cold run and the hot
+    drain) — the mechanism the injected ``submit_market`` rides on."""
+    from marimo import App
+
+    recorded: list[float] = []
+
+    app = App()
+
+    @app.cell
+    def _state():
+        import marimo as mo
+
+        get_bar, set_bar = mo.state(0.0)
+        return get_bar, set_bar
+
+    @app.cell
+    def _call(get_bar):
+        host_fn(get_bar() * 2.0)  # noqa: F821 — host-injected free name
+        return ()
+
+    with open_runtime(app, drivers=["get_bar"], inject={"host_fn": recorded.append}) as rt:
+        rt.drain({"get_bar": 5.0})
+        rt.drain({"get_bar": 7.0})
+
+    assert recorded == [10.0, 14.0]
+
+
+def test_compile_rejects_inject_name_colliding_with_cell_def():
+    """FAIL-CLOSED (S4): an injected name that a cell ALSO defines would be silently clobbered
+    when the real callable is armed after the cold run — shadowing the author's value/helper
+    with an action (or firing a spurious order). Reject at compile instead of clobbering."""
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _state():
+        import marimo as mo
+
+        get_bar, set_bar = mo.state(0.0)
+        return get_bar, set_bar
+
+    @app.cell
+    def _helper(get_bar):
+        submit_market = 42.0 + get_bar() * 0.0  # a cell DEFINES the same name the host injects
+        return (submit_market,)
+
+    with pytest.raises(ValueError, match="also defined by a cell"):
+        with open_runtime(
+            app, drivers=["get_bar"], inject={"submit_market": lambda *a, **k: None}
+        ):
+            pass
+
+
+def _order_dag_app():
+    """A signed-quantity order DAG: bar→signal→qty→``submit_market(qty)``. The order cell
+    references the injected ``submit_market`` as a free name (findings 0046 S4)."""
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _state():
+        import marimo as mo
+
+        get_bar, set_bar = mo.state(0.0)
+        return get_bar, set_bar
+
+    @app.cell
+    def _signal(get_bar):
+        bar = get_bar()
+        # three-way: long / flat / short — flat (0.0) exercises the adapter's no-op branch
+        signal = 1.0 if bar > 1010.0 else (-1.0 if bar < 990.0 else 0.0)
+        return (signal,)
+
+    @app.cell
+    def _order(signal):
+        qty = signal * 10.0
+        submit_market(qty)  # noqa: F821 — host-injected signed-qty adapter
+        return (qty,)
+
+    return app
+
+
+def _order_twin(closes):
+    """Imperative on_bar twin: the signed→(side, abs) order oracle (0 → no order)."""
+    out = []
+    for close in closes:
+        signal = 1.0 if close > 1010.0 else (-1.0 if close < 990.0 else 0.0)
+        qty = signal * 10.0
+        # mirror the adapter: sign → side, abs → quantity, 0 → no order
+        if qty != 0.0:
+            out.append(
+                ("7203.T", OrderSide.BUY if qty > 0.0 else OrderSide.SELL, abs(qty))
+            )
+    return out
+
+
+def test_injected_submit_market_order_parity_with_imperative_twin():
+    """PARITY (S4): a signed-qty marimo cell-DAG calling the injected ``submit_market`` emits
+    the same order sequence as the imperative on_bar twin — proving the signed→(side, abs)
+    adapter + injection end-to-end (the existing _dag_app parity gate never submits orders)."""
+    closes = [1000.0 + (i % 97) * 0.5 + i * 0.01 for i in range(300)]
+    # span all three bands so BUY (>1010), SELL (<990), and flat/no-op (990..1010) all occur
+    closes = [
+        980.0 if i % 5 == 0 else (1000.0 if i % 5 == 1 else c) for i, c in enumerate(closes)
+    ]
+
+    expected = _order_twin(closes)
+    # guard the gate itself: the series must exercise all three adapter branches
+    sides = {o[1] for o in expected}
+    assert sides == {OrderSide.BUY, OrderSide.SELL} and len(expected) < len(closes), (
+        "parity series must include BUY, SELL, and at least one flat (no-op) bar"
+    )
+
+    ctx = _RecordingCtx()
+    adapter = make_submit_market(ctx, strategy_id="strat-1", default_instrument_id="7203.T")
+    with open_runtime(
+        _order_dag_app(), drivers=["get_bar"], inject={"submit_market": adapter}
+    ) as rt:
+        for close in closes:
+            rt.drain({"get_bar": close})
+
+    assert ctx.calls == expected

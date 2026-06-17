@@ -233,4 +233,34 @@ gate 結果（S3）: thin_drain 8 / offline+import-purity 2 すべて GREEN（pl
 ### S3 後の残務（順序）
 **S4** cell へ `submit_market`/`portfolio` を inject（marimo 戦略が発注できるように）→ **S6** `KernelRunner` adapter/dispatch 配線（lazy import・dormant 解除）→ 命令型 sunset（さらに後の named スライス）。D3 構造的 hot-list guard は独立の任意 guard。
 
+---
+
+## S4 設計＋実装着地（2026-06-18・injected cell-facing API）
+
+`/grill-with-docs`（#76 S4・Q1–Q2）で確定。S4 は **marimo cell が host の per-bar 契約へ adapt して発注できるようにする** スライス。thin_drain は引き続き dormant（実 `KernelRunner` 配線は S6）。実装は `engine/strategy_runtime/cell_api.py`（adapter・marimo-free）＋ thin_drain の `inject=` seed 機構。
+
+### 確定した設計（grill）
+- **Q1 values=injected driver State / actions=injected callable**: reachability は **object identity**（`runtime.py:_find_cells_for_state` の `globals[ref] is state`）で張られる＝graph-def 辺ではない。よって **値**（bar/tick/cash/position/portfolio）は host が compile 前に globals へ seed する **driver mo.state**（cell が getter を読む→identity で root 化→hot list 入り＋reactivity 辺＋no-look-ahead）。**アクション**（submit_market/log）は **injected plain callable**（fire-and-forget の副作用、reachability は読んでいる値/bar 経由）。findings 旧表の「injected global(portfolio)」と D5 の「portfolio=driver」は**排他でなく両立**＝portfolio は *injected driver State*。値の seed は既存 `_compile`（`glbls[name]` を読み `_find_cells_for_state` で identity 照合）が**無改修で**受ける。S4 の新規コードは **callable injection の seed 機構**のみ。
+- **Q2 submit_market 署名 = signed quantity**: cell-facing `submit_market(qty, *, instrument_id=None)`。qty の符号が side（>0 BUY / <0 SELL）、|qty| が size、**delta order**（この bar で取引する数量＝命令型 on_bar と同契約・target position ではない）。adapter が kernel 契約（`ctx.submit_market(*, strategy_id, instrument_id, side: OrderSide, quantity>0)`）へ変換し strategy_id を host-bind・instrument_id を primary default。reactive idiom（`qty = signal * size`）の出力型そのもので分岐ゼロの sink。
+- **adapter = host-owned validation の砦**（kernel に positivity guard が無いため全 host-owned 検証をここに集約）: `0`/`-0.0` → no-op（発注なし）、`NaN`/`inf` → fail-closed（`ValueError`・絶対に submit しない）。**lot 丸めはしない**（abs(qty) を float のまま渡す。J-Quants 売買単位＝venue 別レイヤ）。
+
+### AC → 恒久 gate（behavior-to-e2e）
+| 挙動（不変条件）| gate | 種別 |
+|---|---|---|
+| **adapter 変換**: signed qty → (side, abs(qty)) を kernel 契約へ・strategy_id host-bind・instrument_id primary default / 明示上書き | `tests/test_cell_api.py`（fake ctx・marimo-free・fast）| unit |
+| **adapter 検証**: 0/-0.0 → no-op・NaN/±inf → `ValueError`（submit しない）| `..::test_cell_api`（同上）| unit |
+| **injection 機構**: `open_runtime(.., inject={"submit_market": fn})` が cell globals へ seed され cell が呼べる（cold run＋hot drain 両方で resolve）| `test_strategy_runtime_thin_drain::test_injected_callable_is_callable_from_cell` | inject |
+| **発注 parity**: signed-qty marimo cell-DAG（bar→signal→qty→submit_market）が命令型 on_bar twin（`submit_market(side, abs)`）と **同一の order 列**を出す | `..::test_injected_submit_market_order_parity_with_imperative_twin` | parity |
+| **lazy-import 規律**: `engine.strategy_runtime.cell_api` は marimo-free（runtime seam が import 可） | `test_strategy_runtime_offline`（_CHILD import 集合へ追加）| invariant |
+
+> 既存 `_dag_app`/`_dag_twin` parity gate は pure-compute 蓄積器で submit_market を呼ばない＝発注 parity を証明しない。S4 は signed→(side,abs) 変換を被験対象とする専用 order-parity gate を新設する。
+
+### 実装着地（実コードで判明した2点・gate が surface）
+- **cold compile run は injected action の副作用を発火させてはいけない**: `_compile` の cold `runner.run(all)` は全 cell を1度実行して globals を populate する。injected `submit_market` を素のまま seed すると、cold run が **bar 到来前に spurious order を発火**する（pure-compute cell では無害だが action cell では実害）。解決: cold run の間は injected 名に **inert no-op stub**（`_inert_action`）を seed し、cold run 後に**実 callable を arm**（同一 glbls を hot drain が使う）。これは S6 の実 KernelRunner 配線でも効く本番上の不変条件。
+- **injected 名と cell-defined 名の衝突は fail-closed**（code-review CONFIRMED・tdd RED-first で修正）: cell が injected と同名を def すると arm 時に **silent clobber**（著者の値を action で上書き／spurious 発火）。`_compile` が `set(inject) & ∪cell.defs` を検出して `ValueError`。
+- gate（全 GREEN・plain `uv run`）: `test_cell_api` 8（adapter 変換/検証）＋ thin_drain に inject 機構/order-parity(三-way・BUY/SELL/flat 自己 guard)/collision の3本追加。offline gate の seam import 集合に `cell_api` を追加（marimo-free 確認）。
+
+### この slice で**やっていない**こと
+実 `KernelRunner`/`_Context` への配線（S6）。S4 の adapter は fake StrategyContext で駆動・検証する standalone（dormant）。value-State の host preamble（canonical getter 名の所有）は author ergonomics 次第で S6/UI slice 判断（S4 は inject 機構が両 authoring 様式を支えることだけ確定）。
+
 > 🤖 `/grill-with-docs` redesign 追補＋S3 セッション記録（Claude Code）。spike は throwaway。ADR-0012 accepted（#76 §6 の「spike 後に起案」を充足）。

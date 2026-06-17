@@ -130,3 +130,10 @@ def test_live_ctx_buying_power_uses_provider() -> None:
     # The #74 extension point: a venue-余力 provider overrides the kernel cash mirror.
     driver = _make_live_driver(provider=lambda: 12_345.0, cash=777.0)
     assert driver.ctx.buying_power() == 12_345.0
+
+
+def test_live_ctx_buying_power_falls_back_when_provider_returns_none() -> None:
+    # Before the first venue snapshot (e.g. just after login) the provider returns None;
+    # the driver falls back to the seeded kernel cash rather than crashing on float(None).
+    driver = _make_live_driver(provider=lambda: None, cash=777.0)
+    assert driver.ctx.buying_power() == 777.0

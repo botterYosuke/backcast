@@ -98,7 +98,23 @@ v19 は `nautilus_trader.trading.strategy.Strategy` をフル活用。kernel-nat
 
 owner 方針 A: HITL の前に「production Replay seam で v19 が通るか」を AFK で潰す。`test_v19_replay_production_seam.py` が**アプリと同一経路**を駆動: `DataEngine(duckdb_root) → load_replay_data → DataEngineBackend.start_engine(v19_morning.py) → KernelRunner + ReplayKernelObserver → apply_replay_event + RunBuffer → get_portfolio`。実 mount で GREEN（fills が `last_portfolio["orders"]` に出る・primary 銘柄の `per_id_ohlc_points` が bar-by-bar 蓄積＝チャート追従）。skip-if-mount-absent。throttle（`_REPLAY_BAR_INTERVAL_SEC`=0.01×81k bar≈16分）は wiring 検証では monkeypatch で 0 化（pacing は #30 のテスト責務）。
 
-残ゲート: **owner が Unity アプリで v19 を Replay 起動して目視**（#73 AC の HITL）。手順は別途 owner へ。GREEN なら #74（Auto）へ。
+残ゲート: **owner が Unity アプリで v19 を Replay 起動して目視**（#73 AC の HITL）。→ **owner HITL PASS（2026-06-17）**。アプリ埋め込み Python は `python/.venv`（`PythonRuntimeLocator.cs` が project `.venv` を解決）＝sklearn 1.8.0 降格が効く。#73 完了、#74（Auto）へ。
+
+## #74 Auto（LiveAuto）— buying_power_provider 配線＋mock AFK（2026-06-17）
+
+#71 で用意した `buying_power_provider` を Auto 経路に結線:
+- **driver** `_buying_power()`: provider が None を返したら（venue snapshot 未取得・login 直後）seed 済み kernel cash へ fall back（`float(None)` crash 回避）。
+- **controller** ctor に `buying_power_provider` を追加し driver へ pass-through（既存 ctor seam の additive 拡張）。
+- **orchestrator** が `_live_buying_power`（= `self._session.account_sync.last_snapshot.buying_power`）を controller に渡す。**手動発注の pre-trade gate（live_orchestrator ~L1145）と同一の venue 余力ソース**＝Manual/Auto で買付余力の権威が一致。
+
+AFK: `test_v19_auto_live_afk.py` が **同一 v19 戦略**を `KernelLiveEngineController` で mock venue 駆動:
+- AC#1: Auto で RUNNING 到達 → 確定バー（>=10:00 JST）で intent → mock fill → 建玉追跡。
+- AC#2: venue 余力（provider=¥15k）で gate がトリム＝seed cash（¥10M）ではない、を**判別構成**で固定（¥10k×2 picks のうち1だけ約定）。
+- AC#3: partial バー（`is_closed=False`）は on_bar を駆動しない（10:00 partial で発注ゼロ・confirmed で発注）。
+- AC#4: graceful stop（cancel_inflight→detach）で driver 解放。v19 は成行のみ＝resting order 無し（cancel は no-op だが経路は健全）。
+- 既存 live AFK 36件 GREEN（非破壊）。
+
+残ゲート: **demo venue（立花/kabu）で owner が発注→約定→建玉表示を HITL 確認**（AC#5）。手順は別途。
 
 ## faithfulness の限界（明示）
 

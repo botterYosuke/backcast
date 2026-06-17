@@ -29,7 +29,11 @@ import pytest
 
 pytest.importorskip("marimo", reason="#76 S1 gate: marimo is a spike-only dependency")
 
-from engine.strategy_runtime.thin_drain import HeadlessKernel, open_runtime  # noqa: E402
+from engine.strategy_runtime.thin_drain import (  # noqa: E402
+    HeadlessKernel,
+    _execute_hot_cell,
+    open_runtime,
+)
 
 pytestmark = pytest.mark.marimo
 
@@ -151,8 +155,9 @@ def _hot_path_behavior(kind: str) -> str:
 
     This deliberately does NOT cold-run the app: the contract is a property of the
     context-less HOT path, and a full cold run would install an execution context that
-    masks it (and, for mo.ui/output cells, would not populate globals at all). Mirrors
-    the #76 spike ``_boundary`` probe, on the production HeadlessKernel.
+    masks it (and, for mo.ui/output cells, would not populate globals at all). It drives
+    the SAME ``_execute_hot_cell`` primitive ``StrategyRuntime.step`` uses, so the contract
+    cannot drift from the production drain. Mirrors the #76 spike ``_boundary`` probe.
     """
     from marimo import App
     from marimo._runtime.executor import ExecutionConfig, get_executor
@@ -183,7 +188,7 @@ def _hot_path_behavior(kind: str) -> str:
         executor = get_executor(ExecutionConfig())
         cell = runner._kernel.graph.cells[cid]
         try:
-            executor.execute_cell(cell, runner.globals, runner._kernel.graph)
+            _execute_hot_cell(executor, cell, runner.globals, runner._kernel.graph)
             return "ran-no-error"
         except BaseException as exc:  # marimo raises MarimoRuntimeException(BaseException)
             return f"raised:{type(exc).__name__}"
@@ -207,7 +212,6 @@ def test_precompute_hot_list_is_driver_rooted_topo_ordered():
     state, topo-ordered, with the state-definition cell auto-excluded (it is neither a
     root nor a descendant of one)."""
     with open_runtime(_dag_app(), drivers=["get_bar"]) as rt:
-        glbls = rt.globals
         hot_ids = list(rt.hot_cell_ids)
 
         # Map each hot cell id to the variable it defines, to assert order semantically
@@ -229,7 +233,31 @@ def test_precompute_hot_list_is_driver_rooted_topo_ordered():
             )
         # Sanity: the three compute cells are present.
         assert {"signal", "qty", "new_pf"} <= set().union(*defined.values())
-        assert glbls is rt.globals
+
+
+def test_compile_rejects_driver_with_no_reader_cell():
+    """FAIL-CLOSED: a declared driver that no cell reads is rejected at compile, not left to
+    silently no-op every bar (a dead strategy that looks live)."""
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _state():
+        import marimo as mo
+
+        get_bar, set_bar = mo.state(0.0)
+        get_unused, set_unused = mo.state(0.0)  # declared driver below, read by nobody
+        return get_bar, set_bar, get_unused, set_unused
+
+    @app.cell
+    def _strategy(get_bar):
+        result = 2.0 * get_bar()
+        return (result,)
+
+    with pytest.raises(ValueError, match="no reader cell"):
+        with open_runtime(app, drivers=["get_unused"]):
+            pass
 
 
 def test_dag_byte_identical_to_imperative_twin():

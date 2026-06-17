@@ -37,8 +37,10 @@ only by the spike-group gates (see ``tests/test_strategy_runtime_thin_drain.py``
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import dataclasses
+import sys
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
 # marimo is spike-only (not in [project.dependencies]); importing this module
@@ -145,8 +147,6 @@ class HeadlessKernel:
     session_mode: SessionMode = SessionMode.EDIT
 
     def __post_init__(self) -> None:
-        import sys
-
         self.stream = _SilentStream()
         self.stdout = _SilentStdout(self.stream)
         self.stderr = _SilentStderr(self.stream)
@@ -186,17 +186,24 @@ class HeadlessKernel:
         )
 
     def teardown(self) -> None:
-        import sys
-
-        teardown_context()
+        # Best-effort cleanup, but the __main__ restore is non-negotiable: it runs in
+        # ``finally`` and every stop is independently guarded, so one failing step can
+        # neither skip the restore — a leaked patched __main__ would be captured as the
+        # NEXT HeadlessKernel's self._main (cross-session corruption) — nor skip a sibling.
         try:
-            self.stdout._watcher.stop()
-            self.stderr._watcher.stop()
-        except Exception:
-            pass
-        if getattr(self.k, "module_watcher", None) is not None:
-            self.k.module_watcher.stop()
-        sys.modules["__main__"] = self._main
+            with contextlib.suppress(Exception):
+                teardown_context()
+            for stream in (self.stdout, self.stderr):
+                watcher = getattr(stream, "_watcher", None)
+                if watcher is not None:
+                    with contextlib.suppress(Exception):
+                        watcher.stop()
+            module_watcher = getattr(self.k, "module_watcher", None)
+            if module_watcher is not None:
+                with contextlib.suppress(Exception):
+                    module_watcher.stop()
+        finally:
+            sys.modules["__main__"] = self._main
 
 
 # ---------------------------------------------------------------------------
@@ -204,20 +211,29 @@ class HeadlessKernel:
 # ---------------------------------------------------------------------------
 
 
+def _execute_hot_cell(executor: Any, cell: Any, glbls: dict[str, Any], graph: Any) -> None:
+    """The single context-less hot-path primitive: ``exec(body); eval(last_expr)``.
+
+    Both ``StrategyRuntime.step`` and the contract gate route through this one function so
+    the gate can never silently drift from what the runtime actually does per bar — any
+    future change to how a hot cell is invoked (config, wrapping) lives here, in one place.
+    """
+    executor.execute_cell(cell, glbls, graph)
+
+
 @dataclasses.dataclass(frozen=True)
 class CompiledStrategy:
     """The frozen result of the cold compile: everything the hot drain needs.
 
     The hot path touches only ``executor`` / ``hot_cells`` / ``graph`` / ``glbls`` /
-    ``setters`` — no marimo orchestration. ``hot_cell_ids`` mirrors ``hot_cells`` for
-    introspection (the public ids accessor).
+    ``setters`` — no marimo orchestration. The hot-cell ids (introspection only) are
+    derived from ``hot_cells`` on demand, not stored as a second copy.
     """
 
     executor: Any
     graph: Any
     glbls: dict[str, Any]
     hot_cells: tuple[Any, ...]
-    hot_cell_ids: tuple[str, ...]
     setters: dict[str, Any]
 
 
@@ -256,7 +272,16 @@ def _compile(app: "App", drivers: Sequence[str]) -> CompiledStrategy:
                 f"(got {type(state).__name__}); declare only host-driven mo.state getters"
             )
         setters[name] = state._set_value
-        roots |= kernel._find_cells_for_state(state, _EXTERNAL)
+        cells_for_state = kernel._find_cells_for_state(state, _EXTERNAL)
+        # Fail-closed: a driver no cell reads makes the hot list silently shrink, so every
+        # bar's write to it is a no-op (a dead strategy that looks live). Reject at compile.
+        if not cells_for_state:
+            raise ValueError(
+                f"driver {name!r} has no reader cell — every bar's write to it would be a "
+                "silent no-op. A declared driver must be read by at least one cell "
+                "(D5: roots = exactly the states the host writes between bars)."
+            )
+        roots |= cells_for_state
 
     hot_ids = Runner.compute_cells_to_run(graph, roots, set(), "autorun")
     # Built once so the per-bar drain never re-pays marimo's entry-point scan.
@@ -267,7 +292,6 @@ def _compile(app: "App", drivers: Sequence[str]) -> CompiledStrategy:
         graph=graph,
         glbls=glbls,
         hot_cells=tuple(graph.cells[cid] for cid in hot_ids),
-        hot_cell_ids=tuple(str(cid) for cid in hot_ids),
         setters=setters,
     )
 
@@ -290,22 +314,21 @@ class StrategyRuntime:
 
     @property
     def hot_cell_ids(self) -> tuple[str, ...]:
-        return self._c.hot_cell_ids
-
-    def set_driver(self, getter_name: str, value: Any) -> None:
-        """Write a host-driven state (e.g. the current bar) via its mo.state setter."""
-        self._c.setters[getter_name](value)
+        # Derived from hot_cells (each CellImpl carries its own cell_id) — not stored twice.
+        return tuple(str(cell.cell_id) for cell in self._c.hot_cells)
 
     def step(self) -> None:
         """Execute the precomputed hot cells once, in topological order."""
         c = self._c
+        executor, glbls, graph = c.executor, c.glbls, c.graph
         for cell in c.hot_cells:
-            c.executor.execute_cell(cell, c.glbls, c.graph)
+            _execute_hot_cell(executor, cell, glbls, graph)
 
     def drain(self, values: dict[str, Any]) -> None:
         """One bar: set every declared driver from ``values``, then step the cell-DAG."""
+        setters = self._c.setters
         for name, value in values.items():
-            self._c.setters[name](value)
+            setters[name](value)
         self.step()
 
 

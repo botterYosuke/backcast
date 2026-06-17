@@ -138,6 +138,7 @@ public static class LayoutStore
         NormalizeCanvasView(doc);
         NormalizeFloatingWindows(doc);
         NormalizeStrategyEditors(doc);
+        NormalizeHakoniwaProfiles(doc);
 
         if (doc.panels == null)
         {
@@ -145,6 +146,23 @@ public static class LayoutStore
             return;
         }
         doc.panels.RemoveAll(p => p == null || string.IsNullOrEmpty(p.id) || p.rect == null);
+    }
+
+    // hakoniwaProfiles normalization (issue #62, findings 0029) — drop per-mode panel entries the
+    // controller can't place (null, null/empty id, null rect), the same rule as `panels`. A null
+    // profiles / null sub-profile is left untouched (HakoniwaLayoutProfiles.FromDocument treats
+    // null/empty as "no per-mode data" and seeds from the legacy single `panels`).
+    public static void NormalizeHakoniwaProfiles(LayoutDocument doc)
+    {
+        if (doc?.hakoniwaProfiles == null) return;
+        NormalizeProfilePanels(doc.hakoniwaProfiles.replay);
+        NormalizeProfilePanels(doc.hakoniwaProfiles.live);
+    }
+
+    static void NormalizeProfilePanels(HakoniwaProfile prof)
+    {
+        if (prof?.panels == null) return;
+        prof.panels.RemoveAll(p => p == null || string.IsNullOrEmpty(p.id) || p.rect == null);
     }
 
     // floatingWindows normalization (issue #15, findings 0008 §3) — the persistence-boundary

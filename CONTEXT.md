@@ -289,6 +289,10 @@ _Avoid_: chart の集合を layout doc 側の正本にすること（正本は u
 **base tile の集合（種類）を [[ExecutionMode（実行モード）]] が決める**。Replay = `[startup, buying_power, orders, positions, run_result]`（`startup` を index 0）、Live（LiveManual/LiveAuto 共通）= `[buying_power, orders, positions, run_result]`（`startup` 無し）。mode が切り替わって **base の集合が変わったときだけ** base tile を despawn/respawn する＝**base retile**。chart tile（[[chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）]]）は mode 切替をまたいで **identity を保持**し、新 grid の後半スロットへ再配置される（**所有権分離**: base=ExecutionMode／chart=universe`InstrumentRegistry`）。`HakoniwaController.Order` は常に `[base…, chart…]` の順を保ち、grid は `n_base + n_chart` から再構築する。backcast には TTWR の `ExecutionMode` enum/Resource が無く、mode の正本は footer の [[FooterModeViewModel.DisplayMode]]（poll が overwrite）なので、base の集合判定は `DisplayMode → {Replay, Live}` の 2 値（LiveManual/LiveAuto は同一 Live base）で行う。base 集合の所有は membership orchestrator（`BackcastWorkspaceRoot`）= chart の universe 同期と対の構造。TTWR `hakoniwa_tile_kinds(mode)`／`reconcile_hakoniwa_tiles`（base-only rebuild）・ADR 0013(#169 amendment) の capability parity。
 _Avoid_: mode 切替で chart tile を despawn すること（所有権違反・identity を壊す）／base↔chart の cross-swap 後に base/chart 判定を slot 位置で行うこと（判定は **id prefix `chart:`** で・TTWR は component kind で判定）／LiveManual⇄LiveAuto で retile すること（base 集合が同一なので no-op）／単一共有レイアウトと per-mode profile（別 slice）を混ぜること
 
+**per-mode layout profile（モード別レイアウト・[[ExecutionMode（実行モード）]] 別に Hakoniwa tile 並び順を保存）**:
+**Replay と Live が各々の Hakoniwa tile 並び順を別の profile として覚え**、mode 切替で当該 profile を復元する（TTWR `HakoniwaLayoutProfiles { replay, live }` の capability parity・`from_mode`: Replay→replay／LiveManual・LiveAuto→**同一 live profile**）。per-mode 化の対象は **Hakoniwa の tile 並び順（`_hako.Capture().panels`）だけ**で、infinite-canvas の pan/zoom・floating window・Strategy Editor の開きファイルは **mode 横断で単一共有**（doc 直下に flat 保持。TTWR `restore.rs` も camera/windows は flat 復元）。disk スキーマは `LayoutDocument.hakoniwaProfiles { replay, live }`（nested・**additive**・version bump 無し）を**正本**とし、`panels` は active mode の互換ミラー＆旧 doc の **forward-compat seed** 用（read は常に profiles 優先で drift しない）。mode 切替は TTWR `reconcile_hakoniwa_tiles` 準拠＝**旧 profile に現 layout 退避 → current 切替 → 新 profile を検証 load**。検証（`is_valid_for` parity）= 保存 profile の **非 chart（base）id 集合が当該 mode の `HakoniwaBaseTiles.Kinds` と一致するか**で、一致なら user の base 並び順を honor・不一致/無は canonical `Kinds(mode)` に落とす（[[backcast-layout-default-id-collision]] の #61 衝突安全を strict superset で包含）。chart の並び順はどの場合も honor し membership は universe 再導出（#60 不変）。ロジックは pure class `HakoniwaLayoutProfiles`（UnityEngine-free・AFK 権威）に集約し、`HakoniwaController` が actuation・`BackcastWorkspaceRoot` が membership/box-grow。box 位置/サイズ・cols/rows（divider）の per-mode 化は後続 additive slice（同コンテナ `HakoniwaProfile` へ拡張）。
+_Avoid_: per-mode 化対象を tile 順以外（canvas/window/editor）へ広げること（TTWR は flat 共有）／`panels` を per-mode の正本にすること（正本は `hakoniwaProfiles`・panels はミラー/seed）／検証なしで legacy/衝突 doc の base 順を honor すること（集合不一致は canonical へ＝#61 衝突安全）／LiveManual と LiveAuto を別 profile にすること（同一 live profile を共有）
+
 **floating window / FloatingWindowLayer / z-order**:
 infinite canvas の Content 上を **自由配置（free placement）**で漂う window（Strategy Editor / Order 等）。Hakoniwa の
 **tile swap とは別物**（tile は grid slot を占めるだけ・自由配置不可。floating window は canvas 論理座標で position+size を
@@ -302,6 +306,20 @@ title bar drag で position を移動（screen delta / zoom → canvas 論理 de
 _Avoid_: chart を floating window と呼ぶこと（Hakoniwa tile が正）／zOrder を `slot` に相乗りさせること（別 field）／
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
 resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）
+
+**chrome z-order 前面順序（画面固定 chrome のレイヤリング契約）**:
+[[infinite canvas]] の外に置く画面固定 chrome（menu bar / その dropdown / sidebar / footer / secret modal）の
+**前後関係の契約**。chrome はすべて uGUI（ScreenSpaceOverlay）で描き、順序は **`Canvas.sortingOrder` で決定的に**持つ。
+IMGUI（`OnGUI`）の `GUI.depth` は単一カメラ Screen-Space では無視され、IMGUI 同士の描画順は MonoBehaviour 実行順依存で
+制御不能（＝#77 の不具合源：menu と sidebar が両方 IMGUI で、後に走る sidebar が dropdown を上塗りした）。ゆえに
+chrome は IMGUI を撤去して uGUI 化する。契約の順序は **field/windows < sidebar < menu+dropdown < secret modal**：
+dropdown は sidebar の前面に描かれ、secret modal は常に最前面。**EventSystem はクリックを最前面 raycaster だけへ配送**
+するので、この順序が視覚 z-order と入力到達の両方を一意に決める（dropdown 直下の sidebar への取りこぼしクリックも構造的に
+消える）。menu 展開中は menu と sidebar の間に全画面 backdrop を一枚敷き、外側クリックで閉じつつ sidebar への到達を断つ。
+数値の `sortingOrder` は findings 0045。[[floating window / FloatingWindowLayer / z-order]]（Content 内の window 同士の
+前後）とは別レイヤ——あちらは pan/zoom 追従、こちらは画面固定。
+_Avoid_: chrome の前後を IMGUI の `GUI.depth` や MonoBehaviour 実行順で持つこと（単一カメラでは無効・#77）／secret modal
+より前面に menu を置くこと（modal は常に最前面）／Content 内の window z-order と画面固定 chrome の layering を同一視すること
 
 **Strategy Editor（code buffer）**:
 floating window kind `strategy_editor` の**実 content**。strategy `.py` を編集する code buffer（Python の lexical

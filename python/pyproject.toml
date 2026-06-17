@@ -33,6 +33,20 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.36.2",
 ]
+# #76 marimo-embed spike ONLY — kept out of [project.dependencies] so the
+# orphan-free runtime (ADR-0001) and distribution are not polluted until an ADR
+# receives the embed construct. Sourced from the local fork (see [tool.uv.sources]),
+# which is == 0.20.4 (the version the spike-0 import-graph findings were taken against).
+spike = ["marimo"]
+
+[tool.uv.sources]
+# Local marimo fork (== 0.20.4). Editable so a lazy-import experiment on the
+# marimo._server import chain (spike-0 root cause) can be tried without re-publishing.
+# #76 design-tree change: spike-0 pinned PyPI "marimo==0.20.4"; owner switched the
+# source to this fork (the porting source) this session — spike-only, reversible.
+# Path is relative to this pyproject (python/) so the committed file stays portable
+# as long as the fork sits beside the repo (../../marimo == <repo>/../marimo).
+marimo = { path = "../../marimo", editable = true }
 
 [build-system]
 requires = ["hatchling"]

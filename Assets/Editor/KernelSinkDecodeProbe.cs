@@ -44,6 +44,19 @@ public static class KernelSinkDecodeProbe
 
         try
         {
+            // #65 decoder-binding round-trip FIRST: pure C# (JsonUtility), no Python/DuckDB — so it
+            // runs in any environment, independent of the kernel run below (which needs the S:\ Daily
+            // catalog). Locks the field-name binding of the get_portfolio_json / union summary_json
+            // fields #65 added (silent zero-fill on a name mismatch is the failure this catches).
+            string shapeErr = ValidateReplayPollShape();
+            if (shapeErr != null)
+            {
+                Debug.LogError("[REPLAY POLL SHAPE FAIL] " + shapeErr);
+                EditorApplication.Exit(1);
+                return;
+            }
+            Debug.Log("[REPLAY POLL SHAPE PASS] get_portfolio_json orders/realized/unrealized + summary total_pnl bind");
+
             PythonRuntimeLocator.ConfigureBeforeInitialize();
             PythonEngine.Initialize();
             engineStarted = true;
@@ -212,6 +225,48 @@ public static class KernelSinkDecodeProbe
             return $"run_result: FillsCount={rr.FillsCount} != {EXPECTED_FILLS}";
         if (rr.EquityPoints != EXPECTED_BARS)
             return $"run_result: EquityPoints={rr.EquityPoints} != {EXPECTED_BARS}";
+
+        // (the get_portfolio_json / union summary_json decoder-binding round-trip runs FIRST in Run(),
+        // data-independent — see ValidateReplayPollShape.)
+        return null;
+    }
+
+    // #65 decoder-binding round-trip for the get_portfolio_json / union summary_json shapes. The
+    // literals mirror python/tests/test_get_portfolio_json._RUNNING_SNAPSHOT and the _finalize_run
+    // union {fills_count, equity_points, total_pnl, max_drawdown, sharpe, sortino} — Python pinning of
+    // those exact shapes lives in the pytest; this is the C# half (does the decoder bind the keys).
+    static string ValidateReplayPollShape()
+    {
+        // positions[].unrealized_pnl is given a NON-ZERO value here (production finalize hardcodes 0.0)
+        // purely so a binding failure on that newly-bound field is detectable, not zero-fill-masked.
+        const string portfolioJson =
+            "{\"buying_power\":900000.0,\"cash\":900000.0,\"equity\":1005000.0," +
+            "\"positions\":[{\"symbol\":\"8918.TSE\",\"qty\":100,\"avg_price\":1000.0,\"unrealized_pnl\":5000.0}]," +
+            "\"orders\":[{\"symbol\":\"8918.TSE\",\"side\":\"BUY\",\"qty\":100.0,\"price\":1000.0,\"status\":\"FILLED\",\"ts_ms\":1700000000000}]," +
+            "\"realized_pnl\":0.0,\"unrealized_pnl\":5000.0}";
+
+        PortfolioSnapshot snap = ReplayPanelDecoder.DecodePortfolio(portfolioJson);
+        if (snap.Orders == null || snap.Orders.Count != 1)
+            return $"get_portfolio_json: Orders count={snap.Orders?.Count ?? -1} != 1 (orders not bound)";
+        PortfolioOrderRow o = snap.Orders[0];
+        if (o.status != "FILLED")
+            return $"get_portfolio_json: order.status='{o.status}' != FILLED (zero-fill / key mismatch)";
+        if (o.side != "BUY" || o.qty <= 0 || o.price <= 0)
+            return $"get_portfolio_json: order side/qty/price not bound (side='{o.side}' qty={o.qty} price={o.price})";
+        if (snap.UnrealizedPnl <= 0)
+            return $"get_portfolio_json: UnrealizedPnl={snap.UnrealizedPnl} not bound (running-view pnl zero-fill)";
+        if (snap.Positions == null || snap.Positions.Count != 1 || snap.Positions[0].unrealized_pnl <= 0)
+            return "get_portfolio_json: PositionRow.unrealized_pnl not bound (was silently zero-filled pre-#65)";
+
+        // union summary_json: total_pnl is the #65-added field DecodeRunResult must now bind.
+        const string summaryJson =
+            "{\"fills_count\":2,\"equity_points\":68,\"total_pnl\":-410010.0," +
+            "\"max_drawdown\":1234.0,\"sharpe\":0.5,\"sortino\":0.7}";
+        RunResult ur = ReplayPanelDecoder.DecodeRunResult(summaryJson);
+        if (ur.TotalPnl >= 0.0)
+            return $"summary_json: TotalPnl={ur.TotalPnl} not bound (expected -410010; total_pnl zero-fill)";
+        if (ur.Sharpe <= 0.0 || ur.Sortino <= 0.0)
+            return $"summary_json: sharpe/sortino not bound (sharpe={ur.Sharpe} sortino={ur.Sortino})";
 
         return null;
     }

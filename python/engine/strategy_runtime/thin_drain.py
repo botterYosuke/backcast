@@ -29,10 +29,11 @@ Design decisions this module realizes (findings 0046):
 Scope (S1+S2): the host-owned per-bar primitive and the static precompute. NOT in
 scope (later slices): the structural fail-closed guard (D3, S3), injected cell-facing
 globals (S4), cold↔hot live-edit transition (S5), and wiring into ``KernelRunner``
-(S6). marimo is a spike-only dependency until the S3 ADR promotes it, so NOTHING on
-the production runtime import path imports this module — it is dormant and exercised
-only by the spike-group gates (see ``tests/test_strategy_runtime_thin_drain.py`` and
-``tests/test_strategy_runtime_offline.py``).
+(S6). marimo is a prod dependency since S3 (ADR-0012), but the runtime seam must still
+NOT import this module at module-load (it top-imports marimo): the seam loads it LAZILY,
+only when a marimo strategy runs — so this module stays dormant until S6 wires it. The
+lazy-import discipline is proven by ``tests/test_strategy_runtime_offline.py``; the runtime
+behavior by ``tests/test_strategy_runtime_thin_drain.py``.
 """
 
 from __future__ import annotations
@@ -43,8 +44,8 @@ import dataclasses
 import sys
 from typing import TYPE_CHECKING, Any, Iterator, Sequence
 
-# marimo is spike-only (not in [project.dependencies]); importing this module
-# therefore requires the spike group. The runtime seam never imports it — proven by
+# marimo is a prod dependency since ADR-0012, so importing this module is fine — but the
+# runtime seam must not import it at module-load (lazy-import discipline) — proven by
 # tests/test_strategy_runtime_offline.py.
 from marimo._ast.app_config import _AppConfig
 from marimo._config.config import DEFAULT_CONFIG

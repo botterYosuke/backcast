@@ -5,19 +5,21 @@ durable regression gates on the production ``engine.strategy_runtime.thin_drain`
 
   PERF        50k bars through the host-owned thin drain complete at native speed (the
               documented AppKernelRunner.run path needed ~235s for the same).
-  CONTRACT    the hot-path cell contract (D-grill): pure compute + mo.state read/write
-              WORK; ``mo.output`` is a SILENT no-op; ``mo.ui`` is a HARD error. Per-bar
-              cells are pure compute; UI/output belong on the cold (live-edit) path.
+  D6 PROD     the per-bar primitive installs the execution context, so ``mo.output`` is
+              published to the kernel stream and ``mo.ui`` does not hard-error — every cell
+              behaves like a normal marimo cell (findings 0046 D6 / redesign 追補).
+  CONTROL     the context-less BARE ``executor.execute_cell`` drops ``mo.output`` silently
+              and hard-errors on ``mo.ui`` — kept only to motivate D6, NOT what production does.
   PRECOMPUTE  the static dirty-set/topo (D2) is what marimo's own functions return:
               driver-rooted, topo-ordered, with the state-definition cell auto-excluded.
   PARITY      a multi-cell reactive DAG (bar→signal→order→portfolio, with a self-cycle
               feedback — D1/D4-A) produces a byte-identical result sequence to the
               imperative on_bar twin.
 
-marimo is a spike-only dependency, so this whole module is skipped unless it is
-installed. Run the gate explicitly with::
+marimo is a prod dependency since S3 (ADR-0012), so these gates run in the default test
+run. Run them explicitly with::
 
-    uv run --group spike python -m pytest tests/test_strategy_runtime_thin_drain.py
+    uv run python -m pytest tests/test_strategy_runtime_thin_drain.py
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import time
 
 import pytest
 
-pytest.importorskip("marimo", reason="#76 S1 gate: marimo is a spike-only dependency")
+pytest.importorskip("marimo", reason="defensive: marimo is a prod dep since ADR-0012")
 
 from engine.strategy_runtime.thin_drain import (  # noqa: E402
     HeadlessKernel,
@@ -149,6 +151,36 @@ def test_thin_drain_native_speed_and_hot_state_write():
     assert sig_getter() == pytest.approx(248.0), "hot-path mo.state WRITE did not take effect"
 
 
+def _single_cell_app(kind: str):
+    """A one-cell app whose single cell exercises ``mo.output`` or ``mo.ui`` — the shared
+    fixture for both the context-less control (`_hot_path_behavior`) and the D6 production
+    gate (`_production_hot_path`). The two helpers differ only in HOW they drive this cell
+    (bare ``execute_cell`` vs the context-installing ``_execute_hot_cell``) and what they
+    assert; the cell itself is identical, so it lives here once."""
+    from marimo import App
+
+    app = App()
+    if kind == "output":
+
+        @app.cell
+        def _c():
+            import marimo as mo
+
+            mo.output.replace("hello")
+            result = 1
+            return (result,)
+    else:  # "ui"
+
+        @app.cell
+        def _c():
+            import marimo as mo
+
+            result = mo.ui.slider(0, 10)
+            return (result,)
+
+    return app
+
+
 def _hot_path_behavior(kind: str) -> str:
     """Drive a single cell through a BARE ``executor.execute_cell`` — no execution context
     — and report its behavior. This is the CONTROL that motivates D6.
@@ -161,28 +193,9 @@ def _hot_path_behavior(kind: str) -> str:
     for mo.ui/output cells would not populate globals at all). Mirrors the #76 spike
     ``_boundary`` probe.
     """
-    from marimo import App
     from marimo._runtime.executor import ExecutionConfig, get_executor
 
-    app = App()
-    if kind == "output":
-
-        @app.cell
-        def _c():
-            import marimo as mo
-
-            mo.output.replace("hello")  # expected: silent no-op (no exec-context)
-            result = 1
-            return (result,)
-    else:  # "ui"
-
-        @app.cell
-        def _c():
-            import marimo as mo
-
-            result = mo.ui.slider(0, 10)  # expected: hard error
-            return (result,)
-
+    app = _single_cell_app(kind)
     host = HeadlessKernel()
     try:
         runner = app._get_kernel_runner()
@@ -224,29 +237,10 @@ def _production_hot_path(kind: str) -> dict:
     is observed on the kernel stream (the user-visible publish), not on the internal
     ``execution_context.output`` attribute, which is restored on block exit.
     """
-    from marimo import App
     from marimo._runtime.context.types import get_context
     from marimo._runtime.executor import ExecutionConfig, get_executor
 
-    app = App()
-    if kind == "output":
-
-        @app.cell
-        def _c():
-            import marimo as mo
-
-            mo.output.replace("hello")
-            result = 1
-            return (result,)
-    else:  # "ui"
-
-        @app.cell
-        def _c():
-            import marimo as mo
-
-            result = mo.ui.slider(0, 10)
-            return (result,)
-
+    app = _single_cell_app(kind)
     host = HeadlessKernel()
     try:
         runner = app._get_kernel_runner()

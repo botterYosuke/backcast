@@ -139,7 +139,7 @@ spike probe（単一 cell 直打ち）を **production module** `engine/strategy
   ctx-mgr 規約）→ `__enter__` で compile 失敗時に明示 teardown する（prod robustness fix・cross-session leak 封鎖）。
 
 ### AC → 恒久 gate（behavior-to-e2e: backcast に FLOWS.md 無し＝gate がテスト正本）
-| 挙動（保証したい不変条件）| gate（pytest, spike-group）| 種別 |
+| 挙動（保証したい不変条件）| gate（pytest）| 種別 |
 |---|---|---|
 | **AC1 perf**: 50k bar を native 速度で完走（orchestrated 235s に対し 桁違い）| `test_strategy_runtime_thin_drain::test_thin_drain_native_speed_and_hot_state_write`（5s/50k budget・hot-path mo.state write も検証）| perf |
 | **control（旧契約・降格）**: context-less bare execute では mo.output silent / mo.ui hard error（＝なぜ D6 が要るか。`executor.execute_cell` 直叩きで pin。プリミティブ経由ではない）| `..::test_hot_path_contract_mo_output_silent` / `..::test_hot_path_contract_mo_ui_hard_error` | control |
@@ -151,7 +151,7 @@ spike probe（単一 cell 直打ち）を **production module** `engine/strategy
 
 実測（production drain＝set_driver＋step）: median ≈5.9µs/bar・50k≈0.31s（native baseline 0.060s の ~5x、
 orchestrated 235s の ~750x 速）＝budget 内・native-class。
-走らせ方: `uv run --group spike python -m pytest tests/test_strategy_runtime_thin_drain.py`。
+走らせ方: `uv run python -m pytest tests/test_strategy_runtime_thin_drain.py`（S3/ADR-0012 で marimo が prod 依存になり `--group spike` 不要）。
 
 ### この slice で**やっていない**こと（後続）
 S3 fail-closed guard（D3 構造判定の runtime 実装）/ S4 injected globals（`submit_market`/`portfolio` の cell 注入）/
@@ -217,4 +217,20 @@ D6 の唯一の新しい不変条件＝「production が毎 bar **context を張
 - gate（`tests/test_strategy_runtime_thin_drain.py`・8 GREEN）: 新 `test_production_context_publishes_mo_output`（kernel stream に出力 CellOp が届く）/ `test_production_context_mo_ui_no_hard_error`（`ran-no-error`）。既存 `test_hot_path_contract_*` 2本は `executor.execute_cell` 直叩きの **control** へ降格（プリミティブ非経由）。perf/precompute/parity は不変で GREEN、offline/import-purity も GREEN＝marimo は runtime seam に漏れず spike-only 据え置き。
 - 残務（不変）: D3 構造的 hot-list guard / S3 ADR 起案＋ADR-0005 supersede＋marimo prod 昇格 / S6 `KernelRunner` 載せ替え。本 module は dormant のまま。
 
-> 🤖 `/grill-with-docs` redesign 追補セッション記録（Claude Code）。spike は throwaway（spike dep group）。ADR は #76 方針どおり未起案。
+---
+
+## S3 実装着地（2026-06-18・ADR-0012 起案＋marimo prod 昇格＋offline gate intent 昇格）
+
+`/grill-with-docs`（#76 S3・Q1–Q4）で設計の木を固め、**[ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)**（marimo embed を reactive strategy 実行モデルとする）を accepted で起案。S3 が landing させたのは「docs + manifest + gate-intent」の3点で、**per-bar 配線（S6）／order 注入（S4）は未着手・thin_drain は引き続き dormant**。
+
+- **Q1 supersede 範囲**: ADR-0012 は ADR-0005-cutover を **strategy-authoring 表面（Strategy Editor＝cell-DAG ＋ 単一 run ボタン→reactive）のみ**部分 supersede。他5表面の 1:1 TTWR parity は踏襲。ADR-0011 の facet-scoped supersede 文型を踏襲し、ADR-0005 本体は無改変（scoping は ADR-0012 側）。＝findings 冒頭/末尾の「ADR-0005 supersede」は**部分 supersede**と確定（全面ではない）。
+- **Q2 dep の形**: `[project.dependencies]` に **`marimo>=0.20.4`**（PyPI 範囲 pin）。editable local fork は破棄（embed は `marimo._server` を引かず fork 不要）。`uv.lock` は **0.20.4 に解決**（検証版・破壊的 upgrade なし）。範囲 pin の安全網＝lock 固定＋thin_drain gate が private-API drift 検出。
+- **Q3 offline gate**: `test_strategy_runtime_offline` は機構据え置き・intent を「dormancy」→「**lazy-import 規律**（seam は module-load で marimo を引かない／marimo 戦略実行時だけ lazy import）」へ昇格。gate が `engine.kernel.runner` を import するので **S6 が module-top に marimo/thin_drain を置けば即 RED**＝lazy import を構造的に強制。
+- **Q4 execution-model 立場**: marimo cell-DAG が **唯一の target authored モデル**、命令型 `Strategy.on_bar`/`strategy_loader` は**移行期 only**（新機能を足さない frozen surface）。kernel per-bar 契約（`on_start`/`on_bar`/`on_stop`＋`ctx.submit_market`）は**不変の adaptation 境界**で marimo は App→compile→drain で adapt（S4 injected globals＋S6 dispatch）。#24 golden は命令型経路で byte-identical 保持。
+
+gate 結果（S3）: thin_drain 8 / offline+import-purity 2 すべて GREEN（plain `uv run`・marimo prod 化で default run でも走る）。lazy-import 規律 GREEN＝seam は marimo installed でも module-load で引かない。
+
+### S3 後の残務（順序）
+**S4** cell へ `submit_market`/`portfolio` を inject（marimo 戦略が発注できるように）→ **S6** `KernelRunner` adapter/dispatch 配線（lazy import・dormant 解除）→ 命令型 sunset（さらに後の named スライス）。D3 構造的 hot-list guard は独立の任意 guard。
+
+> 🤖 `/grill-with-docs` redesign 追補＋S3 セッション記録（Claude Code）。spike は throwaway。ADR-0012 accepted（#76 §6 の「spike 後に起案」を充足）。

@@ -344,6 +344,8 @@ shadow 可能なので構文ではない）。LSP / autocomplete / Python parser
 _Avoid_: chart/order と混同すること（別 kind）／#15 の汎用 floating window system に content を混ぜること（content は
 caller の window factory が `kind=="strategy_editor"` のとき合成・controller 境界は不変）／「Python parser を載せた」と
 表現すること（lexical tokenizer であって parser ではない）
+（方向: ADR-0012 — target authored モデルは marimo cell-DAG（"Strategy Editor = cell"）に再定義済み。本 code buffer は
+移行期の暫定表面として共存し、実 UI 置換は #15/#16。本エントリの定義は移行期の現実を記述したもの）
 
 **strategy file provider（供給 seam）**:
 編集・保存済みの strategy `.py` の**パス**を Replay/Live に `strategy_file` として渡す durable な境界（#16）。engine は

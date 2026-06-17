@@ -1,5 +1,7 @@
 # marimo-embed Spike 結果: `App.embed()` を strategy 実行基盤に使えるか
 
+> **後日更新（2026-06-18・S3）**: 本書は spike 時点の frozen record。spike PASS を受け **[ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)** が accepted となり、marimo は **`[project.dependencies]` の `marimo>=0.20.4`（PyPI）へ昇格**（editable fork・`[tool.uv.sources] marimo`・`[dependency-groups] spike` への隔離は撤去。`--group spike` は空 group で後方互換維持）。以下の「spike 専用 dep group / fork」記述は spike 時点のもの。現行の dep/gate 方針は ADR-0012＋findings 0046「S3 実装着地」が正本。
+
 - Issue: **#76**（gate spike のみ。実装 epic・ADR 起案・docs 反映は本 issue スコープ外）
 - 設計正本: [Discussion #64](https://github.com/botterYosuke/backcast/discussions/64)（本文 + R7–R14）
 - 関連 ADR: ADR-0001（orphan-free runtime, **proposed**・自己保護条項あり＝編集不可）、

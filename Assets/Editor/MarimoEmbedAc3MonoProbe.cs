@@ -114,6 +114,10 @@ public static class MarimoEmbedAc3MonoProbe
         {
             using (Py.GIL())
             {
+                // NOTE (S3/ADR-0012): marimo is now a REGULAR prod dependency (PyPI, in the
+                // venv site-packages), not the editable fork this AC3 spike probe was taken
+                // against — so this fork sys.path injection is vestigial. Kept as frozen spike
+                // evidence; below reflects the spike-time setup.
                 // marimo is installed EDITABLE from the fork (pyproject [tool.uv.sources]);
                 // it is reachable in the venv only via a .pth that Mono's PYTHONPATH wiring
                 // does not process, so we put the fork on sys.path directly. DERIVED from the

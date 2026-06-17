@@ -25,6 +25,14 @@ dependencies = [
     "scikit-learn>=1.8,<1.9",
     "numpy>=2.4.4",
     "pandas>=2.3.3",
+    # #76 S3 (ADR-0012): marimo promoted from spike-only to a prod dependency — it is the
+    # reactive strategy execution model going forward. Range-pinned (not ==) per ADR-0012
+    # Decision 3; the safety net for the heavy private-API coupling (compute_cells_to_run /
+    # _find_cells_for_state / with_cell_id / get_executor) is uv.lock pinning the resolved
+    # version + the thin-drain gate catching drift. RUN tests/test_strategy_runtime_thin_drain.py
+    # on every marimo upgrade. The runtime seam must still lazy-import marimo (ADR-0012
+    # Decision 4) — enforced by tests/test_strategy_runtime_offline.py.
+    "marimo>=0.20.4",
 ]
 
 [dependency-groups]
@@ -33,20 +41,11 @@ dev = [
     "pytest-asyncio>=1.3.0",
     "pytest-httpx>=0.36.2",
 ]
-# #76 marimo-embed spike ONLY — kept out of [project.dependencies] so the
-# orphan-free runtime (ADR-0001) and distribution are not polluted until an ADR
-# receives the embed construct. Sourced from the local fork (see [tool.uv.sources]),
-# which is == 0.20.4 (the version the spike-0 import-graph findings were taken against).
-spike = ["marimo"]
-
-[tool.uv.sources]
-# Local marimo fork (== 0.20.4). Editable so a lazy-import experiment on the
-# marimo._server import chain (spike-0 root cause) can be tried without re-publishing.
-# #76 design-tree change: spike-0 pinned PyPI "marimo==0.20.4"; owner switched the
-# source to this fork (the porting source) this session — spike-only, reversible.
-# Path is relative to this pyproject (python/) so the committed file stays portable
-# as long as the fork sits beside the repo (../../marimo == <repo>/../marimo).
-marimo = { path = "../../marimo", editable = true }
+# #76 S3 (ADR-0012): marimo graduated from this group to [project.dependencies]. The group
+# is kept (empty) so the throwaway spike probes' documented `uv run --group spike python -m
+# spike.marimo_embed.*` invocations (and docs/spike/marimo-embed-result.md) keep resolving —
+# marimo now comes from the prod deps, so the group needs no entries.
+spike = []
 
 [build-system]
 requires = ["hatchling"]
@@ -60,6 +59,7 @@ pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-    # #76 S1: gates that need the spike-only marimo dependency (skipped otherwise).
-    "marimo: requires the spike-group marimo dependency (thin-drain runtime gates)",
+    # #76: thin-drain runtime gates. marimo is a prod dependency since S3 (ADR-0012), so
+    # these run in the default test run; the importorskip is now a defensive no-op.
+    "marimo: thin-drain runtime gates (exercise the marimo embed execution model)",
 ]

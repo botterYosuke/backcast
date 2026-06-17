@@ -1,15 +1,21 @@
-"""S1 "not wired" guard (#76 / findings 0046).
+"""Lazy-import discipline guard for the runtime seam (#76 / findings 0046 / ADR-0012).
 
-S1 lands the host-owned thin-drain runtime (``engine.strategy_runtime.thin_drain``) as a
-standalone, dormant module. marimo is a SPIKE-ONLY dependency until the S3 ADR promotes
-it, so the production runtime import path must NOT pull marimo (nor the thin-drain module)
-into the interpreter — wiring the per-bar loop onto this runtime is S6, after promotion.
+Since S3 (ADR-0012) marimo is a PROD dependency — it is the reactive strategy execution
+model. But the runtime seam must still NOT pull marimo at module-load time: a top-level
+``import marimo`` costs ~500ms and drags a heavy chain a headless strategy runtime never
+needs (``_ai.llm`` / ``_plugins.ui.chat`` / altair / the ``_server`` submodules). marimo
+is loaded LAZILY, only when a marimo strategy is actually run (ADR-0012 Decision 4). The
+non-marimo paths (imperative strategies, marimo-free Replay) keep their orphan-free,
+light-startup property.
 
-This gate imports the whole production runtime seam (the same set the nautilus import-purity
-gate uses) in a clean interpreter and asserts no ``marimo`` module leaked — even though
-marimo IS importable in the spike venv. It therefore runs in BOTH the default and the spike
-test runs (no marimo import-skip): the invariant is "the runtime does not depend on marimo",
-which holds regardless of whether marimo happens to be installed.
+This gate imports the whole production runtime seam in a clean interpreter and asserts no
+``marimo`` module leaked into ``sys.modules`` — even though marimo IS now installed. The
+mechanism is unchanged from the old dormancy guard; the INTENT was promoted from "marimo
+is spike-only, the seam is dormant" to "marimo is a prod dep, the seam imports it only
+lazily". Because the gate imports ``engine.kernel.runner`` (the S6 wiring target), placing
+``import marimo`` / ``import …thin_drain`` at the seam's module top would turn this RED —
+so leaving the gate in place STRUCTURALLY FORCES S6 to lazy-import (in the same narrow-
+submodule style thin_drain uses, never a bare top-level ``import marimo``).
 
 Runnable directly (``python tests/test_strategy_runtime_offline.py``) or via pytest.
 """
@@ -19,8 +25,9 @@ from __future__ import annotations
 import sys
 
 # Clean-interpreter child: import the production runtime seam (Replay + Live entry points)
-# and report any marimo module that leaked in. The thin-drain module is NOT imported here —
-# if anything on this seam imported it, marimo would surface, failing the gate.
+# and report any marimo module that leaked in. marimo is now installed (prod dep, ADR-0012),
+# so a leak means the seam imported it at MODULE LOAD instead of lazily — if anything on this
+# seam top-imported marimo (or the thin-drain module, which top-imports marimo), it surfaces.
 _CHILD = r"""
 import sys
 
@@ -46,9 +53,10 @@ def _run_child():
 def test_runtime_seam_does_not_import_marimo() -> None:
     result = _run_child()
     assert result.returncode == 0, (
-        "the production runtime seam imported marimo into a clean interpreter — #76 S1 lands "
-        "the thin-drain runtime as a dormant, standalone module; marimo stays spike-only until "
-        "the S3 ADR promotes it, and wiring the per-bar loop onto it is S6.\n"
+        "the production runtime seam imported marimo at MODULE LOAD — marimo is a prod dep "
+        "since ADR-0012, but the seam must lazy-import it (only when a marimo strategy runs); "
+        "S6 must lazy-import in thin_drain's narrow-submodule style, never a top-level "
+        "`import marimo` / `import …thin_drain` on the seam.\n"
         f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
     )
     assert "MARIMO-FREE" in result.stdout

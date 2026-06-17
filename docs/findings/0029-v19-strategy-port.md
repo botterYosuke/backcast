@@ -94,6 +94,12 @@ v19 は `nautilus_trader.trading.strategy.Strategy` をフル活用。kernel-nat
 
 **simplify レビュー後の整理（2026-06-17）**: ① hot path（~80k bar/run）の JST 復元を tz-aware datetime 構築から整数演算（`_jst_day_minute`：`ts//1e9 + 9h` → day-ordinal / minute-of-day）へ置換（real-data AFK が byte-identical＝14 fills・final_cash 944,390 不変を確認）。② `.py` 内 SCENARIO 重複リテラルを削除（sidecar `.json` が engine 所有の唯一 SoT・CONTEXT「scenario sidecar」）。③ write-only な `_scored` flag 削除、`_current_price` の到達不能 try/except 撤去、`_score_instruments` の未使用 `import numpy` 削除。④ test の手書き ts-sort を公開 `merge_bars_by_ts` へ。挙動不変（全テスト GREEN）。
 
+## #73 バックエンド検証（AFK GREEN・2026-06-17）
+
+owner 方針 A: HITL の前に「production Replay seam で v19 が通るか」を AFK で潰す。`test_v19_replay_production_seam.py` が**アプリと同一経路**を駆動: `DataEngine(duckdb_root) → load_replay_data → DataEngineBackend.start_engine(v19_morning.py) → KernelRunner + ReplayKernelObserver → apply_replay_event + RunBuffer → get_portfolio`。実 mount で GREEN（fills が `last_portfolio["orders"]` に出る・primary 銘柄の `per_id_ohlc_points` が bar-by-bar 蓄積＝チャート追従）。skip-if-mount-absent。throttle（`_REPLAY_BAR_INTERVAL_SEC`=0.01×81k bar≈16分）は wiring 検証では monkeypatch で 0 化（pacing は #30 のテスト責務）。
+
+残ゲート: **owner が Unity アプリで v19 を Replay 起動して目視**（#73 AC の HITL）。手順は別途 owner へ。GREEN なら #74（Auto）へ。
+
 ## faithfulness の限界（明示）
 
 データ源が別物（v19=kabu 配信の分足 / backcast Replay=J-Quants DuckDB 分足）かつ静的 prev_close のため、

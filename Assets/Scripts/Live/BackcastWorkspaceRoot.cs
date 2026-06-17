@@ -247,6 +247,64 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _menuBarView?.ShowMessage("strategy SCENARIO unreadable — save a scenario sidecar to set the universe");
     }
 
+    // #80/#78: the canonical "(re)bind editor .py → re-seed scenario/universe" tail, shared by
+    // ApplyLayout's post-RestoreEditors seed and the menu picker's OnOpenStrategy. ORDER matters
+    // (findings 0025 §12): scenario first; then the Startup tile fields (written ONLY here — they have
+    // NO Changed event, so a stale tile would render blank while Run uses the seeded Params, a WYSIWYR
+    // break); then the sidebar writeback prime (so _lastFlushed matches the just-seeded universe — else
+    // a later sidebar edit diffs against a stale set → phantom-id hazard).
+    void ReseedFromEditor()
+    {
+        SeedScenarioFromEditor();
+        _tile?.SyncFieldsFromController();
+        _sidebarCtrl?.PrimeWritebackFromCurrent();
+    }
+
+    // #80: the menu-bar Strategy picker's enumerator — every .py under python/strategies/**, annotated
+    // with scenario status (StrategyPickerModel, AFK-locked). Re-run on each menu open (stale-safe).
+    IReadOnlyList<StrategyPickerEntry> EnumerateStrategies()
+    {
+        try
+        {
+            string strategiesDir = Path.Combine(PythonRuntimeLocator.ProjectRoot, "strategies");
+            return StrategyPickerModel.Enumerate(strategiesDir);
+        }
+        catch (Exception e)
+        {
+            // ProjectRoot resolution can THROW before Python is configured (PythonRuntimeLocator
+            // .ResolveVenvHome on a not-yet-staged python/.venv). Uphold StrategyPickerModel's
+            // never-throws contract at this seam — degrade to an empty list (the menu then shows
+            // "(no .py …)") instead of throwing out of the uGUI menu-open click handler.
+            Debug.LogWarning("[BackcastWorkspaceRoot] strategy enumeration failed: " + e.Message);
+            return Array.Empty<StrategyPickerEntry>();
+        }
+    }
+
+    // #80: open a strategy .py into the adopted editor, then re-seed scenario/universe so Run unblocks
+    // immediately — the same bind→SeedScenarioFromEditor path #78 restore uses (findings 0047 §1/§2 ①).
+    // Open is UNCONDITIONAL: a scenario-less / broken .py still opens (it is exactly what you open to
+    // FIX); the Run gate (empty universe → blocked) is the only blocker, never the Open. A vanished
+    // entry (stale list) is rejected by StrategyEditorView.Open (File.Exists guard) → message, no crash;
+    // the next menu open re-enumerates.
+    void OnOpenStrategy(string path)
+    {
+        if (string.IsNullOrEmpty(path)) return;
+        if (!_editors.TryGetValue(WINDOW_ID, out var editor) || editor == null)
+        {
+            _menuBarView?.ShowMessage("Open Strategy: no editor window");
+            return;
+        }
+        if (!editor.Open(path))
+        {
+            _menuBarView?.ShowMessage("Open Strategy: '" + Path.GetFileName(path) + "' is unavailable (moved/deleted)");
+            return;   // stale entry — next menu open re-lists; no scenario change
+        }
+
+        // Re-seed exactly as ApplyLayout does after RestoreEditors (the shared ReseedFromEditor tail).
+        ReseedFromEditor();
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(path));
+    }
+
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
     void BuildWorkspace()
     {
@@ -390,7 +448,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
                 _venue,                                               // "MOCK" → dev connect item (editor only)
-                _font);                                               // uGUI font (#77)
+                _font,                                                // uGUI font (#77)
+                OnOpenStrategy,                                       // #80: open a strategy .py
+                EnumerateStrategies);                                 // #80: list python/strategies/**.py
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -1545,16 +1605,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RestoreFloating(doc);
         RestoreEditors(doc);
 
-        // #78: the editor's .py is now bound (or unbound on fresh install) — seed the scenario from it,
-        // then (a) re-sync the Startup tile's Start/End/cash fields, which are written ONLY by
-        // SyncFieldsFromController and have NO Changed event (the build-time sync at BuildWorkspace ran
-        // against an empty Params, so without this the tile renders blank while Run uses the seeded
-        // Params — a WYSIWYR break), and (b) re-prime the sidebar writeback so its _lastFlushed matches
-        // the just-seeded universe (the BuildWorkspace prime ran against an empty universe; without this
-        // a later sidebar edit would diff against a stale empty set — phantom-id hazard, findings 0025 §12).
-        SeedScenarioFromEditor();
-        _tile?.SyncFieldsFromController();
-        _sidebarCtrl?.PrimeWritebackFromCurrent();
+        // #78: the editor's .py is now bound (or unbound on fresh install) — re-seed scenario/tile/
+        // writeback from it via the shared ReseedFromEditor tail (WYSIWYR tile sync + the phantom-id
+        // writeback prime; see that method for the order rationale, findings 0025 §12).
+        ReseedFromEditor();
     }
 
     // floating: adopted/existing windows repositioned IN PLACE (never destroyed); only additional

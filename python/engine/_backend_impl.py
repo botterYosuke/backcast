@@ -421,6 +421,57 @@ def _live_login_timeout_s() -> float:
     return float(os.environ.get("LIVE_LOGIN_TIMEOUT_S", "180"))
 
 
+def _select_replay_strategy(strategy_file):
+    """Pick the Replay strategy runtime for ``strategy_file`` (#76 S6a / ADR-0012).
+
+    Detect-first, marimo-free (AST scan, no exec): a marimo notebook (module-level
+    ``app = marimo.App()``) runs through the reactive thin-drain adapter (MarimoStrategy);
+    anything else is an imperative ``engine.kernel.strategy.Strategy`` subclass loaded by the
+    legacy loader. Returns ``(scenario, factory, label)`` where ``factory(primary_id)`` builds
+    the (unregistered) strategy and ``label`` is for logging.
+
+    Errors are unchanged from the imperative path (FileNotFoundError / StrategyLoadError /
+    SyntaxError / ScenarioValidationError), so the caller's mapping still holds: a broken
+    imperative file (no App()) surfaces its real load error on the loader path — never misrouted
+    to marimo (exception-as-control-flow avoided). marimo/thin_drain are imported lazily (only
+    on the marimo branch), so the seam stays marimo-free at module load (offline gate).
+    """
+    from engine.strategy_runtime.strategy_kind import is_marimo_app_file
+
+    spath = Path(strategy_file)  # production passes a str; load_scenario/load_app need a Path
+    if is_marimo_app_file(spath):
+        from marimo._ast.load import load_app
+
+        from engine.strategy_runtime.scenario import load_scenario
+        from engine.strategy_runtime.strategy_loader import StrategyLoadError
+
+        scenario = load_scenario(spath)
+        # Load (parse) the notebook HERE so a malformed marimo file maps to STRATEGY_LOAD_ERROR
+        # at the dispatch site — symmetric with the imperative loader. The cold COMPILE (the
+        # analog of imperative on_start) still happens later in run() → RUN_FAILED, like on_start.
+        app = load_app(str(spath))
+        if app is None:
+            raise StrategyLoadError(f"{spath} is empty or not a valid marimo notebook")
+        strategy_id = spath.stem
+
+        def factory(primary_id):
+            from engine.strategy_runtime.marimo_strategy import MarimoStrategy
+
+            return MarimoStrategy(app=app, strategy_id=strategy_id, instrument_id=primary_id)
+
+        return scenario, factory, f"marimo:{strategy_id}"
+
+    from engine.kernel.strategy import Strategy as _KernelStrategy
+    from engine.strategy_runtime.strategy_loader import load as _load_strategy
+
+    _module, scenario, strategy_cls = _load_strategy(strategy_file, base_cls=_KernelStrategy)
+
+    def factory(primary_id):
+        return strategy_cls(instrument_id=primary_id)
+
+    return scenario, factory, strategy_cls.__name__
+
+
 class DataEngineBackend:
     def __init__(
         self,
@@ -756,14 +807,13 @@ class DataEngineBackend:
         """
         import json as _json
 
-        # Kernel-native strategy load: base_cls=engine.kernel.strategy.Strategy, so the loader
-        # never imports nautilus (D4) and only matches kernel-API strategies.
+        # Detect-first marimo-vs-imperative dispatch (#76 S6a / ADR-0012): a marimo notebook
+        # runs through the reactive thin-drain adapter, an imperative Strategy subclass through
+        # the legacy loader (base_cls=engine.kernel.strategy.Strategy, never imports nautilus —
+        # D4). See _select_replay_strategy. KernelRunner is unchanged either way (#24 golden
+        # byte-identical), so the marimo adapter just conforms to its per-bar Strategy contract.
         try:
-            from engine.kernel.strategy import Strategy as _KernelStrategy
-            from engine.strategy_runtime.strategy_loader import load as _load_strategy
-            _module, scenario, strategy_cls = _load_strategy(
-                strategy_file, base_cls=_KernelStrategy
-            )
+            scenario, strategy_factory, strategy_label = _select_replay_strategy(strategy_file)
         except FileNotFoundError as exc:
             logging.error(f"start_engine(duckdb): strategy file not found: {exc}")
             return BacktestRunResult(
@@ -784,13 +834,14 @@ class DataEngineBackend:
         initial_cash = scenario.get("initial_cash", 10_000_000)
         logging.info(
             "start_engine(duckdb): cls=%r instruments=%r granularity=%r start=%r end=%r root=%r",
-            strategy_cls.__name__, instruments, granularity,
+            strategy_label, instruments, granularity,
             scenario.get("start"), scenario.get("end"), duckdb_root,
         )
 
-        # The kernel construction contract (#25): strategy_cls(instrument_id=..., **params).
+        # The kernel construction contract (#25): strategy_cls(instrument_id=..., **params); the
+        # marimo factory mirrors it (the adapter takes instrument_id + a host-bound strategy_id).
         try:
-            strategy = strategy_cls(instrument_id=primary_id)
+            strategy = strategy_factory(primary_id)
         except Exception as exc:
             logging.exception("start_engine(duckdb): strategy construction failed")
             return BacktestRunResult(
@@ -832,22 +883,32 @@ class DataEngineBackend:
             base_dir=get_run_buffer_base_dir(),
         )
         observer = ReplayKernelObserver(engine=self.engine, run_buffer=rb)
+        # Teardown ownership (#76 S6a): a marimo MarimoStrategy opens a headless marimo kernel in
+        # on_start and must tear it down even if a cell raises mid-bar — KernelRunner.run wraps no
+        # try/finally, so a leaked thread-local context would kill the NEXT run ("RuntimeContext
+        # already initialized"). The strategy owns the lifetime; we call its close() in finally.
+        # Imperative strategies have no close() → no-op (byte-identical golden path).
+        strategy_close = getattr(strategy, "close", None)
         try:
-            KernelRunner(
-                data_root=duckdb_root,
-                instrument_ids=list(instruments),
-                granularity=granularity,
-                start=scenario["start"],
-                end=scenario["end"],
-                initial_cash=initial_cash,
-                strategy=strategy,
-                sink=observer,
-                run_event=self.engine.run_event,
-                bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
-                stop_event=self.engine.replay_stop_event,
-                step_event=self.engine.step_event,  # #30: PAUSED + step → exactly one bar
-                speed_provider=lambda: self.engine.replay_speed_multiplier,  # #30: per-bar speed
-            ).run()
+            try:
+                KernelRunner(
+                    data_root=duckdb_root,
+                    instrument_ids=list(instruments),
+                    granularity=granularity,
+                    start=scenario["start"],
+                    end=scenario["end"],
+                    initial_cash=initial_cash,
+                    strategy=strategy,
+                    sink=observer,
+                    run_event=self.engine.run_event,
+                    bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
+                    stop_event=self.engine.replay_stop_event,
+                    step_event=self.engine.step_event,  # #30: PAUSED + step → exactly one bar
+                    speed_provider=lambda: self.engine.replay_speed_multiplier,  # #30: per-bar speed
+                ).run()
+            finally:
+                if strategy_close is not None:
+                    strategy_close()
             summary = self._finalize_run(rb, scenario)
             logging.info(
                 "start_engine(duckdb): run complete run_id=%s run_dir=%s summary=%r",

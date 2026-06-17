@@ -488,3 +488,76 @@ def test_injected_submit_market_order_parity_with_imperative_twin():
             rt.drain({"get_bar": close})
 
     assert ctx.calls == expected
+
+
+# ---------------------------------------------------------- S6a host-seed driver State
+
+
+def _free_ref_app():
+    """A cell that reads ``get_bar()`` as a FREE name — no ``mo.state`` boilerplate.
+
+    This is the S6a host-seed authoring style (findings 0046 S6-6): the host OWNS the
+    driver State (name + object) and seeds the getter into globals; the author writes only
+    strategy logic and reads ``get_bar`` like a builtin.
+    """
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _signal():
+        bar = get_bar()  # noqa: F821 — host-seeded driver getter
+        doubled = bar * 2.0
+        return (doubled,)
+
+    return app
+
+
+def test_host_seeded_driver_state_drives_free_ref_cell():
+    """S6a: a host-seeded driver State roots + drives a cell that never defines it."""
+    with open_runtime(_free_ref_app(), driver_seeds={"get_bar": 0.0}) as rt:
+        rt.drain({"get_bar": 5.0})
+        assert rt.globals["doubled"] == 10.0
+        rt.drain({"get_bar": 7.0})
+        assert rt.globals["doubled"] == 14.0
+
+
+def test_host_seeded_driver_with_no_reader_is_rejected():
+    """S6a reuses the D5 fail-closed: a seeded driver no cell reads would make every bar's
+    write a silent no-op — reject at compile (a single-driver strategy must read the bar)."""
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _c():
+        x = 1  # never reads get_bar
+        return (x,)
+
+    with pytest.raises(ValueError, match="no reader cell"):
+        with open_runtime(app, driver_seeds={"get_bar": 0.0}):
+            pass
+
+
+def test_host_seeded_driver_collision_with_cell_def_is_rejected():
+    """S6a fail-closed (symmetric with inject collision): a cell that also DEFINES a host-seeded
+    driver name shadows the seeded State at cold run — reject instead of driving an orphan."""
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _state():
+        import marimo as mo
+
+        get_bar, set_bar = mo.state(0.0)  # cell DEFINES the host-seeded name
+        return get_bar, set_bar
+
+    @app.cell
+    def _reader(get_bar):
+        y = get_bar()
+        return (y,)
+
+    with pytest.raises(ValueError, match="also defined by a cell"):
+        with open_runtime(app, driver_seeds={"get_bar": 0.0}):
+            pass

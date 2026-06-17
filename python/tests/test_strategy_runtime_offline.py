@@ -35,6 +35,7 @@ import engine.kernel.runner                            # noqa: F401  per-bar Rep
 import engine._backend_impl                            # noqa: F401  InProc entry (Replay + Live)
 import engine.strategy_runtime.replay_kernel_observer  # noqa: F401  strategy_runtime package sibling
 import engine.strategy_runtime.cell_api                # noqa: F401  S4 cell-facing adapter (S6 imports it; must be marimo-free)
+import engine.strategy_runtime.strategy_kind          # noqa: F401  S6a AST detector (dispatch reads it; must be marimo-free)
 
 leaked = sorted(m for m in sys.modules if m == "marimo" or m.startswith("marimo."))
 if leaked:

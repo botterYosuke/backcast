@@ -264,3 +264,74 @@ gate 結果（S3）: thin_drain 8 / offline+import-purity 2 すべて GREEN（pl
 実 `KernelRunner`/`_Context` への配線（S6）。S4 の adapter は fake StrategyContext で駆動・検証する standalone（dormant）。value-State の host preamble（canonical getter 名の所有）は author ergonomics 次第で S6/UI slice 判断（S4 は inject 機構が両 authoring 様式を支えることだけ確定）。
 
 > 🤖 `/grill-with-docs` redesign 追補＋S3 セッション記録（Claude Code）。spike は throwaway。ADR-0012 accepted（#76 §6 の「spike 後に起案」を充足）。
+
+---
+
+## S6 設計の木（2026-06-18・`/grill-with-docs`）— dispatch 配線（dormant 解除）
+
+`/grill-with-docs`（#76 S6）で確定。S3/S4 が前提（marimo prod dep・lazy-import 規律・injected order API）を揃えたので、S6 で **thin_drain を runtime seam へ配線し dormant を解除**する＝**初めてアプリで marimo 戦略が動く**スライス。
+
+### スコープ決定（owner binding）— epic は full bullet、実装は順序付きスライス
+epic S6 bullet（`KernelRunner` 載せ替え＋単一再生ボタン撤去＋footer transport #30 撤去＋strategy-editor #15/#16）を **done-definition** に据えるが、**1 スライスに束ねない**。コードが順序を物理的に固定する: marimo cell を走らせる Python 経路（dispatch 配線）が無いのに UI の実行手段を消すと壊れる＝dispatch 配線が UI 撤去の厳密な前提。さらに Python 配線だけで hard 制約が3本（lazy-import / #24 golden byte-identical / teardown 保証）立ち、pytest で独立に green にできる自己完結スライス。UI と結合すると runtime の clean な変更が Unity AFK/HITL の green まで人質になる（[HITL surfaces bugs AFK gates miss]）。
+
+- **S6a（本スライス）= Python runtime dispatch 配線**: marimo 判定分岐＋`MarimoStrategy` adapter（`open_runtime` 寿命所有・teardown 保証）＋発注 parity gate＋offline gate に新 detector module 追加。ここで dormant 解除。
+- **S6b 以降 = UI 表面**: strategy-editor #15/#16 → 単一再生ボタン撤去 → footer transport #30 撤去。S6a で「実際に動く」ことを示してから表面を切替。
+- **Live 配線は bullet 外**＝別 epic 据え置き（adapter は mode 非依存に作るので将来 Live が再利用可だが S6 では配線しない）。
+
+### S6a 確定設計（owner binding・コードで裏取り済み）
+
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **S6-1 adapter 形** | `MarimoStrategy(Strategy)` を kernel 契約に被せる。**`KernelRunner` 本体は無改変**（ADR-0012 D2「不変の adaptation 境界」を字義通り守り #24 golden を byte-identical 保持） | `register(ctx)` で `_Context` を捕獲 → `on_start()` で `open_runtime.__enter__`（cold compile・inject 構築）→ `on_bar(bar)` で `rt.drain(...)` → adapter `close()` で `__exit__`。発注は injected `submit_market`→`ctx.submit_market`→`ctx.pending` で **fill ループは命令型と同一**（runner.py:280–292 無改修） |
+| **S6-2 teardown 保証** | dispatch 側（`_backend_impl`）が `try: KernelRunner(...).run() finally: strategy.close()` で寿命所有 | `KernelRunner.run` は loop を try/finally で包まない（runner.py:236–336）＝bar 途中 raise で `on_stop` も `__exit__` も呼ばれず thread-local marimo context が leak（次 run で "RuntimeContext already initialized" 連鎖死）。`open_runtime` 自体は `@contextmanager`＝compile-raise は自己 teardown 済み。残る穴（compile 成功後の bar 途中 raise）を dispatch finally が塞ぐ。「1 process = 1 kernel session」不変条件も run ごと完全 teardown で保つ |
+| **S6-3 marimo 判定** | dispatch seam で **AST scan（module-level `marimo.App()`）**。marimo-free（offline gate を守る・ユーザ module を exec しない） | 署名 = module-level `import marimo[as X]` **かつ** module-level の `X.App`/`App` 呼び出し（import alias 解決）。`App()` 構築が authoritative（`import marimo` 単独は弱い）。`__generated_with` は必須にしない（手書き marimo 可）。`"import marimo" in text` で安価 pre-filter → AST で `App()` 確認。marimo 自身も textual guard で構造識別（codegen.py:613） |
+| **S6-4 detect-first 順序** | AST scan を先（無 exec・marimo-free）。App あり → marimo adapter 分岐（thin_drain を lazy import）／App 無し → 命令型分岐 → `strategy_loader.load(base_cls=Strategy)` | これで `load()` の `StrategyLoadError`（no/multiple subclass・import 失敗の3理由・strategy_loader.py:91/117/120）は**本物の命令型エラーのまま**＝壊れた命令型を marimo へ誤ルートしない（exception-as-control-flow 回避）。`SyntaxError`（parse 不能）は kind を推測せず load エラーとして表面化 |
+| **S6-5 hybrid（App と Strategy 両方）** | `App` を authoritative とし **marimo 優先**（document） | `App` = notebook の決定的シグナル |
+| **S6-6 driver 契約（host-seed・S4 先送りを確定）** | **host が canonical driver state を seed**（host が名前もオブジェクトも所有）。author は `bar = get_bar()` を builtin 同然に読む | author-defined（gate 式 `get_bar, set_bar = mo.state(...)`）でも host は drain で `{"get_bar": …}` を書き `drivers=["get_bar"]` を宣言＝**name-ownership は結局 host 側**で、author にマッチを強い失敗モードが「compile 落ち（no-reader/KeyError）」。host-seed はマッチ seam ゼロ＝durable author API として厳密に上。`editor #15/#16` 未着の今が author base ゼロ＝移行コスト最小の確定タイミング（後で author-defined→host-seed は名前衝突＝移行になる）。#64「Strategy Editor = cell・最小 ceremony」とも整合 |
+| **S6-7 S6a の SET = bar のみ** | host-seed `get_bar` → **Bar オブジェクト全体**（`bar.close` 等）＋ injected `submit_market` | portfolio/position/cash の cell 露出は**直後の追加スライス**（同一 host-seed 機構の純追加・S4 Q1 の precision = prev-bar snapshot で no-look-ahead / 単一 `get_portfolio()` snapshot で granularity 最小 / fail-closed「読まれた driver だけ declare」を持ち込む）。delta 発注の tracer bullet として bar-only で成立 |
+| **S6-8 on_order/denial の cell 可視性** | S6a では cell から不可視（adapter `on_order` = no-op）。`KernelRunner` は fill/denial を通常処理（`ctx.pending`→fill→portfolio→sink） | cell は reactive＝event callback を持たない。fill/denial の反映は **portfolio-driver スライス**で next-bar snapshot として入る（S6-7 と同時に解禁） |
+| **S6-9 scenario / 起動メタ** | marimo 分岐は `_load_strategy` を通らない（Strategy サブクラス無し）ので **`load_scenario(path)` を直接呼ぶ**（sidecar JSON 優先・命令型と共有）。instruments/granularity/start/end/cash を取得 | strategy_id は host-bind、`default_instrument_id` = `instruments[0]`（S4 Q2）。file テキストは #78 provider の canonical .py path から読む（cwd/identity は ADR-0011） |
+
+### thin_drain への小拡張（S6a で本物化）
+1. **seed パスを型で分岐**: driver State は **real State を seed**（cold run でも読む＝cell が `get_bar()` を free-ref で resolve・identity で root 化）、アクションは現 `_inert_action` のまま arm。現 `_compile`（thin_drain.py:283/304）の inject= は**アクション専用**（docstring:273「host が bar 間に書く state は inject しない」）＝S4 が S6 へ送った当の論点。host-seed driver State は別経路で cold-run 前 seed。
+2. **`_compile` docstring（line 273）更新**: interim 記述「host-written states are NOT injected」→「driver State は host-seed 可（D5 の roots = seed＋declare した subset ちょうど）」へ完成。
+3. **fail-closed 再利用**: 全 host 名を seed、driver 宣言は cell.refs に現れた value-State subset だけ（`submit_market` は never declare）。S6a は単一 driver（`get_bar`）なので既存 no-reader 拒否で足り、subset ロジックの本番化は portfolio スライス。
+
+### AC → 恒久 gate（behavior-to-e2e: backcast に FLOWS.md 無し＝gate がテスト正本）
+| 挙動（不変条件）| gate | 種別 |
+|---|---|---|
+| **marimo 判定**: `marimo.App()` を持つ .py は marimo・持たない .py は imperative（無 exec・marimo-free）| 新 detector module の unit（AST 各分岐＋hybrid＋SyntaxError）| unit |
+| **production-binding 発注 parity**: `_backend_impl` の dispatch を**実際に通した** host-seed bar の marimo 戦略が命令型 twin と同一 order 列／fill／equity | dispatch を駆動する parity gate（現 author-defined `test_injected_submit_market_order_parity` は機構単体テストとして残置・production 契約ではないと明記）| parity |
+| **teardown 保証**: bar 途中 raise でも marimo context が leak しない（次 run が "already initialized" にならない）| 連続 run + 途中 raise の regression | invariant |
+| **lazy-import 規律**: 新 detector module は marimo-free・seam は marimo 戦略実行時だけ lazy import | `test_strategy_runtime_offline`（_CHILD import 集合へ detector を追加）| invariant |
+| **#24 golden 不変**: 命令型経路は byte-identical（`KernelRunner` 無改変）| 既存 #24 golden gate（不変で GREEN）| golden |
+
+> 🤖 `/grill-with-docs`（#76 S6）セッション記録（Claude Code）。実装は tdd RED-first（gate を先に赤く）＋ code-review(simplify)。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。
+
+### S6a 実装着地（2026-06-18・dormant 解除）
+
+`/grill-with-docs`（設計の木）→ `/behavior-to-e2e`（AC→pytest gate）→ `/tdd`（RED-first 縦スライス）で実装。thin_drain を **runtime seam（`_backend_impl` の Replay dispatch）へ初配線**＝**dormant 解除**。アプリで marimo `.py` を Replay 実走できるようになった（初めてアプリ挙動が変わる #76 スライス）。
+
+成果物（4 縦スライス・各 RED→GREEN）:
+- `engine/strategy_runtime/strategy_kind.py`（新）: marimo-free AST detector（`is_marimo_app_source/_file`）。`tests/test_strategy_kind.py`（7）。offline gate の `_CHILD` import 集合へ追加。
+- `engine/strategy_runtime/thin_drain.py`: `open_runtime`/`_compile` に **`driver_seeds={name: initial}`**（host-owned driver State を in-context `mo.state()` で生成→getter を cold-run 前 seed→free-ref read を root 化）。`drivers` は author-defined 経路として残置（既存 gate）。`tests/test_strategy_runtime_thin_drain.py` に host-seed 2 本追加（計 15）。
+- `engine/strategy_runtime/marimo_strategy.py`（新）: `MarimoStrategy(Strategy)` adapter。`register`→ctx 捕獲 / `on_start`→`load_app`＋ExitStack で `open_runtime`（neutral Bar seed・`submit_market` inject）/ `on_bar`→drain / `close`→teardown。
+- `engine/_backend_impl.py`: `_select_replay_strategy(strategy_file)`（detect-first 分岐・marimo は lazy import）＋ `_start_engine_duckdb` に配線＋ **run を `try/finally: strategy.close()` で包む**（teardown 保証）。`tests/test_marimo_strategy_adapter.py`（4: production-binding parity / teardown / dispatch 2）。
+
+実コードで surface した非自明点（gate が束縛）:
+- **`push_order` が受けるのは `OrderFilled`**（`.last_qty`/`.last_px`・`.quantity` ではない）。parity sink はこの形で記録。
+- **teardown の必要性が cascade で実証**: parity test の sink バグ（`.quantity`）が run を mid-bar で raise → `on_stop`/`close` が呼ばれず marimo context leak → 次 run が "RuntimeContext already initialized"。KernelRunner.run に try/finally が無い事実を実機で確認＝S6-2 の dispatch finally が load-bearing。
+- **neutral Bar seed**: cold compile は bar 到来前に全 cell を1度実行するので、driver は `close=0.0` の neutral Bar で seed（結果は hot drain が上書き）。author の div-by-zero は compile 時に surface（fail-fast）。
+- **`load_app` は context を残さない**・手書き marimo（`__generated_with` 無し）も読める（実機確認）。
+
+gate 状況: S6a 34 本＋golden/imperative 11 本＋全 suite 326 passed（既知の `test_login_subprocess_env` macOS path-separator quirk のみ fail＝本スライス無関係・`_login_subprocess_env` 未変更）。#24 golden byte-identical（KernelRunner 無改変）。offline/import-purity GREEN（seam は marimo を module-load で引かない）。
+
+`code-review(simplify)`（high・2 ラウンド）で解消した指摘:
+- **HIGH（crash）**: production は `strategy_file` を **str** で渡す（`backend_service` の `cfg.get`）が `_select_replay_strategy` の marimo 分岐が `load_scenario(str)` を呼び `_sidecar_path(...).with_name` で `AttributeError`＝**全 marimo run が STRATEGY_LOAD_ERROR**。dispatch test が Path を渡して masking していた。→ `Path(strategy_file)` 強制＋**dispatch test を str 入力へ**（regression guard）。
+- **MEDIUM（error taxonomy）**: marimo の notebook load を **dispatch で eager に**（`load_app` を factory 前で実行・None→`StrategyLoadError`）。これで「ファイルが壊れている」は命令型と対称に **STRATEGY_LOAD_ERROR**、cold compile（on_start の analog）失敗だけ RUN_FAILED に揃う。adapter は `app_path=` → **`app=`（loaded App）** へ変更。
+- **LOW/cleanup**: `driver_seeds` の clobber guard（cell が seed 名を def→fail-closed・inject と対称）／import 収集を module-level（`tree.body`）に制限／`_compile` の冗長 local `import asyncio` 撤去／no-op `register` override 撤去。
+- 2 ラウンド目: 新規 Medium+ ゼロ（ctx 捕獲・同一スレッド・`tree.body` 検出・clobber 偽陽性なしを実機確認）。
+
+未着手（S6a 範囲外）: portfolio/position の cell 露出（直後スライス）／UI 表面 S6b（#15/#16→単一ボタン撤去→footer #30）／Live 配線（別 epic）／D3 構造的 hot-list guard（任意）。
+
+> 🤖 `/grill-with-docs`＋`/behavior-to-e2e`＋`/tdd`＋`/code-review(simplify)` セッション記録（Claude Code）。

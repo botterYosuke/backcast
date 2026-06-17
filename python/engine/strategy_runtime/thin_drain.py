@@ -258,7 +258,10 @@ class CompiledStrategy:
 
 
 def _compile(
-    app: "App", drivers: Sequence[str], inject: "dict[str, Any] | None" = None
+    app: "App",
+    drivers: Sequence[str],
+    inject: "dict[str, Any] | None" = None,
+    driver_seeds: "dict[str, Any] | None" = None,
 ) -> CompiledStrategy:
     """Cold precompute. Must run inside a HeadlessKernel context, on its thread.
 
@@ -266,14 +269,22 @@ def _compile(
     the graph is built with no stale cells), then asks marimo which cells a host-driven
     state update must re-run, in topological order.
 
-    ``inject`` seeds host-provided names into the cell globals BEFORE the cold run (S4): a
-    cell that references an injected name (e.g. ``submit_market``) sees it as a free ref —
-    like a builtin — that resolves from globals in both the cold run and the hot drain. This
-    is how the cell-facing action API (engine.strategy_runtime.cell_api) reaches cells. Values
-    the host writes between bars are NOT injected here — they are driver mo.state (D5).
-    """
-    import asyncio
+    Two kinds of host names are seeded into the cell globals BEFORE the cold run, branched
+    by role:
 
+      ``inject`` — host ACTION callables (``submit_market`` / ``log``, S4). A cell references
+        the name as a free ref — like a builtin. Seeded INERT for the cold run (so the cold
+        run, which executes every cell once, does not fire a spurious order before any bar),
+        then armed with the real callable for the hot drain.
+      ``driver_seeds`` — host-owned driver mo.state, ``{getter_name: initial_value}`` (S6a,
+        findings 0046 S6-6). The host OWNS the State (name + object): this builds a real
+        ``mo.state(initial)`` here and seeds its getter into globals, so a cell reading
+        ``get_bar()`` as a free ref is rooted by identity (``_find_cells_for_state``) and the
+        host writes it each bar via ``drain``. This is the canonical authoring style — the
+        author writes no ``get_bar, set_bar = mo.state(...)`` boilerplate. (``drivers`` is the
+        older author-defined style, where the cell itself defines the mo.state; both resolve
+        through the same setter recovery below.)
+    """
     runner = app._get_kernel_runner()
     if inject:
         # Seed INERT stubs before the cold run so cells referencing these names resolve, but
@@ -281,6 +292,15 @@ def _compile(
         # globals + build the graph), so a live ``submit_market`` would place a spurious order
         # before any bar. The real callables are armed only after the cold run, for the hot drain.
         runner.globals.update({name: _inert_action for name in inject})
+    if driver_seeds:
+        # Build host-owned driver States and seed their getters so free-ref reads resolve in
+        # the cold run AND the hot drain. mo.state() registers in the active kernel context
+        # (we are inside a HeadlessKernel), so this must run in-context, on its thread.
+        import marimo
+
+        for name, initial in driver_seeds.items():
+            getter, _setter = marimo.state(initial)
+            runner.globals[name] = getter
     cells = list(app._cell_manager.valid_cells())
     # A stale-free graph + populated globals is the precondition compute_cells_to_run assumes.
     asyncio.run(runner.run({cid for cid, _ in cells}))
@@ -288,6 +308,20 @@ def _compile(
     kernel = runner._kernel
     graph = kernel.graph
     glbls = runner.globals
+    if driver_seeds:
+        # Fail-closed (symmetric with inject below): a cell that also DEFINES a host-seeded driver
+        # name shadows the seeded State after the cold run, so the host's per-bar write would drive
+        # an orphaned State (a dead driver that looks live). Reject — the host owns the canonical
+        # driver names; the cell must read the driver as a free ref, not redefine it.
+        seed_clobbered = sorted(
+            set(driver_seeds) & {d for cell in graph.cells.values() for d in cell.defs}
+        )
+        if seed_clobbered:
+            raise ValueError(
+                f"host-seeded driver name(s) {seed_clobbered} are also defined by a cell — the cold "
+                "run shadows the host-seeded State, so the host's per-bar write would drive an "
+                "orphaned State. Read the driver as a free ref (the host owns the driver names)."
+            )
     if inject:
         # Fail-closed: an injected name a cell also defines would be silently clobbered when we
         # arm — shadowing the author's value (corrupting downstream cells) or firing an action
@@ -310,7 +344,7 @@ def _compile(
     # pruning that an approximation would drop).
     setters: dict[str, Any] = {}
     roots: set = set()
-    for name in drivers:
+    for name in (*drivers, *(driver_seeds or {})):
         if name not in glbls:
             raise KeyError(f"driver getter {name!r} not found in strategy globals")
         state = glbls[name]
@@ -388,28 +422,35 @@ class StrategyRuntime:
 
 @contextlib.contextmanager
 def open_runtime(
-    app: "App", *, drivers: Sequence[str], inject: "dict[str, Any] | None" = None
+    app: "App",
+    *,
+    drivers: Sequence[str] = (),
+    inject: "dict[str, Any] | None" = None,
+    driver_seeds: "dict[str, Any] | None" = None,
 ) -> Iterator[StrategyRuntime]:
     """Open a thin-drain runtime for ``app``, owning the headless kernel's lifetime.
 
-    Usage::
+    Usage (S6a host-seed style — the host owns the driver name + object)::
 
         rt_inject = {"submit_market": make_submit_market(ctx, ...)}
-        with open_runtime(app, drivers=["get_bar"], inject=rt_inject) as rt:
+        with open_runtime(app, driver_seeds={"get_bar": neutral_bar}, inject=rt_inject) as rt:
             for bar in bars:
-                rt.drain({"get_bar": bar.close})
+                rt.drain({"get_bar": bar})
                 signal = rt.globals["signal"]
 
-    ``drivers`` are the getter names of the host-driven (root) mo.state — exactly the
-    states the host writes between bars (never auto-detect: a cell-written feedback state
-    must not become a root). ``inject`` seeds host-provided names (the cell-facing ACTION
-    API — ``submit_market`` / ``log``) into the cell globals so per-bar cells can call them
-    (S4); host-written VALUES are driver mo.state, not injected. The single try/finally
+    ``driver_seeds`` (``{getter_name: initial_value}``) are host-owned driver mo.state the
+    runtime builds and seeds — the canonical authoring style, so the cell reads ``get_bar()``
+    as a free ref with no ``mo.state`` boilerplate. ``drivers`` is the older author-defined
+    style (the cell itself does ``get_bar, set_bar = mo.state(...)``). Either way these are
+    exactly the states the host writes between bars (never auto-detect: a cell-written feedback
+    state must not become a root — D5). ``inject`` seeds host-provided names (the cell-facing
+    ACTION API — ``submit_market`` / ``log``) into the cell globals so per-bar cells can call
+    them (S4); host-written VALUES are driver mo.state, not injected. The single try/finally
     guarantees the thread-local marimo context is torn down even when the compile itself raises.
     """
     host = HeadlessKernel()
     try:
-        runtime = StrategyRuntime(_compile(app, drivers, inject))
+        runtime = StrategyRuntime(_compile(app, drivers, inject, driver_seeds))
         yield runtime
     finally:
         host.teardown()

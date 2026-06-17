@@ -72,6 +72,12 @@ gate spike の実測は [`docs/spike/marimo-embed-result.md`](../spike/marimo-em
 ---
 
 ## per-bar cell 契約（hot path の正しさ境界・redesign grill 前段で確定）
+
+> ⚠️ **このセクションは [redesign 追補 (2026-06-18)](#redesign-追補-2026-06-18--per-bar-cell-契約を撤回context-均一化案a) で撤回された。**
+> 「per-bar cell = pure compute のみ／mo.output 黙殺→guard」は **hot/cold の挙動差をユーザーに露出させる**ため owner 判断で却下。
+> 下記の境界（context を張らないと mo.output が黙殺・mo.ui が hard error）は**実測の事実として正しい**が、解決策が
+> 「guard で塞ぐ」から「context を張って全 cell を marimo と同じ挙動に均一化する」へ変わった。以下は歴史的記録として残す。
+
 痩せ drain は per-cell の execution-context（`_install_execution_context`）を張らない。実測した境界:
 
 | per-bar cell が触るもの | hot path | 
@@ -148,3 +154,51 @@ orchestrated 235s の ~750x 速）＝budget 内・native-class。
 ### この slice で**やっていない**こと（後続）
 S3 fail-closed guard（D3 構造判定の runtime 実装）/ S4 injected globals（`submit_market`/`portfolio` の cell 注入）/
 S5 cold↔hot 遷移 / S6 `KernelRunner` 載せ替え ＋ ADR-0005 supersede ＋ marimo prod 昇格。
+
+---
+
+## redesign 追補 (2026-06-18) — per-bar cell 契約を撤回・context 均一化（案A）
+
+`/grill-with-docs` 続行セッション。owner が **「hot cell / cold cell をユーザーに見せるモデルはボツ（わかりにくい）。
+速度は確保したまま代替案を」** と判断。S3 の「per-bar cell = pure compute 契約 ＋ mo.output/UI fail-closed guard」を**撤回**し、
+代わりに **痩せ drain の per-cell 実行を marimo の execution-context で包んで全 cell を均一化する（案A）** に確定。
+
+### 何が問題だったか
+S1 痩せ drain は per-cell の execution-context を張らない（`executor.execute_cell` 直叩き）。その副作用として
+**bar を読む cell（hot）と読まない cell（cold）で挙動が割れる**: hot 経路だけ `mo.output` が silent no-op（footgun）・
+`mo.ui` が hard error。これは「ユーザーが hot/cold を意識し、どこで何が使えるかを学ぶ」必要を生む＝**漏れた抽象**。
+遅さの真因（4.5ms/bar）は entry-point 走査＋graph mutation＋lint＋topo であって **execution-context ではない**
+（`with_cell_id` = ExecutionContext 1個生成＋属性差し替え＝サブµs）。つまり「速さ」と「hot/cold 露出」は**本来無関係**で分離できる。
+
+### 確定（owner binding・実測裏取り済み）
+- **D6 — per-bar cell も execution-context を張る（`with_cell_id`）**。痩せ drain は precompute した cell 列を毎 bar 実行する
+  S1 のまま。違いは各 `execute_cell(cell, glbls, graph)` を `get_context().with_cell_id(cid)` で包むこと。
+- これで **全 cell が普通の marimo cell として振る舞う**: `mo.output` は動く（`_output.py:42` の `execution_context is None` 早期 return を
+  通らなくなる）・`mo.ui` も hard error にならない。**hot/cold の挙動差は消滅**。precompute 列は「内部の最適化」でユーザーには不可視。
+- **pure-compute 契約・mo.output/UI guard は不要**（S3 の guard 部分を削除）。**`mo.output` を毎 bar cell に書くのは事故ではなく
+  普通の marimo 挙動**。その出力を host がパネル（Hakoniwa）へ流すか捨てるかは**配線の選択**（#64 R4 と整合）であってユーザー規約ではない。
+
+### 実測（spike `python/spike/marimo_embed/context_uniform.py`・`CTX-UNIFORM PASS`）
+| 経路 | per-bar median | 50k 換算 |
+|---|---|---|
+| 痩せ drain（context 無し＝S1）| 3.03µs | 0.157s |
+| **痩せ drain ＋ context（D6・案A）** | **6.26µs** | **0.345s**（native 級・orchestrated 235s の ~680x 速・overhead 2.07x は絶対値誤差）|
+
+| 境界 | context 無し（control）| **context あり（D6）** |
+|---|---|---|
+| `mo.output` | 黙殺（output 空）| **動く（output 充填）＝footgun 消滅** |
+| `mo.ui` | hard error（`MarimoRuntimeException`）| **ran-no-error ＝普通の marimo cell と同じ** |
+
+### この追補で**変わらない**こと
+D1（bar 内＝変数 dataflow / bar またぎ＝mo.state）・D2（precompute は marimo 関数を call）・**D3（構造的 fail-closed＝hot list 外 cid 発火を拒否。
+parity/no-look-ahead の正しさ境界であって UI 契約とは別物）**・D4（feedback 3形）・D5（driver-state は host 明示宣言）は**全て不変**。
+撤回したのは「per-bar cell 契約（pure compute のみ・mo.output guard）」のみ。
+
+### 実装 epic への影響
+- **S1 module の小改修**: `StrategyRuntime.step` の `executor.execute_cell` 呼び出しを `with_cell_id` で包む（D6）。
+- **S3 の再定義**: 「fail-closed guard（mo.output/UI footgun 封じ）」は消滅。S3 に残るのは **ADR 起案 ＋ ADR-0005 supersede ＋ marimo prod 昇格** と、
+  必要なら **D3 構造的 hot-list 完全性 guard**（mo.output とは無関係の parity 保証）。
+- contract gate（`test_hot_path_contract_mo_output_silent` / `..._mo_ui_hard_error`）は「context 無しの素の挙動」を pin したもの＝**control として有効**だが、
+  production runtime（context あり）の挙動 gate を別途足す（mo.output が動く・mo.ui が動く）。
+
+> 🤖 `/grill-with-docs` redesign 追補セッション記録（Claude Code）。spike は throwaway（spike dep group）。ADR は #76 方針どおり未起案。

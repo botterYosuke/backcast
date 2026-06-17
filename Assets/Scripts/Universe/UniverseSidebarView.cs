@@ -1,4 +1,4 @@
-// UniverseSidebarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the universe sidebar, findings 0044)
+// UniverseSidebarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the universe sidebar, findings 0045)
 //
 // The scene-authored production HOST for the instrument-picker / universe sidebar. It REUSES the durable
 // UniverseSidebarController brain and renders the screen-fixed left sidebar as uGUI on its OWN nested,
@@ -8,7 +8,7 @@
 // WHY uGUI (was OnGUI): #77 — the sidebar and the menu were BOTH IMGUI, and a single-camera Screen-Space
 // setup ignores GUI.depth, so the (later) sidebar OnGUI overpainted the menu dropdown. uGUI makes z-order
 // deterministic by sortingOrder: this sidebar sits BELOW the menu (MenuBarView.MENU_SORT) so the dropdown
-// draws in front, and the EventSystem routes clicks to the top raycaster (no input bleed). See findings 0044.
+// draws in front, and the EventSystem routes clicks to the top raycaster (no input bleed). See findings 0045.
 //
 // Python-FREE: the controller drives SelectedSymbol (the depth-target focus) and the universe writeback;
 // the candidate source is injected by the root (a separate issue owns the real DuckDB/venue universe).
@@ -24,7 +24,7 @@ using UnityEngine.UI;
 public sealed class UniverseSidebarView : MonoBehaviour
 {
     // below MenuBarView.MENU_SORT so the dropdown overlaps the sidebar, above the field/windows (0) so the
-    // sidebar chrome stays visible over the workspace (findings 0044).
+    // sidebar chrome stays visible over the workspace (findings 0045).
     public const int SIDEBAR_SORT = 500;
 
     const float PAD = 6f, ROW_H = 22f, TITLE_H = 22f, GAP = 2f, REMOVE_W = 24f;

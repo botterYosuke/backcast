@@ -1,4 +1,4 @@
-# findings 0044 — menu dropdown z-order: chrome uGUI cutover (#77)
+# findings 0045 — menu dropdown z-order: chrome uGUI cutover (#77)
 
 方針: ADR-0005（1:1 表面 parity）。語彙: CONTEXT.md「chrome z-order 前面順序」。
 

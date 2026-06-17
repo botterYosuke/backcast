@@ -51,7 +51,8 @@ public static class StrategyEditorProbe
                 ?? Section5_Registry()
                 ?? Section6_LayoutRoundTrip()
                 ?? Section7_Restore(spawned)
-                ?? Section8_MeshColoring(spawned);
+                ?? Section8_MeshColoring(spawned)
+                ?? Section9_RegistryRunWiring();
         }
         catch (Exception e)
         {
@@ -75,7 +76,9 @@ public static class StrategyEditorProbe
                       "additive strategyEditors, on-disk text proof, sanitize null/empty/dup/orphan/missing-path, back-compat, " +
                       "Clone/StructurallyEqual) + restore full-replacement on real windows (state-none->unbound, present->reset+Open, " +
                       "Open-failure keeps window) + non-scroll mesh colouring (real Text, token glyph vertex colour, Default unchanged, " +
-                      "no tag injection) — Unity-owned, ADR-0003 capability parity, under Unity Mono");
+                      "no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
+                      "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
+                      "— Unity-owned, ADR-0003 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
         else
@@ -362,6 +365,51 @@ public static class StrategyEditorProbe
         if (!reg.Unregister("strategy_editor:region_002")) return "S5: unregister failed";
         if (reg.Contains("strategy_editor:region_002")) return "S5: still present after unregister";
         if (reg.Unregister("nope")) return "S5: unregister of a missing id returned true";
+        return null;
+    }
+
+    // ======================================================================
+    // 9. RegistryStrategyFileProvider — the #78 run-layer wiring (findings 0044 §2-1):
+    //    Run/Step/LiveAuto hold THIS adapter; it re-resolves the editor's live provider through the
+    //    registry on every call, so "未ロード/未保存/欠落 → false → Run封鎖" comes for free and a saved
+    //    editor .py flows straight through (WYSIWYR). No env-default path anywhere.
+    // ======================================================================
+    static string Section9_RegistryRunWiring()
+    {
+        const string WID = "strategy_editor:region_001";
+        Directory.CreateDirectory(TempDir);
+        string py = Path.Combine(TempDir, "run_wire.py");
+        File.WriteAllText(py, "SCENARIO = {}\n");
+
+        var reg = new StrategyProviderRegistry();
+
+        // (a) nothing registered → false (the unloaded case → Run blocked).
+        var prov = new RegistryStrategyFileProvider(reg, WID);
+        if (prov.TryGetStrategyFile(out _)) return "S9: supplyable with NOTHING registered";
+
+        // (b) null registry / empty id → false (defensive, never throws).
+        if (new RegistryStrategyFileProvider(null, WID).TryGetStrategyFile(out _)) return "S9: null registry supplyable";
+        if (new RegistryStrategyFileProvider(reg, null).TryGetStrategyFile(out _)) return "S9: null window id supplyable";
+
+        // (c) an UNBOUND document registered → still false (the editor shows nothing to run).
+        var doc = new StrategyDocument();
+        reg.Register(WID, doc);
+        if (prov.TryGetStrategyFile(out _)) return "S9: supplyable while the registered editor is unbound";
+
+        // (d) the editor opens a saved .py → the adapter returns THAT path (WYSIWYR), live through the registry.
+        if (!doc.Open(py)) return "S9: Open failed";
+        if (!prov.TryGetStrategyFile(out string got) || got != Path.GetFullPath(py))
+            return "S9: adapter did not return the editor's saved path (got [" + got + "])";
+
+        // (e) the editor goes dirty → the adapter re-resolves to false on the SAME instance (no stale path).
+        doc.SetText("SCENARIO = {}\n# edit\n");
+        if (prov.TryGetStrategyFile(out _)) return "S9: dirty editor still supplyable — adapter cached a stale path";
+
+        // (f) unregistered mid-flight → false (window torn down → Run blocked).
+        doc.Save();   // clean again so only the unregister can flip it
+        if (!prov.TryGetStrategyFile(out _)) return "S9: clean saved editor not supplyable";
+        reg.Unregister(WID);
+        if (prov.TryGetStrategyFile(out _)) return "S9: supplyable after the editor was unregistered";
         return null;
     }
 

@@ -1,4 +1,4 @@
-// MenuBarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the global menu bar, findings 0044)
+// MenuBarView.cs — issue #77 "menu dropdown z-order" (uGUI cutover of the global menu bar, findings 0045)
 //
 // The scene-authored production HOST for the menu bar. It KEEPS the existing MenuBarViewModel brain and
 // renders the TTWR File/Edit/Venue/Help surface (ADR-0005 1:1 parity) as uGUI on its OWN nested,
@@ -12,7 +12,7 @@
 // dropdown can't bleed a click into the sidebar beneath it. A full-screen BACKDROP (BACKDROP_SORT,
 // between sidebar and menu) is active only while a menu is open: it closes the menu on an outside click
 // AND consumes that click so it never reaches the sidebar (desktop menu semantics). The secret modal's
-// Canvas (1000) stays above the menu, so it remains topmost (findings 0044).
+// Canvas (1000) stays above the menu, so it remains topmost (findings 0045).
 //
 //   * File = Layout (New / Open / Save) — forwards to the workspace root's layout I/O.
 //   * Venue = the reused VenueMenuViewModel (vm.Venue): 4 TTWR connect variants (prod grey-out) +
@@ -30,7 +30,7 @@ public sealed class MenuBarView : MonoBehaviour
 {
     enum OpenMenu { None, File, Edit, Venue, Help }
 
-    // chrome z-order contract (findings 0044): field/windows(0) < sidebar < BACKDROP < menu+dropdown
+    // chrome z-order contract (findings 0045): field/windows(0) < sidebar < BACKDROP < menu+dropdown
     // < secret modal(1000). Only the RELATIONS matter; these values just realise them.
     public const int MENU_SORT = 600;
     const int BACKDROP_SORT = MENU_SORT - 1;   // catches outside clicks above the sidebar, below the dropdown

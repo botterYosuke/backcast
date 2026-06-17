@@ -316,7 +316,7 @@ chrome は IMGUI を撤去して uGUI 化する。契約の順序は **field/win
 dropdown は sidebar の前面に描かれ、secret modal は常に最前面。**EventSystem はクリックを最前面 raycaster だけへ配送**
 するので、この順序が視覚 z-order と入力到達の両方を一意に決める（dropdown 直下の sidebar への取りこぼしクリックも構造的に
 消える）。menu 展開中は menu と sidebar の間に全画面 backdrop を一枚敷き、外側クリックで閉じつつ sidebar への到達を断つ。
-数値の `sortingOrder` は findings 0044。[[floating window / FloatingWindowLayer / z-order]]（Content 内の window 同士の
+数値の `sortingOrder` は findings 0045。[[floating window / FloatingWindowLayer / z-order]]（Content 内の window 同士の
 前後）とは別レイヤ——あちらは pan/zoom 追従、こちらは画面固定。
 _Avoid_: chrome の前後を IMGUI の `GUI.depth` や MonoBehaviour 実行順で持つこと（単一カメラでは無効・#77）／secret modal
 より前面に menu を置くこと（modal は常に最前面）／Content 内の window z-order と画面固定 chrome の layering を同一視すること

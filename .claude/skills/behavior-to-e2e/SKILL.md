@@ -197,6 +197,19 @@ release-gate 項目に落とす。既存の `tests/e2e_replay.rs` は backend→
 リリース前の最後の砦としてはそれだけでは足りない。ユーザーが取りうる操作は原則すべてカタログ化し、
 可能な限り自動テストにする。採用中の方式で忠実に検証できない場合も除外せず、代替方式を明記する。
 
+> **このリポジトリ（backcast）では FLOWS.md / `tests/e2e_replay.rs` は無い**。以下の本文は移植元 TTWR(Bevy)
+> 向け。backcast slice では正本が異なる（詳細は description の line 13）。最短の対応表:
+> | 挙動の出所 | gate（backcast 正本）|
+> |---|---|
+> | Python seam ロジック（engine/*・handler・poll）| `python/tests/test_*.py`（pytest。fake/stub で seam を直接駆動・RED→GREEN を findings に記録）|
+> | C# / Unity 挙動 | AFK batchmode probe（`-executeMethod <…>Probe.Run`）＋ HITL harness の hard assert |
+> | 純 Python engine（Unity 未配線・oracle あり）| golden gate スクリプト（capture/verify）＋ `docs/findings/NNNN` の AC 対応表 |
+> | **spike probe の卒業**（#76 等 throwaway→本実装）| spike probe を production pytest gate に卒業し、AC→gate 表を `docs/findings/NNNN` に記録。spike-only dep（marimo 等）は `pytest.importorskip` で gate（実例 #76 S1: `test_strategy_runtime_thin_drain.py`＝perf/contract/precompute/parity、`test_strategy_runtime_offline.py`＝runtime seam が dep を引かない不変条件を clean subprocess で固定）|
+>
+> backcast では「**probe/pytest を回帰ゲートとして著したか／findings に RED→GREEN・再走手順を記録したか**」が
+> 本スキルの実体。FLOWS.md 採番に拘泥しない。`/grill-with-docs` 併発時は設計インタビュー着手前に **最初に formal
+> invoke**（成果物の品質・設計済み度・新規性と formal invoke は独立＝飛ばさない。#76 S1 はこれを実践＝miss せず）。
+
 ## なぜこの形なのか（先に理解する）
 
 本アプリには複数の検証面がある。backend（Python gRPC、replay/live runner）が push する状態は

@@ -5,6 +5,7 @@ InprocLiveServer はこのクラスだけを import すればよい。
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Optional
 
@@ -78,9 +79,9 @@ class BackendService:
         try:
             resp = self._srv.get_portfolio()
         except RuntimeError as exc:
-            return {"success": False, "error_code": "INPROC_ABORT", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "detail": str(exc)}
+            return {"success": False, "error_code": "INPROC_ABORT", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "detail": str(exc)}
         except Exception as exc:
-            return {"success": False, "error_code": "INPROC_ERROR", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "detail": str(exc)}
+            return {"success": False, "error_code": "INPROC_ERROR", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "detail": str(exc)}
         return {
             "success": resp.success,
             "buying_power": resp.buying_power,
@@ -94,7 +95,26 @@ class BackendService:
                 {"symbol": o.symbol, "side": o.side, "qty": o.qty, "price": o.price, "status": o.status, "ts_ms": o.ts_ms}
                 for o in resp.orders
             ],
+            # #65: RunResult running-view (走行中) realized/unrealized — Python 権威 (§7-c).
+            "realized_pnl": resp.realized_pnl,
+            "unrealized_pnl": resp.unrealized_pnl,
         }
+
+    def get_portfolio_json(self) -> str:
+        """#65: JSON string of get_portfolio() for the Replay poll (symmetric with get_state_json).
+
+        C#'s ReplayPanelDecoder.DecodePortfolio takes a JSON string; get_portfolio returns a dict,
+        so the Replay poll lane reads this. Keeps portfolio off the chart's get_state_json (TTWR's
+        StateJson/Status 2-channel split — findings 0044 §2/§7-a).
+
+        Honest-empty (findings 0044 §3/§7-b): when no run has produced a portfolio yet
+        (`last_portfolio is None` — loaded-but-not-running, or just-cleared at run start), return ""
+        so the C# panels show "(no data)" (ShowReplayEmpty) instead of a zero-filled snapshot
+        ("bp=0 / flat / o:0"), which would misread as real zero buying power.
+        """
+        if getattr(self._srv.engine, "last_portfolio", None) is None:
+            return ""
+        return json.dumps(self.get_portfolio(), ensure_ascii=False)
 
     # ------------------------------------------------------------------
     # Venue lifecycle

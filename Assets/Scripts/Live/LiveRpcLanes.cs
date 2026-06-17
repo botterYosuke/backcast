@@ -45,9 +45,11 @@ public class LiveRpcLanes
     Thread _writeThread, _secretThread, _pollThread;
     volatile bool _pollStop;
     volatile string _latestState;
+    volatile string _latestPortfolio;   // #65: Replay portfolio snapshot (latest-wins, like _latestState)
     PyObject _pyNone;
 
     public string LatestState => _latestState;
+    public string LatestPortfolio => _latestPortfolio;   // #65
     public long PollCount;   // Interlocked
 
     public LiveRpcLanes(PyObject server, LiveLogoutCoordinator coord, int pollIntervalMs = 50)
@@ -239,8 +241,23 @@ public class LiveRpcLanes
             try
             {
                 using (Py.GIL())
-                using (PyObject s = _server.InvokeMethod("get_state_json"))
-                    _latestState = s.As<string>();
+                {
+                    string state;
+                    using (PyObject s = _server.InvokeMethod("get_state_json"))
+                        state = s.As<string>();
+                    _latestState = state;
+                    // #65: in Replay, also poll the portfolio snapshot for the base panels. Kept on
+                    // a SEPARATE call from the chart's get_state_json (TTWR's StateJson/Status
+                    // 2-channel split — findings 0044 §2/§7-a), under the same GIL hold so a bar
+                    // never advances mid-pair. Gated to Replay: Live panels are driven by
+                    // _host.Panel (LivePanelViewModel); execution_mode is the only field whose value
+                    // is the quoted literal "Replay". Match the KEY+value pair so a stray string field
+                    // that happened to equal "Replay" can't false-trigger (pydantic dumps with no
+                    // spaces, so the exact "execution_mode":"Replay" pair is reliable).
+                    if (state != null && state.Contains("\"execution_mode\":\"Replay\""))
+                        using (PyObject p = _server.InvokeMethod("get_portfolio_json"))
+                            _latestPortfolio = p.As<string>();
+                }
                 Interlocked.Increment(ref PollCount);
             }
             catch (Exception) { /* transient; keep polling until stopped */ }

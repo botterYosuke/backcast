@@ -10,11 +10,15 @@ description: |
   `python/engine/nautilus_*.py`.
   Also trigger on the **replay streaming-runner seam** even though it lives outside
   `nautilus_*.py` — `python/engine/strategy_runtime/replay_runner.py` / `engine_runner.py` /
-  `catalog_data_loader.py`, the per-bar streaming loop (`engine.add_data([item])` +
+  `replay_kernel_observer.py` / `catalog_data_loader.py`, the per-bar streaming loop (`engine.add_data([item])` +
   `engine.run(streaming=True)` one bar at a time), `engine.kernel.msgbus.subscribe`/`unsubscribe`
   on `data.bars.{bar_type}` / `events.fills.{symbol}` topics, the `ReplaySink` hook
   `get_extra_subscriptions`, per-bar `on_bar` callbacks, `bar_type_for_instrument`,
   `merge_bars_by_ts`, and `start_engine` の bar-by-bar streaming into GetState (`apply_replay_event`).
+  Also the **Replay panel running-snapshot seam** (#65): `ReplayKernelObserver` が push_portfolio /
+  push_order / on_equity から `engine.last_portfolio` へ atomic-swap する running snapshot、`get_portfolio_json`
+  / `get_portfolio` の realized/unrealized、`_finalize_run` の summary union（sharpe/sortino を
+  `equity_curve_stats` から合流・max_drawdown は単一ソース）。正本: `docs/findings/0044-replay-panel-real-data.md`。
   実例: #29 で engine_runner に `on_bar` を足し start_engine を bar-by-bar 化したとき本スキルを
   invoke せずコード読解＋verify agent だけで進めた（msgbus 同一トピック複数 subscribe の安全性など
   本スキルで前裁定できた・2026-06）。**実装だけでなく、この seam に触れる diff の code-review /

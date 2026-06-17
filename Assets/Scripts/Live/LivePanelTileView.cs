@@ -69,4 +69,17 @@ public sealed class LivePanelTileView
         _last = ReplayEmpty;
         _content.text = ReplayEmpty;
     }
+
+    // #65: render a Replay-derived string (the caller formats it from the decoded get_portfolio_json /
+    // summary_json). Same dedup gate as Refresh/ShowReplayEmpty so a steady snapshot costs one compare
+    // per frame and no uGUI rebuild. Keeps the view a dumb string sink — Replay formatting lives in the
+    // caller, exactly as the Live path's per-tile formatter delegates do.
+    public void ShowText(string text)
+    {
+        if (_content == null) return;
+        string next = text ?? "";
+        if (next == _last) return;
+        _last = next;
+        _content.text = next;
+    }
 }

@@ -146,6 +146,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile string _manualOrderId = "";        // retained for the next "Cancel last"
     volatile bool _manualStatusDirty;
     long _lastPanelApplied = -1;                 // LivePanelViewModel.AppliedCount gate (skip idle tile re-format)
+    // #65: Replay base-panel payload-change gate (mirrors DriveDepthLadders' _lastDepthPayload) so the
+    // per-frame Replay drive only JsonUtility-parses when the poll/summary string actually changed.
+    // Seeded to the force sentinel so the first drive always renders (honest-empty before any poll).
+    const string _replayForceSentinel = "force";
+    string _lastReplayPortfolioPayload = _replayForceSentinel;
+    string _lastReplaySummaryPayload = _replayForceSentinel;
     // Venue login ack crosses worker→main (host.VenueLogin onResult runs off-main); apply to Conn on main.
     volatile bool _loginAckPending;
     volatile bool _loginAckOk;
@@ -782,6 +788,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // allocation) while the live session is idle — the formatters only run when an event was applied. ──
     void RefreshLiveTiles()
     {
+        // #65: Replay drives the base panels from the get_portfolio_json poll, which the live
+        // AppliedCount gate never observes — no live events drain in Replay, so AppliedCount is
+        // frozen and the gate would render PushReplayTiles only once (at the shape flip), leaving the
+        // panels stuck while the run streams. Bypass the gate in Replay and drive every frame;
+        // PushReplayTiles dedups on the poll payload (one string compare) and ShowText dedups the
+        // text write, so a steady snapshot is cheap. Live keeps the AppliedCount gate.
+        if (!_baseLive) { PushReplayTiles(); return; }
         long applied = _host.Panel.AppliedCount;
         if (applied == _lastPanelApplied) return;
         _lastPanelApplied = applied;
@@ -791,19 +804,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // Repaint all base panel tiles unconditionally (bypass the AppliedCount gate). #61 base retile uses
     // this on a Replay⇄Live shape flip so the panels redraw immediately (the gate would otherwise skip
     // an unchanged AppliedCount). _buyingPowerView is the #61 4th panel; the other three are #23 tiles.
-    void ForceRefreshLiveTiles() => PushLiveTiles();
+    void ForceRefreshLiveTiles()
+    {
+        // #65: a flip must repaint NOW even if the Replay poll payload is unchanged (Live→Replay must
+        // replace live figures; Replay→Live must drop replay ones). Reset the payload gate to the force
+        // sentinel so the next PushReplayTiles always re-decodes/renders.
+        _lastReplayPortfolioPayload = _replayForceSentinel;
+        _lastReplaySummaryPayload = _replayForceSentinel;
+        PushLiveTiles();
+    }
 
     void PushLiveTiles()
     {
-        // honest empty state in Replay: _host.Panel is monotonic (never cleared), so after a Live→Replay
-        // flip the live formatters would still render the LAST live account/orders/fills. In Replay the
-        // base panels show "(no data — Replay)" instead; real replay numbers are follow-up #65 (findings 0028).
+        // #65: in Replay the base panels render the real run's portfolio (get_portfolio_json poll),
+        // not the monotonic live VM. Before the first poll / outside a run last_portfolio is null →
+        // DecodePortfolio yields an empty snapshot, so we keep the #61 honest-empty "(no data)".
         if (!_baseLive)
         {
-            _buyingPowerView?.ShowReplayEmpty();
-            _ordersView?.ShowReplayEmpty();
-            _positionsView?.ShowReplayEmpty();
-            _runResultView?.ShowReplayEmpty();
+            PushReplayTiles();
             return;
         }
         LivePanelViewModel p = _host.Panel;
@@ -811,6 +829,44 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _ordersView?.Refresh(p);
         _positionsView?.Refresh(p);
         _runResultView?.Refresh(p);
+    }
+
+    // #65: Replay base-panel drive. Decodes the get_portfolio_json poll snapshot into the 4 tiles.
+    // Portfolio absent (run not started / cleared) → honest-empty, preserving the #61 anti-stale-live
+    // contract (a Live→Replay flip never leaves stale live figures on screen). RunResult is two-stage
+    // (TTWR run_result_panel.rs): running view (counts + realized/unrealized) while the run streams,
+    // full stats (fills/sharpe/dd + pnl/sortino) once the launcher captures summary_json.
+    void PushReplayTiles()
+    {
+        string portfolioJson = _host.LatestPortfolioJson;
+        string summaryJson = _host.RunSummaryJson;
+        // payload-change gate: only decode+render when the poll snapshot OR the completion summary
+        // actually changed, so the per-frame Replay drive doesn't JsonUtility-parse every frame. Both
+        // are tracked because the running→full-stats switch (summary flips non-null) can land on a
+        // frame where the portfolio string is unchanged.
+        if (portfolioJson == _lastReplayPortfolioPayload && summaryJson == _lastReplaySummaryPayload)
+            return;
+        _lastReplayPortfolioPayload = portfolioJson;
+        _lastReplaySummaryPayload = summaryJson;
+
+        if (string.IsNullOrWhiteSpace(portfolioJson))
+        {
+            _buyingPowerView?.ShowReplayEmpty();
+            _ordersView?.ShowReplayEmpty();
+            _positionsView?.ShowReplayEmpty();
+            _runResultView?.ShowReplayEmpty();
+            return;
+        }
+
+        PortfolioSnapshot snap = ReplayPanelDecoder.DecodePortfolio(portfolioJson);
+        _buyingPowerView?.ShowText(FormatReplayBuyingPower(snap));
+        _ordersView?.ShowText(FormatReplayOrders(snap));
+        _positionsView?.ShowText(FormatReplayPositions(snap));
+
+        _runResultView?.ShowText(
+            string.IsNullOrWhiteSpace(summaryJson)
+                ? FormatReplayRunResultRunning(snap)
+                : FormatReplayRunResultComplete(ReplayPanelDecoder.DecodeRunResult(summaryJson)));
     }
 
     // ── #57: per-frame depth ladder drive (TTWR overlays_ladder.rs mode_sync + render, findings 0028
@@ -1133,6 +1189,65 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
               .Append("  orders=").Append(t.OrderCount).Append("  fills=").Append(t.FillCount);
         }
         if (!vm.HasLifecycle && !vm.HasTelemetry) sb.Append("(no run)");
+        return sb.ToString();
+    }
+
+    // ── #65 Replay base-panel formatters (decoded get_portfolio_json / summary_json) ──
+    // Style mirrors the Live formatters above so the same tile reads consistently across modes.
+    static string FormatReplayBuyingPower(PortfolioSnapshot s)
+    {
+        var sb = new StringBuilder();
+        sb.Append("bp=").Append(s.BuyingPower).Append("  equity=").Append(s.Equity);
+        return sb.ToString();
+    }
+
+    static string FormatReplayOrders(PortfolioSnapshot s)
+    {
+        var sb = new StringBuilder();
+        int n = s.Orders?.Count ?? 0;
+        if (n > 0)
+        {
+            // Show the most recent fill (Replay is MARKET-immediate → every order is a FILLED row).
+            PortfolioOrderRow o = s.Orders[n - 1];
+            sb.Append(o.symbol).Append("  ").Append(o.side).Append("  ").Append(o.status)
+              .Append("  qty=").Append(o.qty).Append('@').Append(o.price).Append('\n');
+        }
+        else sb.Append("(none)\n");
+        sb.Append("filled-order count: ").Append(n);
+        return sb.ToString();
+    }
+
+    static string FormatReplayPositions(PortfolioSnapshot s)
+    {
+        if (s.Positions != null && s.Positions.Count > 0)
+        {
+            var sb = new StringBuilder();
+            foreach (PositionRow p in s.Positions)
+                sb.Append(p.symbol).Append("  qty=").Append(p.qty).Append("  avg=").Append(p.avg_price)
+                  .Append("  uPnL=").Append(p.unrealized_pnl).Append('\n');
+            sb.Append("cash=").Append(s.BuyingPower).Append("  equity=").Append(s.Equity);
+            return sb.ToString();
+        }
+        return "(flat)";
+    }
+
+    // RunResult running view (TTWR run_result_panel.rs running branch): o:orders f:fills + realized/unrlz.
+    static string FormatReplayRunResultRunning(PortfolioSnapshot s)
+    {
+        int orders = s.Orders?.Count ?? 0;
+        var sb = new StringBuilder();
+        sb.Append("running  o:").Append(orders).Append("  f:").Append(orders).Append('\n');
+        sb.Append("pnl:").Append(s.RealizedPnl).Append("  unrlz:").Append(s.UnrealizedPnl);
+        return sb.ToString();
+    }
+
+    // RunResult full-stats view (TTWR full-stats branch): fills/sharpe/dd + pnl/sortino from summary_json.
+    static string FormatReplayRunResultComplete(RunResult r)
+    {
+        var sb = new StringBuilder();
+        sb.Append("fills:").Append(r.FillsCount).Append("  sh:").Append(r.Sharpe.ToString("F2"))
+          .Append("  dd:").Append(r.MaxDrawdown.ToString("F0")).Append('\n');
+        sb.Append("pnl:").Append(r.TotalPnl.ToString("F0")).Append("  so:").Append(r.Sortino.ToString("F2"));
         return sb.ToString();
     }
 

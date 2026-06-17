@@ -99,6 +99,7 @@ public sealed class WorkspaceEngineHost
     bool _closing;                             // teardown started: reject new RPCs + launcher must not start_engine
     bool _teardownComplete;
     string _finalStateJson;
+    string _runSummaryJson;   // #65: start_engine's summary_json (RunResult full-stats at completion)
     readonly OnceGate _stopGate = new OnceGate();
     readonly object _rpcLock = new object();   // guards the live-RPC single-flight check-and-set
 
@@ -118,6 +119,24 @@ public sealed class WorkspaceEngineHost
     public string LatestStateJson =>
         Volatile.Read(ref _teardownComplete) ? Volatile.Read(ref _finalStateJson)
         : (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestState : null);
+
+    // #65 AFK test seam: edit-mode probes (HakoniwaBaseModeProbe) have no live poll lane (_lanes ==
+    // null), so they inject the Replay portfolio / summary snapshots here to drive PushReplayTiles.
+    // Null in production — never assigned outside the editor probe, so LatestPortfolioJson/RunSummaryJson
+    // fall through to their real sources with zero behavioural change.
+    internal string TestPortfolioJsonOverride;
+    internal string TestRunSummaryJsonOverride;
+
+    // #65: the Replay portfolio snapshot, polled alongside the chart state (get_portfolio_json @ 50 ms,
+    // Replay-only). null before the first poll / outside Replay → the base panels show honest-empty.
+    public string LatestPortfolioJson =>
+        TestPortfolioJsonOverride
+        ?? (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestPortfolio : null);
+
+    // #65: the launcher captures start_engine's summary_json once the run completes; the RunResult
+    // panel reads it for full stats (TTWR push_run_complete → RunComplete{summary_json}). Cleared at
+    // run start so a new run doesn't show the prior run's stats during its running view.
+    public string RunSummaryJson => TestRunSummaryJsonOverride ?? Volatile.Read(ref _runSummaryJson);
 
     // ---- bring-up: build the PERSISTENT live-configured server ONCE (decision 1) ----
     // The CALLER decides ownership BEFORE calling this (WorkspaceOwnership.ShouldClaim). venue has a
@@ -189,6 +208,7 @@ public sealed class WorkspaceEngineHost
         _req = req;
         Volatile.Write(ref _startError, null);
         Volatile.Write(ref _runFinished, false);
+        Volatile.Write(ref _runSummaryJson, null);   // #65: drop prior run's stats before this run
         Volatile.Write(ref _running, true);
         _launcher = new Thread(Launcher) { IsBackground = true, Name = "WorkspaceEngineLauncher" };
         _launcher.Start();
@@ -229,6 +249,10 @@ public sealed class WorkspaceEngineHost
                         using (PyObject ec = res["error_code"])
                         using (PyObject em = res["error_message"])
                             Volatile.Write(ref _startError, $"start_engine: {ec.As<string>()} {em.As<string>()}");
+                    else
+                        // #65: capture summary_json for the RunResult full-stats view (was discarded).
+                        using (PyObject sj = res["summary_json"])
+                            Volatile.Write(ref _runSummaryJson, sj.As<string>());
                 }
             }
         }

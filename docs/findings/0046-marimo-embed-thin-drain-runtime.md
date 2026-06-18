@@ -470,7 +470,28 @@ T1–T9 を 6 縦スライスで実装。全 step green・#24 golden byte-identi
 - **step4+5**（`8c31738`）: `v19_morning_cell.py`（命令型 on_bar の reset→exit→entry→snapshot を単一 self-cycle cell の if/elif へ写経・entry bar 非 accumulate で no-look-ahead 構造保証・pure logic は v19_core・scorer は注入 `score_v19_rows`・universe/rs_ref は constants）。`test_v19_marimo_parity.py`: 複数日（daily reset exercise）・real `V19MorningStrategy`+stub oracle・marimo は同一 stub を `services=` 経由・fixture guard で multi-iid（2 picks/day）＋cash gate bite（3rd trim）＋round-trip・order/fill/equity 一致。**一発 GREEN**。
 - **実コードで判明した非自明点**: ① marimo cell は mid-body `return` 不可＝命令型 if/return 鎖を if/elif/elif（相互排他）へ。② `_config`/`_feedback` は driver を読まない＝per-bar hot list 外（ancestor）で一度だけ cold 実行＝feedback State 持続（spike と同型）。③ snaps dict の挿入順は build_rows が universe 順で組むため parity 無影響（順序契約が効く）。
 
+### v19 production scorer resolver（T6 follow-up）設計の木（2026-06-18・`/grill-with-docs`・owner binding）
+T6 で follow-up に切った「production dispatch から marimo-v19 が実 model で走る」配線を grill で確定。
+behavior-to-e2e を grill 前に formal invoke し gate 枠組みを固定（AC1 mount-free dispatch→services/constants・
+AC2 real-data skip-if-mount-absent・AC3 resolver は module-load で marimo/joblib を引かない lazy 不変条件）。
+
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **R1 sidecar scorer-spec＝generic kind-keyed** | `v19_morning_cell.json` に `scorer` キー（多キー sidecar＝scenario/layout と共存）: `{"kind":"v19","model_path","universe_path","adv_path","prev_close_path"}`。paths は base_dir（sidecar dir）相対 | dispatch を v19 非依存に保つ（S6a detect-first と整合）。`kind→factory` registry で将来戦略は kind 追加のみ。v19 専用キー案は dispatch 肥大で却下 |
+| **R2 adv/prev_close＝static constants** | step2 で cell の `build_rows(snaps, UNIVERSE, RS_REF)` が adv/prev_close 無し（default {}）だったのは **production faithfulness gap**（本物 v19 は on_start で adv/prev_close をロードし `rel_turnover`/`gap` 特徴に使う）。resolver が `V19_ADV_BASELINE`/`V19_PREV_CLOSE`（`MappingProxyType`）を constants 注入し cell は `build_rows(.., adv_baseline=V19_ADV_BASELINE, prev_close=V19_PREV_CLOSE)`。step2 の `UNIVERSE`/`RS_REF` も `V19_*` 接頭辞へ rename（host-injected v19 config の namespacing） | step2 seam（cell=build_rows / service=score）を維持。adv/prev は model でなく feature input＝constants が自然。**parity gate も両 twin に非空 adv/prev_close を注入し `rel_turnover`/`gap` 非ゼロを fixture guard**（{} は経路が効くか見えない＝弱い） |
+| **R3 universe src＝universe_path artifact** | `V19_UNIVERSE`/`V19_RS_REF` は `universe_path` artifact（`{instruments, rs_ref}`）から。本物 v19 on_start と同一 source（faithful）。`rs_ref` は scenario に無くこの artifact にのみ存在。**resolver は scenario.instruments と artifact instruments の不一致を fail-loud** | 役割分担: `scenario.instruments`＝KernelRunner の bar universe / `scorer.universe_path`＝scoring/ranking universe＋rs_ref。scoring universe にある銘柄の bar が来ないと snapshots が永遠に埋まらず静かに ranking が変わる＝fail-loud |
+| **R4 resolver＝generic registry＋v19 factory** | **engine** `engine/strategy_runtime/scorer_bindings.py`: `load_scorer_bindings(strategy_path, scenario)→(services, constants)`。sidecar の `scorer` キーを読み `kind` で factory を lazy import。scorer キー無し→`({}, {})`。module-load は marimo/joblib-free。**strategy** `strategies/v19/v19_scorer.py`: `make_v19_scorer_bindings(spec, base_dir)`＝4 artifact を base_dir 相対でロード→universe→`V19_UNIVERSE`/`V19_RS_REF`・adv/prev_close→`MappingProxyType` constants・`score_v19_rows(rows)` は初回呼び出しで `joblib.load(model_path)`→cache し `v19_core.score_universe(rows, model)` | dispatch（`_select_replay_strategy`）は `services, constants = load_scorer_bindings(spath, scenario)` のみ追加し `MarimoStrategy(.., services=, constants=)` へ。v19 を知らない。joblib は scorer closure 初回（entry bar）で import＝AC3 lazy 不変＋v19 の deferred-load 設計を保つ |
+| **R5 toy marimo＝graceful no-injection** | `scorer` キー無しの marimo file は `({}, {})`＝従来どおり services/constants 無しで走る。`score_v19_rows` を参照する cell が spec 無しなら cold compile で `NameError`＝必要 spec 欠落が fail-loud | toy/parity-fixture の marimo（scorer 不要）を壊さない |
+
+### AC → 恒久 gate（behavior-to-e2e: backcast は findings＋pytest が正本）
+| 挙動（不変条件）| gate | 種別 |
+|---|---|---|
+| **AC1 mount-free dispatch wiring**: production dispatch（`_select_replay_strategy`）が fixture sidecar の `scorer` spec を解決し、実 resolver＋実 `joblib.load`（fixture の stub model `.joblib`）で services/constants を組み、dispatched marimo-v19 が命令型 twin（同一 stub model・同一 artifacts）と order/fill/equity 一致 | `test_v19_production_resolver.py`（synthetic bars monkeypatch・fixture artifacts＝小 universe/adv/prev_close JSON＋joblib.dump した stub model・dispatch を実駆動） | integration |
+| **AC2 real-data**: 実 joblib model＋実 universe artifact で dispatched marimo-v19 が end-to-end 実走 | skip-if-mount-absent（model/DuckDB 不在で skip・`test_v19_replay_real_data_roundtrips` と同型） | integration |
+| **AC3 lazy invariant**: `scorer_bindings`/`v19_scorer` は module-load で marimo/sklearn/joblib を引かない | `test_strategy_runtime_offline`（_CHILD 集合へ追加）/ import-purity | invariant |
+| **scenario/artifact 不一致 fail-loud**: scoring universe に bar の来ない銘柄があれば resolver が raise | AC1 gate に negative case | unit |
+
 ### 残務（順序・不変）
-**S6b-α step2**（設計＝上記 T1–T9 ＋実装順で確定。実装着手）→ **v19 production scorer resolver**（T6 follow-up: sidecar scorer-spec→lazy joblib scorer discovery ＋ `v19_morning_cell.json` sidecar ＋ dispatch 配線・universe source 確定）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+**v19 production scorer resolver**（設計＝上記 R1–R5・実装着手）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 
 > 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証・step2 設計の木は T1–T9 で確定。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。

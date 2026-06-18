@@ -53,6 +53,15 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Self-hosted owner machine ships PowerShell 5.1 (no pwsh) with default
+# ExecutionPolicy = Restricted. Override the shell at job level so:
+#   -NoProfile skips loading the user's profile script (don't depend on its state)
+#   -ExecutionPolicy Bypass lets the runner's temp .ps1 script execute
+#   "& '{0}'" is the GH Actions convention for passing the generated script file
+defaults:
+  run:
+    shell: powershell -NoProfile -ExecutionPolicy Bypass -Command "& '{0}'"
+
 jobs:
   build:
     name: Build & smoke-gate shippable Windows64
@@ -64,7 +73,6 @@ jobs:
       # Library/ and python/.venv/ are KEPT (natural cache); transient build/dist/smoke
       # outputs are cleaned so stale state from a failed prior run can't poison this one.
       - name: Clean transient outputs
-        shell: powershell
         run: |
           foreach ($p in @('build','dist','smoke-extract','release-body-verify.md')) {
             if (Test-Path $p) { Remove-Item -Recurse -Force $p -Confirm:$false }
@@ -80,7 +88,6 @@ jobs:
       # ── Resolve artifact version ─────────────────────────────────────────
       - name: Resolve artifact version
         id: ver
-        shell: powershell
         run: |
           $sha = "${{ github.sha }}".Substring(0,7)
           if ("${{ github.ref_type }}" -eq "tag") {
@@ -99,7 +106,6 @@ jobs:
       # ── Read Unity version + verify Editor installed ────────────────────
       - name: Read Unity version & verify Editor present
         id: unity
-        shell: powershell
         run: |
           $line = Get-Content ProjectSettings/ProjectVersion.txt | Where-Object { $_ -match '^m_EditorVersion:' } | Select-Object -First 1
           $v = ($line -split '\s+')[1]
@@ -115,7 +121,6 @@ jobs:
       # ── Publish path gate (tag push or dispatch) ─────────────────────────
       - name: Determine publish path
         id: publish
-        shell: powershell
         run: |
           $tag = "${{ github.ref_type }}" -eq "tag"
           $dispatch = "${{ github.event_name }}" -eq "workflow_dispatch"
@@ -132,7 +137,6 @@ jobs:
           enable-cache: false
 
       - name: uv sync (materialize python/.venv)
-        shell: powershell
         run: uv sync --frozen
         working-directory: python
 
@@ -141,7 +145,6 @@ jobs:
       # (cpython + engine + site-packages copy + compileall + manifest) lands as part
       # of the same Unity invocation.
       - name: Build (BackcastShippableBuild.BuildWindows64)
-        shell: powershell
         run: |
           $unity = "${{ steps.unity.outputs.unity_exe }}"
           $log = "build/unity-build.log"
@@ -165,7 +168,6 @@ jobs:
 
       # ── Verify build output is where BackcastShippableBuild puts it ─────
       - name: Verify build output location
-        shell: powershell
         run: |
           $exe = "build/windows64/backcast.exe"
           $manifest = "build/windows64/backcast_Data/StreamingAssets/PythonRuntime/runtime-manifest.json"
@@ -182,7 +184,6 @@ jobs:
 
       # ── Library size guard (findings 0050 §2.3.2 — still relevant on self-hosted) ─
       - name: Measure Library size (cap=8GB raw)
-        shell: powershell
         run: |
           $size = (Get-ChildItem Library -Recurse -Force -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum / 1GB
           $sizeRounded = [math]::Round($size, 2)
@@ -196,7 +197,6 @@ jobs:
       # ── Assemble dist/ with the single-top-folder zip layout ────────────
       - name: Assemble dist
         id: assemble
-        shell: powershell
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           $stage = "dist/backcast-windows64-$v"
@@ -211,7 +211,6 @@ jobs:
 
       # ── SBOM: bundled Python venv only (Principle P2, findings 0050 §2.5) ─
       - name: Generate Python SBOM (CycloneDX)
-        shell: powershell
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           uvx --from cyclonedx-bom cyclonedx-py environment python/.venv -o "dist/sbom-python-$v.cdx.json"
@@ -219,7 +218,6 @@ jobs:
       # ── Stage 1: Zip integrity ──────────────────────────────────────────
       - name: Stage 1 — Zip integrity (re-extract)
         id: smoke-extract
-        shell: powershell
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           $zip = "${{ steps.assemble.outputs.zip_path }}"
@@ -236,7 +234,6 @@ jobs:
 
       # ── Stage 2: Manifest schema ────────────────────────────────────────
       - name: Stage 2 — Manifest schema
-        shell: powershell
         run: |
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
           $manifestPath = Join-Path $tree "backcast_Data/StreamingAssets/PythonRuntime/runtime-manifest.json"
@@ -253,7 +250,6 @@ jobs:
 
       # ── Stage 3: Bundled venv import smoke ──────────────────────────────
       - name: Stage 3 — Bundled venv import
-        shell: powershell
         run: |
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
           $py = Join-Path $tree "backcast_Data/StreamingAssets/PythonRuntime/cpython/python.exe"
@@ -267,7 +263,6 @@ jobs:
       # (findings 0050 §4). Self-hosted runner has owner's desktop session, so GUI launch
       # is straightforward.
       - name: Stage 4 — Player GUI smoke (retry once)
-        shell: powershell
         run: |
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
           $exe = Join-Path $tree "backcast.exe"
@@ -306,7 +301,6 @@ jobs:
       # ── Supplementary release assets (only when publishing) ──────────────
       - name: Generate SHA256SUMS + copy manifest
         if: steps.publish.outputs.publish == 'True'
-        shell: powershell
         run: |
           $v = "${{ steps.ver.outputs.version }}"
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
@@ -332,7 +326,6 @@ jobs:
 
       - name: Generate Release body (verify procedure)
         if: steps.publish.outputs.publish == 'True'
-        shell: powershell
         # Built line-by-line rather than a here-string because PowerShell's `@"..."@`
         # requires `"@` at column 0, which is incompatible with YAML block scalar indentation.
         run: |
@@ -382,7 +375,6 @@ jobs:
       # show 'queued' indefinitely — owner notices via the Actions tab being empty.
       - name: Weekly cron monitor
         if: github.event_name == 'schedule'
-        shell: powershell
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

@@ -5,10 +5,47 @@ exclude_docs: |
   adr/**
   findings/**
   spike/**
+  samples/code/__pycache__/**
 theme:
-  name: readthedocs
+  name: material
+  language: ja
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.indexes
+    - content.code.copy
+    - content.code.annotate
+    - search.highlight
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: ダークモードに切り替え
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: ライトモードに切り替え
 nav:
   - はじめに: index.md
+  - チュートリアル:
+      - tutorial/index.md
+      - "01 はじめての戦略": tutorial/01-first-strategy.md
+      - "02 発注する": tutorial/02-submitting-orders.md
+      - "03 ポートフォリオを読む": tutorial/03-reading-portfolio.md
+      - "04 先読み禁止とバー契約": tutorial/04-bar-contract.md
+      - "05 シナリオと銘柄": tutorial/05-scenario-universe.md
+      - "06 複数銘柄を扱う": tutorial/06-multi-instrument.md
+      - "付録 imperative 戦略": tutorial/99-imperative.md
+  - サンプル戦略:
+      - samples/index.md
   - ユーザーマニュアル:
       - manual/index.md
       - インストールと起動: manual/install.md
@@ -20,6 +57,19 @@ nav:
       - technical/index.md
 markdown_extensions:
   - admonition
-  - fenced_code
+  - attr_list
+  - md_in_html
   - toc:
       permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      base_path:
+        - docs
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details

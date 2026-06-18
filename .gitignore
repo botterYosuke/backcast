@@ -113,3 +113,8 @@ __pycache__/
 *.pyc
 python/spike/fixtures/jquants-catalog/
 .env
+
+# mkdocs build/preview tooling (docs/requirements.txt pins the deps; this venv is local)
+.venv-docs/
+site/
+.DS_Store

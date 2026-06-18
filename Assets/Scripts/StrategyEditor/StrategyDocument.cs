@@ -25,8 +25,6 @@ using System.Text;
 
 public class StrategyDocument : IStrategyFileProvider
 {
-    static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(/*encoderShouldEmitUTF8Identifier:*/ false);
-
     string _text = string.Empty;
     string _path;                 // null = unbound; otherwise canonical absolute .py
     bool _dirty;
@@ -74,7 +72,7 @@ public class StrategyDocument : IStrategyFileProvider
     public bool Save()
     {
         if (_path == null) return false;
-        if (!WriteAtomic(_path, _text)) return false;   // text/path/dirty retained on failure
+        if (!AtomicPyFile.Write(_path, _text)) return false;   // text/path/dirty retained on failure
         _dirty = false;
         _openedOrSaved = true;
         return true;
@@ -91,36 +89,12 @@ public class StrategyDocument : IStrategyFileProvider
         try { full = Path.GetFullPath(newPath); }
         catch { return false; }
         if (!string.Equals(Path.GetExtension(full), ".py", StringComparison.OrdinalIgnoreCase)) return false;
-        if (!WriteAtomic(full, _text)) return false;   // document unchanged on failure
+        if (!AtomicPyFile.Write(full, _text)) return false;   // document unchanged on failure
 
         _path = full;       // rebind: subsequent Save() targets the new path
         _dirty = false;
         _openedOrSaved = true;
         return true;
-    }
-
-    // Atomic temp+replace write of `text` to `path` (temp in the same dir, then File.Replace/Move).
-    // Returns false on any IO failure, leaving the destination's prior content intact (findings 0010
-    // §3 — replace-failure preserves it). Shared by Save (bound path) and SaveAs (new path).
-    static bool WriteAtomic(string path, string text)
-    {
-        string dir = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(dir)) return false;
-
-        string tmp = Path.Combine(dir, "." + Path.GetFileName(path) + ".tmp-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(tmp, text, Utf8NoBom);
-            if (File.Exists(path)) File.Replace(tmp, path, /*destinationBackupFileName:*/ null);
-            else File.Move(tmp, path);
-            return true;
-        }
-        catch
-        {
-            TryDelete(tmp);
-            return false;
-        }
     }
 
     // Restore-boundary reset to unbound-empty (findings 0010 §7). NOT a normal Open failure.
@@ -156,10 +130,5 @@ public class StrategyDocument : IStrategyFileProvider
         if (!File.Exists(_path)) return false;                             // 5. still a normal file now
         path = _path;
         return true;
-    }
-
-    static void TryDelete(string p)
-    {
-        try { if (File.Exists(p)) File.Delete(p); } catch { /* best-effort cleanup */ }
     }
 }

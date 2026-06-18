@@ -15,7 +15,6 @@
 
 using System.Collections.Generic;
 using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 public sealed class FakeMarimoSynthesizer : IMarimoSynthesizer
 {
@@ -25,21 +24,7 @@ public sealed class FakeMarimoSynthesizer : IMarimoSynthesizer
     public bool FailDecompose;
 
     public string Synthesize(IReadOnlyList<Cell> cells)
-    {
-        var arr = new JArray();
-        if (cells != null)
-            foreach (var c in cells)
-            {
-                if (c == null) continue;
-                arr.Add(new JObject
-                {
-                    ["body"] = c.Body ?? string.Empty,
-                    ["name"] = string.IsNullOrEmpty(c.Name) ? "_" : c.Name,
-                    ["config"] = ParseConfig(c.ConfigJson),
-                });
-            }
-        return Marker + "\n" + arr.ToString(Formatting.None);
-    }
+        => Marker + "\n" + CellJson.ToArray(cells).ToString(Formatting.None);
 
     public IReadOnlyList<Cell> Decompose(string py)
     {
@@ -48,32 +33,10 @@ public sealed class FakeMarimoSynthesizer : IMarimoSynthesizer
 
         int nl = py.IndexOf('\n');
         if (nl >= 0 && py.Substring(0, nl).Trim() == Marker)
-        {
-            try
-            {
-                var arr = JArray.Parse(py.Substring(nl + 1));
-                var cells = new List<Cell>(arr.Count);
-                foreach (var tok in arr)
-                {
-                    string body = (string)tok["body"] ?? string.Empty;
-                    string name = (string)tok["name"] ?? "_";
-                    string cfg = tok["config"] != null ? tok["config"].ToString(Formatting.None) : "{}";
-                    cells.Add(new Cell(body, name, cfg));
-                }
-                return cells;
-            }
-            catch { return null; }   // a corrupt fake blob is "broken" -> fail-soft
-        }
+            return CellJson.TryParse(py.Substring(nl + 1));   // null on a corrupt fake blob -> fail-soft
 
         // arbitrary real `.py` (no marker): wrap the whole text as one anonymous cell so the notebook
         // can bind to it (the seeding probes read the file off disk, independent of cell decomposition).
         return new List<Cell> { new Cell(py, "_", "{}") };
-    }
-
-    static JToken ParseConfig(string configJson)
-    {
-        if (string.IsNullOrEmpty(configJson)) return new JObject();
-        try { return JToken.Parse(configJson); }
-        catch { return new JObject(); }
     }
 }

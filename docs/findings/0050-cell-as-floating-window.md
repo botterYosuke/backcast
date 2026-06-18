@@ -192,3 +192,31 @@ Step 0+1 を選択（C# コア＝Step 2 に入る前に Python 側の正本を G
 ＋本番 `PythonnetMarimoSynthesizer`＋`SpawnPlacement`/`SpawnAuto`＋中央 [+]＋X ボタン＋root の OnAddCell/Open/Save gut→委譲
 ＋レイアウト・スキーマ移行 `cellPositions`）→ 層1/2 AFK probe → 層4 HITL（AC5）。**C# コンパイルゲートは Step 0 の撤去について
 owner が Unity batchmode で要確認**（ローカルで C# を実コンパイルしていない）。
+
+## 実装着地 — Step 2（2026-06-18・引き継ぎセッション・merge commit `89a0c23`）
+
+S1 **Step 2（C# コア一括）** を凍結プラン通りに実装し、`origin/main` の #76（C# UI cutover）を merge。compile gate＋層1/2 AFK＋層3 pytest が全て GREEN。**層4 HITL（AC5）のみ owner 実行待ち**。
+
+### 成果物（新規）
+- 純コア（UnityEngine-free）: `Cell`（body+name+config opaque・dirty notify）／`IMarimoSynthesizer`（`Synthesize(cells)→py` / `Decompose(py)→cells`・fail-soft null）／`MarimoNotebookDocument`（集約＝1 .py/dirty/順序付き cells/Save・Open・SaveAs・ResetUnboundEmpty・≥1 削除ガード・TryGetStrategyFile 5条件・`StrategyDocument` の atomic-write 契約を移送）／`SpawnPlacement.Next`（純関数 cascade）。
+- seam: `python/engine/strategy_runtime/cell_synthesis.py`（`synthesize_json`/`decompose_json`＝`generate_filecontents`/`load_app` を names+configs 込み往復）＋本番 `PythonnetMarimoSynthesizer`（`WorkspaceEngineHost.SynthesizeCells`/`DecomposeCells` 経由・`Py.GIL`・single Python owner=ADR-0009）。
+- 空間 UI: `FloatingWindowController.SpawnAuto`/`Hide`/`CaptureTopLefts`／`NotebookCellCoordinator`（region↔Cell・AddCell/DeleteCell/Open/Save・dormant region_001 再利用・≥1 ルーティング）／`StrategyEditorWindowFrame.EnsureCloseButton`（X）／`StrategyEditorView` を Cell 束縛へ作り替え（Document/registry/file-ops 撤去・`ApplyTextAndSelection`/EditHistory/highlight 保持）／中央 [+] overlay。
+- root: provider 键＝logical `strategy_editor:notebook`／OnFileOpen・Save・SaveAs・New・OnOpenStrategy・Resume を coordinator へ委譲／`CaptureLayout` で cell 窓を `floatingWindows` から除外＋`cellPositions` 追加／`SetSynthesizer` 注入 seam。
+- レイアウト・スキーマ: `LayoutDocument.cellPositions:[{x,y}]`（cell 順並走・id 無し）＋`LayoutStore.NormalizeCellPositions`＋Clone/StructurallyEqual（index 一致）。per-window `strategyEditors` は cell 用途では退役（field は additive 残置）。
+
+### `StrategyDocument` の扱い（退役の現実解）
+production の編集経路は `MarimoNotebookDocument` へ全面移行。`StrategyDocument`/`StrategyEditorRestore` は **削除せず regression net として残置**（`StrategyEditorProbe §3/§4/§7` が I/O 契約を引き続き固定）。集約は同契約（atomic-replace・SaveAs fork・vanished-reject・5条件 supplyable）を移送して持つ＝契約の二重保証。`StrategyEditorHitlHarness`＋その menu は**退役（削除）**＝単一バッファ前提の遺物で、層4 HITL は workspace root 本体で行う。
+
+### #76 ↔ #81 マージ調停（merge `89a0c23`・正本: 本節）
+- **U1 ▶ Run ボタン**（#76）= 維持。`RunReadinessViewModel` は `strategyReady` を `EditorFileProvider`（→ NOTEBOOK_ID → 集約）から取る純ロジックなので #81 と無改修で両立。
+- **U2 File→New の template seed**（#76）= **#81 が supersede**。findings 0050 は「新セル本体への seed 焼き込みを却下（marimo 非忠実）」と凍結済み → File→New = 空セル 1 個＋placeholder。`MarimoStrategyTemplate.NewStrategy` は dead（残置）。
+- **U3 起動時 canonical v19 を開く**（#76）= **採用**。ただし `editor.Open` は退役済みのため **coordinator 経由**（`OpenCanonicalDefault` → `_coordinator.Open(v19, sidecar positions)`）に配線し直し、N セル窓へ分解。失敗時は空ノートへ fallback。untitled 維持（canonical の sidecar を boot/quit が書かない）。
+- 共有 4 ファイル（`BackcastWorkspaceRoot`/`WorkspaceEngineHost`/`StrategyEditorView`/`MenuBarCutoverProbe`）の conflict を上記方針で解決。`WorkspaceUiCutoverProbe`（#76 新規・`editor.Document` 参照）も notebook 版へ移行。
+
+### 検証（全 GREEN）
+- **層3 pytest**: `test_marimo_cell_synthesis_golden.py`（9）＋`test_marimo_strategy_adapter.py`（7）= 16 passed（merge 後）。entry-point seam に named-cell 往復 idempotency＋fail-soft＋新セル既定の 3 test を追加。
+- **C# compile gate**: merge 後ツリーを `-batchmode -nographics -quit` で `error CS` 0 件・return code 0。
+- **層1/2 AFK**: `StrategyEditorProbe`（集約・SpawnPlacement・coordinator の新 §10/11/12＋既存 §1-9）／`MenuBarCutoverProbe`（File→New cell reset）／`WorkspaceUiCutoverProbe`（#76 U1/U3＋#81 notebook boot）／`BackcastWorkspaceProbe`（#78/#81 seeding）= **4 本とも PASS**。fake synthesizer（`FakeMarimoSynthesizer`・Editor）注入で Python-free に駆動。
+- **残＝層4 HITL（AC5）**: 実 workspace で [+]→中央 spawn→本体編集→Save→Open で位置復元→複数セル戦略を Replay run（owner 実行）。
+
+正本: `docs/adr/0013` ＋ 本 findings。ADR-0013 は immutable（書き戻さない）— 本節が Step 2 着地と #76 調停の記録。

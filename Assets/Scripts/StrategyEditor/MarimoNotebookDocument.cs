@@ -31,8 +31,6 @@ using System.Text;
 
 public sealed class MarimoNotebookDocument : IStrategyFileProvider
 {
-    static readonly UTF8Encoding Utf8NoBom = new UTF8Encoding(/*encoderShouldEmitUTF8Identifier:*/ false);
-
     readonly IMarimoSynthesizer _synth;
     readonly List<Cell> _cells = new List<Cell>();
     string _path;                 // null = unbound; otherwise canonical absolute .py
@@ -90,8 +88,8 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     {
         if (_path == null) return false;
         string py = _synth.Synthesize(_cells);
-        if (py == null) return false;                    // unexpected seam failure: retain dirty/path
-        if (!WriteAtomic(_path, py)) return false;       // replace-failure preserves on-disk
+        if (py == null) return false;                       // unexpected seam failure: retain dirty/path
+        if (!AtomicPyFile.Write(_path, py)) return false;   // replace-failure preserves on-disk
         _dirty = false;
         _openedOrSaved = true;
         return true;
@@ -109,7 +107,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
 
         string py = _synth.Synthesize(_cells);
         if (py == null) return false;
-        if (!WriteAtomic(full, py)) return false;
+        if (!AtomicPyFile.Write(full, py)) return false;
 
         _path = full;
         _dirty = false;
@@ -124,22 +122,21 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     public bool Open(string path)
     {
         _lastError = null;
-        if (string.IsNullOrEmpty(path)) { _lastError = "no path"; return false; }
+        if (string.IsNullOrEmpty(path)) return Fail("no path");
 
         string full;
         try { full = Path.GetFullPath(path); }
-        catch { _lastError = "bad path"; return false; }
+        catch { return Fail("bad path"); }
 
-        if (!string.Equals(Path.GetExtension(full), ".py", StringComparison.OrdinalIgnoreCase))
-        { _lastError = "not a .py"; return false; }
-        if (!File.Exists(full)) { _lastError = "file missing"; return false; }
+        if (!string.Equals(Path.GetExtension(full), ".py", StringComparison.OrdinalIgnoreCase)) return Fail("not a .py");
+        if (!File.Exists(full)) return Fail("file missing");
 
         string content;
         try { content = File.ReadAllText(full, Encoding.UTF8); }
-        catch { _lastError = "read failed"; return false; }
+        catch { return Fail("read failed"); }
 
         IReadOnlyList<Cell> decomposed = _synth.Decompose(content);
-        if (decomposed == null) { _lastError = "not a marimo notebook"; return false; }   // fail-soft
+        if (decomposed == null) return Fail("not a marimo notebook");   // fail-soft
 
         _cells.Clear();
         foreach (var c in decomposed)
@@ -181,32 +178,6 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         return true;
     }
 
-    // Atomic temp+replace write (temp in the same dir, then File.Replace/Move). Returns false on any
-    // IO failure, leaving the destination's prior content intact (replace-failure preserves it).
-    // Ported verbatim from StrategyDocument (its retirement = move the contract, not delete it).
-    static bool WriteAtomic(string path, string text)
-    {
-        string dir = Path.GetDirectoryName(path);
-        if (string.IsNullOrEmpty(dir)) return false;
-
-        string tmp = Path.Combine(dir, "." + Path.GetFileName(path) + ".tmp-" + Guid.NewGuid().ToString("N"));
-        try
-        {
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(tmp, text, Utf8NoBom);
-            if (File.Exists(path)) File.Replace(tmp, path, /*destinationBackupFileName:*/ null);
-            else File.Move(tmp, path);
-            return true;
-        }
-        catch
-        {
-            TryDelete(tmp);
-            return false;
-        }
-    }
-
-    static void TryDelete(string p)
-    {
-        try { if (File.Exists(p)) File.Delete(p); } catch { /* best-effort cleanup */ }
-    }
+    // Set the fail-soft reason and return false in one statement (Open's uniform failure exit).
+    bool Fail(string reason) { _lastError = reason; return false; }
 }

@@ -166,12 +166,21 @@ jobs:
           $unity = "${{ steps.unity.outputs.unity_exe }}"
           $log = "build/unity-build.log"
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          & $unity -batchmode -nographics -quit `
-            -projectPath . `
-            -buildTarget StandaloneWindows64 `
-            -executeMethod BackcastShippableBuild.BuildWindows64 `
-            -logFile $log
-          $code = $LASTEXITCODE
+          # PowerShell's call operator `& $unity ...` does NOT wait for GUI-subsystem
+          # apps (Unity.exe is GUI subsystem even in -batchmode). It returns 0.6s
+          # later with $LASTEXITCODE empty while Unity is still running in the
+          # background — leading to spurious "Unity build failed exit=" with empty
+          # code and the workspace getting torn down mid-build. Use Start-Process
+          # -Wait to force synchronous execution and capture the real ExitCode.
+          $args = @(
+            '-batchmode','-nographics','-quit',
+            '-projectPath','.',
+            '-buildTarget','StandaloneWindows64',
+            '-executeMethod','BackcastShippableBuild.BuildWindows64',
+            '-logFile', $log
+          )
+          $proc = Start-Process -FilePath $unity -ArgumentList $args -PassThru -NoNewWindow -Wait
+          $code = $proc.ExitCode
           if ($code -ne 0) {
             Write-Error "Unity build failed exit=$code"
             if (Test-Path $log) { Get-Content $log -Tail 80 }

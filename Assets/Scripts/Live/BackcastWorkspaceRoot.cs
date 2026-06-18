@@ -45,9 +45,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // that supplies the `.py` to run is the NOTEBOOK aggregate, NOT a physical window. `region_001` stays
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
-    // #76 S6b-β-clean U3: the canonical boot strategy (under PythonRuntimeLocator.ProjectRoot). Public so
-    // the AFK gate (WorkspaceUiCutoverProbe) derives + asserts the SAME path — one source, no probe drift.
-    public const string CanonicalStrategyRelPath = "strategies/v19/v19_morning_cell.py";
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -1529,9 +1526,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #76↔#81 reconciliation: #76's U2 seeded MarimoStrategyTemplate.NewStrategy into the single editor
         // buffer. The #81 cell model (findings 0050) DELIBERATELY rejects body-seeding (marimo-faithful: a
         // fresh cell is empty, with the host-API names shown as a placeholder, not as "example to delete").
-        // A one-empty-cell notebook still synthesises to a valid (runnable-once-saved) marimo app, and the
-        // "start from something runnable" intent is now served by U3 (boot OPENS the canonical v19 marimo),
-        // so File→New stays a true blank slate.
+        // A one-empty-cell notebook still synthesises to a valid (runnable-once-saved) marimo app. #76
+        // (2026-06-19): a no-resume boot lands in this SAME File→New blank state (OpenFileNewDefault →
+        // _coordinator.New()); strategies are opened via File→Open, not auto-opened at boot.
         _coordinator.New();
 
         // scenario buffer + universe (the in-memory clear the host owns).
@@ -1649,9 +1646,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // #69 (B2): boot resume — re-open the last document's layout from its <strategy>.json, or start
     // with the default workspace when there is no resumable document (fresh install / moved file).
-    // #76 S6b-β-clean U3: when there is no resume, the default workspace OPENS THE CANONICAL v19 marimo
-    // (v19_morning_cell.py — it ships a sidecar with scenario + scorer spec, so it is immediately
-    // runnable) into the adopted editor, instead of an untitled-empty buffer.
+    // #76 (2026-06-19): a no-resume boot lands in the File→New blank state (an untitled empty notebook),
+    // NOT a strategy. Strategies are opened explicitly via File→Open (owner: "this app opens files via
+    // File→Open"). The earlier U3 "boot opens the canonical v19 marimo" is withdrawn.
     void ResumeLastDocumentOrDefault()
     {
         string py = PlayerPrefs.GetString(ResumeKey, "");
@@ -1659,7 +1656,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             // #81: restore geometry, then decompose the document `.py` into N cell windows at the saved
             // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
-            // the default workspace rather than leaving a half-restored state.
+            // the File→New blank state rather than leaving a half-restored state.
             ApplyLayout(doc);
             if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
             {
@@ -1669,39 +1666,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
         ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace
-        _currentLayoutPath = "";                 // untitled document — boot leaves the canonical fixture unmodified
-        OpenCanonicalDefault();                  // U3: open the canonical v19 marimo into cell windows
+        _currentLayoutPath = "";                 // untitled document
+        OpenFileNewDefault();                    // #76: boot to the File→New blank state (no canonical auto-open)
     }
 
-    // #76 S6b-β-clean U3 (#81-routed): the canonical boot strategy. DECOMPOSE the v19 marimo cell-DAG into
-    // N cell windows (via the coordinator) so a fresh launch shows a runnable reactive strategy (Run
-    // unblocks once ReseedFromEditor seeds the scenario from its sidecar). The layout document stays
-    // UNTITLED (_currentLayoutPath = "") so boot/quit never write into the canonical fixture's sidecar
-    // (OnFileSave delegates to Save As while untitled; quit autosave is a no-op). Best-effort: a pre-Python
-    // ProjectRoot/synth failure, a missing file, or a failed Open falls back to the untitled-empty notebook
-    // (no crash) — the same degrade-not-throw discipline the canonical boot path upholds at this seam.
-    void OpenCanonicalDefault()
+    // #76 (2026-06-19): the no-resume / unresumable boot state = the File→New blank document (one empty
+    // cell in region_001, unbound). Identical to OnFileNew's notebook reset (`_coordinator.New()` =
+    // ResetUnboundEmpty + SyncWindowsToNotebook) so boot and File→New land in the SAME state; Run stays
+    // blocked until the user saves (WYSIWYR). The layout document stays UNTITLED (_currentLayoutPath = "").
+    void OpenFileNewDefault()
     {
-        string py;
-        try { py = Path.Combine(PythonRuntimeLocator.ProjectRoot, CanonicalStrategyRelPath); }
-        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] canonical boot path unresolved: " + e.Message); FallbackEmptyNotebook(); return; }
-        if (!File.Exists(py)) { Debug.Log("[BackcastWorkspaceRoot] canonical v19 marimo not found; booting untitled."); FallbackEmptyNotebook(); return; }
-
-        IReadOnlyList<Vector2> positions = null;
-        if (LayoutSidecarStore.TryReadLayout(py, out var cdoc)) positions = ToVectors(cdoc.cellPositions);
-        if (!_coordinator.Open(py, positions))
-        {
-            Debug.LogWarning("[BackcastWorkspaceRoot] canonical v19 marimo open failed (" + (_notebook?.LastError ?? "?") + "); booting untitled.");
-            FallbackEmptyNotebook();
-            return;
-        }
-        ReseedFromEditor();   // bind → seed scenario/universe/sidebar (the shared #78 tail) so Run unblocks
-    }
-
-    // The fresh/unresumable fallback: an untitled empty notebook (one empty cell in region_001).
-    void FallbackEmptyNotebook()
-    {
-        _coordinator.SyncWindowsToNotebook(null);
+        _coordinator.New();
         ReseedFromEditor();
     }
 
@@ -1800,7 +1775,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ApplyProfileOrder(_baseLive);
         RestoreFloating(doc);
         // #81: cell windows are restored by the coordinator (Open/New/Sync) from the notebook + the
-        // cellPositions list — NOT here. Each caller (OnFileOpen / OpenCanonicalDefault / Resume) runs the
+        // cellPositions list — NOT here. Each caller (OnFileOpen / OpenFileNewDefault / Resume) runs the
         // coordinator open + the ReseedFromEditor tail around this geometry restore (restore order
         // canvas -> Hakoniwa -> floating(non-cell) -> cells -> reseed, findings 0025 §8).
     }

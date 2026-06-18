@@ -12,15 +12,14 @@
 //   2. U1/U4/U5 single Run entry (structural): the adopted editor title bar HAS a Run button; the
 //      footer has the mode segments but NO transport buttons (▶/⏭/⏹/speed); the startup tile has NO
 //      Run button.
-//   3. U3 boot canonical: a no-resume boot opens the canonical v19 marimo into the adopted editor
-//      (skipped — logged — when the dev python tree / v19 file is not resolvable in this environment).
+//   3. U3 boot → File→New blank state: a no-resume boot lands in the File→New state (an untitled,
+//      UNBOUND empty notebook), NOT a strategy — strategies open via File→Open (#76 2026-06-19).
 //
 // It composes the REAL BackcastWorkspaceRoot via reflection (BuildWorkspace — Awake's Python init is
 // gated off in batchmode and never reached here), then value-asserts the seams.
 
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -40,7 +39,7 @@ public static class WorkspaceUiCutoverProbe
         {
             fail = Section1_RunReadinessTruthTable()
                 ?? Section2_SingleRunEntry()
-                ?? Section3_BootCanonical();
+                ?? Section3_BootFileNew();
         }
         catch (Exception e) { fail = "driver: " + e; }
 
@@ -112,30 +111,23 @@ public static class WorkspaceUiCutoverProbe
         return null;
     }
 
-    // ── 3. U3 boot canonical: no-resume boot opens the v19 marimo into the adopted editor. ──
-    static string Section3_BootCanonical()
+    // ── 3. U3 boot → File→New blank state (#76 2026-06-19): a no-resume boot lands in the File→New
+    //       state (an untitled, UNBOUND empty notebook), NOT a strategy. Strategies open via File→Open;
+    //       the earlier "boot opens the canonical v19 marimo" is withdrawn. ──
+    static string Section3_BootFileNew()
     {
-        // Resolve the expected canonical path the same way the root does; skip (not fail) when the dev
-        // python tree / v19 file is not resolvable here (venv-less CI) — the owner-run AFK has the tree.
-        string expected;
-        try { expected = Path.Combine(PythonRuntimeLocator.ProjectRoot, BackcastWorkspaceRoot.CanonicalStrategyRelPath); }
-        catch (Exception e) { Debug.Log("[WORKSPACE UI CUTOVER] U3 skipped — ProjectRoot unresolved: " + e.Message); return null; }
-        if (!File.Exists(expected)) { Debug.Log("[WORKSPACE UI CUTOVER] U3 skipped — v19 marimo not found at " + expected); return null; }
-
         var root = ComposeRoot(out var ty);
         if (root == null) return "BackcastWorkspaceRoot missing in scene";
 
-        PlayerPrefs.DeleteKey(ResumeKey);   // force the no-resume branch (canonical default)
+        PlayerPrefs.DeleteKey(ResumeKey);   // force the no-resume branch (File→New default)
         ty.GetMethod("ResumeLastDocumentOrDefault", BF).Invoke(root, null);
 
-        // #81: boot decomposes the canonical v19 into cell windows via the coordinator; the NOTEBOOK
-        // aggregate (not the editor view) holds the bound `.py` path.
+        // File→New state = UNBOUND: no document path is bound at boot (the notebook aggregate, not the
+        // editor view, holds the bound `.py` path). A bound path would mean a strategy was auto-opened.
         var notebook = ty.GetField("_notebook", BF).GetValue(root) as MarimoNotebookDocument;
         if (notebook == null) return "U3: notebook missing";
-        string path = notebook.CurrentPath;
-        if (string.IsNullOrEmpty(path)) return "U3: boot did not bind the notebook to the canonical v19 marimo";
-        if (!path.Replace('\\', '/').EndsWith(BackcastWorkspaceRoot.CanonicalStrategyRelPath))
-            return "U3: boot opened the wrong canonical file: " + path;
+        if (!string.IsNullOrEmpty(notebook.CurrentPath))
+            return "U3: no-resume boot must be the File→New blank state (unbound), but bound to: " + notebook.CurrentPath;
         return null;
     }
 

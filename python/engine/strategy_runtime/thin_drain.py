@@ -275,6 +275,8 @@ def _compile(
     drivers: Sequence[str],
     inject: "dict[str, Any] | None" = None,
     driver_seeds: "dict[str, Any] | None" = None,
+    services: "dict[str, Any] | None" = None,
+    constants: "dict[str, Any] | None" = None,
 ) -> CompiledStrategy:
     """Cold precompute. Must run inside a HeadlessKernel context, on its thread.
 
@@ -282,13 +284,17 @@ def _compile(
     the graph is built with no stale cells), then asks marimo which cells a host-driven
     state update must re-run, in topological order.
 
-    Two kinds of host names are seeded into the cell globals BEFORE the cold run, branched
+    Four kinds of host names are seeded into the cell globals BEFORE the cold run, branched
     by role:
 
       ``inject`` — host ACTION callables (``submit_market`` / ``log``, S4). A cell references
         the name as a free ref — like a builtin. Seeded INERT for the cold run (so the cold
         run, which executes every cell once, does not fire a spurious order before any bar),
         then armed with the real callable for the hot drain.
+      ``services`` — host SERVICE callables (e.g. v19 scoring). They return values and must
+        be live during the cold run; unlike actions, they are never inert-swapped.
+      ``constants`` — host STATIC values (e.g. ordered universe / rs_ref). They are live
+        during the cold run, are not mo.state drivers, and are never written per bar.
       ``driver_seeds`` — host-owned driver mo.state, ``{getter_name: initial_value}`` (S6a,
         findings 0046 S6-6). The host OWNS the State (name + object): this builds a real
         ``mo.state(initial)`` here and seeds its getter into globals, so a cell reading
@@ -305,6 +311,16 @@ def _compile(
         # globals + build the graph), so a live ``submit_market`` would place a spurious order
         # before any bar. The real callables are armed only after the cold run, for the hot drain.
         runner.globals.update({name: _inert_action for name in inject})
+    if services:
+        # Service callables are value-returning host APIs (not side-effect actions). They must
+        # be real during cold compile so a cell that computes initial derived values sees the
+        # same service it will see in the hot drain.
+        runner.globals.update(services)
+    if constants:
+        # Static config/data values are host-provided free refs, not driver States. They are
+        # seeded once and never get setters/roots; callers should pass immutable-ish values
+        # (tuple, MappingProxyType, frozen dataclasses) when mutation would break a contract.
+        runner.globals.update(constants)
     if driver_seeds:
         # Build host-owned driver States and seed their getters so free-ref reads resolve in
         # the cold run AND the hot drain. state() registers in the active kernel context
@@ -319,6 +335,27 @@ def _compile(
     kernel = runner._kernel
     graph = kernel.graph
     glbls = runner.globals
+    if services:
+        service_clobbered = _cell_clobbered_names(services, graph)
+        if service_clobbered:
+            raise ValueError(
+                f"service name(s) {service_clobbered} are also defined by a cell — the cold "
+                "run shadows the host-provided service. Rename the cell variable or the "
+                "service name (services are host-owned value-returning APIs)."
+            )
+        # Re-assert the host value after the cold run. A non-def mutation is still the
+        # caller's responsibility (pass immutable constants/data where needed), but the
+        # canonical binding stays host-owned.
+        glbls.update(services)
+    if constants:
+        constant_clobbered = _cell_clobbered_names(constants, graph)
+        if constant_clobbered:
+            raise ValueError(
+                f"constant name(s) {constant_clobbered} are also defined by a cell — the cold "
+                "run shadows the host-provided static config. Rename the cell variable or the "
+                "constant name (constants are host-owned static values)."
+            )
+        glbls.update(constants)
     if driver_seeds:
         # Fail-closed (symmetric with inject below): a cell that also DEFINES a host-seeded driver
         # name shadows the seeded State after the cold run, so the host's per-bar write would drive
@@ -462,6 +499,8 @@ def open_runtime(
     drivers: Sequence[str] = (),
     inject: "dict[str, Any] | None" = None,
     driver_seeds: "dict[str, Any] | None" = None,
+    services: "dict[str, Any] | None" = None,
+    constants: "dict[str, Any] | None" = None,
 ) -> Iterator[StrategyRuntime]:
     """Open a thin-drain runtime for ``app``, owning the headless kernel's lifetime.
 
@@ -480,12 +519,23 @@ def open_runtime(
     exactly the states the host writes between bars (never auto-detect: a cell-written feedback
     state must not become a root — D5). ``inject`` seeds host-provided names (the cell-facing
     ACTION API — ``submit_market`` / ``log``) into the cell globals so per-bar cells can call
-    them (S4); host-written VALUES are driver mo.state, not injected. The single try/finally
-    guarantees the thread-local marimo context is torn down even when the compile itself raises.
+    them (S4); action callables are inert during cold compile and armed after. ``services``
+    seeds live value-returning callables and ``constants`` seeds live static data before the
+    cold run; neither is a driver or written per bar. The single try/finally guarantees the
+    thread-local marimo context is torn down even when the compile itself raises.
     """
     host = HeadlessKernel()
     try:
-        runtime = StrategyRuntime(_compile(app, drivers, inject, driver_seeds))
+        runtime = StrategyRuntime(
+            _compile(
+                app,
+                drivers,
+                inject,
+                driver_seeds,
+                services=services,
+                constants=constants,
+            )
+        )
         yield runtime
     finally:
         host.teardown()

@@ -418,6 +418,100 @@ def test_compile_rejects_inject_name_colliding_with_cell_def():
             pass
 
 
+# ---------------------------------------------------------- service / constant seeds
+
+
+def _service_constant_app():
+    """Reads a live host service + static host constants as free refs.
+
+    The strategy cell also reads ``get_bar`` so the app has a real per-bar root; services and
+    constants themselves are NOT drivers and must not acquire setters/roots.
+    """
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _strategy():
+        bar = get_bar()  # noqa: F821
+        cold_or_hot_score = score_rows({"A": {"x": 3.0}})  # noqa: F821
+        universe_len = len(V19_UNIVERSE)  # noqa: F821
+        rs = V19_RS_REF  # noqa: F821
+        out = bar + cold_or_hot_score + universe_len
+        return cold_or_hot_score, out, rs, universe_len
+
+    return app
+
+
+def test_services_and_constants_are_live_during_cold_run_and_not_drivers():
+    """S6b-alpha step2 T4: ``services`` and ``constants`` are real host-provided
+    free-ref globals during the cold run. Unlike ``inject`` actions, services are NOT
+    inert-swapped; unlike ``driver_seeds``, neither services nor constants are per-bar
+    drivers or written by ``drain``.
+    """
+    calls: list[dict] = []
+
+    def score_rows(rows):
+        calls.append(rows)
+        return 7.0
+
+    with open_runtime(
+        _service_constant_app(),
+        driver_seeds={"get_bar": 0.0},
+        services={"score_rows": score_rows},
+        constants={"V19_UNIVERSE": ("A", "B"), "V19_RS_REF": "1306.TSE"},
+    ) as rt:
+        # This assertion happens immediately after compile: the service was live during the
+        # cold run, not replaced by the inert action stub used for submit_market-like actions.
+        assert calls == [{"A": {"x": 3.0}}]
+        assert rt.active_drivers == frozenset({"get_bar"})
+        assert rt.globals["cold_or_hot_score"] == 7.0
+        assert rt.globals["universe_len"] == 2
+        assert rt.globals["rs"] == "1306.TSE"
+
+        rt.drain({"get_bar": 5.0})
+        assert rt.globals["out"] == 14.0
+
+    assert calls == [{"A": {"x": 3.0}}, {"A": {"x": 3.0}}]
+
+
+@pytest.mark.parametrize(
+    ("seed_param", "seed_value"),
+    [
+        ("services", {"score_rows": lambda rows: 1.0}),
+        ("constants", {"V19_UNIVERSE": ("A", "B")}),
+    ],
+)
+def test_compile_rejects_service_or_constant_name_colliding_with_cell_def(
+    seed_param, seed_value
+):
+    """FAIL-CLOSED: services/constants are host-owned free-ref globals. A cell defining the
+    same name would shadow the host value after the cold run, so reject like ``inject`` and
+    ``driver_seeds`` do.
+    """
+    from marimo import App
+
+    app = App()
+
+    @app.cell
+    def _strategy():
+        bar = get_bar()  # noqa: F821
+        if seed_param == "services":
+            score_rows = 42  # noqa: F841
+        else:
+            V19_UNIVERSE = ("shadowed",)  # noqa: F841
+        out = bar + 1
+        return out, score_rows if seed_param == "services" else V19_UNIVERSE
+
+    kwargs = {
+        "driver_seeds": {"get_bar": 0.0},
+        seed_param: seed_value,
+    }
+    with pytest.raises(ValueError, match="also defined by a cell"):
+        with open_runtime(app, **kwargs):
+            pass
+
+
 def _order_dag_app():
     """A signed-quantity order DAG: bar→signal→qty→``submit_market(qty)``. The order cell
     references the injected ``submit_market`` as a free name (findings 0046 S4)."""

@@ -219,12 +219,27 @@ def test_real_v19_sidecar_resolves_and_real_model_scores(monkeypatch):
         adv_baseline=constants["V19_ADV_BASELINE"], prev_close=constants["V19_PREV_CLOSE"],
     )
     assert set(rows) == set(scored)
+    # Decide skip on the MODEL LOAD alone (sklearn 1.8.x unpickle, findings 0029); a bug in the
+    # scoring path itself must NOT be swallowed as a skip, so scoring runs outside the try.
+    model_path = os.path.join(_PY, "strategies", "v19", "artifacts",
+                              "v19_live_model_o3histgb_10h00.joblib")
     try:
-        scores = services["score_v19_rows"](rows)  # lazy joblib.load of the real model + predict
-    except Exception as exc:  # noqa: BLE001 — model unpickle needs sklearn 1.8.x (findings 0029)
+        joblib.load(model_path)
+    except Exception as exc:  # noqa: BLE001 — unpickle needs sklearn 1.8.x
         pytest.skip(f"real v19 model not loadable in this env: {exc!r}")
+    scores = services["score_v19_rows"](rows)  # real model + predict (bugs here DO fail)
     assert set(scores) == set(scored)
     assert all(isinstance(s, float) for s in scores.values())
+
+
+def test_resolver_fail_loud_on_missing_artifact_maps_to_load_error(tmp_path):
+    """A scorer spec whose artifact is missing must raise a LOAD-class error (ValueError), not a
+    bare FileNotFoundError — the dispatch maps FileNotFoundError to STRATEGY_FILE_NOT_FOUND (as if
+    the .py were missing), which is misleading when the .py exists but an artifact is absent."""
+    cell = _write_v19_cell_with_scorer(tmp_path)
+    (tmp_path / "universe.json").unlink()  # remove a required artifact
+    with pytest.raises(ValueError, match="artifact not found"):
+        _select_replay_strategy(str(cell))
 
 
 def test_resolver_fail_loud_on_scenario_universe_mismatch(tmp_path):

@@ -30,7 +30,7 @@ def make_v19_scorer_bindings(spec: dict, base_dir, scenario: dict) -> Tuple[dict
     """
     base = Path(base_dir)
 
-    universe_doc = json.loads((base / spec["universe_path"]).read_text(encoding="utf-8"))
+    universe_doc = _read_json(base, spec["universe_path"], "universe")
     instruments = list(universe_doc["instruments"])
     rs_ref = universe_doc.get("rs_ref", "1306.TSE")
 
@@ -79,4 +79,18 @@ def _load_optional_map(base: Path, rel: "str | None") -> dict:
     """Load a ``{iid: float}`` artifact (adv / prev_close); ``{}`` when the path is omitted."""
     if not rel:
         return {}
-    return json.loads((base / rel).read_text(encoding="utf-8"))
+    return _read_json(base, rel, "artifact")
+
+
+def _read_json(base: Path, rel: str, what: str) -> dict:
+    """Read a required scorer artifact JSON. A missing or malformed artifact is a strategy LOAD
+    failure (the .py exists; its config is wrong), so raise ValueError — the dispatch site maps
+    that to STRATEGY_LOAD_ERROR. Letting the bare FileNotFoundError escape would be mis-reported
+    as STRATEGY_FILE_NOT_FOUND (as if the strategy file itself were missing)."""
+    path = base / rel
+    if not path.exists():
+        raise ValueError(f"v19 scorer {what} artifact not found: {path}")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"v19 scorer {what} artifact is not valid JSON: {path}: {exc}") from exc

@@ -214,8 +214,11 @@ def test_prev_close_changes_the_picks_so_the_parity_is_not_vacuous(monkeypatch):
     stub = _StubModel()
     _r1, with_pc = _run(_make_imperative(stub), monkeypatch)
     _r2, no_pc = _run(_make_imperative(stub, prev_close={}), monkeypatch)
+    # With prev_close the gap-rank buys {9984, 7203}; with empty prev_close (gap→0, ties broken
+    # by universe order) it buys {7203, 6758} — a concretely different set, so prev_close
+    # demonstrably drives the picks (the parity gate is not vacuous w.r.t. R2).
     assert _bought(with_pc) == {"9984.TSE", "7203.TSE"}
-    assert _bought(no_pc) != _bought(with_pc), _bought(no_pc)
+    assert _bought(no_pc) == {"7203.TSE", "6758.TSE"}
 
 
 def test_adv_and_prev_close_reach_nonzero_features():
@@ -232,5 +235,9 @@ def test_adv_and_prev_close_reach_nonzero_features():
     rows = v19_core.build_rows(
         snaps, _UNIVERSE, _RS_REF, adv_baseline=_ADV_BASELINE, prev_close=_PREV_CLOSE
     )
-    assert rows["9984.TSE"]["rel_turnover"] != 0.0
-    assert rows["9984.TSE"]["gap"] != 0.0
+    # Every scored instrument (all of _GAP_TARGET) must carry non-zero rel_turnover (adv) and
+    # gap (prev_close) — so neither constant is silently dropped for any instrument.
+    assert set(_GAP_TARGET) <= set(rows)
+    for iid in _GAP_TARGET:
+        assert rows[iid]["rel_turnover"] != 0.0, iid
+        assert rows[iid]["gap"] != 0.0, iid

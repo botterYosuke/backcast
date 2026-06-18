@@ -32,8 +32,14 @@ _REGISTRY: dict[str, Callable[[], Callable]] = {
 
 
 def _read_scorer_spec(strategy_path: Path) -> "dict | None":
-    """The ``scorer`` key from the co-located ``<stem>.json`` sidecar, or None when absent."""
-    sidecar = strategy_path.with_suffix(".json")
+    """The ``scorer`` key from the co-located sidecar, or None when absent.
+
+    Uses scenario.py's ``_sidecar_path`` so this reader and ``load_scenario`` resolve the SAME
+    sidecar file (a private import, but the alternative — recomputing the path here — would let
+    the two silently diverge if the sidecar convention ever changes)."""
+    from engine.strategy_runtime.scenario import _sidecar_path
+
+    sidecar = _sidecar_path(strategy_path)
     if not sidecar.exists():
         return None
     doc = json.loads(sidecar.read_text(encoding="utf-8"))

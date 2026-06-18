@@ -491,7 +491,23 @@ AC2 real-data skip-if-mount-absent・AC3 resolver は module-load で marimo/job
 | **AC3 lazy invariant**: `scorer_bindings`/`v19_scorer` は module-load で marimo/sklearn/joblib を引かない | `test_strategy_runtime_offline`（_CHILD 集合へ追加）/ import-purity | invariant |
 | **scenario/artifact 不一致 fail-loud**: scoring universe に bar の来ない銘柄があれば resolver が raise | AC1 gate に negative case | unit |
 
+### v19 production scorer resolver 実装着地（2026-06-18・RED-first＋commit）
+R1–R5 を実装。**production marimo-v19 が実 joblib model で実走可能に**（AC2 gate が skip せず実走＝
+sklearn 1.8.x 在で実 HistGB model をロードし score）。全 suite 373 passed・#24 golden 不変・
+offline/import-purity GREEN。
+- **Step A**（`8c…`）: R2 — cell の `build_rows` に adv/prev_close を渡す faithfulness 修正＋constants を
+  `V19_*` 接頭辞へ rename。parity gate を **gap 列ランク stub** で非 vacuous 化（prev_close 依存・gap-rank≠
+  universe order＝drop すると picks が変わる）＋ sensitivity litmus＋feature guard。
+- **Step B**（resolver）: `engine/strategy_runtime/scorer_bindings.py`（generic kind-keyed・no key→`({},{})`・
+  marimo/joblib-free）＋`strategies/v19/v19_scorer.py`（universe/adv/prev_close ロード→`V19_*` constants・lazy
+  joblib scorer・scored 不在を fail-loud）＋dispatch 配線＋実 sidecar `v19_morning_cell.json`（scenario＋scorer spec）。
+- **R3 微修正（実コードで判明）**: fail-loud は **scored instruments（rs_ref 除く）** に限る。命令型 v19 は rs_ref
+  の bar 不在を `rs=0` で許容するので、rs_ref を必須にすると rs_ref を含む実 sidecar が誤 fail。build_rows が
+  rs_ref を skip する事実と整合。
+- **AC3 強化**: offline gate の leak 検査を marimo だけでなく **joblib/sklearn** にも拡張＝scorer modules が
+  module-load で重 ML dep を引かない lazy 不変を直接 pin。
+
 ### 残務（順序・不変）
-**v19 production scorer resolver**（設計＝上記 R1–R5・実装着手）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+**S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 
 > 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証・step2 設計の木は T1–T9 で確定。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。

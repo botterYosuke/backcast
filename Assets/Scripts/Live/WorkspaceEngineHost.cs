@@ -155,6 +155,10 @@ public sealed class WorkspaceEngineHost
             PythonRuntimeLocator.ConfigureBeforeInitialize();
             PythonEngine.Initialize();
             PythonEngine.BeginAllowThreads();   // main GIL-free for the rest of the process
+            // #33: in deploy, verify ADR-0001 d3 executor in-proc parity before any engine
+            // work runs. Editor parity is already covered by S1/S2 probes (findings 0001/0013).
+            if (!Application.isEditor)
+                ExecutorOrphanAbsenceAssert.AssertInProcParity();
             s_pythonBootstrapped = true;
         }
 

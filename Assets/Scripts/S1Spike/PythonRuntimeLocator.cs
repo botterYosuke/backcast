@@ -1,60 +1,58 @@
-// PythonRuntimeLocator.cs — issue #9 S1 "Replay seam tracer" (M3 move 1)
+// PythonRuntimeLocator.cs — single source of truth for embedded-Python runtime paths.
 //
-// Single source of truth for the four embedded-Python runtime paths pythonnet
-// needs BEFORE PythonEngine.Initialize():
+// Resolves the four paths pythonnet needs BEFORE PythonEngine.Initialize():
 //   * LibPython   -> Python.Runtime.Runtime.PythonDLL (the libpython to dlopen)
 //   * PythonHome  -> PythonEngine.PythonHome + PYTHONHOME env (CPython stdlib root)
-//   * VenvSite    -> venv site-packages (nautilus + backcast-engine live here)
+//   * VenvSite    -> venv site-packages (kernel deps + backcast-engine live here)
 //   * ProjectRoot -> python/ import root (so `import engine` resolves)
 //
-// This is the REAL abstraction that resolves the absolute-path hardcode debt S0
-// deferred ("Step1 #3: relativize via StreamingAssets"). The S1 probe adopts it
-// (M3 move 2); the S0 throwaway probes (S0EditorProbe / S0SpikeHarness) keep
-// their own consts — we do not churn throwaways. Per ADR-0002
-// (docs/adr/0002-embedded-python-runtime-placement-and-resolution.md) resolution
-// lives in ONE place that branches on Application.isEditor:
-//   * Editor (dev)   -> python/.venv, DERIVED from the repo layout (Application
-//                       .dataPath = <repo>/Assets, so <repo>/python). The
-//                       genuinely EXTERNAL uv CPython install (~/.local/share/uv)
-//                       is not repo-relative, so it stays a documented const.
-//   * build (deploy) -> Application.streamingAssetsPath base. AUTHORED so the
-//                       abstraction + the Editor/build seam exist, but the
-//                       post-process copy that PUTS the venv there and a real
-//                       standalone-exe run are DEFERRED to the #2 Windows leg
-//                       (ADR-0002 slice split). This slice does NOT verify the
-//                       build branch — treat it as unexercised.
+// Per ADR-0002, resolution lives in ONE place that branches on Application.isEditor:
+//   * Editor (dev)   -> python/.venv. Repo-relative (Application.dataPath = <repo>/Assets,
+//                       so <repo>/python). uv CPython install is per-user/external and
+//                       resolved from pyvenv.cfg `home=` (Windows) or documented const (Mac).
+//   * build (deploy) -> Application.streamingAssetsPath/PythonRuntime/{cpython, python}.
+//                       Layout is written by BackcastShippableBuild (IPostprocessBuildWithReport).
+//                       venv's pyvenv.cfg is DELETED by the post-process — this Locator is
+//                       the single source of truth for PYTHONHOME in deploy (#33 grill 2026-06-18).
 //
-// Placed in Assets/Scripts/ (runtime / Assembly-CSharp) because the build branch
-// uses Application.streamingAssetsPath, a RUNTIME API. The Editor probe
-// (Assembly-CSharp-Editor) can see runtime types, so S1AdapterSmokeProbe (move 2)
-// will call ConfigureBeforeInitialize() in place of its own consts.
+// Build-branch additions (#33):
+//   * ConfigureBeforeInitialize sets TTWR_PYTHON_BIN env (deploy only — Editor's dev
+//     workflows have their own resolver fallbacks) so engine._backend_impl
+//     _resolve_python_executable() hits step 1 deterministically in the shipped exe
+//     (findings 0016 "better seam" wired here for deploy).
+//   * On Windows (Editor AND Player), P/Invoke AddDllDirectory + SetDefaultDllDirectories
+//     so the loader can find vcruntime140.dll (uv-bundled, sibling to python313.dll) when
+//     LoadLibrary resolves transitive .pyd dependencies (pyarrow / duckdb / marimo /
+//     pydantic_core, etc.) — without this, VC++ Redistributable becomes a precondition on
+//     a clean Win10/11 LTSC or corporate-locked machine. Runs in Editor too because the
+//     Editor loads the same uv-bundled CPython + .pyd graph as deploy.
+//   * runtime-manifest.json sanity assert (build branch only): every resolved path must
+//     exist. Asset gaps fail loudly at startup instead of an opaque ImportError later.
 //
-// THREADING: EnsureResolved() reads Application.dataPath, which must be read on
-// the Unity MAIN thread. ConfigureBeforeInitialize() (called on main, pre-
-// Initialize) forces resolution + caches all four strings into static fields, so
-// the later background launcher thread reads cached strings only — it never
-// touches a Unity API off-main. First resolution MUST therefore happen on main.
+// THREADING: EnsureResolved() reads Application.dataPath/streamingAssetsPath which
+// must be read on the Unity MAIN thread. ConfigureBeforeInitialize() (called on main,
+// pre-Initialize) forces resolution + caches all four strings into static fields, so
+// the later background launcher thread reads cached strings only.
 
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using Python.Runtime;
 using UnityEngine;
 
 public static class PythonRuntimeLocator
 {
-    // Genuinely external: the uv-managed CPython 3.13.13 install. Not repo-
-    // relative, so these stay documented absolute consts (ADR-0002: "derive where
-    // sensible; the uv cpython path is genuinely external/absolute").
+    // Genuinely external Mac dev: the uv-managed CPython install. Not repo-relative,
+    // so these stay documented absolute consts (ADR-0002: "derive where sensible; the
+    // uv cpython path is genuinely external/absolute"). Editor Mac leg only.
     const string UV_LIBPYTHON  = "/Users/sasac/.local/share/uv/python/cpython-3.13.13-macos-x86_64-none/lib/libpython3.13.dylib";
     const string UV_PYTHONHOME = "/Users/sasac/.local/share/uv/python/cpython-3.13.13-macos-x86_64-none";
 
     // CPython minor version — single source for everything that depends on it
-    // (the venv "lib/<PY_TAG>" dir and the build-branch libpython filename), so a
-    // minor bump can't drift one of them. The uv consts above carry the full patch
-    // version (3.13.13) and stay independent.
+    // (the venv "lib/<PY_TAG>" dir, libpython filename). Production patch pin is
+    // 3.13.11 win_amd64 (ADR-0001 d7); the minor (3.13) is what's burned into paths.
     const string PY_MINOR = "3.13";
-    // venv site-packages is "<python root>/.venv/lib/<PY_TAG>/site-packages".
-    const string PY_TAG = "python" + PY_MINOR;
+    const string PY_TAG   = "python" + PY_MINOR;
 
     static bool   _resolved;
     static string _libPython;
@@ -68,10 +66,10 @@ public static class PythonRuntimeLocator
     public static string ProjectRoot { get { EnsureResolved(); return _projectRoot; } }
 
     // Performs the pre-Initialize pythonnet wiring the probes used to do inline:
-    // sets the libpython to dlopen, PYTHONHOME (env + PythonEngine), and PYTHONPATH
-    // (venv site-packages + project root). MUST be called on the Unity MAIN thread
-    // BEFORE PythonEngine.Initialize() and before any background thread reads the
-    // path properties (it forces main-thread resolution + caching).
+    // sets the libpython to dlopen, PYTHONHOME (env + PythonEngine), PYTHONPATH
+    // (venv site-packages + project root), and in deploy (build branch) also
+    // TTWR_PYTHON_BIN (subprocess resolver) + Windows DLL search path. MUST be
+    // called on the Unity MAIN thread BEFORE PythonEngine.Initialize().
     public static void ConfigureBeforeInitialize()
     {
         EnsureResolved();
@@ -80,6 +78,40 @@ public static class PythonRuntimeLocator
         Environment.SetEnvironmentVariable("PYTHONHOME", _pythonHome);
         Environment.SetEnvironmentVariable("PYTHONPATH", _venvSite + Path.PathSeparator + _projectRoot);
         PythonEngine.PythonHome = _pythonHome;
+
+        if (!Application.isEditor)
+        {
+            // Deploy: pin the BASE CPython executable so _resolve_python_executable()
+            // (engine/_backend_impl.py) hits step 1 (env override) and never needs
+            // fallback chain. findings 0016 §"better seam" — wired here for deploy.
+            // Editor-skip: dev workflows resolve Python via venv-activated shells, IDE
+            // configs, etc.; deploy is the case where the resolver chain matters.
+            string pyExe = Path.Combine(_pythonHome,
+                Application.platform == RuntimePlatform.WindowsPlayer ? "python.exe" : "bin/python3");
+            Environment.SetEnvironmentVariable("TTWR_PYTHON_BIN", pyExe);
+        }
+
+        // Windows: uv-bundled vcruntime140.dll / msvcp140.dll live next to python313.dll
+        // under PythonHome. Without expanding the loader search path, transitive .pyd
+        // dependencies (pyarrow / duckdb / marimo / pydantic_core, etc.) that need the
+        // VC runtime fall back to System32 — and a fresh Win10/11 LTSC or corporate-
+        // locked machine may not have VC++ Redistributable pre-installed.
+        //
+        // Player and Editor use different Win32 APIs to minimize blast radius:
+        //   * Player: SetDefaultDllDirectories + AddDllDirectory (modern, secure default —
+        //     disables PATH-based DLL search process-wide, which is desirable for a
+        //     shipped self-contained app where any PATH reliance would be a hidden host
+        //     dependency).
+        //   * Editor: SetDllDirectory (legacy single-dir API — inserts cpython/ before
+        //     System32 in the search path but PRESERVES PATH search). The Editor hosts
+        //     arbitrary third-party plugins (analytics SDKs, profilers, VCS integrations)
+        //     whose lazy DLL loads may rely on PATH; the modern API's process-wide PATH
+        //     disable would silently break them. SetDllDirectory adds what we need
+        //     without subtracting what others might.
+        if (Application.platform == RuntimePlatform.WindowsPlayer)
+            AddWindowsDllSearchDir_Player(_pythonHome);
+        else if (Application.platform == RuntimePlatform.WindowsEditor)
+            AddWindowsDllSearchDir_Editor(_pythonHome);
     }
 
     static void EnsureResolved()
@@ -88,29 +120,23 @@ public static class PythonRuntimeLocator
 
         if (Application.isEditor)
         {
-            // <repo>/Assets -> <repo> -> <repo>/python (the import root). Derived
-            // from the project layout so moving the repo cannot stale the dev paths.
+            // <repo>/Assets -> <repo> -> <repo>/python (import root). Derived from
+            // project layout so moving the repo cannot stale dev paths.
             string repoRoot = Directory.GetParent(Application.dataPath).FullName;
             _projectRoot    = Path.Combine(repoRoot, "python");
             string venvRoot = Path.Combine(_projectRoot, ".venv");
 
             if (Application.platform == RuntimePlatform.WindowsEditor)
             {
-                // Windows leg (#18 / Step2 prereq, deploy OS = Windows). The
-                // externally-installed uv CPython root is recorded in the venv's
-                // own pyvenv.cfg `home=`, so we DERIVE it (portable across
-                // machines) instead of hardcoding a per-user absolute path.
-                // libpython is python<minor-nodot>.dll in that home; venv
-                // site-packages is Lib/site-packages (not Mac's lib/<tag>/).
+                // Windows dev: uv CPython is per-user (AppData\Roaming\uv\python\...).
+                // pyvenv.cfg `home=` records it portably across machines.
                 _pythonHome = ResolveVenvHome(venvRoot);
                 _libPython  = Path.Combine(_pythonHome, "python" + PY_MINOR.Replace(".", "") + ".dll");
                 _venvSite   = Path.Combine(venvRoot, "Lib", "site-packages");
             }
             else
             {
-                // macOS dev leg (S0/S1 Mac green): external uv install carried as
-                // documented absolute consts (ADR-0002: the uv cpython path is
-                // genuinely external/absolute).
+                // macOS dev: external uv install carried as documented absolute consts.
                 _libPython  = UV_LIBPYTHON;
                 _pythonHome = UV_PYTHONHOME;
                 _venvSite   = Path.Combine(venvRoot, "lib", PY_TAG, "site-packages");
@@ -118,25 +144,40 @@ public static class PythonRuntimeLocator
         }
         else
         {
-            // DEFERRED (ADR-0002 slice split / #2 Windows leg): a post-process build
-            // hook will copy the deploy-OS CPython + venv under StreamingAssets with
-            // this layout. NOT exercised by this slice — authored only so the
-            // abstraction and the Editor/build seam exist.
+            // Deploy (#33): post-process copies cpython/ + python/{engine, .venv} under
+            // StreamingAssets/PythonRuntime/. Layout is written by
+            // BackcastShippableBuild.PostProcess and verified by the manifest assert below.
             string baseDir = Path.Combine(Application.streamingAssetsPath, "PythonRuntime");
             _projectRoot   = Path.Combine(baseDir, "python");
-            _venvSite      = Path.Combine(_projectRoot, ".venv", "lib", PY_TAG, "site-packages");
             _pythonHome    = Path.Combine(baseDir, "cpython");
-            _libPython     = Path.Combine(_pythonHome, "lib", "libpython" + PY_MINOR + ".dylib");
+
+            if (Application.platform == RuntimePlatform.WindowsPlayer)
+            {
+                _libPython = Path.Combine(_pythonHome, "python" + PY_MINOR.Replace(".", "") + ".dll");
+                _venvSite  = Path.Combine(_projectRoot, ".venv", "Lib", "site-packages");
+            }
+            else
+            {
+                // macOS Player (code path exists for symmetry; verification gate is
+                // Windows-only per #33 grill — cutover #5 deploy target is Windows).
+                _libPython = Path.Combine(_pythonHome, "lib", "libpython" + PY_MINOR + ".dylib");
+                _venvSite  = Path.Combine(_projectRoot, ".venv", "lib", PY_TAG, "site-packages");
+            }
+
+            AssertDeployBundleIntact(baseDir);
         }
 
         _resolved = true;
     }
 
     // Reads the venv's pyvenv.cfg `home = <uv cpython root>` line — the venv's own
-    // portable record of its base interpreter, so the Windows uv path is never a
-    // per-user hardcode. Throws a clear error if absent (mis-staged venv) rather
-    // than failing later inside PythonEngine.Initialize with an opaque dlopen miss.
-    static string ResolveVenvHome(string venvRoot)
+    // portable record of its base interpreter. Used by:
+    //   * EnsureResolved (Editor Windows) to derive the per-user uv CPython at runtime
+    //   * BackcastShippableBuild post-process to locate the CPython to bundle
+    // Public so the post-process script can share the parser (single source of truth
+    // for `home=` semantics; drift between the two would silently disagree on which
+    // CPython is bundled vs which one is loaded).
+    public static string ResolveVenvHome(string venvRoot)
     {
         string cfg = Path.Combine(venvRoot, "pyvenv.cfg");
         if (File.Exists(cfg))
@@ -151,6 +192,70 @@ public static class PythonRuntimeLocator
         }
         throw new InvalidOperationException(
             "PythonRuntimeLocator: could not resolve uv CPython home from " + cfg +
-            " (missing `home=`). Stage the Windows venv (python/.venv) before running.");
+            " (missing `home=`). Stage the venv (python/.venv) before running.");
+    }
+
+    // Hard-fails loudly when the deploy bundle is incomplete (post-process bug, mis-
+    // staged install, antivirus quarantine). An asset gap here would otherwise surface
+    // as an opaque dlopen / ImportError deep inside PythonEngine.Initialize.
+    static void AssertDeployBundleIntact(string baseDir)
+    {
+        string manifest = Path.Combine(baseDir, "runtime-manifest.json");
+        if (!File.Exists(manifest))
+            throw new InvalidOperationException(
+                "PythonRuntime asset incomplete: missing " + manifest +
+                ". The build post-process did not run, or the StreamingAssets bundle is corrupt. " +
+                "Rebuild via Tools > Backcast > Build Shippable (Windows64).");
+
+        foreach (string p in new[] { _libPython, _pythonHome, _venvSite, _projectRoot })
+        {
+            if (!File.Exists(p) && !Directory.Exists(p))
+                throw new InvalidOperationException(
+                    "PythonRuntime asset incomplete: missing " + p +
+                    ". Rebuild via Tools > Backcast > Build Shippable (Windows64).");
+        }
+    }
+
+    // Windows loader hygiene — let .pyd transitive deps see uv-bundled vcruntime140.dll
+    // (sibling to python313.dll under cpython/). Without this, the Locator becomes
+    // dependent on a system-wide VC++ Redistributable install, which fresh Win10 LTSC
+    // and locked-down corporate machines may lack.
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern IntPtr AddDllDirectory(string lpPathName);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool SetDefaultDllDirectories(uint DirectoryFlags);
+
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern bool SetDllDirectory(string lpPathName);
+
+    const uint LOAD_LIBRARY_SEARCH_DEFAULT_DIRS = 0x00001000;
+    const uint LOAD_LIBRARY_SEARCH_USER_DIRS    = 0x00000400;
+
+    // Player: modern AddDllDirectory + SetDefaultDllDirectories. Process-wide PATH
+    // disable is the recommended secure default for a shipped self-contained app.
+    static void AddWindowsDllSearchDir_Player(string dir)
+    {
+        if (!SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS))
+            throw new InvalidOperationException(
+                "SetDefaultDllDirectories failed (LastError=" + Marshal.GetLastWin32Error() + ")");
+
+        IntPtr cookie = AddDllDirectory(dir);
+        if (cookie == IntPtr.Zero)
+            throw new InvalidOperationException(
+                "AddDllDirectory failed for " + dir +
+                " (LastError=" + Marshal.GetLastWin32Error() + ")");
+    }
+
+    // Editor: legacy SetDllDirectory inserts `dir` BEFORE System32 in the standard
+    // search path but PRESERVES PATH-based DLL search — so third-party editor plugins
+    // that lazily LoadLibrary from a PATH-located DLL keep working. Single-dir limit
+    // is fine: cpython/ is the only directory we need to add.
+    static void AddWindowsDllSearchDir_Editor(string dir)
+    {
+        if (!SetDllDirectory(dir))
+            throw new InvalidOperationException(
+                "SetDllDirectory failed for " + dir +
+                " (LastError=" + Marshal.GetLastWin32Error() + ")");
     }
 }

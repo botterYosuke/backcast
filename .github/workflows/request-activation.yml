@@ -65,7 +65,7 @@ jobs:
             echo ''
             echo "1. Download the **${ALF_PATH}** artifact from this run."
             echo '2. Open <https://license.unity3d.com/manual> in a browser and sign in with the Unity ID'
-            echo '   held in `UNITY_EMAIL` (account email: `sasaicco@gmail.com`).'
+            echo '   held in `UNITY_EMAIL` (account email: `sasaco@live.jp`).'
             echo '3. Upload the `.alf` file. The site returns a `.ulf` file.'
             echo '4. Open the `.ulf` and copy its **full content** into the GitHub repo secret'
             echo '   `UNITY_LICENSE` (overwrite the previous value if renewing).'

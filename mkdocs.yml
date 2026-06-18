@@ -1,0 +1,25 @@
+site_name: Backcast Manual
+site_description: User manual and technical notes for Backcast
+docs_dir: docs
+exclude_docs: |
+  adr/**
+  findings/**
+  spike/**
+theme:
+  name: readthedocs
+nav:
+  - はじめに: index.md
+  - ユーザーマニュアル:
+      - manual/index.md
+      - インストールと起動: manual/install.md
+      - Replay を実行する: manual/replay.md
+      - 戦略を書く: manual/strategy-authoring.md
+      - Live / Auto を使う: manual/live-auto.md
+      - トラブルシュート: manual/troubleshooting.md
+  - 技術者向け:
+      - technical/index.md
+markdown_extensions:
+  - admonition
+  - fenced_code
+  - toc:
+      permalink: true

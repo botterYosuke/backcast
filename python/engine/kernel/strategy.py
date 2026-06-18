@@ -14,10 +14,11 @@ from typing import Protocol
 
 from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderSide
+from engine.kernel.portfolio import PortfolioSnapshot
 
 
 class StrategyContext(Protocol):
-    """Injected at register(): how a strategy submits orders and logs."""
+    """Injected at register(): how a strategy submits orders, logs, and reads its book."""
 
     def submit_market(
         self, *, strategy_id: str, instrument_id: str, side: OrderSide, quantity: float
@@ -26,6 +27,14 @@ class StrategyContext(Protocol):
     def log(self, message: str) -> None: ...  # noqa: E704
 
     def buying_power(self) -> float: ...  # noqa: E704
+
+    # Read seam (#76 portfolio-driver slice): a frozen pre-fill snapshot (cash / MTM equity /
+    # realized / signed positions). Additive to ADR-0012 D2's adaptation boundary — the
+    # marimo adapter pipes it into the get_portfolio driver; the imperative golden never
+    # calls it (byte-identical). Replay and Live both implement it (Live = kernel mirror).
+    def portfolio_snapshot(
+        self, instrument_id: "str | None" = None
+    ) -> PortfolioSnapshot: ...  # noqa: E704
 
 
 class Strategy:
@@ -68,6 +77,15 @@ class Strategy:
         if self._ctx is None:
             raise RuntimeError("buying_power called before register()")
         return float(self._ctx.buying_power())
+
+    def portfolio_snapshot(self) -> PortfolioSnapshot:
+        """Frozen pre-fill book snapshot for the strategy's primary instrument (#76).
+
+        Fail-loud before register (mirrors buying_power): a strategy that read positions/
+        cash off a default snapshot before wiring would size silently wrong."""
+        if self._ctx is None:
+            raise RuntimeError("portfolio_snapshot called before register()")
+        return self._ctx.portfolio_snapshot(self.instrument_id)
 
     # --- lifecycle hooks (no-op defaults) -------------------------------------
     def on_start(self) -> None: ...  # noqa: E704

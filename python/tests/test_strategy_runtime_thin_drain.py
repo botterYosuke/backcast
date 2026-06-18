@@ -523,8 +523,10 @@ def test_host_seeded_driver_state_drives_free_ref_cell():
 
 
 def test_host_seeded_driver_with_no_reader_is_rejected():
-    """S6a reuses the D5 fail-closed: a seeded driver no cell reads would make every bar's
-    write a silent no-op — reject at compile (a single-driver strategy must read the bar)."""
+    """P4 fail-closed: a host-seeded driver no cell reads is simply not declared, so when the
+    ONLY seed is unread the hot list is empty — a dead strategy that compiled "successfully".
+    Caught by the empty-roots guard (the rejection reason moved from the per-driver no-reader
+    check to the empty-roots check when host-seed no-reader became "skip")."""
     from marimo import App
 
     app = App()
@@ -534,8 +536,76 @@ def test_host_seeded_driver_with_no_reader_is_rejected():
         x = 1  # never reads get_bar
         return (x,)
 
-    with pytest.raises(ValueError, match="no reader cell"):
+    with pytest.raises(ValueError, match="no host driver"):
         with open_runtime(app, driver_seeds={"get_bar": 0.0}):
+            pass
+
+
+# -------------------------------------------------- portfolio-driver subset (P4/P5)
+
+
+def _two_seed_app(reads: str):
+    """A single cell reading a SUBSET of the host-seed set {get_bar, get_portfolio} as free
+    refs — the P4 subset fixture. Seeds are plain floats here (thin_drain is agnostic to the
+    value type; the PortfolioSnapshot type is exercised by the adapter parity gate)."""
+    from marimo import App
+
+    app = App()
+    if reads == "bar":
+
+        @app.cell
+        def _c():
+            out = get_bar() * 2.0  # noqa: F821
+            return (out,)
+    elif reads == "portfolio":
+
+        @app.cell
+        def _c():
+            out = get_portfolio() + 1.0  # noqa: F821
+            return (out,)
+    elif reads == "both":
+
+        @app.cell
+        def _c():
+            out = get_bar() + get_portfolio()  # noqa: F821
+            return (out,)
+    else:  # "neither"
+
+        @app.cell
+        def _c():
+            out = 1
+            return (out,)
+
+    return app
+
+
+def test_subset_declares_and_writes_only_read_host_seeds():
+    """P4/P5: the host seeds both {get_bar, get_portfolio}; only the facets a cell actually
+    reads become active drivers (setter + per-bar write + root). bar-only and portfolio-only
+    both work; the adapter writes exactly active_drivers."""
+    seeds = {"get_bar": 0.0, "get_portfolio": 0.0}
+
+    with open_runtime(_two_seed_app("bar"), driver_seeds=seeds) as rt:
+        assert rt.active_drivers == frozenset({"get_bar"})
+        rt.drain({"get_bar": 5.0})
+        assert rt.globals["out"] == 10.0
+
+    with open_runtime(_two_seed_app("portfolio"), driver_seeds=seeds) as rt:
+        assert rt.active_drivers == frozenset({"get_portfolio"})
+        rt.drain({"get_portfolio": 9.0})
+        assert rt.globals["out"] == 10.0
+
+    with open_runtime(_two_seed_app("both"), driver_seeds=seeds) as rt:
+        assert rt.active_drivers == frozenset({"get_bar", "get_portfolio"})
+        rt.drain({"get_bar": 4.0, "get_portfolio": 6.0})
+        assert rt.globals["out"] == 10.0
+
+
+def test_no_host_driver_read_is_rejected_as_dead_strategy():
+    """P4: a cell reading NEITHER seeded driver → empty hot list → every bar a no-op. Reject."""
+    seeds = {"get_bar": 0.0, "get_portfolio": 0.0}
+    with pytest.raises(ValueError, match="no host driver"):
+        with open_runtime(_two_seed_app("neither"), driver_seeds=seeds):
             pass
 
 

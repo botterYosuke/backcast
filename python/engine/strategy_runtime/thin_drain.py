@@ -351,6 +351,7 @@ def _compile(
     # that read a host-driven state — found by calling marimo's own function, never
     # mirroring it (it folds in stale-ancestor union / import-block relatives / override
     # pruning that an approximation would drop).
+    seed_names = set(driver_seeds or {})
     setters: dict[str, Any] = {}
     roots: set = set()
     for name in (*drivers, *(driver_seeds or {})):
@@ -362,17 +363,35 @@ def _compile(
                 f"driver getter {name!r} is not an mo.state getter "
                 f"(got {type(state).__name__}); declare only host-driven mo.state getters"
             )
-        setters[name] = state._set_value
         cells_for_state = kernel._find_cells_for_state(state, _EXTERNAL)
-        # Fail-closed: a driver no cell reads makes the hot list silently shrink, so every
-        # bar's write to it is a no-op (a dead strategy that looks live). Reject at compile.
         if not cells_for_state:
+            # A host SEED (P4) is speculative — the host seeds the canonical driver set
+            # ({get_bar, get_portfolio}) without knowing which a cell reads. An unread seed
+            # is simply not declared: it stays in globals for free-ref resolution but is never
+            # written per bar (no setter, no root). The empty-roots guard below catches the
+            # case where NOTHING is read.
+            if name in seed_names:
+                continue
+            # An author-DECLARED driver (`drivers=[...]`) with no reader is still a bug — the
+            # author named a state nobody reads, so every bar's write is a silent no-op.
             raise ValueError(
                 f"driver {name!r} has no reader cell — every bar's write to it would be a "
                 "silent no-op. A declared driver must be read by at least one cell "
                 "(D5: roots = exactly the states the host writes between bars)."
             )
+        # Declared (read) driver: build the setter + root only now (so an unread seed neither
+        # gets a setter the adapter would mistakenly write nor enters the hot roots).
+        setters[name] = state._set_value
         roots |= cells_for_state
+    if not roots:
+        # Fail-closed (P4): no declared/seeded driver is read by any cell, so the hot list is
+        # empty and every bar is a no-op — a dead strategy that compiled "successfully". This
+        # is where a single unread host seed is rejected (its no-reader case is "skip" above).
+        raise ValueError(
+            "no host driver is read by any cell — every bar would be a no-op (a dead "
+            "strategy). A reactive strategy must read at least one host driver "
+            "(e.g. get_bar() / get_portfolio())."
+        )
 
     hot_ids = Runner.compute_cells_to_run(graph, roots, set(), "autorun")
     # Built once so the per-bar drain never re-pays marimo's entry-point scan.
@@ -407,6 +426,13 @@ class StrategyRuntime:
     def hot_cell_ids(self) -> tuple[str, ...]:
         # Derived from hot_cells (each CellImpl carries its own cell_id) — not stored twice.
         return tuple(str(cell.cell_id) for cell in self._c.hot_cells)
+
+    @property
+    def active_drivers(self) -> frozenset[str]:
+        """The host-driven states actually declared (read by ≥1 cell) — exactly the subset the
+        host must write each bar (P5). The adapter writes these and skips unread host seeds
+        (so it never builds a get_portfolio snapshot a portfolio-blind strategy ignores)."""
+        return frozenset(self._c.setters)
 
     def step(self) -> None:
         """Execute the precomputed hot cells once, in topological order.

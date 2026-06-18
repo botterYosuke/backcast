@@ -81,6 +81,13 @@ class _Ctx:
     def buying_power(self) -> float:
         return self._driver._buying_power()
 
+    def portfolio_snapshot(self, instrument_id: "str | None" = None):
+        # StrategyContext read seam (#76): kernel-mirror snapshot, symmetric with
+        # buying_power's kernel-cash fallback. The marimo adapter is Replay-only in S6a;
+        # Live's venue-authoritative 余力/建玉 integration is a future epic (like the
+        # buying_power_provider). Prices = the driver's last seen closes.
+        return self._driver._portfolio.snapshot(self._driver.last_prices, instrument_id)
+
 
 class KernelLiveDriver:
     """1 run 分の kernel Strategy を live loop 上で駆動する（単一 run・§0.7）。"""

@@ -9,7 +9,9 @@ Single-instrument, single-position (NETTING) — tracer scope. Nautilus-free.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Mapping, Optional
 
 from engine.kernel.orders import OrderFilled, OrderSide
 
@@ -19,6 +21,30 @@ class Position:
     instrument_id: str
     quantity: float = 0.0   # signed: long > 0, short < 0
     avg_px: float = 0.0
+
+
+@dataclass(frozen=True)
+class PortfolioSnapshot:
+    """Immutable per-bar portfolio view a marimo cell reads via ``get_portfolio()`` (#76).
+
+    The glossary 3-value model (CONTEXT.md): ``equity`` = mark-to-market (cash + Σ position×
+    price), ``cash`` = realized cash, plus signed positions. ``position`` is the primary
+    instrument's signed net qty (the symmetric read of the signed-delta ``submit_market``);
+    ``net_qty(iid)`` / ``positions`` cover multi-instrument. Frozen so a cell cannot mutate
+    the host's accounting and so the reactive value semantics hold (the snapshot IS a value).
+    """
+
+    cash: float
+    equity: float
+    realized_pnl: float
+    position: float
+    # Excluded from the frozen dataclass's generated __hash__ (a MappingProxyType is
+    # unhashable, which would make hashing the "value" snapshot raise TypeError) but kept in
+    # __eq__ — so reactive value-equality still sees position changes, and `pf in a_set` works.
+    positions: Mapping[str, float] = field(hash=False)
+
+    def net_qty(self, instrument_id: str) -> float:
+        return self.positions.get(instrument_id, 0.0)
 
 
 class Portfolio:
@@ -125,3 +151,27 @@ class Portfolio:
 
     def open_positions(self) -> list[Position]:
         return [p for p in self._positions.values() if p.quantity != 0.0]
+
+    def snapshot(
+        self, prices: dict[str, float], primary_instrument_id: Optional[str] = None
+    ) -> PortfolioSnapshot:
+        """Build the frozen cell-facing snapshot (#76 portfolio-driver slice).
+
+        ``equity`` is marked to market at ``prices`` (the kernel's ``reference_prices`` at
+        ``on_bar`` entry — the bar close orders fill at), ``cash`` / ``realized_pnl`` are the
+        live book, ``position`` is the primary instrument's signed net qty. Called at
+        ``on_bar(N)`` entry (before this bar's fill) → the book is end-of-(N-1) = no-look-ahead.
+        """
+        positions = {p.instrument_id: p.quantity for p in self.open_positions()}
+        primary = (
+            positions.get(primary_instrument_id, 0.0)
+            if primary_instrument_id is not None
+            else 0.0
+        )
+        return PortfolioSnapshot(
+            cash=self._cash,
+            equity=self.mark_to_market_equity(prices),
+            realized_pnl=self._realized,
+            position=primary,
+            positions=MappingProxyType(positions),
+        )

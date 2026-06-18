@@ -32,9 +32,11 @@ from typing import Any
 from engine.kernel.duckdb_bars import Bar
 from engine.kernel.strategy import Strategy
 
-# The canonical host-owned driver getter name (S6-6): the host owns the name; the author
-# reads ``get_bar()`` as a free ref. The portfolio driver joins this set in a later slice.
+# The canonical host-owned driver getter names (S6-6): the host owns the names; the author
+# reads ``get_bar()`` / ``get_portfolio()`` as free refs. Both are seeded speculatively; the
+# thin drain declares (and the adapter writes) only the subset a cell actually reads (P4/P5).
 _BAR_DRIVER = "get_bar"
+_PORTFOLIO_DRIVER = "get_portfolio"
 
 
 class MarimoStrategy(Strategy):
@@ -45,6 +47,7 @@ class MarimoStrategy(Strategy):
         self._app = app
         self._stack: contextlib.ExitStack | None = None
         self._rt: Any = None
+        self._active: frozenset[str] = frozenset()
 
     def on_start(self) -> None:
         # Lazy: keep marimo off the module-load path (lazy-import discipline). thin_drain
@@ -59,7 +62,7 @@ class MarimoStrategy(Strategy):
         # bar (close=0.0) so the cold run executes without a live bar. The result is discarded —
         # the hot drain re-runs the cells with the real bar. submit_market is inert during the
         # cold run (thin_drain arms it after), so no spurious order fires.
-        neutral = Bar(
+        neutral_bar = Bar(
             instrument_id=self.instrument_id,
             ts_event_ns=0,
             open=0.0,
@@ -68,20 +71,35 @@ class MarimoStrategy(Strategy):
             close=0.0,
             volume=0.0,
         )
+        # The portfolio driver is seeded with the run-start (flat) snapshot: reference_prices
+        # is empty and the book is flat at on_start, so this is cash=initial / equity=initial /
+        # position=0 — a valid neutral the cold compile run can read (P3).
+        neutral_pf = self._ctx.portfolio_snapshot(self.instrument_id)
         submit = make_submit_market(
             self._ctx, strategy_id=self.id, default_instrument_id=self.instrument_id
         )
         self._stack = contextlib.ExitStack()
         self._rt = self._stack.enter_context(
             open_runtime(
-                self._app, driver_seeds={_BAR_DRIVER: neutral}, inject={"submit_market": submit}
+                self._app,
+                driver_seeds={_BAR_DRIVER: neutral_bar, _PORTFOLIO_DRIVER: neutral_pf},
+                inject={"submit_market": submit},
             )
         )
+        # Write only the drivers a cell actually reads (P5): the snapshot is built per bar only
+        # when get_portfolio is read. If the strategy reads neither, _compile already raised.
+        self._active = self._rt.active_drivers
 
     def on_bar(self, bar: Bar) -> None:
-        # Drain the bar into the host-seeded driver; the cell-DAG recomputes and orders flow
-        # through ctx.pending exactly as the imperative on_bar does.
-        self._rt.drain({_BAR_DRIVER: bar})
+        # Drain the host-seeded drivers; the cell-DAG recomputes and orders flow through
+        # ctx.pending exactly as the imperative on_bar does. The snapshot is captured at
+        # on_bar entry — before this bar's fill — so get_portfolio is end-of-prev-bar (P3).
+        values: dict[str, Any] = {}
+        if _BAR_DRIVER in self._active:
+            values[_BAR_DRIVER] = bar
+        if _PORTFOLIO_DRIVER in self._active:
+            values[_PORTFOLIO_DRIVER] = self._ctx.portfolio_snapshot(self.instrument_id)
+        self._rt.drain(values)
 
     def close(self) -> None:
         """Tear down the headless kernel. Idempotent; the dispatch site calls this in finally."""

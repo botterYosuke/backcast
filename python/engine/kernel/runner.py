@@ -28,7 +28,7 @@ from engine.kernel.orders import (
     OrderSide,
     OrderStatus,
 )
-from engine.kernel.portfolio import Portfolio
+from engine.kernel.portfolio import Portfolio, PortfolioSnapshot
 from engine.kernel.risk import RiskEngine
 from engine.kernel.sink import EventSink
 from engine.kernel.strategy import Strategy
@@ -127,6 +127,12 @@ class _Context:
 
     def buying_power(self) -> float:
         return float(self._portfolio.cash)
+
+    def portfolio_snapshot(self, instrument_id: str | None = None) -> PortfolioSnapshot:
+        """Cell-facing read seam (#76): a frozen pre-fill snapshot marked to market at the
+        current reference_prices (the bar close orders fill at). Called at on_bar entry —
+        before this bar's fill — so the book is end-of-(N-1) = no-look-ahead."""
+        return self._portfolio.snapshot(self.reference_prices, instrument_id)
 
 
 class KernelRunner:

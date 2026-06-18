@@ -137,6 +137,68 @@ def test_marimo_adapter_order_fill_parity_with_imperative_twin(tmp_path, monkeyp
     )
 
 
+# ----------------------------------------- portfolio-driver target-position parity (P3)
+
+_MARIMO_PF_SRC = """
+import marimo
+
+app = marimo.App()
+
+
+@app.cell
+def _rebal():
+    bar = get_bar()               # noqa: F821  host-seeded bar driver
+    pf = get_portfolio()          # noqa: F821  host-seeded portfolio driver
+    target = 10.0 if bar.close > 1010.0 else (-10.0 if bar.close < 990.0 else 0.0)
+    delta = target - pf.position  # delta to reach target off the PRE-FILL position
+    submit_market(delta)          # noqa: F821  S4 injected signed-qty adapter
+    return (delta,)
+"""
+
+
+class _TargetPositionTwin(Strategy):
+    """Imperative twin: same target bands, sizes the delta off the same pre-fill net position
+    (read through the new ctx.portfolio_snapshot seam) — the no-look-ahead parity oracle."""
+
+    def on_bar(self, bar) -> None:
+        target = 10.0 if bar.close > 1010.0 else (-10.0 if bar.close < 990.0 else 0.0)
+        delta = target - self.portfolio_snapshot().position
+        if delta > 0.0:
+            self.submit_market(self.instrument_id, OrderSide.BUY, delta)
+        elif delta < 0.0:
+            self.submit_market(self.instrument_id, OrderSide.SELL, abs(delta))
+
+
+def test_marimo_get_portfolio_target_position_parity(tmp_path, monkeypatch):
+    """A marimo strategy reading get_portfolio().position to size a target-position delta
+    matches the imperative twin order-for-order. If get_portfolio leaked the POST-fill
+    position (look-ahead), the marimo delta would diverge after the first fill — so this is
+    also the no-look-ahead gate (snapshot captured at on_bar entry = end-of-prev-bar)."""
+    path = tmp_path / "strat_pf.py"
+    path.write_text(_MARIMO_PF_SRC, encoding="utf-8")
+
+    marimo_strat = MarimoStrategy(
+        app=load_app(str(path)), strategy_id="strat-marimo", instrument_id=IID
+    )
+    twin = _TargetPositionTwin(strategy_id="strat-imp", instrument_id=IID)
+
+    m_result, m_sink = _run(marimo_strat, monkeypatch)
+    marimo_strat.close()
+    t_result, t_sink = _run(twin, monkeypatch)
+
+    # guard the fixture: a target-position strategy must place real BUYs and SELLs, bounded
+    sides = {o[1] for o in t_sink.fills}
+    assert sides == {OrderSide.BUY, OrderSide.SELL} and 0 < len(t_sink.fills) < 300
+
+    assert m_sink.fills == t_sink.fills
+    assert m_sink.equities == t_sink.equities
+    assert (m_result.fills, m_result.final_cash, m_result.realized_pnl) == (
+        t_result.fills,
+        t_result.final_cash,
+        t_result.realized_pnl,
+    )
+
+
 def test_marimo_adapter_teardown_allows_a_second_run(tmp_path, monkeypatch):
     """The adapter owns the headless-kernel lifetime: after close() a second run stands up a
     fresh kernel (no 'RuntimeContext already initialized'). The dispatch site calls close()."""

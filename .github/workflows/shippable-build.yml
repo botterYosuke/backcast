@@ -1,28 +1,30 @@
 # shippable-build.yml — CI shippable Windows64 build & draft Release publish (#83)
 #
-# Wraps Assets/Editor/BackcastShippableBuild.BuildWindows64 on a hosted Windows runner
-# via GameCI unity-builder, so the build leg escapes owner-machine state contamination.
+# Wraps Assets/Editor/BackcastShippableBuild.BuildWindows64 on a self-hosted Windows
+# runner (owner's machine) and ships a Sigstore-attested zip to a draft GitHub Release.
 # Authoritative design + rationale: docs/findings/0050-ci-shippable-build-pipeline.md.
 #
+# Runner pivot (2026-06-18 #83 onboarding):
+#   Originally designed for `runs-on: windows-2022 + GameCI` but Unity 6 broke Personal
+#   license activation on hosted runners (.alf flow deprecated, Unity manual web page
+#   serial-only, entitlement XML MAC-bound). See ADR-0014 for the full trade-off.
+#   We accept owner-machine state seepage; HITL gate + bundled cpython/venv hermetic
+#   design (findings 0049 §2) compensate.
+#
 # Trigger map (findings 0050 §2.1 / Appendix A):
-#   - push tags v*     → build + publish DRAFT Release (manual Publish click after HITL)
+#   - push tags v*      → build + publish DRAFT Release (manual Publish click after HITL)
 #   - workflow_dispatch → build + publish DRAFT Release (synthetic version) for ad-hoc HITL
-#   - push main paths  → build + smoke ONLY (bit-rot detection on workflow/build script)
-#   - schedule weekly  → build + smoke ONLY + stale-draft monitor + license expiry surfacing
+#   - push main paths   → build + smoke ONLY (bit-rot detection)
+#   - schedule weekly   → build + smoke ONLY + stale-draft monitor + runner health
 #
-# Smoke pattern (findings 0050 §2.7 / §4): GUI mode launch + log-poll + Stop-Process kill.
-# The literal contract string lives in WorkspaceEngineHost.cs:189 (// CONTRACT marker).
-#
-# Principle (findings 0050): hosted-only runner choice protects the artifact's clean-machine
-# thesis. Self-hosted needs a superseding ADR, not a YAML edit.
+# Smoke pattern (findings 0050 §2.7): GUI mode launch + log-poll + Stop-Process kill.
+# Contract: WorkspaceEngineHost.cs:189 (// CONTRACT marker).
 
 name: Shippable build (Windows64)
 
 on:
   push:
-    # Tag publish path AND main-push bit-rot path. The `paths` filter is ignored for tag
-    # pushes (tag refs don't carry path deltas), so v* tags fire unconditionally while main
-    # pushes fire only when the listed files change.
+    # Tag publish AND main-push bit-rot path. `paths` is ignored for tag refs.
     tags:
       - 'v*'
     branches:
@@ -36,8 +38,8 @@ on:
       - 'python/pyproject.toml'
   workflow_dispatch:
   schedule:
-    # Monday 07:00 UTC = JST 16:00 月曜. Triple-duty: license expiry early warning,
-    # workflow bit-rot detection, stale-draft monitor (findings 0050 §2.1.1).
+    # Monday 07:00 UTC = JST 16:00 月曜. 4 roles per findings 0050 §2.1.1 + ADR-0014:
+    # license expiry watch (n/a after pivot), bit-rot, stale-draft, self-hosted runner health.
     - cron: '0 7 * * 1'
 
 permissions:
@@ -46,24 +48,36 @@ permissions:
   attestations: write   # attest-build-provenance
 
 concurrency:
+  # Cancel in-progress on re-tag / re-dispatch / rapid main push. Cron + dispatch
+  # share the main-ref group; dispatch wins (cron retries next week).
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
     name: Build & smoke-gate shippable Windows64
-    runs-on: windows-2022   # pinned, not windows-latest (findings 0050 §2.2)
-    timeout-minutes: 60     # expected ~20-25 min; cap protects against asset-import hangs
+    runs-on: [self-hosted, Windows, X64]   # ADR-0014: pivot from windows-2022
+    timeout-minutes: 60                    # expected ~10-15 min on warm self-hosted
 
     steps:
+      # ── Workspace cleanup (self-hosted persists between runs) ────────────
+      # Library/ and python/.venv/ are KEPT (natural cache); transient build/dist/smoke
+      # outputs are cleaned so stale state from a failed prior run can't poison this one.
+      - name: Clean transient outputs
+        shell: pwsh
+        run: |
+          foreach ($p in @('build','dist','smoke-extract','release-body-verify.md')) {
+            if (Test-Path $p) { Remove-Item -Recurse -Force $p -Confirm:$false }
+          }
+          Remove-Item smoke-try*.log -Force -ErrorAction SilentlyContinue
+          Write-Host "Workspace cleaned (Library/ and python/.venv/ preserved)"
+
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          clean: false   # don't wipe Library/ or .venv/ — we want them as natural cache
 
       # ── Resolve artifact version ─────────────────────────────────────────
-      # Tag push → "v1.2.3"
-      # Dispatch → "dispatch-<run>-<short_sha>" (synthetic, for HITL artifacts)
-      # Main push → "main-<short_sha>"          (smoke only, no publish)
-      # Schedule → "cron-<short_sha>"          (smoke only, no publish)
       - name: Resolve artifact version
         id: ver
         shell: pwsh
@@ -78,25 +92,27 @@ jobs:
           } else {
             $v = "main-$sha"
           }
-          # -Encoding utf8: PS5.1 Out-File default is UTF-16 LE+BOM which corrupts
-          # GITHUB_OUTPUT (runner reads it as UTF-8). All Out-File writes to GITHUB_OUTPUT
-          # / GITHUB_STEP_SUMMARY below pass -Encoding utf8 for this reason.
+          # PS5.1 Out-File default is UTF-16 LE+BOM which corrupts GITHUB_OUTPUT — pass -Encoding utf8.
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "artifact version: $v"
 
-      # ── Read Unity version from ProjectVersion.txt (single SoT) ─────────
-      - name: Read Unity version
+      # ── Read Unity version + verify Editor installed ────────────────────
+      - name: Read Unity version & verify Editor present
         id: unity
         shell: pwsh
         run: |
           $line = Get-Content ProjectSettings/ProjectVersion.txt | Where-Object { $_ -match '^m_EditorVersion:' } | Select-Object -First 1
           $v = ($line -split '\s+')[1]
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Unity version: $v"
+          $exe = "C:\Program Files\Unity\Hub\Editor\$v\Editor\Unity.exe"
+          "unity_exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          if (-not (Test-Path $exe)) {
+            Write-Error "Unity Editor $v not installed at $exe (ADR-0014: self-hosted runner requires local Unity install)"
+            exit 1
+          }
+          Write-Host "Unity version: $v  ($exe)"
 
-      # ── Compute whether this run publishes a draft Release ───────────────
-      # Publish path: tag push OR workflow_dispatch (both produce artifacts owner uses).
-      # Dry-run path: main push (bit-rot) OR schedule (monitoring).
+      # ── Publish path gate (tag push or dispatch) ─────────────────────────
       - name: Determine publish path
         id: publish
         shell: pwsh
@@ -107,77 +123,54 @@ jobs:
           "publish=$will" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "publish path: $will"
 
-      # ── Caches (findings 0050 §2.3) ──────────────────────────────────────
-      - name: Cache Unity Editor
-        id: cache-editor
-        if: ${{ vars.CACHE_EDITOR != 'false' }}   # guard rail C: repo-var override drops Editor cache
-        uses: actions/cache@v4
-        with:
-          path: 'C:\Program Files\Unity\Hub\Editor\${{ steps.unity.outputs.version }}'
-          key: Unity-Editor-${{ steps.unity.outputs.version }}
-
-      - name: Cache Unity Library
-        uses: actions/cache@v4
-        with:
-          path: Library
-          # Guard rail A: ProjectSettings.asset is in the key so scripting-backend changes
-          # (Mono ↔ IL2CPP) invalidate Library. Without it a stale Library would load native
-          # plugins built against the other backend (findings 0050 §2.3.1).
-          key: ${{ runner.os }}-Library-${{ hashFiles('Packages/packages-lock.json', 'ProjectSettings/ProjectVersion.txt', 'ProjectSettings/ProjectSettings.asset') }}
-          restore-keys: |
-            ${{ runner.os }}-Library-
-
-      - name: Cache uv wheel directory
-        uses: actions/cache@v4
-        with:
-          path: '~\AppData\Local\uv\cache'
-          key: uv-wheel-${{ hashFiles('python/uv.lock') }}
-          restore-keys: |
-            uv-wheel-
-
       # ── Materialize the bundled venv that BackcastShippableBuild copies ─
+      # python/.venv/ persists between runs on self-hosted, so uv sync is incremental
+      # and typically completes in seconds. --frozen rejects any uv.lock drift.
       - name: Setup uv
         uses: astral-sh/setup-uv@v5
         with:
-          enable-cache: false   # we manage the cache slot ourselves above
+          enable-cache: false
 
       - name: uv sync (materialize python/.venv)
         shell: pwsh
-        run: |
-          uv sync --frozen
+        run: uv sync --frozen
         working-directory: python
 
-      # ── Unity build via GameCI ──────────────────────────────────────────
-      # buildMethod points at BackcastShippableBuild.BuildWindows64, which calls
-      # BuildPipeline.BuildPlayer with its own BuildPlayerOptions AND runs the
-      # IPostprocessBuildWithReport that copies cpython/engine/site-packages into
-      # StreamingAssets (findings 0049 §2.5).
+      # ── Direct Unity build (no GameCI; ADR-0014 dispenses with it) ──────
+      # The build script runs as an IPostprocessBuildWithReport, so the post-process
+      # (cpython + engine + site-packages copy + compileall + manifest) lands as part
+      # of the same Unity invocation.
       - name: Build (BackcastShippableBuild.BuildWindows64)
-        uses: game-ci/unity-builder@v4
-        env:
-          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
-          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
-          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
-        with:
-          unityVersion: ${{ steps.unity.outputs.version }}
-          targetPlatform: StandaloneWindows64
-          buildMethod: BackcastShippableBuild.BuildWindows64
-          allowDirtyBuild: true
-          versioning: None
+        shell: pwsh
+        run: |
+          $unity = "${{ steps.unity.outputs.unity_exe }}"
+          $log = "build/unity-build.log"
+          New-Item -ItemType Directory -Force -Path build | Out-Null
+          & $unity -batchmode -nographics -quit `
+            -projectPath . `
+            -buildTarget StandaloneWindows64 `
+            -executeMethod BackcastShippableBuild.BuildWindows64 `
+            -logFile $log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Error "Unity build failed exit=$code"
+            if (Test-Path $log) { Get-Content $log -Tail 80 }
+            exit $code
+          }
+          # Surface the BackcastShippableBuild log lines for quick triage.
+          if (Test-Path $log) {
+            Write-Host "--- BackcastShippableBuild post-process lines ---"
+            Get-Content $log | Where-Object { $_ -match '\[BackcastShippableBuild\]' }
+          }
 
       # ── Verify build output is where BackcastShippableBuild puts it ─────
-      # GameCI's unity-builder defers entirely to our buildMethod, but its post-build
-      # auto-discovery looks at buildsPath/buildName by convention. Our build script
-      # writes to a hardcoded `build/windows64/backcast.exe` regardless — this step
-      # explicitly verifies that contract so a path mismatch fails with a clear error
-      # rather than crashing the later Move-Item with 'path not found'.
       - name: Verify build output location
         shell: pwsh
         run: |
           $exe = "build/windows64/backcast.exe"
           $manifest = "build/windows64/backcast_Data/StreamingAssets/PythonRuntime/runtime-manifest.json"
           if (-not (Test-Path $exe)) {
-            Write-Error "BackcastShippableBuild did not produce $exe (build script convention broke)"
+            Write-Error "BackcastShippableBuild did not produce $exe"
             Get-ChildItem build -Recurse -Depth 3 -ErrorAction SilentlyContinue | Select-Object FullName
             exit 1
           }
@@ -187,7 +180,7 @@ jobs:
           }
           Write-Host "Build output verified at $exe"
 
-      # ── Guard rail B: Library bloat fail-fast (findings 0050 §2.3.2) ───
+      # ── Library size guard (findings 0050 §2.3.2 — still relevant on self-hosted) ─
       - name: Measure Library size (cap=8GB raw)
         shell: pwsh
         run: |
@@ -196,7 +189,7 @@ jobs:
           Write-Host "Library size: $sizeRounded GB"
           "library_size_gb=$sizeRounded" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           if ($size -gt 8) {
-            Write-Error "Library bloat: $sizeRounded GB exceeds 8GB raw cap (findings 0050 §2.3.2)"
+            Write-Error "Library bloat: $sizeRounded GB exceeds 8GB raw cap"
             exit 1
           }
 
@@ -208,12 +201,9 @@ jobs:
           $v = "${{ steps.ver.outputs.version }}"
           $stage = "dist/backcast-windows64-$v"
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          # Move the build output under the named top folder so the zip extracts to a single
-          # named directory rather than splattering files into the user's Downloads root.
+          # Move so the zip extracts to a single named folder.
           Move-Item build/windows64 $stage
           $zip = "dist/backcast-windows64-$v.zip"
-          # Compress-Archive is built-in; sufficient for a ~700 MB tree. Use -CompressionLevel
-          # Optimal so the published asset is smaller (the build artifact uploads aren't a hot path).
           Compress-Archive -Path "$stage/*" -DestinationPath $zip -CompressionLevel Optimal
           "stage_dir=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "zip_path=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
@@ -226,7 +216,7 @@ jobs:
           $v = "${{ steps.ver.outputs.version }}"
           uvx --from cyclonedx-bom cyclonedx-py environment python/.venv -o "dist/sbom-python-$v.cdx.json"
 
-      # ── Stage 1: Zip integrity (re-extract to clean tree) ────────────────
+      # ── Stage 1: Zip integrity ──────────────────────────────────────────
       - name: Stage 1 — Zip integrity (re-extract)
         id: smoke-extract
         shell: pwsh
@@ -244,19 +234,16 @@ jobs:
           "tree_dir=$tree" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "Stage 1 PASS"
 
-      # ── Stage 2: Manifest schema sanity ─────────────────────────────────
+      # ── Stage 2: Manifest schema ────────────────────────────────────────
       - name: Stage 2 — Manifest schema
         shell: pwsh
         run: |
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
           $manifestPath = Join-Path $tree "backcast_Data/StreamingAssets/PythonRuntime/runtime-manifest.json"
-          if (-not (Test-Path $manifestPath)) {
-            Write-Error "Stage 2 fail: runtime-manifest.json missing"; exit 1
-          }
+          if (-not (Test-Path $manifestPath)) { Write-Error "Stage 2 fail: runtime-manifest.json missing"; exit 1 }
           $m = Get-Content $manifestPath -Raw | ConvertFrom-Json
           if ($m.schema -ne 1) { Write-Error "schema drift: $($m.schema)"; exit 1 }
           if ($m.target -ne 'StandaloneWindows64') { Write-Error "target drift: $($m.target)"; exit 1 }
-          # Locator-reachable paths must exist in the extracted tree.
           $runtimeRoot = Split-Path $manifestPath -Parent
           foreach ($p in @($m.paths.cpython, $m.paths.project_root, $m.paths.venv_site_relative)) {
             $full = Join-Path $runtimeRoot $p
@@ -276,10 +263,9 @@ jobs:
           Write-Host "Stage 3 PASS"
 
       # ── Stage 4: Player GUI smoke (retry once, findings 0050 §2.7.4) ───
-      # Q8 plan tried -batchmode -nographics; preflight (2026-06-18) found
-      # WorkspaceOwnership.ShouldClaim suppresses Python init in batchmode by design.
-      # GUI mode launches the player normally; we poll the log for the CONTRACT line
-      # in WorkspaceEngineHost.cs:189 and Stop-Process when seen.
+      # GUI mode: -batchmode would skip Python init per WorkspaceOwnership.ShouldClaim
+      # (findings 0050 §4). Self-hosted runner has owner's desktop session, so GUI launch
+      # is straightforward.
       - name: Stage 4 — Player GUI smoke (retry once)
         shell: pwsh
         run: |
@@ -291,7 +277,7 @@ jobs:
             $log = "smoke-$Tag.log"
             Remove-Item $log -ErrorAction SilentlyContinue
             $proc = Start-Process $exe -ArgumentList "-logFile",$log -PassThru
-            # Contract is WorkspaceEngineHost.cs:189 — change there requires change here in the same PR.
+            # CONTRACT in WorkspaceEngineHost.cs:189 — change there requires change here in the same PR.
             $contract = '\[WorkspaceEngineHost\] live-configured server built; main GIL-free; lanes polling\.'
             $deadline = (Get-Date).AddSeconds(90)
             $hit = $false
@@ -314,7 +300,7 @@ jobs:
           if (Invoke-Smoke "try1") { exit 0 }
           Write-Warning "Player GUI smoke try1 failed; retrying once"
           if (Invoke-Smoke "try2") { exit 0 }
-          Write-Error "Player GUI smoke failed twice (findings 0050 §2.7.4 escalation: drop to Option D)"
+          Write-Error "Player GUI smoke failed twice"
           exit 1
 
       # ── Supplementary release assets (only when publishing) ──────────────
@@ -367,20 +353,18 @@ jobs:
             "",
             "## Runtime requirements",
             "",
-            "- Windows 10 64-bit (``windows-2022`` is the build host; user runtimes >= Win10 supported)",
+            "- Windows 10 64-bit",
             "- DuckDB data root must be supplied via env ``BACKCAST_JQUANTS_DUCKDB_ROOT`` per ADR-0006",
             "- No system Python install required (cpython bundled)",
             "- No VC++ Redistributable required (vcruntime DLLs bundled per findings 0049 §2.4)"
           )
           $lines | Set-Content release-body-verify.md -Encoding utf8
 
-      # ── Draft Release publish (HITL-gated; flip draft:false once stable) ─
       - name: Create draft Release
         if: steps.publish.outputs.publish == 'True'
         uses: softprops/action-gh-release@v2
         with:
           draft: true
-          # Prerelease iff semver pre-release suffix (findings 0050 §2.6); plain v1.2.3 → false.
           prerelease: ${{ startsWith(github.ref_name, 'v') && (contains(github.ref_name, '-rc.') || contains(github.ref_name, '-beta.') || contains(github.ref_name, '-alpha.')) }}
           tag_name: ${{ steps.ver.outputs.version }}
           generate_release_notes: true
@@ -392,8 +376,11 @@ jobs:
             dist/runtime-manifest.json
             dist/sbom-python-${{ steps.ver.outputs.version }}.cdx.json
 
-      # ── Weekly cron monitor: stale-draft + license expiry (findings 0050 §7) ─
-      - name: Weekly cron monitor (stale-draft + license expiry)
+      # ── Weekly cron monitor (stale-draft + runner health) ───────────────
+      # Self-hosted runner health: the fact that we got HERE on a scheduled run means the
+      # runner is alive. If the cron didn't fire at all (runner offline), GitHub will
+      # show 'queued' indefinitely — owner notices via the Actions tab being empty.
+      - name: Weekly cron monitor
         if: github.event_name == 'schedule'
         shell: pwsh
         env:
@@ -401,7 +388,7 @@ jobs:
         run: |
           $fence = [string][char]0x60 * 3
           $summary = @()
-          $summary += "## Weekly monitor (findings 0050 §7)"
+          $summary += "## Weekly monitor (findings 0050 §7 + ADR-0014)"
           $cutoff = (Get-Date).AddDays(-7).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
           $jq = "[.[] | select(.draft and (.created_at < \`"$cutoff\`")) | {name, created_at, html_url}]"
           $stale = gh api "/repos/${{ github.repository }}/releases" --jq $jq
@@ -409,21 +396,21 @@ jobs:
           $summary += "$fence" + "json"
           $summary += $stale
           $summary += $fence
-          # License expiry from GameCI's activation log is surfaced by the unity-builder step
-          # above. If GameCI prints `License expires in N days` with N < 30, the build step
-          # itself fails or warns; this cron run independently confirms the activation works.
+          $summary += ""
+          $summary += "### Self-hosted runner health"
+          $summary += "This cron ran successfully → runner is alive and authenticated."
           $summary -join "`n" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
 
-      # ── Upload build artifacts (always, for debugging non-publish runs) ──
+      # ── Upload workflow artifacts (always, for debugging) ───────────────
       - name: Upload workflow artifacts (logs + smoke output)
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          # Run number suffix prevents 'artifact already exists' on re-tag / re-dispatch
-          # within the 14-day retention window (upload-artifact@v4 has no overwrite mode).
+          # Run number suffix prevents 'artifact already exists' on re-tag / re-dispatch.
           name: shippable-build-${{ steps.ver.outputs.version }}-run${{ github.run_number }}
           path: |
             smoke-try*.log
+            build/unity-build.log
             dist/runtime-manifest.json
           retention-days: 14
           if-no-files-found: ignore

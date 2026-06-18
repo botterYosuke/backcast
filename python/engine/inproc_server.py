@@ -217,37 +217,26 @@ class InprocLiveServer:
         return self._svc.get_portfolio_json()
 
     # ------------------------------------------------------------------
-    # Replay transport (#30 footer: play / pause / step / speed / stop)
+    # Replay transport — RETIRED (#76 S6b-β); only force_stop (teardown) survives
     # ------------------------------------------------------------------
     #
-    # #50 (ADR-0006) retired the nautilus #68 forwarders (start_nautilus_replay +
-    # pause/step/resume/set_replay_speed) for lack of a production caller. The #30 footer IS
-    # that caller, now over the DuckDB→kernel path: these forward to the DataEngine control
-    # methods and map its (ok, err) tuple to the {success, error_code, error_message} dict the
-    # C# side already consumes from start_engine. Run lifecycle control lives on the server;
-    # data prep (load_replay_data) stays on the engine (findings 0023 §5 C3).
-
-    @staticmethod
-    def _transport_result(ok_err: tuple) -> dict:
-        ok, err = ok_err
-        if ok:
-            return {"success": True, "error_code": "", "error_message": ""}
-        return {"success": False, "error_code": "TRANSPORT_REJECTED", "error_message": err or ""}
-
-    def pause_replay(self) -> dict:
-        return self._transport_result(self._engine.pause_replay())
-
-    def resume_replay(self) -> dict:
-        return self._transport_result(self._engine.resume_replay())
-
-    def step_replay(self) -> dict:
-        return self._transport_result(self._engine.step_replay())
+    # The #30 footer transport (play / pause / step / speed) was the only caller of the
+    # pause_replay / resume_replay / step_replay / set_replay_speed RPCs. ADR-0012's reactive
+    # execution model supersedes the transport affordance (a reactive drain completes near-
+    # instantly — 0.3s/50k — so scrubbing is obsolete), and the footer was removed with it. Those
+    # four user-transport RPCs are retired from the production surface.
+    #
+    # force_stop_replay SURVIVES as run-lifecycle TEARDOWN (NOT a user transport control): the C#
+    # host's Stop() teardown calls it to unblock the launcher's synchronous start_engine before
+    # closing the server, and _backend_impl calls the engine method directly on run completion /
+    # abort. It maps the engine (ok, err) tuple to the {success, error_message} dict CallTransport
+    # consumes (#76 S6b-β: kept by role — teardown, not transport).
 
     def force_stop_replay(self) -> dict:
-        return self._transport_result(self._engine.force_stop_replay())
-
-    def set_replay_speed(self, multiplier: int) -> dict:
-        return self._transport_result(self._engine.set_replay_speed(multiplier))
+        ok, err = self._engine.force_stop_replay()
+        if ok:
+            return {"success": True, "error_code": "", "error_message": ""}
+        return {"success": False, "error_code": "TEARDOWN_FAILED", "error_message": err or ""}
 
     def close(self) -> None:
         """Tear down the underlying live server (loop/runner/account-sync).

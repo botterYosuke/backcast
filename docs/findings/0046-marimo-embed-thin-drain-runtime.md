@@ -386,18 +386,27 @@ adapter は `on_start` で `driver_seeds={get_bar: neutral_bar(close=0), get_por
 
 ## S6b 設計の木（2026-06-18・`/grill-with-docs`）— UI パラダイム移行＋v19 marimo 移植
 
-`/grill-with-docs`（#76 S6b）で確定。S6a＋portfolio スライスで **marimo `.py` は既に production の再生ボタンから実走する**（C# `BackcastWorkspaceRoot.OnRun → start_engine{strategy_file} → _backend_impl._start_engine_duckdb → _select_replay_strategy`、コードで裏取り済み）。S6b に **Python 実走の残務は無い**。残るのは UI パラダイム移行（命令型＋transport replay → reactive cell-DAG＋単一 Run）と、それを実証する **v19 の marimo 移植＋parity**。
+`/grill-with-docs`（#76 S6b）で確定。S6a＋portfolio スライスで **marimo `.py` は既に production の再生ボタンから実走する**（C# `BackcastWorkspaceRoot.OnRun → start_engine{strategy_file} → _backend_impl._start_engine_duckdb → _select_replay_strategy`、コードで裏取り済み）。S6b に **Python 実走の残務は無い**。残るのは UI パラダイム移行（命令型＋transport replay → reactive cell-DAG＋Strategy Editor title bar Run）と、それを実証する **v19 の marimo 移植＋parity**。
+
+### S6b UI correction（2026-06-18・owner correction）
+
+以下を S6b UI 方針の訂正正本とする。旧記録にある「footer ▶ へ Run を統合」「footer global Run」「ScenarioStartupTile Run を残す/撤去するか」の揺れは、この段落と下の B1/β 定義で上書きする。
+
+- **Run 入口は `Strategy Editor` floating window の title bar に置く。** 具体的な frame の SoT は `Assets/Scripts/StrategyEditor/StrategyEditorWindowFrame.cs`。参考 UI は marimo/TTWR 的な「セル/エディタ窓の title bar に小さな Run ボタン」。
+- `ReplayFooterView` の `▶` は global Run ではなく **削除対象**。Run の移設・流用先ではない。footer に Run 相当の `▶` を残さない。
+- `ScenarioStartupTile` は `Replay Scenario` 設定タイル（start/end/cash/universe）。最終的には scenario 編集専用へ寄せる。scenario 入力エラーは各 field label に残すが、Run ボタン本体と no-saved-strategy 等の run-readiness 表示は Strategy Editor title bar 側へ寄せる。
+- 移植元 marimo frontend の 3D 関連は editor/cell-DAG visualization であり、footer/global Run の根拠にしない。3D を参考にする場合も、per-cell/editor-local Run と DAG visualization の文脈に限定する。
 
 ### 現在地（grill 冒頭の逆向きチェック・git/code）
 - 先行スライス・常時不変条件に **blocked されていない**：#15/#16/#30 の UI 表面は **すべて `BackcastWorkspaceRoot`（#59 本線合体）に production-wired**（gh の「未マージ branch」は stale）。portfolio スライスは着地済（作業ツリー未コミット）。
-- 現状の run 入口は **2つ**：`ScenarioStartupTile` の Run ＋ `ReplayFooterView` の ▶（両方 `OnRun()` に収束）。footer は transport だけでなく **mode segments（Replay/LiveManual/LiveAuto）と run 入口 ▶** を持つ。
+- 現状の run 入口に見えるものは **2つ**：`ScenarioStartupTile` の Run ＋ `ReplayFooterView` の ▶（両方 `OnRun()` に収束）。ただし S6b UI correction により、完成形の単一 Run 入口は footer ではなく **Strategy Editor title bar** とする。`ReplayFooterView` の `▶` は削除し、Run 移設先にも re-arm surface にも残さない。
 - 現存戦略は `v19_morning.py` ただ1つ＝**命令型**（marimo 実例ゼロ）。`File→New` は空エディタ（テンプレ無し）。
 
 ### 確定（owner binding）
 
 | # | 決定 | 機構・根拠 |
 |---|---|---|
-| **B1 footer transport 撤去** | transport（play/pause/step/speed/stop）を UI から撤去。**footer は存続**＝mode segments＋**アプリ全体で単一の Run 入口**。`ScenarioStartupTile` の Run は撤去し設定タイルは scenario 編集専用へ。**完成形・仮状態なし** | reactive drain は native 速度（0.3s/50k）で run→即完了＝scrub の affordance が古い。#30 transport は **ADR-0012（reactive 実行モデル）が supersede**（self-protection＝ADR 編集せず本 findings に記録）。footer は mode chrome＋global run として役割更新（`ReplayFooterView`→`WorkspaceFooterView` 的にリネーム候補）。参照消滅した `ReplayTransportViewModel`/`ReplayLifecycle`/#30 専用 enablement は削除、Python の pause/step/speed/stop RPC は production surface から退役（internal force-stop/teardown は host lifecycle 用に名前/所有者を整理して残す） |
+| **B1 Run 入口＋footer transport 撤去** | transport（play/pause/step/speed/stop）を UI から撤去。**単一 Run 入口は Strategy Editor title bar** に置く。`ScenarioStartupTile` は scenario 編集専用へ寄せ、`ReplayFooterView` の `▶` は **削除** する。**完成形・仮状態なし** | reactive drain は native 速度（0.3s/50k）で run→即完了＝scrub の affordance が古い。#30 transport は **ADR-0012（reactive 実行モデル）が supersede**（self-protection＝ADR 編集せず本 findings に記録）。Strategy Editor が authored cell-DAG の主 surface なので、Run は editor-local title bar action とする。参照消滅した `ReplayTransportViewModel`/`ReplayLifecycle`/#30 専用 enablement は削除、Python の pause/step/speed/stop RPC は production surface から退役（internal force-stop/teardown は host lifecycle 用に名前/所有者を整理して残す） |
 | **B2 editor=cell-DAG 既定化（widget 無改修）** | エディタ widget は無改修（marimo .py = plain Python＝既に編集可）。`File→New` が marimo App skeleton を seed・canonical/picker 上の既定戦略を marimo 版へ。命令型 v19 は legacy oracle/parity fixture として残置（**実走は sunset まで残る**が著者導線の正面に置かない） | #64「Strategy Editor = cell・最小 ceremony」＝marimo の plain-.py 形式で `@app.cell` 関数が cell。cell-aware editor（cell 境界描画/per-cell run）は不要（別途・任意）。命令型 sunset は後続 named スライス＝S6b 範囲外 |
 | **B3 v19 を marimo 移植（multi-instrument 含む）** | S6b の完成 gate は「小さい toy parity」ではなく **marimo-v19 vs 命令型-v19 で同一 bars・model stub・cash から order/fill/equity 一致**（mount 非依存の deterministic parity を必須・実データ gate は mount 依存 skip 可）| owner 方針「完成形・仮状態を残すな」＝最小例で済ませて v19 を後続に逃がさない。v19 はマルチ instrument のクロスセクショナル ML ランカー（universe `_snapshots` 蓄積→10:00 JST ranking→複数銘柄発注） |
 | **B4 driver=Option1（bar driver 不追加）** | **新しい host-owned multi-instrument bar driver は作らない**。マルチ instrument 性は ① 発注=`submit_market(qty, instrument_id=iid)`（S4 Q2・済）② 履歴=strategy 所有の `mo.state` feedback dict `snaps[iid]→[closes]`（D4 self-cycle・per-`get_bar()` 蓄積）③ 決定時クロスセクション=蓄積済 feedback dict 読み（朝場で全銘柄 stream 済＝live read 不要）④ 退出 position=`get_portfolio().positions`。唯一の真の host gap は **`buying_power` の cell 露出**（cash と同型の純追加・ctx には既存 seam） | **spike で実証**（下記）。no-look-ahead が自然一致：v19 `_enter` は `minute<entry` の bar しか append せず entry bar を含めない＝**決定は prev-bar 蓄積を読む**＝marimo の bar-crossing feedback（前 bar 値読み）と完全一致 |
@@ -413,7 +422,7 @@ owner が「完成形 API を spike 無しで凍結しない」と要求。3-ins
 ### 実装スライス（順序・各 committable で coherent）
 コードが順序を固定する。**完成形・仮状態なし**は「中間に half-built な footer を出さない」意＝各中間も自己 coherent（footer transport は α/β の間そのまま動く）:
 1. **S6b-α（Python）**: `buying_power` cell 露出（snapshot 追加 or inject）＋ v19 を marimo cell-DAG へ移植（`python/strategies/v19/v19_morning_cell.py` 等）＋ **mount 非依存 deterministic v19 parity gate**（marimo-v19 ↔ 命令型-v19）。命令型 v19 は oracle/fixture として残置。
-2. **S6b-β（C#/Unity）**: `File→New` の marimo template seed＋canonical/picker 既定を marimo へ。run 入口単一化（`ScenarioStartupTile` の Run 撤去・footer ▶ へ統合）。HITL 要。
+2. **S6b-β（C#/Unity）**: `File→New` の marimo template seed＋canonical/picker 既定を marimo へ。run 入口単一化（**Strategy Editor title bar に小さい `▶` / Run を追加**し、`ScenarioStartupTile` は scenario 編集専用へ寄せる。`ReplayFooterView` の `▶` は削除し、footer へ統合しない）。HITL 要。
 3. **S6b-γ（C#/Unity＋Python cleanup）**: footer transport（pause/step/speed/stop）撤去＋`ReplayTransportViewModel`/`ReplayLifecycle` 等の参照消滅削除＋`ReplayFooterView` リネーム＋Python transport RPC 退役（internal teardown は残す）。HITL 要（旧 transport 機能喪失の owner 確認）。
 
 方針: [ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)（自己保護・編集せず本 findings に下位事実を記録）。B1 の「#30 transport 撤去」は ADR-0012 の reactive 実行モデルが strategy-authoring 表面を supersede したことの UI 帰結＝additive な新 ADR は不要（reactive モデルが target ＝transport は旧 affordance）。
@@ -508,6 +517,79 @@ offline/import-purity GREEN。
   module-load で重 ML dep を引かない lazy 不変を直接 pin。
 
 ### 残務（順序・不変）
-**S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+**S6b-β-clean**（UI パラダイム移行を一括完成形で・下記設計の木）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 
 > 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証・step2 設計の木は T1–T9 で確定。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。
+
+---
+
+## S6b-β-clean 設計の木（2026-06-18・`/grill-with-docs`）— UI パラダイム移行（transport→reactive・一括完成形）
+
+`/grill-with-docs`（#76 S6b-β）で確定。S6b-α（resolver R1–R5）着地で **production marimo-v19 が実 model で実走**するようになったので、残る UI パラダイム移行（命令型＋transport replay → reactive cell-DAG＋単一 Run）を **一括完成形** で landing させる。owner 方針「実装コスト度外視・理想的な完成形・仮状態なし」。
+
+### スコープ決定（owner binding・2026-06-18）— β+γ を統合（"S6b-β-clean"）
+findings 旧分割（β＝footer ▶ だけ削除 / γ＝残り transport 撤去＋cleanup）は **棄却**。コードで裏取りした事実: footer の `▶`（`ReplayFooterView.cs:91`）は Run 単独ではなく **Run/Pause/Resume トグルの唯一入口**で、`⏭ step` は `ReplayTransportViewModel.CanStep = Paused のみ`。よって「β で ▶ だけ削除」は Pause/Resume へ到達不能→step が永久 dead＝**半壊 footer**を生み、owner の「仮状態なし」に反する。reactive drain は 0.3s/50k で run→即完了＝pause/step/speed/stop は ADR-0012 が既に意味を奪っている。
+
+確定（owner binding）: **β+γ を1つの coherent な transport→reactive UI cutover に統合**する。
+- Strategy Editor title bar に **唯一の Run** を追加。
+- `ScenarioStartupTile` は **scenario 編集専用**（start/end/cash/universe・granularity）へ。Run ボタンは撤去。
+- footer から **replay transport UI を全撤去**（▶/pause/step/speed/stop）。**mode segments（Replay/Manual/Auto）は残す**（Live 用・transport とは別物）。
+- 参照消滅した `ReplayTransportViewModel`/`ReplayLifecycle`/#30 専用 enablement/AFK probe/production wiring を削除。
+- Python の replay transport RPC（pause/step/speed/stop）は **production surface から退役**。ただし **`force_stop` 系の内部 teardown は名前/所有を整理して残す**（host lifecycle 用）。
+- コミットは論理単位（「UI 単一化」「C# transport cleanup」「Python RPC cleanup/tests」）で分割可。**ただし HITL に出す状態は必ず完成形**（中間に半壊 UI を出さない）。
+
+### 現在地（grill 冒頭の裏取り・code）
+- run 入口は **2つ**（両方 `OnRun()` 収束）: `ScenarioStartupTile.cs:86`「Run Replay」/ `ReplayFooterView.cs:91` ▶。
+- run 対象ファイルは **常に WINDOW_ID（adopted editor）の .py**: `EditorFileProvider` は `RegistryStrategyFileProvider(_registry, WINDOW_ID)` 固定（`:250`「run WHAT THE EDITOR SHOWS」）。spawned 二次 editor は run 対象ではない。
+- editor title bar は `StrategyEditorWindowFrame.cs:22` で drag 用 `FloatingWindowTitleInput` のみ・**ボタン無し**・stateless（path/dirty は caller=StrategyEditorView 所有）。adopted editor の frame は scene-authored（`_strategyEditorWindow`/`_strategyEditorTitleInput`/`_strategyEditorBody`）。
+- `File→New`（`:1480`）は editor を **空**に（`ResetUnboundEmpty`・テンプレ無し）。
+- boot 既定（`ResumeLastDocumentOrDefault` `:1615`）は last document 再開 or **untitled 空**。グローバル「canonical 既定戦略」は無し。
+- 戦略実体: `python/strategies/v19/` に **`v19_morning.py`（命令型）＋`v19_morning_cell.py`（marimo・sidecar scorer spec 付きで実走可）** が両在。
+
+### 確定（owner binding）
+
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **U1 Run ボタン＝local-target＋disabled/tooltip/status** | Run は **adopted(WINDOW_ID) editor title bar のみ**。spawned 二次 window には出さない（run 対象でないため・出すなら per-window run target 化＝別スライス）。readiness 4 gate（`_host.IsRunning` / `_isOwner` / scenario 妥当性 `_scenario.TryStartRun` / bound 済み `.py`=`IStrategyFileProvider` の 5 条件）で **enabled/disabled** を切り、disabled 理由（not owner / running… / scenario 不正 / 未保存）を title bar 近傍に小さく status/tooltip 表示。実行中は「running…」で disabled。scenario の field 単位エラーは `ScenarioStartupTile` 側に残す | **移植元 marimo frontend の Run UI 原則に一致**: `cell-flow-node.tsx` の `RunButton` は自 cell（見えている対象）を run／`RunButton.tsx` は running/queued/connection/disabled-ancestor で disabled＋tooltip／`Controls.tsx` の `RunControlButton` は `needsRun=false` で "Nothing to run" inactive。原則＝「Run は見えている対象と一致」「押せない理由は近くに出す」。backcast の run 対象が常に WINDOW_ID なので Run の置き場も adopted editor title bar に一意化される |
+| **U2 File→New＝最小 runnable marimo skeleton（Q3）** | `File→New` は editor を空にする代わりに **`00_observe.py` 同型の最小 marimo skeleton** を seed: `import marimo / app=marimo.App()` ＋ 1 つの `@app.cell` が `bar = get_bar()` を読むだけの観察専用（発注なし）。コメントは最小限で `get_bar()`/`get_portfolio()`/`submit_market()` の存在だけ示す。保存＋scenario valid 後に Run 可能 | New 直後から「走る」状態＝仮状態を残さない（owner 方針）。1 cell が host driver を読めば有効な marimo strategy として成立（thin_drain の empty-roots 拒否を通る）。marimo frontend の初期 notebook も軽い skeleton を返す思想と一致 |
+| **U3 canonical 既定＝boot で v19 marimo を開く（Q4）** | picker に「既定」機構は作らない（#80 locked＝全 `.py` 列挙のまま）。`ResumeLastDocumentOrDefault` の resume 無し初回だけ untitled-空ではなく **`python/strategies/v19/v19_morning_cell.py` を adopted editor に開く**（`v19_morning_cell.json` が scenario＋scorer spec を既に持つ＝実走可能な marimo 戦略が正面）。命令型 `v19_morning.py` は parity oracle/fixture として picker に残置（picker からの退役は後続 sunset スライス） | 操作的な「正面」は picker recommended ではなく初回 boot で作るのが #80 仕様と整合。canonical が実走可能な marimo 戦略になる |
+| **U4 footer transport UI 全撤去・mode segments 残置** | `ReplayFooterView` から ▶/pause/step/speed/stop を撤去。**mode segments（Replay/Manual/Auto）は残す**（Live 用・transport とは別の責務）。view は `WorkspaceFooterView` 的にリネーム | reactive 実行は run→即完了＝transport affordance は ADR-0012 が supersede。mode chrome は Live epic の責務で transport とは独立 |
+| **U5 ScenarioStartupTile＝scenario 編集専用** | `Run Replay` ボタン（`:86`）を撤去。start/end/granularity/cash/universe の field とその field 単位エラーは残す。run-readiness（no-saved-strategy 等）は title bar Run 側へ寄せる | run 入口の単一化（U1）。tile は scenario document の編集に責務を絞る |
+| **U6 transport VM/lifecycle 削除＋Python RPC 退役** | 参照消滅する `ReplayTransportViewModel`/`ReplayLifecycle`/#30 専用 enablement/AFK probe を削除。Python の pause/step/speed/stop RPC は production surface から退役。**`force_stop` 系の内部 teardown は host lifecycle 用に名前/所有を整理して残す**（run 完全 teardown＝S6-2 不変条件の維持） | reactive モデルで参照が消える＝dead code。teardown は marimo context leak 防止に load-bearing（S6a で実証）ので残す |
+
+### AC → 恒久 gate（behavior-to-e2e: backcast は findings＋pytest＋AFK probe が正本）
+| 挙動（不変条件）| gate | 種別 |
+|---|---|---|
+| **Run 入口単一化**: run 入口は adopted editor title bar の Run ただ1つ（ScenarioStartupTile/footer に Run/▶ が無い）| Unity AFK probe（title bar Run 在・tile/footer Run 不在を構造検査）| AFK |
+| **Run readiness gate**: not-owner/running/scenario 不正/未保存で Run disabled＋理由表示・全条件 OK で enabled | Run enablement の pure-logic VM 単体（C# editmode test）＋ AFK probe | unit/AFK |
+| **File→New template**: New 後 editor に最小 marimo skeleton が入り `is_marimo_app_source` が真・保存→Run で実走 | New seed 文字列の単体（`strategy_kind` で marimo 判定）＋ AFK probe | unit/AFK |
+| **boot canonical**: resume 無し初回 boot で v19_morning_cell.py が adopted editor に開く | boot default の pure-logic 単体＋ AFK probe | unit/AFK |
+| **footer transport 不在**: footer に ▶/pause/step/speed/stop が無く mode segments は在 | AFK probe（footer 構造検査）| AFK |
+| **Python RPC 退役**: pause/step/speed/set_speed RPC が production surface に無い／`force_stop`(rename) teardown は在 | pytest（backend surface 検査・teardown 回帰）| pytest |
+| **#24 golden 不変**: 命令型経路は byte-identical（runtime 無改変・UI のみ変更）| 既存 #24 golden gate | golden |
+| **marimo run 不変**: dispatch/thin_drain/resolver は無改変で marimo-v19 が実走（offline/import-purity GREEN）| 既存 suite（373 passed）| invariant |
+
+### 実装順（owner 方針＝論理単位コミット・HITL に出す状態は完成形）
+1. **Python transport RPC 退役＋teardown rename**（pytest で独立 GREEN・C# から切り離して先に・`force_stop` 系を残す）。
+2. **C# UI 単一化**（title bar Run 追加＝U1/readiness VM・ScenarioStartupTile Run 撤去＝U5・footer transport UI 撤去＋mode 残置＝U4・File→New template＝U2・boot canonical＝U3）。AFK probe＋editmode unit。
+3. **C# transport cleanup**（`ReplayTransportViewModel`/`ReplayLifecycle`/dead enablement/probe 削除・`ReplayFooterView`→`WorkspaceFooterView` rename）。
+4. AFK probe 一式 GREEN ＋ #24 golden byte-identical ＋ Python suite GREEN → **owner HITL**（Unity 実機で Run 単一化・New template・boot canonical・transport 不在を確認）。
+
+方針: [ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)（自己保護・編集せず本 findings に下位事実を記録）。transport 撤去は ADR-0012 の reactive 実行モデルが strategy-authoring 表面を supersede したことの UI 帰結＝**新 ADR 不要**（reactive モデルが target ＝transport は旧 affordance）。
+
+> 🤖 `/grill-with-docs`（#76 S6b-β-clean）設計の木セッション記録（Claude Code）。β+γ 統合・U1–U6 を owner binding で確定。実装は tdd RED-first（可能な範囲）＋ AFK probe ＋ HITL ＋ `code-review(simplify)`。
+
+### S6b-β-clean step1 実装着地（2026-06-18・Python transport RPC 退役・U6）
+実装順 step1（Python・pytest 独立 GREEN）を着地。**production replay transport を全面退役**し、reactive 実行モデル（ADR-0012）の Python 側を完成形に。`force_stop` 系の内部 teardown だけ残す（run lifecycle・S6-2 不変条件）。
+- **`inproc_server.py`**（C#-facing RPC surface）: `pause_replay`/`resume_replay`/`step_replay`/`set_replay_speed`＋`_transport_result` を削除。**`force_stop_replay` RPC は残置**（teardown・下記 code-review 訂正）。
+- **`core.py`**（`DataEngine`）: `pause_replay`/`resume_replay`/`stop_replay`/`step_replay`/`set_replay_speed`/`replay_speed_multiplier`/`run_event`/`step_event` ＋ `_run_event`/`_step_event`/`_replay_speed_multiplier` を削除。`force_stop_replay`/`replay_stop_event`/`stop` は残置（PAUSED 状態遷移は消滅＝RUNNING↔IDLE のみ）。
+- **`kernel/runner.py`**（#24 golden hot path）: `run_event`/`step_event`/`speed_provider` param＋pause/step gate＋speed 倍率 throttle を削除。`stop_event`（force_stop）＋ base `bar_interval_sec` throttle（#29 chart following）は残置。`_PAUSE_POLL_SEC` 削除。**#24 golden byte-identical**（default-None 経路と同値＝golden test で実証）。
+- **`_backend_impl.py`**: KernelRunner 呼び出しから `run_event=`/`step_event=`/`speed_provider=` を除去（`stop_event=self.engine.replay_stop_event` のみ）。内部 `self.engine.force_stop_replay()`（run 完了/abort）は不変。
+- **gate**: `test_replay_transport_retired.py`（新・退役不変条件＝engine/RPC/runner param に user transport 不在・**force_stop teardown RPC 生存**・stop_event が loop を即停止）。退役した `test_data_engine_transport.py`/`test_inproc_transport_forwarders.py`/`test_replay_transport_seam.py` を削除、`test_kernel_runner_production_seam.py` の run_event gate test 除去、`test_live_configured_server_replay_intact.py` を「user transport RPC 退役」assert へ反転。**全 suite 362 passed**・#24 golden byte-identical・offline/import-purity GREEN・marimo/thin_drain/resolver 無改変。
+
+#### code-review(simplify) high・8 angle — CONFIRMED 1（訂正済み）
+- **CONFIRMED（teardown 断線）**: 初版は `force_stop_replay` を inproc RPC からも削除したが、C# `WorkspaceEngineHost.ForceStop() → CallTransport("force_stop_replay")` が **Stop() teardown（launcher の同期 start_engine を解除）** で呼ぶ＝owner が「残す」と決めた lifecycle 経路。`force_stop_replay` RPC を **role=teardown として復活**（`{success,error_message}` dict shape・`_engine.force_stop_replay()` 委譲）。retirement gate も「force_stop RPC 生存」を assert へ訂正。`models.py:69` の `replay_state` doc から PAUSED を除去（stale）。
+- **C# step2/3 cleanup target（step1 のバグではない）**: `WorkspaceEngineHost.Pause/Resume/Step/SetSpeed`（:274-291）＋`ScenarioStartupHitlHarness`（:395-432）が退役した 4 RPC を呼ぶ＝footer 撤去（step2/3）で同時削除。step1↔step2 間は HITL に出さない（owner 方針「中間 UI を HITL に出さない」）ので許容。
+
+### 残務（S6b-β-clean 続き・順序）
+**step2 C# UI 単一化**（U1 title bar Run/readiness VM・U5 tile Run 撤去・U4 footer transport 撤去＋mode 残置・U2 File→New template・U3 boot canonical）→ **step3 C# transport cleanup**（`ReplayTransportViewModel`/`ReplayLifecycle` 削除・`ReplayFooterView`→`WorkspaceFooterView` rename・dead enablement/probe 削除）→ AFK probe＋#24 golden＋Python suite GREEN → **owner HITL**。C# は Unity build/AFK/HITL ループ必須（本セッションでは未着手）。

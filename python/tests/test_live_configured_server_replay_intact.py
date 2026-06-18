@@ -83,10 +83,10 @@ def test_replay_path_intact_on_live_configured_server(tmp_path) -> None:
     # poll after the run still reports Replay state
     assert json.loads(server.get_state_json())["execution_mode"] == "Replay"
 
-    # the Replay transport RPCs are wired on the live-configured server (callable, dict shape)
-    for rpc in (server.pause_replay, server.resume_replay, server.step_replay):
-        assert "success" in rpc()
-    assert "success" in server.set_replay_speed(2)
+    # #76 S6b-β: the Replay transport RPCs (pause/resume/step/speed) are RETIRED — the reactive
+    # execution model (ADR-0012) supersedes the transport affordance and the footer was removed.
+    for retired in ("pause_replay", "resume_replay", "step_replay", "set_replay_speed"):
+        assert not hasattr(server, retired), f"retired transport RPC still exposed: {retired}"
 
     # CRITICAL: a Replay run must NEVER push to the live event sink (the sink is live-only)
     assert sink_calls == [], f"Replay streaming invoked the live event sink: {sink_calls}"

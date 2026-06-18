@@ -908,11 +908,8 @@ class DataEngineBackend:
                     initial_cash=initial_cash,
                     strategy=strategy,
                     sink=observer,
-                    run_event=self.engine.run_event,
                     bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
-                    stop_event=self.engine.replay_stop_event,
-                    step_event=self.engine.step_event,  # #30: PAUSED + step → exactly one bar
-                    speed_provider=lambda: self.engine.replay_speed_multiplier,  # #30: per-bar speed
+                    stop_event=self.engine.replay_stop_event,  # #76 S6b-β: force_stop teardown only
                 ).run()
             finally:
                 if strategy_close is not None:

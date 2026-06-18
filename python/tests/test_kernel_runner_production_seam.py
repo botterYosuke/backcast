@@ -2,9 +2,11 @@
 
 Issue #49 extends the ONE per-bar execution loop with opt-in seams so the golden #24 path
 and the production Replay path share it (anti-divergence): an injectable `sink` observer, a
-new per-bar `on_equity` emission, a `run_event` pause gate, and a `bar_interval_sec` throttle.
-Defaults must leave the golden EventSink path byte-identical (asserted separately by
-test_kernel_subprocess_matches_committed_golden); here we pin the new seams directly.
+new per-bar `on_equity` emission, and a `bar_interval_sec` throttle. (#76 S6b-β retired the
+run_event pause gate + step/speed transport seams with the footer; force_stop's stop_event is
+pinned by test_replay_transport_retired.) Defaults must leave the golden EventSink path
+byte-identical (asserted separately by test_kernel_subprocess_matches_committed_golden); here
+we pin the new seams directly.
 
 Pure-Python: load_universe_bars is monkeypatched so no DuckDB mount is needed.
 """
@@ -12,7 +14,6 @@ from __future__ import annotations
 
 import os
 import sys
-import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -82,27 +83,6 @@ def test_on_equity_fires_once_per_bar_with_cash(monkeypatch) -> None:
     assert [ts for ts, _, _ in sink.equity] == [b.ts_event_ns // 1_000_000 for b in bars]
     assert all(eq == 10_000_000 for _, eq, _ in sink.equity)
     assert all(cash == 10_000_000 for _, _, cash in sink.equity)
-
-
-def test_run_event_gate_blocks_until_set(monkeypatch) -> None:
-    sink = _Recorder()
-    ev = threading.Event()  # cleared → first wait() blocks before any bar
-    runner = _make_runner(monkeypatch, sink=sink, bars=_bars(3), run_event=ev)
-
-    done = threading.Event()
-
-    def _go():
-        runner.run()
-        done.set()
-
-    t = threading.Thread(target=_go, daemon=True)
-    t.start()
-    # Paused: the loop is blocked on run_event.wait() before bar 0.
-    assert not done.wait(0.2), "run proceeded while run_event was cleared"
-    assert sink.bars == []
-    ev.set()  # resume
-    assert done.wait(2.0), "run did not finish after run_event was set"
-    assert len(sink.bars) == 3
 
 
 def test_sink_without_on_equity_raises(monkeypatch) -> None:

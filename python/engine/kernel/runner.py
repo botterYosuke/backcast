@@ -34,10 +34,6 @@ from engine.kernel.sink import EventSink
 from engine.kernel.strategy import Strategy
 from engine.live.safety_rails import KIND_NO_REFERENCE_PRICE, RailViolation, SafetyRails
 
-# Poll cadence for the paused gate (#30): while PAUSED (run_event cleared) the loop waits in
-# short slices so it can wake promptly on a step pulse OR a stop signal. 50ms is imperceptible
-# to a human watching a paused chart and costs negligible CPU.
-_PAUSE_POLL_SEC = 0.05
 
 
 @dataclass
@@ -154,11 +150,8 @@ class KernelRunner:
         push_target=None,
         sink=None,
         rails: Optional[SafetyRails] = None,
-        run_event=None,
         bar_interval_sec: float = 0.0,
         stop_event=None,
-        step_event=None,
-        speed_provider=None,
     ) -> None:
         self._data_root = data_root  # J-Quants DuckDB root (ADR-0006); <root>/<table>/<code>.duckdb
         # Single instrument (#47) or a universe (#48); universe is time-order-merged into one
@@ -195,23 +188,16 @@ class KernelRunner:
         else:
             raise ValueError("KernelRunner requires either push_target or sink")
         self._ctx = _Context(order_engine=self._order_engine, portfolio=self._portfolio)
-        # Control seam (#49): run_event.wait() before each bar (pause/resume/stop, owned by
-        # the host's DataEngine), and an optional wallclock throttle that releases the GIL so
-        # a polling thread can read the bar-by-bar chart between bars. Both default-off →
-        # golden path runs straight through, byte-identical.
-        self._run_event = run_event
+        # Wallclock throttle (#29): an optional per-bar GIL release so the host's poll thread can
+        # read the incrementally-streamed chart between bars. Default 0 → golden path runs straight
+        # through, byte-identical. (#76 S6b-β: the #30 transport speed multiplier was retired with
+        # the footer — reactive runs complete near-instantly; the base interval stays for chart
+        # following.)
         self._bar_interval_sec = bar_interval_sec
-        # Stop seam (#49 review #5): distinct from run_event (which only pauses: clear=pause,
-        # set=run — it can't signal "stop" because a running run also has it set). force_stop
-        # sets this; the loop breaks promptly so a long Minute run halts instead of running
-        # out. Default None → golden path never breaks early (byte-identical).
+        # Stop seam (#49 review #5): force_stop sets this; the loop breaks promptly so a long
+        # Minute run halts instead of running out. Default None → golden path never breaks early
+        # (byte-identical). The host's force_stop teardown (run lifecycle) owns it (#76 S6b-β).
         self._stop_event = stop_event
-        # Transport seam (#30): step_event advances EXACTLY one bar while PAUSED (run_event
-        # cleared) — one pulse → one bar → re-block. speed_provider() is read EACH bar to scale
-        # the throttle interval (bar_interval_sec / multiplier), so a speed change takes effect
-        # mid-run. Both default None → golden path byte-identical (no step gate, multiplier 1).
-        self._step_event = step_event
-        self._speed_provider = speed_provider
 
     def run(self) -> RunResult:
         import time as _time
@@ -247,26 +233,6 @@ class KernelRunner:
             if self._stop_event is not None and self._stop_event.is_set():
                 stopped_reason = "stopped"
                 break
-
-            # Pause / step gate (#30, host-owned). When PAUSED (run_event cleared) the loop
-            # waits in short slices so it can wake on either resume (run_event set), a single
-            # step pulse (step_event → advance EXACTLY this one bar, then re-block), or a stop
-            # signal (break out). run_event/stop_event mutation stays in the DataEngine; this
-            # gate is purely additive (step_event None → identical to a plain run_event.wait()).
-            if self._run_event is not None:
-                while not self._run_event.is_set():
-                    if self._stop_event is not None and self._stop_event.is_set():
-                        break
-                    if self._step_event is not None and self._step_event.is_set():
-                        self._step_event.clear()  # consume one pulse → let this one bar through
-                        break
-                    # Paused: sleep a slice (waking immediately on resume via run_event), then
-                    # re-check stop/step. Waiting ON run_event — not a bare sleep — means resume
-                    # is instant and the loop never busy-spins, including when step_event is None.
-                    self._run_event.wait(_PAUSE_POLL_SEC)
-                if self._stop_event is not None and self._stop_event.is_set():
-                    stopped_reason = "stopped"
-                    break
 
             self._sink.push_bar(bar)
 
@@ -331,15 +297,10 @@ class KernelRunner:
             # Wallclock throttle (last in the body, like the legacy replay_runner): releases
             # the GIL between bars so the host's poll thread reads the incrementally-streamed
             # chart (issue #29 bar-by-bar following). Default 0 → golden runs straight through.
-            # #30: the interval is read EACH bar as bar_interval_sec / speed_multiplier so a
-            # transport speed change takes effect mid-run. The #49-review-#3 total-budget cap is
-            # removed — #30 hands rate ownership to the user (findings 0023 §4(D)); a long run at
-            # 1x is meant to be watchable (high-speed completion is 50x or stop).
+            # (#76 S6b-β: the #30 transport speed multiplier was retired with the footer; the base
+            # interval remains for chart following.)
             if self._bar_interval_sec > 0:
-                multiplier = self._speed_provider() if self._speed_provider is not None else 1
-                if multiplier < 1:
-                    multiplier = 1
-                _time.sleep(self._bar_interval_sec / multiplier)
+                _time.sleep(self._bar_interval_sec)
 
         self._strategy.on_stop()
 

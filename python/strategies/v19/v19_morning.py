@@ -33,35 +33,21 @@ strategy-only dependency loaded lazily here.
 from __future__ import annotations
 
 import json
-import math
 import os
 
 from engine.kernel.duckdb_bars import Bar
 from engine.kernel.orders import OrderFilled, OrderSide
 from engine.kernel.strategy import Strategy
+from strategies.v19 import v19_core
 
 # The run scenario (universe / window / cash) lives in the co-located v19_morning.json
 # sidecar `"scenario"` key — the engine-owned single source of truth (CONTEXT.md
 # "scenario sidecar"). It is intentionally NOT duplicated here.
-
-_FEATURES = [
-    "ret_cum", "ret_hi", "ret_lo", "ret_1", "ret_3", "ret_5", "ret_15", "ret_30",
-    "close_loc_range", "dd_from_high", "range_frac", "vwap_dist", "rel_turnover",
-    "log_turnover", "ret_std", "up_frac", "n_bars", "or_pos", "or_break_up",
-    "gap", "rs_vs_1306", "tier_mid_small", "price_at_decision",
-]
-
-# JST is a fixed UTC+9 with no DST, so the JST day-ordinal and minute-of-day are pure
-# integer arithmetic from the bar's ts — no tz-aware datetime is built on the ~80k-call
-# per-bar hot path. Flooring ns→s keeps the bar's `:59.999999` end label from rounding up
-# into the next minute (which would mis-classify the entry bar).
-_JST_OFFSET_SEC = 9 * 3600
-
-
-def _jst_day_minute(ts_event_ns: int) -> tuple[int, int]:
-    """UTC ns → (JST day-ordinal, JST minute-of-day). The day-ordinal is the daily-reset key."""
-    jsecs = ts_event_ns // 1_000_000_000 + _JST_OFFSET_SEC
-    return jsecs // 86_400, (jsecs % 86_400) // 60
+#
+# v19's pure numeric logic (JST timing, feature engineering, cross-sectional scoring,
+# ranking-budget sizing) lives in v19_core — the single canonical source shared with the
+# marimo cell-DAG port so both paths keep byte-identical float math (#76 S6b-α step2 / T8).
+# The methods below stay as thin instance-state adapters that delegate to v19_core.
 
 
 class V19MorningStrategy(Strategy):
@@ -185,7 +171,7 @@ class V19MorningStrategy(Strategy):
 
     # ------------------------------------------------------------------ per-bar
     def on_bar(self, bar: Bar) -> None:
-        day, minute = _jst_day_minute(bar.ts_event_ns)
+        day, minute = v19_core.jst_day_minute(bar.ts_event_ns)
         if day != self._cur_day:
             self._reset_day(day)
 
@@ -244,192 +230,52 @@ class V19MorningStrategy(Strategy):
             self.submit_market(iid, OrderSide.SELL, int(qty))
 
     # ------------------------------------------------------------------ sizing (v0)
+    # These methods are thin instance-state adapters over the pure v19_core functions: they
+    # read self._snapshots / knobs / buying_power and hand the values to v19_core, so the
+    # numeric logic stays the single source shared with the marimo port (T8). Signatures are
+    # preserved for the direct-call gates (test_v19_alloc_a0).
     def _current_price(self, iid: str) -> float | None:
-        snaps = self._snapshots.get(iid, [])
-        return float(snaps[-1]["close"]) if snaps else None
+        return v19_core.current_price(self._snapshots.get(iid, []))
 
     def _cash_aware_picks(self, picks: list[str]) -> list[dict]:
-        """Reduce rank-ordered picks under buying_power * safety_margin.
+        """Reduce rank-ordered picks under buying_power * safety_margin (findings 0029 dec.5).
 
-        Gate disabled → every pick at order_qty (findings 0029 dec.5). Gate enabled →
-        dispatch on alloc_policy: None = v0 cumulative-greedy (default, bit-exact);
-        "A0_EQUAL_NOMINAL_E1" = equal-yen + lot-floor + +1-lot redistribute; unknown
-        policy → WARNING + v0 fallback (mirrors _blacksheep _cash_aware_pick_reducer)."""
-        if not self._cash_gate:
-            return [{"iid": iid, "shares": int(self._order_qty)} for iid in picks]
-        budget = float(self.buying_power()) * float(self._cash_safety_margin)
-        if self._alloc_policy == "A0_EQUAL_NOMINAL_E1":
-            return self._alloc_a0_equal_nominal_e1(picks, budget, self._lot_size)
-        if self._alloc_policy is not None:
-            self.log(f"v19 unknown alloc_policy={self._alloc_policy!r} — v0 fallback")
-        # v0 path: cumulative-greedy, lot_size=1, shares=order_qty.
-        submissions: list[dict] = []
-        cum = 0.0
-        order_qty = int(self._order_qty)
-        for iid in picks:
-            price = self._current_price(iid)
-            if price is None or price <= 0:
-                continue
-            notional = float(order_qty) * float(price)
-            if cum + notional <= budget:
-                submissions.append({"iid": iid, "shares": order_qty})
-                cum += notional
-        return submissions
+        Gate-off reads neither buying_power nor prices (preserved); gate-on prices every pick
+        and delegates the policy dispatch to v19_core.cash_aware_picks."""
+        prices = {iid: self._current_price(iid) for iid in picks} if self._cash_gate else {}
+        buying_power = float(self.buying_power()) if self._cash_gate else 0.0
+        return v19_core.cash_aware_picks(
+            picks,
+            cash_gate=self._cash_gate,
+            order_qty=self._order_qty,
+            safety_margin=self._cash_safety_margin,
+            alloc_policy=self._alloc_policy,
+            lot_size=self._lot_size,
+            buying_power=buying_power,
+            prices=prices,
+            log=self.log,
+        )
 
     def _alloc_a0_equal_nominal_e1(
         self, picks: list[str], budget: float, lot_size: int
     ) -> list[dict]:
-        """A0_EQUAL_NOMINAL_E1 (verbatim port of _blacksheep _alloc_a0_equal_nominal_e1).
+        """A0_EQUAL_NOMINAL_E1 — instance adapter over v19_core (prices from self snapshots)."""
+        prices = {iid: self._current_price(iid) for iid in picks}
+        return v19_core.alloc_a0_equal_nominal_e1(picks, budget, lot_size, prices)
 
-        Pass 1: per_pick_budget = budget / K; for each iid in rank order, n_lots =
-        floor(per_pick_budget / (price*lot_size)); commit n_lots*lot_size shares, push the
-        leftover (incl. NO_PRICE / BELOW_1_LOT skips) into `remainder`.
-        Pass 2 (E1): while progress, add +1 lot to each affordable submission in rank order.
-        Returns [{iid, shares}] (kernel ignores the notional/skip detail _blacksheep keeps)."""
-        picks = list(picks)
-        K = len(picks)
-        if K == 0:
-            return []
-        per_pick_budget = float(budget) / float(K)
-        remainder = 0.0
-        submissions: list[dict] = []
-        for iid in picks:
-            price = self._current_price(iid)
-            lot_value = float(price) * float(lot_size) if (price and price > 0) else 0.0
-            if lot_value <= 0:
-                remainder += per_pick_budget  # NO_PRICE
-                continue
-            n_lots = int(per_pick_budget // lot_value)
-            if n_lots <= 0:
-                remainder += per_pick_budget  # BELOW_1_LOT
-                continue
-            shares = int(n_lots * int(lot_size))
-            submissions.append({"iid": iid, "shares": shares, "_price": float(price)})
-            remainder += per_pick_budget - shares * float(price)
-        # Pass 2 (E1): rank-order +1 lot redistribute.
-        progress = True
-        while progress and remainder > 0 and submissions:
-            progress = False
-            for sub in submissions:
-                lot_value = sub["_price"] * float(lot_size)
-                if lot_value <= 0:
-                    continue
-                if remainder + 1e-9 >= lot_value:
-                    sub["shares"] = int(sub["shares"]) + int(lot_size)
-                    remainder -= lot_value
-                    progress = True
-        return [{"iid": s["iid"], "shares": s["shares"]} for s in submissions]
-
-    # ------------------------------------------------------------------ features (verbatim port)
+    # ------------------------------------------------------------------ features / scoring
     def _compute_features(self, iid: str) -> dict | None:
-        snaps = self._snapshots.get(iid, [])
-        if len(snaps) < 3:
-            return None
-
-        closes = [s["close"] for s in snaps]
-        highs = [s["high"] for s in snaps]
-        lows = [s["low"] for s in snaps]
-        vols = [s.get("volume", 0) for s in snaps]
-
-        o0 = snaps[0]["open"]
-        if o0 <= 0:
-            return None
-        c_last = closes[-1]
-        hi, lo = max(highs), min(lows)
-        rng = hi - lo
-
-        ret_cum = c_last / o0 - 1.0
-        ret_hi = hi / o0 - 1.0
-        ret_lo = lo / o0 - 1.0
-
-        def ret_last_n(n: int) -> float:
-            if len(closes) > n:
-                base = closes[-(n + 1)]
-                return c_last / base - 1.0 if base > 0 else 0.0
-            return ret_cum
-
-        ret_1 = ret_last_n(1)
-        ret_3 = ret_last_n(3)
-        ret_5 = ret_last_n(5)
-        ret_15 = ret_last_n(15)
-        ret_30 = ret_last_n(30)
-
-        clr = (c_last - lo) / rng if rng > 0 else 0.5
-        dd_from_high = (c_last - hi) / hi if hi > 0 else 0.0
-        range_frac = rng / o0
-
-        vals = [s.get("volume", 0) * s["close"] for s in snaps]
-        tot_vol = sum(vols)
-        vwap = sum(vals) / tot_vol if tot_vol > 0 else c_last
-        vwap_dist = c_last / vwap - 1.0 if vwap > 0 else 0.0
-
-        turnover = sum(vals)
-        adv = self._adv_baseline.get(iid, 0)
-        rel_turnover = turnover / adv if adv > 0 else 0.0
-        log_turnover = math.log1p(turnover)
-
-        import numpy as np
-
-        c_arr = np.array(closes)
-        if len(c_arr) >= 2:
-            bar_rets = np.diff(c_arr) / c_arr[:-1]
-            ret_std = float(np.std(bar_rets))
-            up_frac = float(np.mean(np.diff(c_arr) > 0))
-        else:
-            ret_std = 0.0
-            up_frac = 0.5
-
-        or_snaps = snaps[:5]
-        if or_snaps:
-            orh = max(s["high"] for s in or_snaps)
-            orl = min(s["low"] for s in or_snaps)
-        else:
-            orh, orl = hi, lo
-        or_pos = (c_last - orl) / (orh - orl) if (orh - orl) > 0 else 0.5
-        or_break_up = 1.0 if c_last > orh else 0.0
-
-        prev_close = self._prev_close.get(iid, 0)
-        gap = (o0 / prev_close - 1.0) if prev_close > 0 else 0.0
-
-        rs_snaps = self._snapshots.get(self._rs_ref, [])
-        rs = 0.0
-        if rs_snaps and rs_snaps[0]["open"] > 0:
-            ref_ret = rs_snaps[-1]["close"] / rs_snaps[0]["open"] - 1.0
-            rs = ret_cum - ref_ret
-
-        tier_mid_small = 0.0
-
-        return {
-            "ret_cum": ret_cum, "ret_hi": ret_hi, "ret_lo": ret_lo,
-            "ret_1": ret_1, "ret_3": ret_3, "ret_5": ret_5,
-            "ret_15": ret_15, "ret_30": ret_30,
-            "close_loc_range": clr, "dd_from_high": dd_from_high,
-            "range_frac": range_frac, "vwap_dist": vwap_dist,
-            "rel_turnover": rel_turnover, "log_turnover": log_turnover,
-            "ret_std": ret_std, "up_frac": up_frac, "n_bars": float(len(snaps)),
-            "or_pos": or_pos, "or_break_up": or_break_up,
-            "gap": gap, "rs_vs_1306": rs,
-            "tier_mid_small": tier_mid_small, "price_at_decision": c_last,
-        }
+        return v19_core.compute_features(
+            self._snapshots.get(iid, []),
+            adv=self._adv_baseline.get(iid, 0),
+            prev_close=self._prev_close.get(iid, 0),
+            rs_snaps=self._snapshots.get(self._rs_ref, []),
+        )
 
     def _score_instruments(self) -> dict[str, float]:
-        import pandas as pd
-
-        rows: dict[str, dict] = {}
-        for iid in self._instruments:
-            if iid == self._rs_ref:
-                continue
-            feat = self._compute_features(iid)
-            if feat is not None:
-                rows[iid] = feat
-
-        if not rows:
-            return {}
-
-        df = pd.DataFrame(rows).T[_FEATURES]
-        mu = df.mean()
-        sigma = df.std() + 1e-9
-        X = ((df - mu) / sigma).values
-        scores_arr = self._model.predict(X)
-        return {iid: float(s) for iid, s in zip(rows.keys(), scores_arr)}
+        rows = v19_core.build_rows(
+            self._snapshots, self._instruments, self._rs_ref,
+            adv_baseline=self._adv_baseline, prev_close=self._prev_close,
+        )
+        return v19_core.score_universe(rows, self._model)
 # endregion region_001

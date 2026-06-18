@@ -220,3 +220,13 @@ production の編集経路は `MarimoNotebookDocument` へ全面移行。`Strate
 - **層4 HITL（AC5）GREEN（2026-06-18・owner 実行）**: 実 workspace（Unity 6000.4.11f1 Play）で boot→canonical v19 が 3 セル窓（`_config`/`_feedback`/`_strategy`・本体のみ）へ分解→中央 [+] で新セル spawn→本体編集→Save→Open で位置復元（窓が飛ばない）→複数セル戦略を Replay run→✕ 削除（≥1 ガード）まで一連を owner が確認し **PASS**。→ **S1 は全 4 層（pytest golden / 純 AFK / view AFK / HITL）GREEN ＝ 出荷可能**。残スコープは Slice 2（依存矢印）/ Slice 3（並べ替え UI・セル名編集）。
 
 正本: `docs/adr/0013` ＋ 本 findings。ADR-0013 は immutable（書き戻さない）— 本節が Step 2 着地と #76 調停の記録。
+
+## Slice 2/3 を nice-to-have として保留・#81 close（owner 判断 2026-06-19）
+
+S1（必須 ＝ #81 本体 AC：セル追加 UI・複数セル編集→Save→Run）は上記のとおり全4層 GREEN で出荷済み。残る **Slice 2（依存矢印）/ Slice 3（並べ替え順 UI・セル名編集・テンプレ挿入）は「あったらいい」枠**で、owner が「なきゃだめではないので今は不要」と判断。**未着手のまま #81 を close**（本体 AC は S1 で充足済み）。再 grill を避けるため、Slice 2 で今回の grill が確定させた下位決定を以下に固定する（**復活時はここから再開・Q1/Q2 は code 裏取り済みで再導出不要**）。
+
+- **マクロ（ADR-0013 で凍結済み・不変）**: 矢印 = 純粋可視化。Python が DAG を所有（`load_app` の `cell.defs`/`cell.refs` から静的算出＝ライブカーネル不要、probe 実証済み）／C# が空間 UI を所有（窓・線）。
+- **Q1 = (a) import（モジュール）由来の依存は矢印にしない**（marimo `cell-3d-renderer.tsx:141` `dataType==="module"` 除外の忠実移植）。静的代理は **`_cell.imports` のうち `imported_symbol is None` の `definition` 名を除外**（＝丸ごとモジュール束縛 `import X`/`import X as Y`）。`from X import Y`（`imported_symbol` 有り＝値はシンボル）は残す＝marimo 一致。`imported_namespaces` は別名 `pd` を取りこぼすため不採用（probe で確認）。
+- **Q2 = (c) 構造変化（追加/削除/Open）＋ focus-out（編集確定）で再計算**。marimo は矢印を keystroke でなく離散的なコード登録（run）で更新する（`runtime.py` の Variables broadcast は `_mutate_graph`→register 経路のみ）ので、live カーネルの無い backcast では focus-out が register の忠実な対応物。線の位置追従は毎フレーム C#（Python 不要）／focus-out で `(defs,refs)` 差分ゼロなら edge を re-push しない／構文壊れ→`load_app` 失敗時は直前の矢印を保持（fail-soft）。
+- **Q3（途中・骨格のみ）**: 単一 `MaskableGraphic`（EdgeOverlay）を `FloatingWindowLayer` 直背面・同 Content 配下に1枚（pan/zoom 追従無料・既存 `PythonSyntaxMeshEffect` の頂点描画イディオム）／ベジエ（marimo `type:"default"`）＋矢じり（`ArrowClosed`）＋固定ハンドル（元=窓下端中央・先=窓上端中央）／純関数 `EdgeGeometry`（rect→頂点）を層1 AFK で検証／矢印集合は Python・幾何は C# で**再結合しない**。未決＝animated 破線（marimo `animated:true`）を含めるか（保留）。
+- 検証層（復活時）: 層3 pytest golden（defs/refs→重複排除 index ペア・module 除外）／層1 純 C# AFK（`EdgeGeometry`）／層2 view AFK（実 pythonnet 1回＋mesh）／層4 HITL（矢印表示・ドラッグ追従・依存の増減で矢印 増減）。

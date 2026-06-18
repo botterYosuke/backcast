@@ -74,8 +74,15 @@ jobs:
       # outputs are cleaned so stale state from a failed prior run can't poison this one.
       - name: Clean transient outputs
         run: |
-          foreach ($p in @('build','dist','smoke-extract','release-body-verify.md')) {
-            if (Test-Path $p) { Remove-Item -Recurse -Force $p -Confirm:$false }
+          # Use cmd.exe rmdir for long-path safety; Remove-Item -Recurse trips on
+          # the deeply-nested bundled venv in dist/ (e.g. jedi/django-stubs/... 285 chars).
+          foreach ($p in @('build','dist','smoke-extract')) {
+            if (Test-Path $p) {
+              & cmd.exe /c "rmdir /s /q `"$p`"" | Out-Null
+            }
+          }
+          if (Test-Path 'release-body-verify.md') {
+            Remove-Item -Force 'release-body-verify.md' -Confirm:$false
           }
           Remove-Item smoke-try*.log -Force -ErrorAction SilentlyContinue
           Write-Host "Workspace cleaned (Library/ and python/.venv/ preserved)"
@@ -230,10 +237,21 @@ jobs:
           # Move so the zip extracts to a single named folder.
           Move-Item build/windows64 $stage
           $zip = "dist/backcast-windows64-$v.zip"
-          Compress-Archive -Path "$stage/*" -DestinationPath $zip -CompressionLevel Optimal
+          # tar.exe (bsdtar on Win10+) handles paths > MAX_PATH (260) because it
+          # uses Win32 `\\?\` extended path API internally. Compress-Archive crashed
+          # on the bundled venv's deep paths (e.g. jedi/third_party/django-stubs/...
+          # ~285 chars) — observed run #27758804761.
+          # -a: auto-detect zip format from .zip extension. -c: create. -C: chdir before
+          # archiving so the zip entries are `backcast-windows64-$v/...` (single top folder).
+          & tar.exe -a -c -f $zip -C dist "backcast-windows64-$v"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "tar create failed exit=$LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
           "stage_dir=$stage" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "zip_path=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          Write-Host "Assembled: $zip"
+          $zipSize = [math]::Round((Get-Item $zip).Length / 1MB, 1)
+          Write-Host "Assembled: $zip ($zipSize MB)"
 
       # ── SBOM: bundled Python venv only (Principle P2, findings 0050 §2.5) ─
       - name: Generate Python SBOM (CycloneDX)
@@ -248,8 +266,19 @@ jobs:
           $v = "${{ steps.ver.outputs.version }}"
           $zip = "${{ steps.assemble.outputs.zip_path }}"
           $out = "smoke-extract"
-          Remove-Item -Recurse -Force $out -ErrorAction SilentlyContinue
-          Expand-Archive -Path $zip -DestinationPath $out -Force
+          # Remove via tar's inverse (no recursive remove needed) — but PowerShell
+          # Remove-Item -Recurse hits the same MAX_PATH problem on the staged tree.
+          # Use cmd.exe rmdir which handles long paths via the same Win32 APIs as tar.
+          if (Test-Path $out) {
+            & cmd.exe /c "rmdir /s /q `"$out`"" | Out-Null
+          }
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          # tar.exe -x for extraction; -C chdir into output dir.
+          & tar.exe -x -f $zip -C $out
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "tar extract failed exit=$LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
           $tree = Join-Path $out "backcast-windows64-$v"
           if (-not (Test-Path "$tree/backcast.exe")) {
             Write-Error "Stage 1 fail: backcast.exe missing from extracted zip"

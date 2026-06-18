@@ -374,6 +374,7 @@ public static class BackcastWorkspaceProbe
         var ty = typeof(BackcastWorkspaceRoot);
         const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
         ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        root.SetSynthesizer(new FakeMarimoSynthesizer());   // #81: Python-free cell synthesis
         ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
 
@@ -381,12 +382,11 @@ public static class BackcastWorkspaceProbe
         var sidebar = ty.GetField("_sidebarCtrl", BF).GetValue(root) as UniverseSidebarController;
         if (scenario == null || sidebar == null) return "reprime: root internals not found (renamed?)";
 
-        // #78: OnRun's run-gate now reads the EDITOR via RegistryStrategyFileProvider (not an env
-        // _strategyFile) — bind the adopted editor to a real temp strategy so the gate is supplyable.
-        var editors = ty.GetField("_editors", BF).GetValue(root) as Dictionary<string, StrategyEditorView>;
-        if (editors == null || !editors.TryGetValue(WINDOW_ID, out var adoptedEv) || adoptedEv == null)
-            return "reprime: adopted editor missing from _editors";
-        if (!adoptedEv.Document.Open(strat)) return "reprime: adopted editor failed to Open the temp strategy";
+        // #78/#81: OnRun's run-gate reads the NOTEBOOK via RegistryStrategyFileProvider (not an env
+        // _strategyFile) — bind the notebook to a real temp strategy so the gate is supplyable.
+        var coordinator = ty.GetField("_coordinator", BF).GetValue(root) as NotebookCellCoordinator;
+        if (coordinator == null) return "reprime: coordinator missing";
+        if (!coordinator.Open(strat, null)) return "reprime: notebook failed to Open the temp strategy";
 
         // a VALID scenario whose universe settled to [A], then a TILE add of B with NO flush (text edits
         // never flush) -> registry=[A,B] while the writeback's _lastFlushed is still [A] (the stale state).
@@ -482,21 +482,20 @@ public static class BackcastWorkspaceProbe
         const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
 
         // helper: compose the root headlessly (no Python; no RestoreLayout so the adopted editor is unbound).
+        const string NOTEBOOK_ID = "strategy_editor:notebook";   // #81: the run path resolves the notebook here
         BackcastWorkspaceRoot Compose()
         {
             EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
             var r = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
             if (r == null) return null;
             ty.GetField("_font", BF).SetValue(r, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
-            ty.GetMethod("BuildWorkspace", BF).Invoke(r, null);   // registers the adopted editor into _registry
+            r.SetSynthesizer(new FakeMarimoSynthesizer());        // #81: Python-free cell synthesis
+            ty.GetMethod("BuildWorkspace", BF).Invoke(r, null);   // registers the notebook aggregate into _registry
             return r;
         }
-        StrategyDocument AdoptedDoc(BackcastWorkspaceRoot r)
-        {
-            var editors = ty.GetField("_editors", BF).GetValue(r) as Dictionary<string, StrategyEditorView>;
-            return (editors != null && editors.TryGetValue(WINDOW_ID, out var v) && v != null) ? v.Document : null;
-        }
+        NotebookCellCoordinator Coord(BackcastWorkspaceRoot r) => ty.GetField("_coordinator", BF).GetValue(r) as NotebookCellCoordinator;
         void Seed(BackcastWorkspaceRoot r) => ty.GetMethod("SeedScenarioFromEditor", BF).Invoke(r, null);
+        void Reseed(BackcastWorkspaceRoot r) => ty.GetMethod("ReseedFromEditor", BF).Invoke(r, null);
 
         // (a) UNBOUND editor: SeedScenarioFromEditor is a NO-OP (universe empty) and Run is BlockedNoStrategy.
         var root0 = Compose();
@@ -508,9 +507,9 @@ public static class BackcastWorkspaceProbe
         if (scenario0.Universe.Count != 0)
             return "editor-seed: UNBOUND editor seeded a non-empty universe (got [" +
                    string.Join(",", scenario0.Universe.Ids) + "]) — #78: nothing loaded must seed nothing";
-        var gate0 = scenario0.TryStartRun(new RegistryStrategyFileProvider(registry0, WINDOW_ID));
+        var gate0 = scenario0.TryStartRun(new RegistryStrategyFileProvider(registry0, NOTEBOOK_ID));
         if (gate0.Gate != RunGate.BlockedNoStrategy)
-            return "editor-seed: UNBOUND editor did NOT block Run (gate=" + gate0.Gate + ") — #78: 空エディタ→Run封鎖";
+            return "editor-seed: UNBOUND notebook did NOT block Run (gate=" + gate0.Gate + ") — #78: 空エディタ→Run封鎖";
 
         // (b) inline-only: bind the editor to a .py with an inline SCENARIO and NO sidecar → seed from inline.
         string inlinePy = Path.Combine(TempDir, "inline_only.py");
@@ -529,9 +528,9 @@ public static class BackcastWorkspaceProbe
         var root1 = Compose();
         if (root1 == null) return "editor-seed: BackcastWorkspaceRoot missing (inline leg)";
         var scenario1 = ty.GetField("_scenario", BF).GetValue(root1) as ScenarioStartupController;
-        var doc1 = AdoptedDoc(root1);
-        if (scenario1 == null || doc1 == null) return "editor-seed: could not read _scenario / adopted editor";
-        if (!doc1.Open(inlinePy)) return "editor-seed: adopted editor failed to Open the inline .py";
+        var coord1 = Coord(root1);
+        if (scenario1 == null || coord1 == null) return "editor-seed: could not read _scenario / coordinator";
+        if (!coord1.Open(inlinePy, null)) return "editor-seed: notebook failed to Open the inline .py";
         Seed(root1);
         var ids = scenario1.Universe.Ids;
         if (ids.Count != 2 || ids[0] != "WIRE.TSE" || ids[1] != "WIRE2.TSE")
@@ -552,26 +551,28 @@ public static class BackcastWorkspaceProbe
         var root2 = Compose();
         if (root2 == null) return "editor-seed: BackcastWorkspaceRoot missing (sidecar-wins leg)";
         var scenario2 = ty.GetField("_scenario", BF).GetValue(root2) as ScenarioStartupController;
-        var doc2 = AdoptedDoc(root2);
-        if (scenario2 == null || doc2 == null) return "editor-seed: could not read _scenario / adopted editor (sidecar-wins)";
-        if (!doc2.Open(bothPy)) return "editor-seed: adopted editor failed to Open the sidecar-wins .py";
+        var coord2 = Coord(root2);
+        if (scenario2 == null || coord2 == null) return "editor-seed: could not read _scenario / coordinator (sidecar-wins)";
+        if (!coord2.Open(bothPy, null)) return "editor-seed: notebook failed to Open the sidecar-wins .py";
         Seed(root2);
         var ids2 = scenario2.Universe.Ids;
         if (ids2.Count != 1 || ids2[0] != "SIDECAR.TSE")
             return "editor-seed: sidecar did NOT win over inline (got [" + string.Join(",", ids2) + "])";
 
-        // (d) FULL restore path: a saved layout binds the adopted editor to inlinePy → the REAL ApplyLayout
-        // seeds AND re-syncs the Startup tile's Start field. Guards the regression where the seed moved
-        // after BuildWorkspace's SyncFieldsFromController, leaving date/cash fields blank while Run uses
-        // the seeded Params (findings 0044 §6 — the tile scalars have no Changed event, unlike universe).
+        // (d) FULL open path (#81): opening the notebook document binds it to inlinePy, then the open
+        // caller's ReseedFromEditor tail seeds the universe AND re-syncs the Startup tile's Start field
+        // (the seed runs AFTER BuildWorkspace's SyncFieldsFromController, so the tile scalars — which have
+        // no Changed event, unlike universe — would otherwise stay blank while Run uses the seeded Params,
+        // findings 0044 §6). The reseed moved OUT of ApplyLayout into the open callers under #81, so this
+        // drives coordinator.Open + ReseedFromEditor (exactly what OnFileOpen / Resume now do).
         var root3 = Compose();
         if (root3 == null) return "editor-seed: BackcastWorkspaceRoot missing (restore leg)";
         var scenario3 = ty.GetField("_scenario", BF).GetValue(root3) as ScenarioStartupController;
         var tile3 = ty.GetField("_tile", BF).GetValue(root3) as ScenarioStartupTile;
-        if (scenario3 == null || tile3 == null) return "editor-seed: could not read _scenario / _tile (restore leg)";
-        var doc = LayoutDocument.Default();
-        doc.strategyEditors = new List<StrategyEditorState> { new StrategyEditorState { id = WINDOW_ID, filePath = inlinePy } };
-        ty.GetMethod("ApplyLayout", BF).Invoke(root3, new object[] { doc });
+        var coord3 = Coord(root3);
+        if (scenario3 == null || tile3 == null || coord3 == null) return "editor-seed: could not read _scenario / _tile / coordinator (restore leg)";
+        if (!coord3.Open(inlinePy, null)) return "editor-seed: notebook failed to Open the inline .py (restore leg)";
+        Reseed(root3);
         var ids3 = scenario3.Universe.Ids;
         if (ids3.Count != 2 || ids3[0] != "WIRE.TSE")
             return "editor-seed: ApplyLayout did not seed the universe from the restored editor (got [" +

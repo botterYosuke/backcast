@@ -81,6 +81,43 @@ public class FloatingWindowController
         return rt;
     }
 
+    // Spawn a window at an AUTO-PLACED top-left (#81 cell-as-floating-window): the caller hands a
+    // canvas-logical anchor (the viewport centre), and SpawnPlacement cascades it diagonally off
+    // EVERY live window's top-left so a new cell never lands directly under an existing window
+    // (marimo calcSpawnPosition). The collision母集合 is `_windows` (cell AND non-cell), and the
+    // anchor is used verbatim as the top-left (no half-size centring — see SpawnPlacement). Size is
+    // the default cell window size; resize is a later slice so w/h are not persisted (findings 0050).
+    public RectTransform SpawnAuto(string kind, string id, float w, float h, Vector2 anchorTopLeft, bool visible)
+    {
+        Vector2 p = SpawnPlacement.Next(CaptureTopLefts(), anchorTopLeft, SpawnPlacement.DefaultOffset);
+        return Spawn(kind, id, p.x, p.y, w, h, visible);
+    }
+
+    // Every live window's top-left (anchoredPosition), the collision母集合 for SpawnPlacement —
+    // used by SpawnAuto AND by the coordinator when it re-places a REUSED dormant window (which
+    // SpawnAuto can't handle, since the id already exists). Order is incidental (a set of points).
+    public List<Vector2> CaptureTopLefts()
+    {
+        var tops = new List<Vector2>(_windows.Count);
+        foreach (var kv in _windows)
+            if (kv.Value.rt != null) tops.Add(kv.Value.rt.anchoredPosition);
+        return tops;
+    }
+
+    // Hide a window WITHOUT destroying or deregistering it (#81 dormant region_001): the adopted
+    // scene-authored cell window survives a delete via SetActive(false) and is reused by the next
+    // AddCell (ADR-0013 Decision 4 — adopt = hide-not-destroy). The inverse of Show. No-op for an
+    // unknown id; returns whether the window was found.
+    public bool Hide(string id)
+    {
+        if (_windows.TryGetValue(id, out var e) && e.rt != null)
+        {
+            e.rt.gameObject.SetActive(false);
+            return true;
+        }
+        return false;
+    }
+
     // Adopt a PRE-EXISTING window RectTransform (e.g. a scene-authored Strategy Editor) as a
     // managed window WITHOUT the factory. The Backcast workspace root (findings 0025 §8) registers
     // scene-authored editor windows this way and restores them IN PLACE — they are never

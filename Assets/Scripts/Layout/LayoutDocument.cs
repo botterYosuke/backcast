@@ -213,6 +213,34 @@ public class StrategyEditorState
     }
 }
 
+// CellPosition — a notebook cell window's spatial position in CELL ORDER (issue #81, ADR-0013 /
+// findings 0050). The cell-as-floating-window model has ONE `.py` (the notebook) but N windows; the
+// `.py` cell order is the authoritative ordering, and these positions run PARALLEL to it
+// (position[i] <-> cell[i]). NO id key: marimo's CellId is random + not written to the `.py`
+// (ids.ts), so an id-keyed lookup breaks on cold-open; an order-parallel list survives append /
+// delete / cold-open so windows don't jump (more faithful than marimo's own 3D positions). Only x,y
+// are persisted — S1 has no resize (all cells share the default size) and z = cell order = spawn
+// order (deterministic), so w/h/z are additive-reserved, NOT written now. Cells are EXCLUDED from
+// floatingWindows (single source of truth — the id-vs-index duplication is root-caused away,
+// findings 0050). UnityEngine-free POCO (JsonUtility binds by verbatim field name).
+[Serializable]
+public class CellPosition
+{
+    public float x;
+    public float y;
+
+    public CellPosition() { }
+    public CellPosition(float x, float y) { this.x = x; this.y = y; }
+
+    public CellPosition Clone() => new CellPosition(x, y);
+
+    public static bool Approx(CellPosition a, CellPosition b, float eps)
+    {
+        if (a == null || b == null) return a == b;
+        return Math.Abs(a.x - b.x) <= eps && Math.Abs(a.y - b.y) <= eps;
+    }
+}
+
 [Serializable]
 public class LayoutDocument
 {
@@ -250,6 +278,13 @@ public class LayoutDocument
     // NOT a version bump (additive, null-defaulting — same tolerance as canvasView/floatingWindows).
     // #63 grows HakoniwaProfile with cols/rows/box (the additive extension point, grill Q2).
     public HakoniwaLayoutProfiles hakoniwaProfiles;
+
+    // Notebook cell window positions in CELL ORDER (issue #81, ADR-0013 / findings 0050). ADDITIVE:
+    // an old pre-#81 sidecar lacking this field loads with everything else intact and cellPositions
+    // normalized to an EMPTY list by LayoutStore.Sanitize (the coordinator then auto-cascades). A
+    // SEPARATE dimension from floatingWindows (cells are excluded there — single source of truth).
+    // NOT a version bump (additive, identity-defaulting — same tolerance as floatingWindows).
+    public List<CellPosition> cellPositions;
 
     // Default ctor leaves version at the UNSET SENTINEL 0 (NOT CURRENT_VERSION) on
     // purpose: JsonUtility's treatment of a JSON-absent field (keep ctor value vs.
@@ -291,6 +326,7 @@ public class LayoutDocument
         doc.canvasView = CanvasView.Identity();   // no pan, 100% (findings 0006 §3)
         doc.floatingWindows = new List<FloatingWindowLayout>();   // none open by default (findings 0008 §3)
         doc.strategyEditors = new List<StrategyEditorState>();    // no editor state by default (findings 0010 §7)
+        doc.cellPositions = new List<CellPosition>();             // no cell windows by default (findings 0050)
         return doc;
     }
 
@@ -314,6 +350,12 @@ public class LayoutDocument
                 if (s != null) doc.strategyEditors.Add(s.Clone());
         }
         doc.hakoniwaProfiles = hakoniwaProfiles?.Clone();
+        if (cellPositions != null)
+        {
+            doc.cellPositions = new List<CellPosition>(cellPositions.Count);
+            foreach (var c in cellPositions)
+                if (c != null) doc.cellPositions.Add(c.Clone());
+        }
         return doc;
     }
 
@@ -395,6 +437,14 @@ public class LayoutDocument
         // empty — all must compare equal to "no per-mode data".
         if (!PanelsEqualById(a.hakoniwaProfiles?.replay?.panels, b.hakoniwaProfiles?.replay?.panels, eps)) return false;
         if (!PanelsEqualById(a.hakoniwaProfiles?.live?.panels, b.hakoniwaProfiles?.live?.panels, eps)) return false;
+
+        // cellPositions (issue #81) — matched BY INDEX (order is the SEMANTIC dimension: position[i]
+        // <-> cell[i], unlike the id-keyed panels/windows lists). null and empty coalesce to "no cells".
+        int pa = a.cellPositions?.Count ?? 0;
+        int pb = b.cellPositions?.Count ?? 0;
+        if (pa != pb) return false;
+        for (int i = 0; i < pa; i++)
+            if (!CellPosition.Approx(a.cellPositions[i], b.cellPositions[i], eps)) return false;
 
         return PanelsEqualById(a.panels, b.panels, eps);
     }

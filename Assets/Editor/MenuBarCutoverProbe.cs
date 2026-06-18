@@ -63,39 +63,38 @@ public static class MenuBarCutoverProbe
         var root = ComposeRoot(out var ty);
         if (root == null) return "BackcastWorkspaceRoot missing in scene";
 
-        var editors = ty.GetField("_editors", BF).GetValue(root) as Dictionary<string, StrategyEditorView>;
         var windows = ty.GetField("_windows", BF).GetValue(root) as FloatingWindowController;
         var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
-        if (editors == null || windows == null || scenario == null) return "root internals not found (renamed?)";
+        var coordinator = ty.GetField("_coordinator", BF).GetValue(root) as NotebookCellCoordinator;
+        var notebook = ty.GetField("_notebook", BF).GetValue(root) as MarimoNotebookDocument;
+        if (windows == null || scenario == null || coordinator == null || notebook == null)
+            return "root internals not found (renamed?)";
 
-        // ---- setup: a bound+dirty adopted editor, an ADDITIONAL editor window, a seeded universe ----
-        if (!editors.TryGetValue(WINDOW_ID, out var adopted) || adopted == null)
-            return "adopted editor not built under WINDOW_ID";
-        if (!adopted.Open(TempPy)) return "probe setup: adopted editor Open(TempPy) failed";
+        // ---- setup (#81): a bound 2-cell notebook (region_001 + region_002) and a seeded universe ----
+        // Bind the notebook to a real `.py` (the fake synthesizer wraps it as one cell -> cell 0 in
+        // region_001), then add a 2nd cell (region_002), so File->New has structure to reset.
+        if (!coordinator.Open(TempPy, null)) return "probe setup: notebook Open(TempPy) failed";
         var adoptedRt = windows.RectOf(WINDOW_ID);
-
-        windows.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, ADDITIONAL_ID, 10f, 10f, 300f, 200f, true);
+        coordinator.AddCell();                                       // 2nd cell -> region_002
         scenario.Universe.ReplaceAll(new[] { "A.TSE", "B.TSE" });
 
         // ---- pre-assert (non-vacuous: prove there is state TO clear) ----
-        if (string.IsNullOrEmpty(adopted.Document.Text)) return "probe setup: adopted editor text not seeded";
-        if (adopted.Document.CurrentPath == null) return "probe setup: adopted editor not bound to a path";
-        if (!windows.Has(ADDITIONAL_ID) || !editors.ContainsKey(ADDITIONAL_ID)) return "probe setup: additional editor window not spawned/registered";
+        if (notebook.CellCount != 2) return "probe setup: expected a 2-cell notebook";
+        if (!notebook.IsBound) return "probe setup: notebook not bound to a path";
+        if (!windows.Has(ADDITIONAL_ID)) return "probe setup: 2nd cell window (region_002) not spawned";
         if (scenario.Universe.Count != 2) return "probe setup: universe not seeded";
 
         // ---- act: File→New ----
         ty.GetMethod("OnFileNew", BF).Invoke(root, null);
 
-        // ---- assert: adopt invariant — the scene-authored window is RESET, never destroyed ----
-        if (!windows.Has(WINDOW_ID)) return "File→New DESTROYED the adopted editor window (adopt invariant breached, findings 0025 §8)";
-        if (windows.RectOf(WINDOW_ID) != adoptedRt) return "File→New REPLACED the adopted editor (must reset in place)";
-        if (!editors.TryGetValue(WINDOW_ID, out var adoptedAfter) || adoptedAfter == null) return "adopted editor dropped from _editors";
-        if (!string.IsNullOrEmpty(adoptedAfter.Document.Text)) return "File→New did not reset the adopted editor text to empty";
-        if (adoptedAfter.Document.CurrentPath != null) return "File→New did not unbind the adopted editor path (ResetUnboundEmpty)";
+        // ---- assert: adopt invariant — the scene-authored region_001 is RESET, never destroyed ----
+        if (!windows.Has(WINDOW_ID)) return "File→New DESTROYED the region_001 cell window (adopt invariant breached, findings 0025 §8)";
+        if (windows.RectOf(WINDOW_ID) != adoptedRt) return "File→New REPLACED the region_001 window (must reset in place)";
+        if (notebook.CellCount != 1) return "File→New did not reset the notebook to one empty cell";
+        if (notebook.IsBound) return "File→New did not unbind the notebook (ResetUnboundEmpty)";
 
-        // ---- assert: additional editor window destroyed + unregistered ----
-        if (windows.Has(ADDITIONAL_ID)) return "File→New did not destroy the ADDITIONAL editor window";
-        if (editors.ContainsKey(ADDITIONAL_ID)) return "File→New did not drop the ADDITIONAL editor from _editors";
+        // ---- assert: the additional (region_002) cell window despawned ----
+        if (windows.Has(ADDITIONAL_ID)) return "File→New did not despawn the region_002 cell window";
 
         // ---- assert: scenario universe cleared ----
         if (scenario.Universe.Count != 0) return "File→New did not clear the scenario universe";
@@ -112,6 +111,7 @@ public static class MenuBarCutoverProbe
         ty = typeof(BackcastWorkspaceRoot);
         if (root == null) return null;
         ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        root.SetSynthesizer(new FakeMarimoSynthesizer());   // #81: Python-free cell synthesis (inject BEFORE compose)
         ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
         return root;

@@ -192,6 +192,53 @@ public sealed class WorkspaceEngineHost
         Debug.Log("[WorkspaceEngineHost] live-configured server built; main GIL-free; lanes polling.");
     }
 
+    // ======================= #81 cell-synthesis seam (ADR-0013 Decision 3) =======================
+    // Synthesise/decompose the notebook through marimo (engine.strategy_runtime.cell_synthesis) on
+    // the SINGLE Python owner (ADR-0009) — no second interpreter. MAIN-THREAD only (UI Save/Open);
+    // main is GIL-free after BeginAllowThreads, so each call acquires the GIL explicitly. sys.path
+    // (ProjectRoot + VenvSite) is already inserted by InitializePython, which the root runs in Awake
+    // before any Save/Open. Returns null on a not-initialised engine or any Python error; decompose
+    // additionally returns null when Python returns None (a broken/non-marimo `.py`, fail-soft).
+
+    // N cells (body+name+config JSON array) -> one canonical marimo `.py` (generate_filecontents).
+    public string SynthesizeCells(string cellsJson)
+    {
+        if (!PythonInitialized) return null;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject mod = Py.Import("engine.strategy_runtime.cell_synthesis"))
+            using (PyObject fn = mod.GetAttr("synthesize_json"))
+            using (PyObject res = fn.Invoke(new PyString(cellsJson ?? "[]")))
+                return res.As<string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] synthesize_json failed: " + e.Message);
+            return null;
+        }
+    }
+
+    // One `.py` -> N cells (body+name+config JSON array) via load_app; null when the source is not a
+    // loadable marimo app (Python returns None -> fail-soft, the aggregate keeps the buffer).
+    public string DecomposeCells(string py)
+    {
+        if (!PythonInitialized) return null;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject mod = Py.Import("engine.strategy_runtime.cell_synthesis"))
+            using (PyObject fn = mod.GetAttr("decompose_json"))
+            using (PyObject res = fn.Invoke(new PyString(py ?? "")))
+                return res.IsNone() ? null : res.As<string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] decompose_json failed: " + e.Message);
+            return null;
+        }
+    }
+
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----
     public bool DrainLiveEvents()

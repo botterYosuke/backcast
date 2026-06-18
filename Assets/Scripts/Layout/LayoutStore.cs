@@ -156,6 +156,7 @@ public static class LayoutStore
         NormalizeCanvasView(doc);
         NormalizeFloatingWindows(doc);
         NormalizeStrategyEditors(doc);
+        NormalizeCellPositions(doc);
         NormalizeHakoniwaProfiles(doc);
 
         if (doc.panels == null)
@@ -243,6 +244,27 @@ public static class LayoutStore
             kept.Add(s);
         }
         doc.strategyEditors = kept;
+    }
+
+    // cellPositions normalization (issue #81, findings 0050) — coalesce a missing list to empty and
+    // repair a non-finite x/y to 0 per axis. Entries are NEVER dropped or reordered: the list is
+    // PARALLEL to the notebook's cell order (position[i] <-> cell[i]), so dropping one would shift
+    // every later cell's position. A list LONGER/SHORTER than the cell count is tolerated at restore
+    // (the coordinator zips by index and auto-cascades any missing tail). Old pre-#81 sidecar -> empty.
+    public static void NormalizeCellPositions(LayoutDocument doc)
+    {
+        if (doc == null) return;
+        if (doc.cellPositions == null)
+        {
+            doc.cellPositions = new System.Collections.Generic.List<CellPosition>();
+            return;
+        }
+        foreach (var c in doc.cellPositions)
+        {
+            if (c == null) continue;
+            if (!IsFinite(c.x)) c.x = 0f;
+            if (!IsFinite(c.y)) c.y = 0f;
+        }
     }
 
     // canvasView normalization (issue #13, findings 0006 §3) — the AUTHORITATIVE place

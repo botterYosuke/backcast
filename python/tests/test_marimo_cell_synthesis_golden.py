@@ -19,6 +19,7 @@ pythonnet in layer 2) can bind to the SAME golden bytes:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -206,6 +207,56 @@ def test_synthesized_py_runs_with_parity(tmp_path, monkeypatch):
         t_result.final_cash,
         t_result.realized_pnl,
     )
+
+
+# ── 6. entry-point seam: synthesize_json/decompose_json carry body+name+config ──
+#
+# The C# PythonnetMarimoSynthesizer binds to THESE two functions (not generate_filecontents
+# directly) — JSON in, JSON/None out (findings 0050). The contract the bodies-only signature got
+# wrong: a NAMED notebook (#76 v19's `def _config()`) must round-trip byte-identically, names and
+# configs preserved opaquely. A bodies-only seam would collapse `def _config()` -> `def _()`.
+
+
+def test_entry_point_named_cell_round_trip_is_byte_idempotent():
+    from engine.strategy_runtime.cell_synthesis import decompose_json, synthesize_json
+
+    cells = [
+        {"body": "x = 1", "name": "_config", "config": {}},
+        {"body": "y = x + 1", "name": "_strategy", "config": {"disabled": True}},
+    ]
+    py1 = synthesize_json(json.dumps(cells))
+    # names + configs survive synthesis (the #76 artifact-preservation guard).
+    assert "def _config():" in py1
+    assert "@app.cell(disabled=True)" in py1 and "def _strategy(x):" in py1
+
+    recovered_json = decompose_json(py1)
+    assert recovered_json is not None
+    recovered = json.loads(recovered_json)
+    assert [c["name"] for c in recovered] == ["_config", "_strategy"]
+    assert recovered[1]["config"]["disabled"] is True
+
+    # synthesise(decompose(py)) == py — byte-idempotent for named cells (bodies-only was false here).
+    py2 = synthesize_json(recovered_json)
+    assert py2 == py1
+
+
+def test_entry_point_decompose_fail_soft_on_broken_py():
+    from engine.strategy_runtime.cell_synthesis import decompose_json
+
+    # A non-marimo / broken source must return None (fail-soft), never raise — the aggregate
+    # keeps the live buffer + shows a notice instead of wiping it (findings 0044).
+    assert decompose_json("this is (not valid python at all") is None
+
+
+def test_entry_point_new_cell_is_anonymous_default():
+    """A freshly added cell carries body="" / name=_ / default config — marimo's own new cell."""
+    from engine.strategy_runtime.cell_synthesis import decompose_json, synthesize_json
+
+    py = synthesize_json(json.dumps([{"body": "", "name": "_", "config": {}}]))
+    recovered = json.loads(decompose_json(py))
+    assert len(recovered) == 1
+    assert recovered[0]["name"] == "_"
+    assert recovered[0]["body"] == ""
 
 
 def _write_golden() -> None:

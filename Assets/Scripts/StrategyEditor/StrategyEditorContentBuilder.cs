@@ -1,14 +1,15 @@
-// StrategyEditorContentBuilder.cs — issue #16 "Strategy Editor" (DURABLE tier, Unity boundary)
+// StrategyEditorContentBuilder.cs — issue #16 "Strategy Editor" / #81 cell-as-floating-window
 //
 // Builds the editable code-buffer subtree INTO a floating-window body and wires it to the cores.
-// This is the integration point #15 deliberately left open: the FloatingWindowController owns no
-// content factory (findings 0008 §6) — instead the CALLER's window factory, when it sees
-// kind == "strategy_editor", calls Build(body, ...) to populate the body (findings 0010 §6). The
-// controller boundary is untouched.
+// This is the integration point #15 left open: the FloatingWindowController owns no content factory
+// (findings 0008 §6) — the caller's window factory, when it sees kind == "strategy_editor", calls
+// Build(body, ...) to populate the body. The controller boundary is untouched.
 //
-// Produces a MULTILINE legacy InputField whose text component carries the PythonSyntaxMeshEffect
-// (full text in the Text mesh -> displayStart 0; no reflection, findings 0010 §1/§8), registers
-// the document as the IStrategyFileProvider under the window id, and returns the StrategyEditorView.
+// Since #81 (ADR-0013) the produced StrategyEditorView is a FRAGMENT VIEW over a Cell, NOT a file:
+// no document, no provider registration (the notebook aggregate is the sole IStrategyFileProvider,
+// registered by the coordinator under the logical notebook id). The view binds to `cell` (or stays
+// unbound until the coordinator Bind()s one). A placeholder Text carries the single-cell host-API
+// hint (shown by uGUI only while the field is empty; the coordinator toggles it per cell count).
 
 using UnityEngine;
 using UnityEngine.UI;
@@ -16,17 +17,15 @@ using UnityEngine.UI;
 public static class StrategyEditorContentBuilder
 {
     public static StrategyEditorView Build(
-        RectTransform body, string windowId,
-        StrategyProviderRegistry registry,
-        StrategyDocument document = null, EditHistory history = null, Font font = null)
+        RectTransform body,
+        EditHistory history = null, Font font = null, Cell cell = null)
     {
         if (body == null) return null;
-        document ??= new StrategyDocument();
         history ??= new EditHistory();
         font ??= BuiltinFont();
 
-        // InputField host (fills the body). StrategyInputField exposes the visible draw-window
-        // start so the mesh effect can offset token spans when a focused multiline field scrolls.
+        // InputField host (fills the body). StrategyInputField exposes the visible draw-window start
+        // so the mesh effect can offset token spans when a focused multiline field scrolls.
         var inputGo = new GameObject("StrategyCodeInput", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(StrategyInputField));
         var inputRt = (RectTransform)inputGo.transform;
         inputRt.SetParent(body, false);
@@ -47,10 +46,28 @@ public static class StrategyEditorContentBuilder
         text.horizontalOverflow = HorizontalWrapMode.Overflow;
         text.verticalOverflow = VerticalWrapMode.Overflow;
 
+        // Placeholder (#81): the single-cell host-API hint. uGUI shows the placeholder Graphic only
+        // while the field is empty; the coordinator sets the hint text for the only cell and clears it
+        // otherwise (marimo showPlaceholder = hasOnlyOneCell). Hidden by default.
+        var phGo = new GameObject("Placeholder", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var phRt = (RectTransform)phGo.transform;
+        phRt.SetParent(inputRt, false);
+        Stretch(phRt);
+        var placeholder = phGo.GetComponent<Text>();
+        placeholder.font = font;
+        placeholder.fontSize = 14;
+        placeholder.alignment = TextAnchor.UpperLeft;
+        placeholder.horizontalOverflow = HorizontalWrapMode.Overflow;
+        placeholder.verticalOverflow = VerticalWrapMode.Overflow;
+        var phColor = ThemeService.Current.colors.text; phColor.a = 0.4f;
+        placeholder.color = phColor;
+        phGo.SetActive(false);
+
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
         var input = inputGo.GetComponent<StrategyInputField>();
         input.textComponent = text;
+        input.placeholder = placeholder;
         input.lineType = InputField.LineType.MultiLineNewline;
         input.characterLimit = 0;
 
@@ -59,7 +76,7 @@ public static class StrategyEditorContentBuilder
         effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
 
         var view = inputGo.AddComponent<StrategyEditorView>();
-        view.Initialize(input, effect, document, history, registry, windowId);
+        view.Initialize(input, effect, history, cell, placeholder);
         return view;
     }
 

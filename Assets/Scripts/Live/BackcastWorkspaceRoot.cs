@@ -39,8 +39,12 @@ using Python.Runtime;
 
 public sealed class BackcastWorkspaceRoot : MonoBehaviour
 {
-    const string WINDOW_ID = "strategy_editor:region_001";
+    const string WINDOW_ID = "strategy_editor:region_001";   // adopted scene-authored cell window (region_001 shell)
     const string ORDER_WINDOW_ID = "order:region_001";   // #23 re-home: singleton Order ticket window
+    // #81 (ADR-0013 / findings 0050): the provider registry key is the LOGICAL notebook id — the thing
+    // that supplies the `.py` to run is the NOTEBOOK aggregate, NOT a physical window. `region_001` stays
+    // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
+    const string NOTEBOOK_ID = "strategy_editor:notebook";
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -93,6 +97,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     UniversePruneDriver _pruneDriver;
     readonly StrategyProviderRegistry _registry = new StrategyProviderRegistry();
     ReplayTransportViewModel _transport;
+
+    // #81 cell-as-floating-window (ADR-0013): the notebook aggregate (the single `.py`/dirty/Save/Open
+    // and the sole IStrategyFileProvider), the coordinator that turns add/delete/open/save into window
+    // lifecycle, and the marimo synthesis seam (pythonnet via the host). Built in BuildWorkspace.
+    IMarimoSynthesizer _synth;
+    MarimoNotebookDocument _notebook;
+    NotebookCellCoordinator _coordinator;
+    FloatingWindowCatalog _catalog;
+    Vector2 _cellWindowSize = new Vector2(520f, 380f);   // resolved from the strategy_editor spec at build
 
     // ── built widgets ──
     InfiniteCanvasController _canvas;
@@ -149,6 +162,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // #69 AFK seam: a probe injects a StubFileDialog so Save As / Open round-trips run headless
     // (the C# equivalent of TTWR's PendingFileDialog.inject_resolved).
     public void SetFileDialog(IFileDialog dialog) { if (dialog != null) _fileDialog = dialog; }
+
+    // #81 AFK seam: a probe injects a fake IMarimoSynthesizer (Python-free, round-trip-faithful) BEFORE
+    // compose so the cell model (synthesise/decompose/save/open) runs headless without pythonnet — the
+    // shared-golden discipline (the fake satisfies the same contract layer 2/3 assert, findings 0050).
+    // Production leaves this null and BuildWorkspace defaults to the pythonnet synthesizer.
+    public void SetSynthesizer(IMarimoSynthesizer synthesizer) { if (synthesizer != null) _synth = synthesizer; }
 
     // ── #23 re-home: live surfaces (3 data tiles / Order ticket / secret modal) ──
     // #61 adds _buyingPowerView (the 4th base panel, dynamically spawned — no scene tile) using the same
@@ -248,7 +267,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // from any seam, including the probes' reflective ResolvePaths-before-BuildWorkspace).
     RegistryStrategyFileProvider _editorFileProvider;
     RegistryStrategyFileProvider EditorFileProvider =>
-        _editorFileProvider ??= new RegistryStrategyFileProvider(_registry, WINDOW_ID);
+        _editorFileProvider ??= new RegistryStrategyFileProvider(_registry, NOTEBOOK_ID);   // #81: the notebook supplies the .py
 
     // Seed the scenario panel from the editor's CURRENT strategy .py (sidecar ?? inline fallback —
     // the #66 mechanism, re-homed from env-default to the LOADED editor, findings 0044 §2-3). When the
@@ -306,18 +325,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void OnOpenStrategy(string path)
     {
         if (string.IsNullOrEmpty(path)) return;
-        if (!_editors.TryGetValue(WINDOW_ID, out var editor) || editor == null)
+        if (_coordinator == null) { _menuBarView?.ShowMessage("Open Strategy: no notebook"); return; }
+
+        // #81: opening a strategy = opening the notebook document (decompose the `.py` into N cell
+        // windows). Cell positions come from the sidecar's layout key when present (best-effort — a
+        // bare strategy from python/strategies has none, so the coordinator auto-cascades). A
+        // non-marimo / vanished `.py` fails fail-soft (buffer kept) -> message, no scenario change.
+        IReadOnlyList<Vector2> positions = null;
+        if (LayoutSidecarStore.TryReadLayout(path, out var doc)) positions = ToVectors(doc.cellPositions);
+        if (!_coordinator.Open(path, positions))
         {
-            _menuBarView?.ShowMessage("Open Strategy: no editor window");
+            _menuBarView?.ShowMessage("Open Strategy: '" + Path.GetFileName(path) + "' " + (_notebook.LastError ?? "is unavailable"));
             return;
         }
-        if (!editor.Open(path))
-        {
-            _menuBarView?.ShowMessage("Open Strategy: '" + Path.GetFileName(path) + "' is unavailable (moved/deleted)");
-            return;   // stale entry — next menu open re-lists; no scenario change
-        }
 
-        // Re-seed exactly as ApplyLayout does after RestoreEditors (the shared ReseedFromEditor tail).
+        _currentLayoutPath = path;
+        PersistResumePointer(path);
         ReseedFromEditor();
         _menuBarView?.ShowMessage("Opened " + Path.GetFileName(path));
     }
@@ -329,7 +352,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _canvas = new InfiniteCanvasController(_content);
         if (_inputSurface != null) _inputSurface.Initialize(_canvas, _viewport);
 
-        _windows = new FloatingWindowController(_floatingLayer, FloatingWindowCatalog.Default(), BuildEditorWindowFrame);
+        _catalog = FloatingWindowCatalog.Default();
+        _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildEditorWindowFrame);
+        if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
 
         // Hakoniwa [startup slot0, chart slot1] on Content (CONTEXT: Startup = PanelKind::Startup slot 0).
         // Each tile gets a panel bg + a header bar so it reads as a DISTINCT box against the infinite-
@@ -400,12 +425,28 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
-        // adopt the scene-authored Strategy Editor window (NEVER destroyed+respawned, findings 0025 §8).
+        // #81 cell-as-floating-window (ADR-0013): the notebook aggregate is the single `.py` owner and
+        // the sole IStrategyFileProvider (registered under the LOGICAL notebook id, NOT a window id —
+        // the run path resolves the notebook, not region_001). The production synthesiser calls marimo
+        // through the host (single Python owner, ADR-0009); it touches Python only at Save/Open, after
+        // InitializePython has run in Awake. The coordinator turns add/delete/open/save into window
+        // lifecycle and is driven by the root's delegates (viewFor / viewport anchor / X callback).
+        _synth ??= new PythonnetMarimoSynthesizer(_host);   // null unless a probe injected a fake (SetSynthesizer)
+        _notebook = new MarimoNotebookDocument(_synth);
+        _registry.Register(NOTEBOOK_ID, _notebook);
+
+        // adopt the scene-authored Strategy Editor window = the never-Destroy region_001 cell shell
+        // (findings 0025 §8). Its editor view is a Cell fragment view (unbound until the coordinator
+        // binds cell 0 in ResumeLastDocumentOrDefault). The X button deletes the cell (coordinator).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
         if (_strategyEditorTitleInput != null)
             _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
-        var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, WINDOW_ID, _registry, font: _font);
+        var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, font: _font);
         if (editorView != null) _editors[WINDOW_ID] = editorView;
+
+        _coordinator = new NotebookCellCoordinator(_notebook, _windows, ViewFor, SpawnAnchorTopLeft, _cellWindowSize);
+        WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
+        BuildAddCellButton();
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
         // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
@@ -504,10 +545,97 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         titleInput.Initialize(_windows, _canvas, _viewport, id);
         if (spec.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR)
         {
-            var view = StrategyEditorContentBuilder.Build(body, id, _registry, font: _font);
+            // #81: a spawned cell window — a Cell fragment view (the coordinator binds its cell right
+            // after the spawn) + a title-bar X wired to delete that cell.
+            var view = StrategyEditorContentBuilder.Build(body, font: _font);
             if (view != null) _editors[id] = view;
+            WireCellCloseButton(root, id);
         }
         return root;
+    }
+
+    // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----
+
+    // regionId -> its editor view (null-tolerant: a window the factory hasn't built yet, or a torn-down
+    // window's stale/destroyed entry, returns null and the coordinator skips the bind).
+    StrategyEditorView ViewFor(string regionId)
+        => _editors.TryGetValue(regionId, out var v) && v != null ? v : null;
+
+    // The viewport-centre canvas-LOGICAL point = the next spawn anchor (used verbatim as a top-left;
+    // SpawnPlacement cascades off it). CanvasView.panX/panY is exactly that point (findings 0006 §2).
+    Vector2 SpawnAnchorTopLeft()
+    {
+        var v = _canvas != null ? _canvas.CaptureView() : null;
+        return v != null ? new Vector2(v.panX, v.panY) : Vector2.zero;
+    }
+
+    // Find-or-create the title-bar X on a cell window and wire it to delete that cell. Idempotent, so
+    // both the adopted scene window and a spawned window get a consistent X (StrategyEditorWindowFrame).
+    void WireCellCloseButton(RectTransform windowRoot, string regionId)
+    {
+        var btn = StrategyEditorWindowFrame.EnsureCloseButton(windowRoot, _font);
+        if (btn == null) return;
+        btn.onClick.RemoveAllListeners();
+        btn.onClick.AddListener(() => OnDeleteCell(regionId));
+    }
+
+    void OnDeleteCell(string regionId)
+    {
+        if (_coordinator == null) return;
+        if (!_coordinator.DeleteCell(regionId))
+            _menuBarView?.ShowMessage("Delete cell: a notebook keeps at least one cell.");
+    }
+
+    // The screen-fixed central "+ Python cell" overlay (marimo edit-app.tsx:454 — top-centre, ONE
+    // button, appends an empty cell). Its own ScreenSpaceOverlay canvas keeps it screen-fixed (it does
+    // NOT pan with the canvas) and above Content but below the secret modal (z帯, findings 0050).
+    void BuildAddCellButton()
+    {
+        var overlayGo = new GameObject("AddCellOverlay", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
+        overlayGo.transform.SetParent(transform, false);
+        var canvas = overlayGo.GetComponent<Canvas>();
+        canvas.renderMode = RenderMode.ScreenSpaceOverlay;
+        canvas.sortingOrder = 200;   // above the scene canvas (menu/footer @0), below the secret modal
+
+        var btnGo = new GameObject("AddCellButton", typeof(RectTransform), typeof(Image), typeof(Button));
+        var rt = (RectTransform)btnGo.transform;
+        rt.SetParent(overlayGo.transform, false);
+        rt.anchorMin = new Vector2(0.5f, 1f); rt.anchorMax = new Vector2(0.5f, 1f); rt.pivot = new Vector2(0.5f, 1f);
+        rt.sizeDelta = new Vector2(170f, 30f);
+        rt.anchoredPosition = new Vector2(0f, -40f);   // top-centre, clear of the menu bar
+        btnGo.GetComponent<Image>().color = new Color(0.20f, 0.50f, 0.35f, 0.95f);
+
+        var lblGo = new GameObject("Label", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var lrt = (RectTransform)lblGo.transform;
+        lrt.SetParent(rt, false);
+        lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
+        var t = lblGo.GetComponent<Text>();
+        t.font = _font;
+        t.text = "+ Python cell";
+        t.alignment = TextAnchor.MiddleCenter;
+        t.color = Color.white;
+        t.fontSize = 14;
+
+        btnGo.GetComponent<Button>().onClick.AddListener(OnAddCell);
+    }
+
+    void OnAddCell() => _coordinator?.AddCell();
+
+    // cellPositions <-> Vector2 list converters (the layout sidecar POCO <-> the coordinator's runtime form).
+    static List<Vector2> ToVectors(List<CellPosition> positions)
+    {
+        if (positions == null) return null;
+        var list = new List<Vector2>(positions.Count);
+        foreach (var p in positions) list.Add(p != null ? new Vector2(p.x, p.y) : Vector2.zero);
+        return list;
+    }
+
+    static List<CellPosition> ToCellPositions(List<Vector2> positions)
+    {
+        var list = new List<CellPosition>(positions != null ? positions.Count : 0);
+        if (positions != null)
+            foreach (var p in positions) list.Add(new CellPosition(p.x, p.y));
+        return list;
     }
 
     // ---- #60 chart tile family: keep Hakoniwa chart tiles == the universe SoT ----
@@ -1482,20 +1610,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var decision = _menuBar.FileNew(out string modeReq, out string refuse);
         if (decision == FileNewDecision.RefusedRunning) { _menuBarView?.ShowMessage(refuse); return; }
 
-        // full TTWR in-memory reset (findings 0017 §4) that HONOURS the adopt invariant (findings 0025 §8):
-        // ADDITIONAL editor windows are destroyed + unregistered; the scene-authored adopted editor is
-        // reset IN PLACE (never destroyed — Apply(Default()) would destroy it, so close each additional
-        // window individually). canvas pan/zoom + Hakoniwa are NOT reset (§4 targets strategy/editor state).
-        var additional = new List<string>();
-        foreach (var id in _editors.Keys) if (id != WINDOW_ID) additional.Add(id);
-        foreach (var id in additional)
-        {
-            _windows.Close(id);
-            _registry.Unregister(id);
-            _editors.Remove(id);
-        }
-        if (_editors.TryGetValue(WINDOW_ID, out var adoptedEditor) && adoptedEditor != null)
-            adoptedEditor.ResetUnboundEmpty();
+        // #81: full in-memory reset (findings 0017 §4) honouring the adopt invariant (findings 0025 §8):
+        // the coordinator resets the notebook to one empty cell and rebuilds the cell windows — region_001
+        // is reset IN PLACE (never destroyed), region_002+ cell windows are despawned. canvas pan/zoom +
+        // Hakoniwa are NOT reset (§4 targets strategy/editor state).
+        _coordinator.New();
 
         // scenario buffer + universe (the in-memory clear the host owns).
         _scenario.Clear();
@@ -1529,12 +1648,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
         SendModeSideEffect(_menuBar.FileOpenModeSideEffect());
 
-        // the picked .py is the document identity — bind the adopted editor to it regardless of what the
-        // layout key recorded, then apply geometry/windows/profiles around it.
-        EnsureAdoptedEditorState(doc, py);
+        // #81: the picked .py IS the notebook document — decompose it into N cell windows at the saved
+        // cellPositions (the coordinator), then apply geometry/non-cell windows/profiles around it. A
+        // non-marimo / unreadable `.py` fails fail-soft (buffer kept) -> abort, keep the workspace.
+        if (!_coordinator.Open(py, ToVectors(doc.cellPositions)))
+        {
+            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "is not a notebook"));
+            return;
+        }
         ApplyLayout(doc);
         _currentLayoutPath = py;
         PersistResumePointer(py);
+        ReseedFromEditor();
         _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py));
     }
 
@@ -1550,8 +1675,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #69: untitled (no document open) → delegate to Save As (TTWR dialogs.rs:272-275). Otherwise
         // merge the layout key into the open document's <strategy>.json (the scenario key is preserved).
         if (string.IsNullOrEmpty(_currentLayoutPath)) { OnFileSaveAs(); return; }
-        if (!TryWriteLayout(_currentLayoutPath)) { _menuBarView?.ShowMessage("Save failed (see log)."); return; }
-        _menuBarView?.ShowMessage("Save: layout written.");
+        // #81: write the notebook `.py` (synthesise the ordered cells) AND merge the layout key
+        // (incl. cellPositions). The .py write clears the notebook's dirty flag, so the editor becomes
+        // supplyable again (WYSIWYR) — reseed so Run unblocks immediately.
+        bool pyOk = _coordinator.Save();
+        bool layoutOk = TryWriteLayout(_currentLayoutPath);
+        if (!pyOk || !layoutOk) { _menuBarView?.ShowMessage("Save failed (see log)."); return; }
+        ReseedFromEditor();
+        _menuBarView?.ShowMessage("Save: notebook + layout written.");
     }
 
     // #69: Save As forks the whole document to a new pair (findings 0048 D6): write <newname>.py
@@ -1563,11 +1694,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!string.Equals(Path.GetExtension(newPy), ".py", StringComparison.OrdinalIgnoreCase))
             newPy = Path.ChangeExtension(newPy, ".py");   // defensive; the dialog's defext usually adds it
 
-        // 1. fork the strategy .py + rebind the adopted editor (the new pair needs its own .py, else the
-        //    layout's strategyEditors[].filePath would dangle). #78/#79: run cwd becomes <newname> dir.
-        if (!_editors.TryGetValue(WINDOW_ID, out var editor) || editor == null)
-        { _menuBarView?.ShowMessage("Save As: no editor window."); return; }
-        if (!editor.SaveAs(newPy))
+        // 1. #81: fork the WHOLE notebook to the new `.py` (N windows -> 1 `.py`) and rebind the
+        //    aggregate. #78/#79: run cwd becomes <newname> dir.
+        if (_coordinator == null) { _menuBarView?.ShowMessage("Save As: no notebook."); return; }
+        if (!_coordinator.SaveAs(newPy))
         { _menuBarView?.ShowMessage("Save As: could not write " + Path.GetFileName(newPy)); return; }
 
         // 2. scenario key into <newname>.json (best-effort: Commit writes nothing on an invalid buffer,
@@ -1591,17 +1721,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     string InitialFileName() =>
         string.IsNullOrEmpty(_currentLayoutPath) ? "strategy.py" : Path.GetFileName(_currentLayoutPath);
 
-    // #69: ensure the adopted editor entry in `doc` binds to the PICKED .py (document identity), so Open
-    // shows the strategy the user picked regardless of the layout key's recorded filePath.
-    void EnsureAdoptedEditorState(LayoutDocument doc, string py)
-    {
-        if (doc == null) return;
-        doc.strategyEditors ??= new List<StrategyEditorState>();
-        foreach (var s in doc.strategyEditors)
-            if (s != null && s.id == WINDOW_ID) { s.filePath = py; return; }
-        doc.strategyEditors.Add(new StrategyEditorState(WINDOW_ID, py));
-    }
-
     // #69 (B2): the resume pointer lives in PlayerPrefs (app state, not a user file). No global
     // layout.json — boot re-opens the last document; Save As / Open keep the pointer current.
     void PersistResumePointer(string py)
@@ -1617,13 +1736,21 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         string py = PlayerPrefs.GetString(ResumeKey, "");
         if (!string.IsNullOrEmpty(py) && File.Exists(py) && LayoutSidecarStore.TryReadLayout(py, out var doc))
         {
-            EnsureAdoptedEditorState(doc, py);
+            // #81: restore geometry, then decompose the document `.py` into N cell windows at the saved
+            // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
+            // the default workspace rather than leaving a half-restored state.
             ApplyLayout(doc);
-            _currentLayoutPath = py;
-            return;
+            if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
+            {
+                _currentLayoutPath = py;
+                ReseedFromEditor();
+                return;
+            }
         }
         ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace, untitled
+        _coordinator.SyncWindowsToNotebook(null);   // show the default notebook (one empty cell in region_001)
         _currentLayoutPath = "";
+        ReseedFromEditor();
     }
 
     // ---- Venue submenu → host venue RPCs (findings 0027 D5). Connect builds the request via the reused
@@ -1671,21 +1798,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // FROM THE CLONE (back-compat for a pre-#62 reader) — never aliasing live _profiles state.
         StashActiveProfile();
         var profiles = _profiles.Clone();
+        // #81: cell windows are EXCLUDED from floatingWindows (single source of truth — their position
+        // is the cell-order-parallel cellPositions, regenerated FROM LIVE by the coordinator, findings
+        // 0050 trap 1). floatingWindows now carries only NON-cell windows (the Order ticket). The old
+        // per-window strategyEditors content list is retired (the notebook has ONE path = the document).
+        var nonCell = new List<FloatingWindowLayout>();
+        foreach (var w in _windows.Capture().floatingWindows)
+            if (w != null && w.kind != FloatingWindowCatalog.KIND_STRATEGY_EDITOR) nonCell.Add(w);
+
         var doc = new LayoutDocument
         {
             version = LayoutDocument.CURRENT_VERSION,
             panels = profiles.Get(_baseLive),
             hakoniwaProfiles = profiles,
             canvasView = _canvas.CaptureView(),
-            floatingWindows = _windows.Capture().floatingWindows,
+            floatingWindows = nonCell,
             strategyEditors = new List<StrategyEditorState>(),
+            cellPositions = _coordinator != null ? ToCellPositions(_coordinator.CapturePositions()) : new List<CellPosition>(),
         };
-        foreach (var kv in _editors)
-        {
-            if (kv.Value == null) continue;
-            var s = kv.Value.CaptureState();
-            if (s != null) doc.strategyEditors.Add(s);
-        }
         return doc;
     }
 
@@ -1717,12 +1847,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _profiles = HakoniwaLayoutProfiles.FromDocument(doc);
         ApplyProfileOrder(_baseLive);
         RestoreFloating(doc);
-        RestoreEditors(doc);
-
-        // #78: the editor's .py is now bound (or unbound on fresh install) — re-seed scenario/tile/
-        // writeback from it via the shared ReseedFromEditor tail (WYSIWYR tile sync + the phantom-id
-        // writeback prime; see that method for the order rationale, findings 0025 §12).
-        ReseedFromEditor();
+        // #81: cell windows are restored by the coordinator (Open/New/Sync) from the notebook + the
+        // cellPositions list — NOT here. Each caller (OnFileOpen / OnOpenStrategy / Resume) runs the
+        // coordinator open + the ReseedFromEditor tail around this geometry restore (restore order
+        // canvas -> Hakoniwa -> floating(non-cell) -> cells -> reseed, findings 0025 §8).
     }
 
     // floating: adopted/existing windows repositioned IN PLACE (never destroyed); only additional
@@ -1736,20 +1864,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         foreach (var w in sorted)
         {
             if (w == null || string.IsNullOrEmpty(w.id)) continue;
+            // #81: SKIP cell windows — they are owned by the coordinator (cellPositions), never spawned
+            // here. A legacy sidecar that still lists strategy_editor in floatingWindows must not spawn
+            // an untracked duplicate cell window (it would escape the coordinator's region map).
+            if (w.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR) continue;
             if (_windows.Has(w.id)) _windows.ApplyGeometry(w);
             else _windows.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible);
             _windows.BringToFront(w.id);
-        }
-    }
-
-    void RestoreEditors(LayoutDocument doc)
-    {
-        var states = doc.strategyEditors;
-        if (states == null) return;
-        foreach (var s in states)
-        {
-            if (s == null || string.IsNullOrEmpty(s.id)) continue;
-            if (_editors.TryGetValue(s.id, out var view) && view != null) view.RestoreFrom(s);
         }
     }
 

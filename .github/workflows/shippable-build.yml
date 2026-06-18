@@ -307,8 +307,17 @@ jobs:
       - name: Stage 3 — Bundled venv import
         run: |
           $tree = "${{ steps.smoke-extract.outputs.tree_dir }}"
-          $py = Join-Path $tree "backcast_Data/StreamingAssets/PythonRuntime/cpython/python.exe"
+          $runtimeRoot = Join-Path $tree "backcast_Data/StreamingAssets/PythonRuntime"
+          $py = Join-Path $runtimeRoot "cpython/python.exe"
           if (-not (Test-Path $py)) { Write-Error "Stage 3 fail: bundled python.exe missing"; exit 1 }
+          # In production the Locator sets PYTHONHOME + adds the venv site-packages
+          # to sys.path before pythonnet bootstrap (findings 0049 §2.4). The bundled
+          # pyvenv.cfg is DELETED in deploy (single-SoT rule), so python.exe direct
+          # invocation can't auto-discover the venv. For the smoke test we mirror what
+          # the Locator does: prepend the venv site-packages to PYTHONPATH.
+          $venvSite = Join-Path $runtimeRoot "python/.venv/Lib/site-packages"
+          if (-not (Test-Path $venvSite)) { Write-Error "Stage 3 fail: venv site-packages missing at $venvSite"; exit 1 }
+          $env:PYTHONPATH = $venvSite
           & $py -c "import duckdb, marimo, pyarrow, sklearn, pandas, numpy, joblib, orjson, httpx, websockets, pydantic; print('venv-import OK')"
           if ($LASTEXITCODE -ne 0) { Write-Error "Stage 3 fail: import smoke (exit=$LASTEXITCODE)"; exit 1 }
           Write-Host "Stage 3 PASS"

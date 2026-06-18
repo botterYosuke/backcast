@@ -185,7 +185,8 @@ Step 0+1 を選択（C# コア＝Step 2 に入る前に Python 側の正本を G
   ② adapter test の import 時 `generate_filecontents` を**遅延化**（body リテラル＋write 時 synth）＝marimo codegen API drift が
   module collection error でなく該当 1 test の失敗に局所化。③ golden test の tmp 書込を `newline=""`＝disk 往復をバイト忠実 LF に。
   **保持（plan 準拠の judgment）**: `FloatingWindowController.Show`・`ApplyTextAndSelection` 抽出は Step 2 再利用 infra として保持。
-  test harness の cross-file 重複は LOW（分離許容）。**C# は未コンパイル**＝撤去＋ガード撤去は Unity batchmode compile-only gate で owner 要確認。
+  test harness の cross-file 重複は LOW（分離許容）。
+- **C# compile-only gate GREEN（2026-06-18）**: Unity 6000.4.11f1 を `-batchmode -nographics -quit`（executeMethod 無し）で回し、撤去＋null-guard 撤去後の全スクリプトが **`error CS` 0 件・`Application will terminate with return code 0`・assembly reload 成功**（touched files に error/warning 無し）。前任 text-append の撤去は HEAD への復帰（prior-session の未コミット追加を除去）＝commit `c4e432f` には FloatingWindowController(+Show)/StrategyEditorView(ApplyTextAndSelection 抽出)/docs/tests のみが入り、Probe/Root は HEAD 一致で差分無し。
 
 **残（次セッション・Step 2/3）**: C# コア一括（`MarimoNotebookDocument`＋`NotebookCellCoordinator`＋`IMarimoSynthesizer`
 ＋本番 `PythonnetMarimoSynthesizer`＋`SpawnPlacement`/`SpawnAuto`＋中央 [+]＋X ボタン＋root の OnAddCell/Open/Save gut→委譲

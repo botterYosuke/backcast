@@ -261,6 +261,70 @@ def test_marimo_buying_power_cash_aware_sizing_parity(tmp_path, monkeypatch):
     )
 
 
+# ----------------------------------------- services=/constants= ctor passthrough (S6b-α step2 step3)
+
+_MARIMO_SVC_SRC = """
+import marimo
+
+app = marimo.App()
+
+
+@app.cell
+def _svc():
+    bar = get_bar()                           # noqa: F821  host-seeded driver
+    # host-injected SERVICE (value-returning) + CONSTANT (static data), both free refs —
+    # the seam the v19 parity gate uses to inject the stub scorer + ordered universe.
+    score = score_rows({"close": bar.close})  # noqa: F821  injected service
+    lots = len(UNIVERSE)                       # noqa: F821  injected constant (tuple)
+    qty = float(lots) if score > 1000.0 else 0.0
+    submit_market(qty)                         # noqa: F821
+    return (qty,)
+"""
+
+
+class _SvcConstTwin(Strategy):
+    """Imperative twin with the service/constant inlined (score = close, len(UNIVERSE) = 2)."""
+
+    def on_bar(self, bar) -> None:
+        qty = 2.0 if bar.close > 1000.0 else 0.0
+        if qty > 0.0:
+            self.submit_market(self.instrument_id, OrderSide.BUY, qty)
+
+
+def test_marimo_adapter_services_and_constants_ctor_passthrough(tmp_path, monkeypatch):
+    """MarimoStrategy forwards services= / constants= to open_runtime, so a cell reads a
+    host-injected scorer service and a static constant as free refs (the public ctor seam the
+    deterministic v19 parity gate drives). Parity with the imperative twin proves the injected
+    values reach the cell unchanged; without the passthrough the cold compile would NameError."""
+    path = tmp_path / "strat_svc.py"
+    path.write_text(_MARIMO_SVC_SRC, encoding="utf-8")
+
+    marimo_strat = MarimoStrategy(
+        app=load_app(str(path)),
+        strategy_id="strat-marimo",
+        instrument_id=IID,
+        services={"score_rows": lambda rows: rows["close"]},
+        constants={"UNIVERSE": ("A", "B")},
+    )
+    twin = _SvcConstTwin(strategy_id="strat-imp", instrument_id=IID)
+
+    m_result, m_sink = _run(marimo_strat, monkeypatch)
+    marimo_strat.close()
+    t_result, t_sink = _run(twin, monkeypatch)
+
+    # fixture guard: the service/constant gate actually fires BUYs (close>1000 bars exist).
+    sides = {o[1] for o in t_sink.fills}
+    assert sides == {OrderSide.BUY} and 0 < len(t_sink.fills) < 300
+
+    assert m_sink.fills == t_sink.fills
+    assert m_sink.equities == t_sink.equities
+    assert (m_result.fills, m_result.final_cash, m_result.realized_pnl) == (
+        t_result.fills,
+        t_result.final_cash,
+        t_result.realized_pnl,
+    )
+
+
 def test_marimo_adapter_teardown_allows_a_second_run(tmp_path, monkeypatch):
     """The adapter owns the headless-kernel lifetime: after close() a second run stands up a
     fresh kernel (no 'RuntimeContext already initialized'). The dispatch site calls close()."""

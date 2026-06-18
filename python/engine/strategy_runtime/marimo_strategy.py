@@ -42,9 +42,24 @@ _PORTFOLIO_DRIVER = "get_portfolio"
 class MarimoStrategy(Strategy):
     """Adapts a marimo cell-DAG ``App`` to the kernel's per-bar Strategy contract."""
 
-    def __init__(self, *, app: Any, strategy_id: str, instrument_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        app: Any,
+        strategy_id: str,
+        instrument_id: str,
+        services: "dict[str, Any] | None" = None,
+        constants: "dict[str, Any] | None" = None,
+    ) -> None:
         super().__init__(strategy_id=strategy_id, instrument_id=instrument_id)
         self._app = app
+        # Host-provided cell-facing seams forwarded to the thin drain (findings 0046 T4/T6):
+        # ``services`` = live value-returning callables (e.g. the v19 scorer), ``constants`` =
+        # live static data (e.g. the ordered universe / rs_ref). Both are read by cells as free
+        # refs; the host owns the names. The deterministic v19 parity gate constructs these
+        # directly (stub scorer + synthetic universe); the production resolver is a follow-up.
+        self._services = services
+        self._constants = constants
         self._stack: contextlib.ExitStack | None = None
         self._rt: Any = None
         self._active: frozenset[str] = frozenset()
@@ -84,6 +99,8 @@ class MarimoStrategy(Strategy):
                 self._app,
                 driver_seeds={_BAR_DRIVER: neutral_bar, _PORTFOLIO_DRIVER: neutral_pf},
                 inject={"submit_market": submit},
+                services=self._services,
+                constants=self._constants,
             )
         )
         # Write only the drivers a cell actually reads (P5): the snapshot is built per bar only

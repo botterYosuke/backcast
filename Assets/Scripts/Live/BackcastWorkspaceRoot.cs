@@ -285,10 +285,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _menuBarView?.ShowMessage("strategy SCENARIO unreadable — save a scenario sidecar to set the universe");
     }
 
-    // #80/#78: the canonical "(re)bind editor .py → re-seed scenario/universe" tail, shared by
-    // ApplyLayout's post-RestoreEditors seed and the menu picker's OnOpenStrategy. ORDER matters
-    // (findings 0025 §12): scenario first; then the Startup tile fields (written ONLY here — they have
-    // NO Changed event, so a stale tile would render blank while Run uses the seeded Params, a WYSIWYR
+    // #78: the canonical "(re)bind editor .py → re-seed scenario/universe" tail, shared by ApplyLayout's
+    // post-RestoreEditors seed, File→Open (OnFileOpen), File→Save and boot's canonical/resume open. ORDER
+    // matters (findings 0025 §12): scenario first; then the Startup tile fields (written ONLY here — they
+    // have NO Changed event, so a stale tile would render blank while Run uses the seeded Params, a WYSIWYR
     // break); then the sidebar writeback prime (so _lastFlushed matches the just-seeded universe — else
     // a later sidebar edit diffs against a stale set → phantom-id hazard).
     void ReseedFromEditor()
@@ -296,55 +296,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         SeedScenarioFromEditor();
         _tile?.SyncFieldsFromController();
         _sidebarCtrl?.PrimeWritebackFromCurrent();
-    }
-
-    // #80: the menu-bar Strategy picker's enumerator — every .py under python/strategies/**, annotated
-    // with scenario status (StrategyPickerModel, AFK-locked). Re-run on each menu open (stale-safe).
-    IReadOnlyList<StrategyPickerEntry> EnumerateStrategies()
-    {
-        try
-        {
-            string strategiesDir = Path.Combine(PythonRuntimeLocator.ProjectRoot, "strategies");
-            return StrategyPickerModel.Enumerate(strategiesDir);
-        }
-        catch (Exception e)
-        {
-            // ProjectRoot resolution can THROW before Python is configured (PythonRuntimeLocator
-            // .ResolveVenvHome on a not-yet-staged python/.venv). Uphold StrategyPickerModel's
-            // never-throws contract at this seam — degrade to an empty list (the menu then shows
-            // "(no .py …)") instead of throwing out of the uGUI menu-open click handler.
-            Debug.LogWarning("[BackcastWorkspaceRoot] strategy enumeration failed: " + e.Message);
-            return Array.Empty<StrategyPickerEntry>();
-        }
-    }
-
-    // #80: open a strategy .py into the adopted editor, then re-seed scenario/universe so Run unblocks
-    // immediately — the same bind→SeedScenarioFromEditor path #78 restore uses (findings 0047 §1/§2 ①).
-    // Open is UNCONDITIONAL: a scenario-less / broken .py still opens (it is exactly what you open to
-    // FIX); the Run gate (empty universe → blocked) is the only blocker, never the Open. A vanished
-    // entry (stale list) is rejected by StrategyEditorView.Open (File.Exists guard) → message, no crash;
-    // the next menu open re-enumerates.
-    void OnOpenStrategy(string path)
-    {
-        if (string.IsNullOrEmpty(path)) return;
-        if (_coordinator == null) { _menuBarView?.ShowMessage("Open Strategy: no notebook"); return; }
-
-        // #81: opening a strategy = opening the notebook document (decompose the `.py` into N cell
-        // windows). Cell positions come from the sidecar's layout key when present (best-effort — a
-        // bare strategy from python/strategies has none, so the coordinator auto-cascades). A
-        // non-marimo / vanished `.py` fails fail-soft (buffer kept) -> message, no scenario change.
-        IReadOnlyList<Vector2> positions = null;
-        if (LayoutSidecarStore.TryReadLayout(path, out var doc)) positions = ToVectors(doc.cellPositions);
-        if (!_coordinator.Open(path, positions))
-        {
-            _menuBarView?.ShowMessage("Open Strategy: '" + Path.GetFileName(path) + "' " + (_notebook.LastError ?? "is unavailable"));
-            return;
-        }
-
-        _currentLayoutPath = path;
-        PersistResumePointer(path);
-        ReseedFromEditor();
-        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(path));
     }
 
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
@@ -516,9 +467,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
                 _venue,                                               // "MOCK" → dev connect item (editor only)
-                _font,                                                // uGUI font (#77)
-                OnOpenStrategy,                                       // #80: open a strategy .py
-                EnumerateStrategies);                                 // #80: list python/strategies/**.py
+                _font);                                               // uGUI font (#77)
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -1728,7 +1677,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // UNTITLED (_currentLayoutPath = "") so boot/quit never write into the canonical fixture's sidecar
     // (OnFileSave delegates to Save As while untitled; quit autosave is a no-op). Best-effort: a pre-Python
     // ProjectRoot/synth failure, a missing file, or a failed Open falls back to the untitled-empty notebook
-    // (no crash) — the same degrade-not-throw contract EnumerateStrategies upholds at this seam.
+    // (no crash) — the same degrade-not-throw discipline the canonical boot path upholds at this seam.
     void OpenCanonicalDefault()
     {
         string py;
@@ -1849,7 +1798,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ApplyProfileOrder(_baseLive);
         RestoreFloating(doc);
         // #81: cell windows are restored by the coordinator (Open/New/Sync) from the notebook + the
-        // cellPositions list — NOT here. Each caller (OnFileOpen / OnOpenStrategy / Resume) runs the
+        // cellPositions list — NOT here. Each caller (OnFileOpen / OpenCanonicalDefault / Resume) runs the
         // coordinator open + the ReseedFromEditor tail around this geometry restore (restore order
         // canvas -> Hakoniwa -> floating(non-cell) -> cells -> reseed, findings 0025 §8).
     }

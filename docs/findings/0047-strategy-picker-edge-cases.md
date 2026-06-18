@@ -83,9 +83,24 @@ touch しない**＝#80 AC「既存 restore 経路は不変」と整合。
   `python/strategies/**` 簡易列挙で十分。
 - **複数窓 active-pick**（複数 `.py` を別窓で開く）→ #78 同様スコープ外（#80 提案にも明記）。
 
-## 5. 実装証跡（着手時に追記）
+## 5. 実装証跡
 
-（未着手）
+- **#80 着地**: `StrategyPickerModel`（pure C# 列挙＋scenario status 分類）＋`StrategyPickerProbe`（AFK 正本）＋
+  `MenuBarView` の `Strategy` ドロップダウン＋`BackcastWorkspaceRoot.{EnumerateStrategies,OnOpenStrategy}` で実装され、
+  §1–§3 の決定表どおり動いた（#80 CLOSED）。
+- **退役（#76 命令型 sunset・2026-06-19）**: 本ピッカーは **#76 で丸ごと削除**された。owner 方針「このアプリは
+  **File→Open でファイルを開いて実行する**・ピッカーは仮メニュー」。開く経路は **File→Open（#69 native picker＋document
+  モデル）＋起動時 canonical（#76 U3 `OpenCanonicalDefault`）** に一本化され、`python/strategies/**.py` 全列挙の
+  in-app ピッカーは冗長になった。これにより命令型 `v19_morning.py` が in-app 一覧から消える＝**#76 命令型 sunset 達成**
+  （ファイルは parity oracle として disk 残置）。正本は `docs/findings/0046`「命令型 sunset 設計の木」節。
+  - **§3 A の「全 `.py` 列挙・no-filter」lock は moot**: ピッカー自体が無くなったため、§3 A が予告した「将来の別スライスでの
+    lexical 除外/グレーアウト」は不要になった（filter ではなく delete で sunset を達成）。
+  - **§1/§5 stale-guard 契約の所在（sibling #81↔#76 調停）**: `StrategyPickerProbe §5`（消えた `.py` を Open が弾く）は
+    削除されたが、その直接等価は `StrategyEditorProbe` **S3:275（`Open(missing .py)→false`）**＝孤児化しない（S5 が assert
+    したのは `Open(missing)` であって、S4:337-338 の `Open` ではない——S4 は `File.Delete` 後に `TryGetStrategyFile→false`
+    を見る provider-level の run-block でこれも残置）。本番 File→Open 経路の stale 挙動は `BackcastWorkspaceProbe` の
+    `coordinator.Open` が pin。ADR-0013 L87／findings 0050 L133 の「StrategyPickerProbe §5」参照は本削除で stale 化＝契約は
+    StrategyEditorProbe S3 が保持（ADR-0013 は無改変）。
 
 ## 6. ADR 判断
 

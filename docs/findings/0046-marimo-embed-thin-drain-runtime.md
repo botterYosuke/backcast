@@ -616,3 +616,57 @@ findings 旧分割（β＝footer ▶ だけ削除 / γ＝残り transport 撤去
 
 ### 残務（S6b-β-clean 続き・順序）
 `code-review(simplify)`（high・Medium+ ゼロまで `/pair-relay`）→ **owner HITL**（Unity GUI で Run 単一化・New template・boot canonical・transport 不在を実機確認）→ commit（論理単位分割可）。Live 配線（別 epic）／D3 構造的 hot-list guard（任意）。
+
+---
+
+## 命令型 sunset 設計の木（2026-06-19・`/grill-with-docs`）— #80 Strategy ピッカー撤去で達成
+
+#76 残務最上位「命令型 sunset（`v19_morning.py` を picker から退役）」を着手。grill 冒頭で owner が
+**スコープを訂正**（再 grill 不要・設計の木は本訂正で確定）:
+
+> 「このアプリは **File→Open でファイルを開いて実行する**アプリ。メニューの『戦略を開く』ピッカー（#80 の
+> Strategy ドロップダウン一覧）は**一時的に追加された仮メニュー**なので削除して。」
+
+### grill 冒頭の裏取り（code）
+- **本物の開く経路**＝`File→Open…（document）`（`MenuBarView.BuildFileMenu` → `OnFileOpen`・`BackcastWorkspaceRoot.cs:1599`）:
+  `_fileDialog.OpenStrategy()`＝OS ネイティブピッカー（#69）→ layout sidecar 読込 → `_coordinator.Open`（#81 ノート分解）
+  → `ReseedFromEditor` → Run 解禁。起動時 canonical（U3 `OpenCanonicalDefault`）が `v19_morning_cell.py` を自動 open。
+- **削除対象**＝`MenuBar` の `Strategy` ドロップダウン（`OnOpenStrategy`/`EnumerateStrategies`/`StrategyPickerModel`/
+  `StrategyPickerProbe`）。#80 で追加された「`python/strategies/**.py` 全列挙」の仮 in-app 一覧。**#80 は CLOSED**。
+- 命令型 `v19_morning.py` は **parity oracle として disk 残置**（`test_v19_marimo_parity` / `test_v19_production_resolver`
+  が module path `strategies.v19.v19_morning` で import）。**#24 golden は v19 を使わない**（`spike/fixtures/strategies/*`）
+  ＝move/削除いずれも golden 無影響。
+
+### 確定（owner binding 2026-06-19）
+
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **K1 ピッカーを丸ごと削除（filter ではなく delete）** | `MenuBar` の `Strategy` ドロップダウン＋`StrategyPickerModel`＋`StrategyPickerProbe`＋`BackcastWorkspaceRoot` の `EnumerateStrategies`/`OnOpenStrategy`＋`MenuBarView.Bind` の 2 引数を撤去。`ScenarioInlineReader` は残置（`SeedScenarioFromEditor`/`ScenarioStartupProbe` が現用）。 | owner「File→Open で開くアプリ・ピッカーは仮」。File→Open（#69 native）＋boot canonical（U3）が開く経路として揃っているので #80 in-app 列挙は冗長。削除＝命令型 `v19_morning.py` が in-app 一覧から消える＝**sunset 達成**（ファイルは oracle 残置） |
+| **K2 File→Open は現状維持（strict layout 要求のまま）** | `OnFileOpen` の「sidecar に layout キー無し→abort（"無効な layout"）」を変えない。bare/layout-less `.py` は best-effort open しない。 | owner が AskUserQuestion で「**picker 削除のみ（現状維持）**」を選択。workflow＝File→New（marimo skeleton seed）→編集→Save（`.py`＋layout sidecar 書込）→File→Open で再開。bundled fixture（`v19_morning_cell.json`/`v19_morning.json` は layout キー無し）は**起動時 canonical のみ**到達＝意図どおり（命令型は File→Open でも開けない＝二重に sunset） |
+| **K3 stale-guard 契約は孤児化しない（sibling #81↔#76 調停）** | `StrategyPickerProbe §5`（消えた `.py` を `StrategyDocument.Open` が弾く stale-guard）の直接等価は **`StrategyEditorProbe` S3:275（`Open(missing .py)→false`）**。加えて S4:337-338 が provider-level の run-block（`File.Delete` 後 `TryGetStrategyFile→false`）を、`BackcastWorkspaceProbe` が `coordinator.Open` 本番経路の stale 挙動を pin。よって probe 丸ごと削除で契約は消えない（**S5 が assert していたのは S3 の `Open(missing)` であって S4 の `Open` ではない**＝コードで裏取り済み）。 | findings 0050 L133／ADR-0013 L87 が「`StrategyPickerProbe §5` stale-guard を集約へ移送」と名指したが、契約は既に StrategyEditorProbe S3 に存在＝#81 が `StrategyEditorProbe §3` を集約へ運べば自動で stale-guard も移行。**ADR-0013 は編集せず**（自己保護に倣い本 findings に下位事実を記録）。0050/0013 の「StrategyPickerProbe §5」参照は本削除で stale 化＝契約の所在は StrategyEditorProbe S3 |
+
+### #80 との関係（CLOSED issue の表面が #76 で退役）
+#80（「戦略 .py をアプリ内で開く UI が無い」）の repro は **File→New（作成）＋File→Open（保存済み document 再開）** で served。
+#80 の Strategy ドロップダウンは「native picker / document モデル（#69）が無かった時期の stopgap」で、#69＋#81＋boot
+canonical（U3）が揃った今は冗長。findings 0047（#80 設計正本）§5 に退役を記録。
+
+### 実装着地（2026-06-19・C# のみ・Python 無改変）
+- **削除**: `Assets/Scripts/StrategyEditor/StrategyPickerModel.cs`（+meta）／`Assets/Editor/StrategyPickerProbe.cs`（+meta）を `git rm`。
+- **`MenuBarView.cs`**: `OpenMenu.Strategy`／`_onOpenStrategy`／`_enumStrategies`／`_strategyItems`／`W_STRATEGY`／`STRATEGY_DD_W`／
+  `MakeBarButton("Strategy"…)`／`BuildStrategyMenu`／`RebuildStrategyMenu`／`Toggle` の re-enumerate 枝／`Bind` の 2 引数を撤去。`DropdownHeight`/`MakeDisabledItem` は他 consumer（File/Edit/Venue/Help）で残置。
+- **`BackcastWorkspaceRoot.cs`**: `EnumerateStrategies`／`OnOpenStrategy` を削除・`Bind` 呼び出しから 2 引数除去・stale コメント 3 箇所（`ReseedFromEditor` doc／`OpenCanonicalDefault` doc／`RestoreFloating` doc の caller 列挙）を File→Open/OpenCanonicalDefault へ更新。
+- **gate**: Python 全 suite **371 passed**（無改変・命令型 oracle import 健在）・#24 golden byte-identical。C# compile＋`MenuBarCutoverProbe`/`WorkspaceUiCutoverProbe` AFK（下記）。
+
+### AC → 恒久 gate（behavior-to-e2e: backcast は findings＋pytest＋AFK probe が正本）
+| 挙動（不変条件）| gate | 種別 |
+|---|---|---|
+| C# compile clean（削除後に参照漏れ無し）| Unity batchmode（`error CS` 不在）| compile |
+| menu/workspace 不変（File/Edit/Venue/Help＋U1–U6 単一 Run・boot canonical）| `MenuBarCutoverProbe` / `WorkspaceUiCutoverProbe` | AFK |
+| stale-guard 契約存続（消えた `.py` を Open が弾く）| `StrategyEditorProbe` S3:275（`Open(missing)→false`・§5 直接等価）＋S4:337-338（provider-level）| AFK |
+| 命令型 oracle 健在（parity twin import 可）| `test_v19_marimo_parity` / `test_v19_production_resolver` | pytest |
+| #24 golden 不変（命令型経路 byte-identical）| 既存 golden gate | golden |
+
+### 残務（#76・順序）
+本 sunset で **#76 のアプリ体感スコープは完了**（命令型は authoring 表面から退役・runtime は frozen surface として残置＝Q4）。
+残るは **Live 配線（別 epic）** と **D3 構造的 hot-list guard（任意）** のみ。命令型 runtime / `strategy_loader` /
+imperative dispatch は #24 golden・per-bar 契約の不変条件として**意図的に残す**（撤去しない）。

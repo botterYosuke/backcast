@@ -28,7 +28,7 @@ using UnityEngine.UI;
 [RequireComponent(typeof(RectTransform))]
 public sealed class MenuBarView : MonoBehaviour
 {
-    enum OpenMenu { None, File, Edit, Venue, Help, Strategy }
+    enum OpenMenu { None, File, Edit, Venue, Help }
 
     // chrome z-order contract (findings 0045): field/windows(0) < sidebar < BACKDROP < menu+dropdown
     // < secret modal(1000). Only the RELATIONS matter; these values just realise them.
@@ -39,9 +39,6 @@ public sealed class MenuBarView : MonoBehaviour
     MenuBarViewModel _vm;
     Action _onNew, _onOpen, _onSave, _onSaveAs, _onDisconnect;
     Action<string, string> _onConnect;     // (venue, env)
-    Action<string> _onOpenStrategy;        // #80: open a strategy .py by absolute path
-    Func<IReadOnlyList<StrategyPickerEntry>> _enumStrategies;   // #80: re-enumerated each time the menu opens (stale-safe)
-    readonly List<GameObject> _strategyItems = new List<GameObject>();   // dynamic rows, rebuilt on open
     Func<bool> _connectReady;              // server ready && !teardown
     Func<string> _modeText;                // current execution-mode display for the bar badge
     bool _showMockConnect;                 // dev-only MOCK connect item (editor only); derived at Bind
@@ -52,8 +49,7 @@ public sealed class MenuBarView : MonoBehaviour
     string _lastBadgeText, _lastMode, _lastMessage;   // badge source cache: rebuild the string only on change
 
     // top-level button widths (fixed so the submenu drop x-offsets line up under each button).
-    const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, W_STRATEGY = 72f, ITEM_H = 22f, V_MARGIN = 4f;
-    const float STRATEGY_DD_W = 320f;   // wide enough for "<relpath>   — scenario: ⚠ unreadable"
+    const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
 
     // retained uGUI graphics reflected by Refresh (no per-frame rebuild of the static tree).
     Canvas _canvas;
@@ -69,9 +65,7 @@ public sealed class MenuBarView : MonoBehaviour
     public void Bind(MenuBarViewModel vm,
                      Action onNew, Action onOpen, Action onSave, Action onSaveAs,
                      Action<string, string> onConnect, Action onDisconnect,
-                     Func<bool> connectReady, Func<string> modeText, string devVenue, Font font,
-                     Action<string> onOpenStrategy = null,
-                     Func<IReadOnlyList<StrategyPickerEntry>> enumStrategies = null)
+                     Func<bool> connectReady, Func<string> modeText, string devVenue, Font font)
     {
         _vm = vm;
         _onNew = onNew;
@@ -79,8 +73,6 @@ public sealed class MenuBarView : MonoBehaviour
         _onSave = onSave;
         _onSaveAs = onSaveAs;
         _onConnect = onConnect;
-        _onOpenStrategy = onOpenStrategy;
-        _enumStrategies = enumStrategies;
         _onDisconnect = onDisconnect;
         _connectReady = connectReady;
         _modeText = modeText;
@@ -122,7 +114,6 @@ public sealed class MenuBarView : MonoBehaviour
         MakeBarButton("Edit", W_EDIT, x, () => Toggle(OpenMenu.Edit)); x += W_EDIT;
         MakeBarButton("Venue", W_VENUE, x, () => Toggle(OpenMenu.Venue)); x += W_VENUE;
         MakeBarButton("Help", W_HELP, x, () => Toggle(OpenMenu.Help)); x += W_HELP;
-        MakeBarButton("Strategy", W_STRATEGY, x, () => Toggle(OpenMenu.Strategy)); x += W_STRATEGY;
 
         _badge = MakeBadge(x + 8f);
 
@@ -132,7 +123,6 @@ public sealed class MenuBarView : MonoBehaviour
         BuildEditMenu();
         BuildVenueMenu();
         BuildHelpMenu();
-        BuildStrategyMenu();
     }
 
     void BuildBackdrop()
@@ -185,9 +175,6 @@ public sealed class MenuBarView : MonoBehaviour
     void Toggle(OpenMenu m)
     {
         _open = _open == m ? OpenMenu.None : m;
-        // #80: re-enumerate the strategy list each time it OPENS so a .py added/removed/renamed
-        // since last open (or a stale entry) is reflected — the picker owns no live watcher.
-        if (_open == OpenMenu.Strategy) RebuildStrategyMenu();
         Refresh();
     }
     string ModeText() => _modeText != null ? _modeText() : "-";
@@ -243,44 +230,6 @@ public sealed class MenuBarView : MonoBehaviour
         MakeDisabledItem(dd, "Settings  (deferred slice)", 0);
     }
 
-    // #80: in-app "Open Strategy .py" picker. The dropdown PANEL is built once (empty); its rows are
-    // (re)built on each open by RebuildStrategyMenu from the enumerator. Lists python/strategies/**.py
-    // ONLY, annotated with scenario status; opening is unconditional (Run gate, not Open gate, blocks
-    // an unrunnable .py — findings 0047 §2). The shell is HITL; StrategyPickerModel is AFK-locked.
-    void BuildStrategyMenu()
-    {
-        NewDropdown(OpenMenu.Strategy, W_FILE + W_EDIT + W_VENUE + W_HELP, STRATEGY_DD_W, 1);
-    }
-
-    void RebuildStrategyMenu()
-    {
-        if (!_dropdowns.TryGetValue(OpenMenu.Strategy, out var dd) || dd == null) return;
-
-        // Clear the previous rows: hide NOW (so they don't render this frame) then Destroy.
-        foreach (var go in _strategyItems)
-            if (go != null) { go.SetActive(false); if (Application.isPlaying) Destroy(go); else DestroyImmediate(go); }
-        _strategyItems.Clear();
-
-        IReadOnlyList<StrategyPickerEntry> entries = _enumStrategies != null ? _enumStrategies() : null;
-        int rows = (entries == null || entries.Count == 0) ? 1 : entries.Count;
-        ((RectTransform)dd.transform).sizeDelta = new Vector2(STRATEGY_DD_W, DropdownHeight(rows));
-
-        if (entries == null || entries.Count == 0)
-        {
-            _strategyItems.Add(MakeDisabledItem(dd, "(no .py under python/strategies)", 0).gameObject);
-            return;
-        }
-
-        int row = 0;
-        foreach (var e in entries)
-        {
-            string path = e.Path;   // capture per-row for the closure
-            string label = e.DisplayName + "   — " + StrategyPickerModel.StatusLabel(e.Status);
-            _strategyItems.Add(MakeItem(dd, label,
-                () => { _open = OpenMenu.None; _onOpenStrategy?.Invoke(path); Refresh(); }, row++).gameObject);
-        }
-    }
-
     // ── uGUI builders ──
 
     // A dropdown panel anchored to the container's bottom-left (pivot top-left) hanging down at x.
@@ -297,9 +246,7 @@ public sealed class MenuBarView : MonoBehaviour
         return go;
     }
 
-    // Dropdown panel height for `rows` item rows (ITEM_H each) + a small bottom pad. Shared by
-    // NewDropdown's initial sizing and RebuildStrategyMenu's per-open re-sizing (#80) so the formula
-    // lives in one place.
+    // Dropdown panel height for `rows` item rows (ITEM_H each) + a small bottom pad.
     static float DropdownHeight(int rows) => rows * ITEM_H + 4f;
 
     Button MakeItem(GameObject dd, string label, Action onClick, int row)

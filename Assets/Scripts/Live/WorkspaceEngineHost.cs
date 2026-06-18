@@ -186,6 +186,9 @@ public sealed class WorkspaceEngineHost
         _lanes = new LiveRpcLanes(_server, _coord);
         _lanes.Start();                      // poll (get_state_json) + venue/order/secret lanes
         Volatile.Write(ref _serverReady, true);
+        // CONTRACT (findings 0050 / #83): the literal string below is what the CI Player smoke
+        // step greps for to gate draft Release publish. Changing this log message requires
+        // updating .github/workflows/shippable-build.yml's smoke regex in the same PR.
         Debug.Log("[WorkspaceEngineHost] live-configured server built; main GIL-free; lanes polling.");
     }
 

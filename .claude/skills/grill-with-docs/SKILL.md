@@ -4,6 +4,7 @@ description: >-
   Grilling session that challenges your plan against the existing domain model, sharpens terminology, and updates documentation (CONTEXT.md, ADRs) inline as decisions crystallise. Use when user wants to stress-test a plan against their project's language and documented decisions.
   **ユーザーが `gh issue #N を実施してください /plan /grill-with-docs` のようにコマンドリストに `/grill-with-docs` を含めたときは必ず発動する**（#199 実例: `/plan /grill-with-docs /diagnose` が羅列されていたのに tdd と diagnose の確認に注力して grill-with-docs を発動しなかった）。複数スキルが羅列されたコマンドでも各スキルを順番に invoke すること。
   **実装後の docs/wiki 整合確認にも使う**: 「実装した内容が wiki と食い違っていないか確認したい」「API の呼び出し側の挙動を docs と照合したい」「契約を明文化する前に docs を読みたい」といった場面でも起動する。実装に入る前の設計ドリルだけでなく、**実装後に呼び出し側コード（`_backend_impl.py` の `hasattr` dispatch など）と docs/wiki のどちらが正しいか確認するコードリーディングとしても機能**する（実例: #189 で `set_execution_hooks` の呼び出しパターンを `_backend_impl.py` で確認）。
+  **CI / automation / GitHub Actions / workflow YAML の設計 grill では、既存 artifact の runtime 契約に依存する設計決定（CI で .exe を起動する / build output path を前提にする / log 行を grep する 等）を YAML に焼く前に「実環境で想定どおり動くか」の preflight を必ず走らせる**。コード読解で「動きそう」までしか言えない invariant は、実 binary を CI と同じフラグで叩いて empirical PASS/FAIL を取り、failure なら grill 内で fallback ladder へ pivot する。preflight を skip して merge すると hosted runner の初回 fail で owner が逐次 debugging する羽目になる（#83 実例 2026-06-18: Q8 Player smoke を `-batchmode -nographics` で設計したが、preflight で `WorkspaceOwnership.ShouldClaim` の batchmode-skip-Python invariant に当たり fail → grill 内で「GUI mode smoke + log poll + Stop-Process」へ pivot 完了。issue body と findings も同じ flow で update した）。
 ---
 
 <what-to-do>

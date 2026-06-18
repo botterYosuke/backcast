@@ -217,6 +217,6 @@ production の編集経路は `MarimoNotebookDocument` へ全面移行。`Strate
 - **層3 pytest**: `test_marimo_cell_synthesis_golden.py`（9）＋`test_marimo_strategy_adapter.py`（7）= 16 passed（merge 後）。entry-point seam に named-cell 往復 idempotency＋fail-soft＋新セル既定の 3 test を追加。
 - **C# compile gate**: merge 後ツリーを `-batchmode -nographics -quit` で `error CS` 0 件・return code 0。
 - **層1/2 AFK**: `StrategyEditorProbe`（集約・SpawnPlacement・coordinator の新 §10/11/12＋既存 §1-9）／`MenuBarCutoverProbe`（File→New cell reset）／`WorkspaceUiCutoverProbe`（#76 U1/U3＋#81 notebook boot）／`BackcastWorkspaceProbe`（#78/#81 seeding）= **4 本とも PASS**。fake synthesizer（`FakeMarimoSynthesizer`・Editor）注入で Python-free に駆動。
-- **残＝層4 HITL（AC5）**: 実 workspace で [+]→中央 spawn→本体編集→Save→Open で位置復元→複数セル戦略を Replay run（owner 実行）。
+- **層4 HITL（AC5）GREEN（2026-06-18・owner 実行）**: 実 workspace（Unity 6000.4.11f1 Play）で boot→canonical v19 が 3 セル窓（`_config`/`_feedback`/`_strategy`・本体のみ）へ分解→中央 [+] で新セル spawn→本体編集→Save→Open で位置復元（窓が飛ばない）→複数セル戦略を Replay run→✕ 削除（≥1 ガード）まで一連を owner が確認し **PASS**。→ **S1 は全 4 層（pytest golden / 純 AFK / view AFK / HITL）GREEN ＝ 出荷可能**。残スコープは Slice 2（依存矢印）/ Slice 3（並べ替え UI・セル名編集）。
 
 正本: `docs/adr/0013` ＋ 本 findings。ADR-0013 は immutable（書き戻さない）— 本節が Step 2 着地と #76 調停の記録。

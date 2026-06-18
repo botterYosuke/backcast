@@ -129,12 +129,29 @@ jobs:
           Write-Host "publish path: $will"
 
       # ── Materialize the bundled venv that BackcastShippableBuild copies ─
-      # python/.venv/ persists between runs on self-hosted, so uv sync is incremental
-      # and typically completes in seconds. --frozen rejects any uv.lock drift.
-      - name: Setup uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: false
+      # python/.venv/ persists between runs on self-hosted, so uv sync is incremental.
+      #
+      # Manual install instead of astral-sh/setup-uv@v5 because that action triggers
+      # a libuv assertion failure on this self-hosted Windows runner during Node.js
+      # cleanup ("Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)" — observed
+      # run #27758559601). uv install itself succeeded; the crash is post-install
+      # tear-down inside the action. The official installer is a plain PowerShell
+      # script with no Node.js involvement.
+      - name: Setup uv (manual install)
+        run: |
+          if (Get-Command uv -ErrorAction SilentlyContinue) {
+            Write-Host "uv already on PATH: $(uv --version)"
+          } else {
+            $uvBin = "$env:USERPROFILE\.local\bin"
+            if (Test-Path "$uvBin\uv.exe") {
+              Write-Host "uv present at $uvBin; adding to PATH"
+            } else {
+              Write-Host "Installing uv via official installer..."
+              irm https://astral.sh/uv/install.ps1 | iex
+            }
+            Add-Content -Path $env:GITHUB_PATH -Value $uvBin -Encoding utf8
+            Write-Host "uv installed: $(& $uvBin\uv.exe --version)"
+          }
 
       - name: uv sync (materialize python/.venv)
         run: uv sync --frozen

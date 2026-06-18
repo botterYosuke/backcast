@@ -335,6 +335,9 @@ def _compile(
     kernel = runner._kernel
     graph = kernel.graph
     glbls = runner.globals
+    # services / constants are seeded real BEFORE the cold run (above) and — unlike inject —
+    # are never inert-swapped, so there is no post-cold re-arm: the only post-cold work is the
+    # fail-closed clobber check (a cell defining the same name would shadow the host binding).
     if services:
         service_clobbered = _cell_clobbered_names(services, graph)
         if service_clobbered:
@@ -343,10 +346,6 @@ def _compile(
                 "run shadows the host-provided service. Rename the cell variable or the "
                 "service name (services are host-owned value-returning APIs)."
             )
-        # Re-assert the host value after the cold run. A non-def mutation is still the
-        # caller's responsibility (pass immutable constants/data where needed), but the
-        # canonical binding stays host-owned.
-        glbls.update(services)
     if constants:
         constant_clobbered = _cell_clobbered_names(constants, graph)
         if constant_clobbered:
@@ -355,7 +354,6 @@ def _compile(
                 "run shadows the host-provided static config. Rename the cell variable or the "
                 "constant name (constants are host-owned static values)."
             )
-        glbls.update(constants)
     if driver_seeds:
         # Fail-closed (symmetric with inject below): a cell that also DEFINES a host-seeded driver
         # name shadows the seeded State after the cold run, so the host's per-bar write would drive

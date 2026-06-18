@@ -118,11 +118,14 @@ def _strategy(
                 submit_market(float(sub["shares"]), instrument_id=sub["iid"])  # noqa: F821
     elif (not placed) and minute < ENTRY_MINUTE:
         # Snapshot collection: pre-entry morning bars only. Copy-on-write so the mo.state
-        # setter sees a new object (the reactive write), mirroring the spike.
-        nxt = {k: list(v) for k, v in snaps.items()}
-        nxt.setdefault(bar.instrument_id, []).append({
+        # setter sees a new object (the reactive write): a shallow dict copy plus a fresh list
+        # for just this instrument — the other instruments' lists are shared but never mutated
+        # (append only ever builds a new list), so a large universe is not re-copied each bar.
+        iid = bar.instrument_id
+        nxt = dict(snaps)
+        nxt[iid] = list(snaps.get(iid, [])) + [{
             "open": bar.open, "high": bar.high, "low": bar.low,
             "close": bar.close, "volume": bar.volume,
-        })
+        }]
         set_snaps(nxt)
     return

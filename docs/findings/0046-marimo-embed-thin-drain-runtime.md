@@ -462,6 +462,14 @@ no-look-ahead は spike で実証済（entry bar 非 append＝prev-bar 蓄積を
 5. **deterministic v19 parity gate**（複数日 synthetic・real `V19MorningStrategy`＋stub model oracle・marimo は同一 stub を `services=` 経由・assert fills/equities/(fills,final_cash,realized_pnl)・fixture guard で multi-iid 発注＋cash gate bite を非 vacuous 化）。
 6. 全 suite＋#24 golden byte-identical＋offline/import-purity GREEN。
 
+### S6b-α step2 実装着地（2026-06-18・各 step RED-first＋commit）
+T1–T9 を 6 縦スライスで実装。全 step green・#24 golden byte-identical・offline/import-purity GREEN。
+- **step1**（`7a9d70b`）: thin_drain に `services=`（live callable）/`constants=`（live immutable data）。cold run 前 real-seed・clobber guard 対称・setter/root なし。gate=cold-run live service / static 非 driver / clobber（RED→GREEN・thin_drain 19）。
+- **step2**（`d553279`）: `strategies/v19/v19_core.py` 抽出（`jst_day_minute`/`compute_features`/`current_price`/`build_rows`/`score_universe(rows,model)`/`cash_aware_picks`/`alloc_a0_equal_nominal_e1`）。命令型 `V19MorningStrategy` は instance-state を渡す thin adapter 化（直接呼び test の署名＋gate-off 非読み挙動を保存）。`score_universe` は `_FEATURES` 列順契約（replay stub が `row[-1]` でランク）。behavior-preserving（既存 v19 gate を characterization）。`test_v19_core.py`（6）。
+- **step3**（`dc3e62a`）: `MarimoStrategy(.., services=, constants=)` ctor → `open_runtime` 転送。gate=実 KernelRunner で service+constant 注入し twin 一致。
+- **step4+5**（`8c31738`）: `v19_morning_cell.py`（命令型 on_bar の reset→exit→entry→snapshot を単一 self-cycle cell の if/elif へ写経・entry bar 非 accumulate で no-look-ahead 構造保証・pure logic は v19_core・scorer は注入 `score_v19_rows`・universe/rs_ref は constants）。`test_v19_marimo_parity.py`: 複数日（daily reset exercise）・real `V19MorningStrategy`+stub oracle・marimo は同一 stub を `services=` 経由・fixture guard で multi-iid（2 picks/day）＋cash gate bite（3rd trim）＋round-trip・order/fill/equity 一致。**一発 GREEN**。
+- **実コードで判明した非自明点**: ① marimo cell は mid-body `return` 不可＝命令型 if/return 鎖を if/elif/elif（相互排他）へ。② `_config`/`_feedback` は driver を読まない＝per-bar hot list 外（ancestor）で一度だけ cold 実行＝feedback State 持続（spike と同型）。③ snaps dict の挿入順は build_rows が universe 順で組むため parity 無影響（順序契約が効く）。
+
 ### 残務（順序・不変）
 **S6b-α step2**（設計＝上記 T1–T9 ＋実装順で確定。実装着手）→ **v19 production scorer resolver**（T6 follow-up: sidecar scorer-spec→lazy joblib scorer discovery ＋ `v19_morning_cell.json` sidecar ＋ dispatch 配線・universe source 確定）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 

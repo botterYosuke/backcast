@@ -591,5 +591,28 @@ findings 旧分割（β＝footer ▶ だけ削除 / γ＝残り transport 撤去
 - **CONFIRMED（teardown 断線）**: 初版は `force_stop_replay` を inproc RPC からも削除したが、C# `WorkspaceEngineHost.ForceStop() → CallTransport("force_stop_replay")` が **Stop() teardown（launcher の同期 start_engine を解除）** で呼ぶ＝owner が「残す」と決めた lifecycle 経路。`force_stop_replay` RPC を **role=teardown として復活**（`{success,error_message}` dict shape・`_engine.force_stop_replay()` 委譲）。retirement gate も「force_stop RPC 生存」を assert へ訂正。`models.py:69` の `replay_state` doc から PAUSED を除去（stale）。
 - **C# step2/3 cleanup target（step1 のバグではない）**: `WorkspaceEngineHost.Pause/Resume/Step/SetSpeed`（:274-291）＋`ScenarioStartupHitlHarness`（:395-432）が退役した 4 RPC を呼ぶ＝footer 撤去（step2/3）で同時削除。step1↔step2 間は HITL に出さない（owner 方針「中間 UI を HITL に出さない」）ので許容。
 
+### S6b-β-clean step2+step3 実装着地（2026-06-18・C# UI 単一化＋transport cleanup・U1–U6）
+実装順 step2（UI 単一化）＋ step3（transport cleanup）を一括で着地（owner「完成形・仮状態なし」＝HITL に出す状態は完成形）。
+`/grill-with-docs`（再 grill 不要を確認＝設計の木は固定済み）→ `/behavior-to-e2e`（AFK probe gate）→ 実装 → Unity batchmode AFK GREEN。
+**Python 無改変**（全 suite 362 passed・step1 ベースラインと同一）＝C# のみの変更。
+
+- **U1 Run ボタン**: `RunReadinessViewModel`（純・no MonoBehaviour・OnRun の gate 順 running→no-strategy→invalid-scenario→not-owner を非破壊ミラー。`TryStartRun` の commit MUTATE は click 時のみ＝VM は非破壊 read 2 つ＝provider 5 条件 supplyable ＋ `!Validate().Any`）＋ `StrategyEditorRunButton`（adopted editor `_strategyEditorTitleInput` の title bar に ▶ Run＋disabled 理由ラベル）。`Update()` 冒頭（owner guard の **前**＝非 owner でも disabled 表示）で毎フレーム Evaluate→Refresh。click→既存 `OnRun()`。spawned 二次 editor は Run 無し（run 対象は常に WINDOW_ID）。
+- **U2 File→New**: `OnFileNew` が `ResetUnboundEmpty()` →`SeedUnbound(MarimoStrategyTemplate.NewStrategy)`（`00_observe.py` 同型・観察専用 marimo skeleton）。`StrategyDocument.SeedUnbound`/`StrategyEditorView.SeedUnbound` 追加（unbound＋clean＝保存まで Run blocked「未保存」）。`MenuBarCutoverProbe` Section1 を「空」→「marimo skeleton＋`is_marimo_app_source` 構造マーカー＋unbound」へ更新。
+- **U3 boot canonical**: `ResumeLastDocumentOrDefault` の no-resume 枝が `OpenCanonicalDefault()`＝`python/strategies/v19/v19_morning_cell.py` を adopted editor に Open＋`ReseedFromEditor`（scenario/universe seed→Run 解禁）。`_currentLayoutPath=""` のまま＝boot/quit が canonical fixture の sidecar を書かない。ProjectRoot 解決失敗/ファイル欠落は untitled へ degrade（EnumerateStrategies と同じ never-throw 規律）。
+- **U4 footer**: `ReplayFooterView`→**`WorkspaceFooterView`**（mode segments Replay/Manual/Auto＋status のみ。▶/⏸/⏭/⏹/speed 撤去。modeVm 必須化＝旧 #30-only legacy 経路は唯一の他 consumer=HITL harness 退役で消滅）。
+- **U5 tile**: `ScenarioStartupTile` を scenario 編集専用化（Run ボタン/`OnRunClicked`/`ShowRunMessage` 撤去・onRun ctor param 撤去＝5 construction site 更新）。field error は残置。`OnRun` の click 時メッセージは menu line へ（run-readiness は title bar・U1）。
+- **U6 削除/退役**: `ReplayTransportViewModel`/`ReplayLifecycle`/`ReplayFooterView`/`ReplayTransportVerify`（#30 専用 AFK probe）／**`ScenarioStartupHitlHarness`**（demoted throwaway・`AutoBootstrapEnabled=false`・transport 全依存・退役済み RPC を呼ぶ＝gut より delete が coherent）を `git rm`（+meta）。`WorkspaceEngineHost` の `Pause/Resume/Step/SetSpeed/CallTransport` 削除→ **`ForceStop`（`force_stop_replay` teardown）のみ残置**（S6-2 不変条件）。`BackcastWorkspaceRoot` の `_transport`/`_lifecycle`/`OnFooterPlayPause|Step|Stop|Speed`/`FooterAutoStart`＋dead start-result plumbing（`_footerStartResult`/`_footerStartedRunId`/`_autoStatus`）撤去。`BoundStrategyFileProvider`（旧 harness 末尾の top-level 型・`BackcastWorkspaceProbe` が使用）を独立 file へ移設。
+
+- **owner 注意（HITL 確認点）**: footer の共有 ▶ 撤去で **LiveAuto の start トリガーも消える**（Live 配線は別 epic＝findings 通り）。mode segments は残るので Auto へ切替は可能だが start ボタンは Live epic で再配線。
+
+### AC → 恒久 gate（着地）
+| 挙動 | gate | 結果 |
+|---|---|---|
+| U1 readiness 真理値表（OnRun gate 順）| `WorkspaceUiCutoverProbe` Section1（純 VM）| **PASS** |
+| U1/U4/U5 単一 Run 入口（title bar Run 在・footer に transport ボタン無・tile に Run 無）| `WorkspaceUiCutoverProbe` Section2（構造）| **PASS** |
+| U3 boot canonical（no-resume→adopted editor が v19_morning_cell.py に bound）| `WorkspaceUiCutoverProbe` Section3（mount 無は skip-log）| **PASS** |
+| U2 File→New marimo template＋adopt 不変条件 | `MenuBarCutoverProbe` Section1 | **PASS** |
+| Python 無改変（marimo run 経路・golden 不変）| 全 suite | **362 passed** |
+
 ### 残務（S6b-β-clean 続き・順序）
-**step2 C# UI 単一化**（U1 title bar Run/readiness VM・U5 tile Run 撤去・U4 footer transport 撤去＋mode 残置・U2 File→New template・U3 boot canonical）→ **step3 C# transport cleanup**（`ReplayTransportViewModel`/`ReplayLifecycle` 削除・`ReplayFooterView`→`WorkspaceFooterView` rename・dead enablement/probe 削除）→ AFK probe＋#24 golden＋Python suite GREEN → **owner HITL**。C# は Unity build/AFK/HITL ループ必須（本セッションでは未着手）。
+`code-review(simplify)`（high・Medium+ ゼロまで `/pair-relay`）→ **owner HITL**（Unity GUI で Run 単一化・New template・boot canonical・transport 不在を実機確認）→ commit（論理単位分割可）。Live 配線（別 epic）／D3 構造的 hot-list guard（任意）。

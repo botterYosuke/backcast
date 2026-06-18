@@ -91,7 +91,7 @@ public class ThemeHitlHarness : MonoBehaviour
 
         // -- scenario panel (left column) — covers panel_background / element_background / text / error --
         var panel = Panel(parent, "panel", new Vector2(0f, 0f), new Vector2(0.34f, 1f));
-        _tile = new ScenarioStartupTile(new ScenarioStartupController(), null, _font);
+        _tile = new ScenarioStartupTile(new ScenarioStartupController(), _font);
         _tile.Build(panel);
 
         // -- chart strip (top-right) — the REAL production ChartView (#53), not a swatch. A 2-bar

@@ -126,7 +126,7 @@ public sealed class ScenarioStartupController
             return new RunGateResult
             {
                 Gate = RunGate.BlockedNoStrategy,
-                Message = "No saved strategy to run — open and save a strategy first.",
+                Message = RunReadinessViewModel.NoStrategy,   // single-source the wording (#76 U1)
             };
         }
 
@@ -136,7 +136,7 @@ public sealed class ScenarioStartupController
             {
                 Gate = RunGate.BlockedInvalidScenario,
                 Errors = Errors,
-                Message = "Scenario has invalid values — fix them to enable Run.",
+                Message = RunReadinessViewModel.InvalidScenario,   // single-source the wording (#76 U1)
             };
         }
 

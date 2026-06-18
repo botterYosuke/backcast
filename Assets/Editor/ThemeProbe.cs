@@ -144,7 +144,7 @@ public static class ThemeProbe
         // -- 4a ScenarioStartupTile (panel) --
         ThemeService.ResetForTests();
         var tileGo = Spawn("probe_tile", typeof(RectTransform));
-        var tile = new ScenarioStartupTile(new ScenarioStartupController(), null, font);
+        var tile = new ScenarioStartupTile(new ScenarioStartupController(), font);
         tile.Build(tileGo.GetComponent<RectTransform>());
         var tileBg = tileGo.GetComponent<Image>();
         Eq(tileBg.color, Theme.Dark().colors.panel_background, "tile bg == dark panel_background");

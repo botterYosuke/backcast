@@ -4,10 +4,10 @@
 // SINGLE normal Play entry that composes every UI surface — menu bar / sidebar / center infinite-
 // canvas workspace (Hakoniwa [startup, chart] + a floating Strategy Editor) / footer — into one
 // screen, and is the single Python owner. Orchestration is NOT here: the durable WorkspaceEngineHost
-// owns the engine lifecycle / launcher / poll / transport (findings 0025 §5); this root WIRES the
-// authored Views to the Host and the layout store, and drives ChartView / the footer from the
-// Host's published state. Demotes the throwaway ScenarioStartupHitlHarness (its AutoBootstrap is
-// off; the engine path is extracted here).
+// owns the engine lifecycle / launcher / poll / force-stop teardown (findings 0025 §5); this root
+// WIRES the authored Views to the Host and the layout store, and drives ChartView / the footer from the
+// Host's published state. (The throwaway ScenarioStartupHitlHarness it once demoted was retired in #76
+// S6b-β-clean along with the replay transport it drove.)
 //
 // SINGLE PLAY-OWNER (findings 0025 §7): the root claims Python only when it is the configured owner,
 // not headless, and nobody else holds the interpreter (WorkspaceOwnership.ShouldClaim). To run a
@@ -45,6 +45,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // that supplies the `.py` to run is the NOTEBOOK aggregate, NOT a physical window. `region_001` stays
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
+    // #76 S6b-β-clean U3: the canonical boot strategy (under PythonRuntimeLocator.ProjectRoot). Public so
+    // the AFK gate (WorkspaceUiCutoverProbe) derives + asserts the SAME path — one source, no probe drift.
+    public const string CanonicalStrategyRelPath = "strategies/v19/v19_morning_cell.py";
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -85,7 +88,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // ── reused brains / VMs (findings 0025 §5) ──
     readonly ScenarioStartupController _scenario = new ScenarioStartupController();
-    readonly ReplayLifecycle _lifecycle = new ReplayLifecycle();
+    // #76 S6b-β-clean U1: the title-bar Run button's readiness brain (pure; non-mutating mirror of OnRun's gates).
+    readonly RunReadinessViewModel _runReadiness = new RunReadinessViewModel();
 
     // #41 instruments universe prune: change-gated, on-demand prune of universe-outside instruments.
     // _pruneSource is a null source today (no live fetch / catalog producer yet — prune stays dormant
@@ -96,7 +100,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly IUniversePruneSource _pruneSource = new NullUniversePruneSource();
     UniversePruneDriver _pruneDriver;
     readonly StrategyProviderRegistry _registry = new StrategyProviderRegistry();
-    ReplayTransportViewModel _transport;
 
     // #81 cell-as-floating-window (ADR-0013): the notebook aggregate (the single `.py`/dirty/Save/Open
     // and the sole IStrategyFileProvider), the coordinator that turns add/delete/open/save into window
@@ -143,7 +146,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // is the current-shape SoT (TTWR profiles.current is owned HERE, not duplicated into the profiles).
     HakoniwaLayoutProfiles _profiles = new HakoniwaLayoutProfiles();
     ScenarioStartupTile _tile;
-    ReplayFooterView _footer;
+    WorkspaceFooterView _footer;
+    StrategyEditorRunButton _editorRunButton;   // #76 S6b-β-clean U1: Run on the adopted editor title bar
     MenuBarViewModel _menuBar;
     VenueMenuViewModel _venueMenu;
     UniverseSidebarController _sidebarCtrl;
@@ -198,24 +202,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     bool _built;         // BuildWorkspace ran (this root is the active layout owner) — independent of Python
     readonly OnceGate _teardownGate = new OnceGate();
     string _lastPayload;
-    bool _errLogged, _finishedHandled;
+    bool _errLogged;
 
-    // ── #39: footer mode segment + LiveAuto ▶, wired to the host live seam (Step 3/4) ──
+    // ── #39: footer mode segment (Replay/Manual/Auto), wired to the host live seam. #76 S6b-β-clean U4:
+    // the LiveAuto ▶ start is retired from the footer (Live start re-wiring is a separate epic); the
+    // mode VMs stay to track Live execution mode + the running-LiveAuto state the mode switch observes. ──
     FooterModeViewModel _footerMode;
     LiveAutoTransportViewModel _footerAuto;
     readonly SelectedSymbol _footerSelected = new SelectedSymbol();
     string _venue = "MOCK";                 // live venue id; resolved from LIVE_VENUE env in Awake (default MOCK)
     volatile bool _footerModeRejected;      // worker→main: a SetExecutionMode / stop-then-switch failed
-    volatile int _footerStartResult;        // worker→main: 0 none / 1 ok / 2 fail (register→start)
-    volatile string _footerStartedRunId;    // worker→main: run_id from a successful start (guard release)
     volatile int _venueLoginResult;         // worker→main: 0 none / 1 ok / 2 fail (venue_login)
     volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
     volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
-    string _autoStatus = "-";
     string _lastFooterSig = "";
+    string _lastRunReadySig;                // #76 U1: change-gate the title-bar Run button Refresh
     string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
-
-    [Serializable] struct _StateLite { public string replay_state; }
 
     void Awake()
     {
@@ -364,7 +366,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         EnsureRootImage(_hakoniwaRoot, HAKO_ROOT_COLOR);
 
         RectTransform startupBody = BuildTileChrome(_startupTile, "startup", out HakoniwaTileHeaderInput startupHeader);
-        _tile = new ScenarioStartupTile(_scenario, OnRun, _font);
+        _tile = new ScenarioStartupTile(_scenario, _font);   // #76 S6b-β-clean U5: scenario-editing-only (Run moved to the editor title bar)
         _tile.Build(startupBody);
         _tile.SyncFieldsFromController();
 
@@ -440,7 +442,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // binds cell 0 in ResumeLastDocumentOrDefault). The X button deletes the cell (coordinator).
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
         if (_strategyEditorTitleInput != null)
+        {
             _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
+            // #76 S6b-β-clean U1: the SINGLE Run entry — a small ▶ Run on the adopted editor's title bar.
+            // Run targets WHAT THE EDITOR SHOWS via EditorFileProvider — now the NOTEBOOK aggregate (#81),
+            // resolved through the registry under NOTEBOOK_ID; the ▶ wiring is unchanged. Click → OnRun().
+            _editorRunButton = new StrategyEditorRunButton(OnRun);
+            _editorRunButton.Build((RectTransform)_strategyEditorTitleInput.transform, _font);
+        }
+        // #81: the adopted window's content is a Cell fragment view (no Document / no registry — the
+        // notebook aggregate, registered above under NOTEBOOK_ID, is the sole provider).
         var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, font: _font);
         if (editorView != null) _editors[WINDOW_ID] = editorView;
 
@@ -476,10 +487,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _secretOverlay.SubmitClicked += SubmitSecret;
         _secretOverlay.CancelClicked += CancelSecret;
 
-        // footer transport + #39 mode segment / LiveAuto ▶ (wired to the host live seam). The
-        // mode-aware footer reuses the same view; modeVm/autoVm enable the Replay/Manual/Auto segments
-        // and the LiveAuto ▶ on top of the Replay transport (findings 0026 §4).
-        _transport = new ReplayTransportViewModel(_lifecycle);
+        // #76 S6b-β-clean U4: workspace footer = mode segments (Replay/Manual/Auto) + status ONLY.
+        // The replay transport controls (▶/⏸/step/stop/speed) are retired (ADR-0012 reactive model —
+        // run→即完了); Run lives on the editor title bar (U1). The mode segments stay (Live execution
+        // mode, NOT transport); _footerAuto drives the live-mode status line + the run/auto state the
+        // mode switch and auto-replay observe (findings 0026 §4).
         _footerMode = new FooterModeViewModel();
         _footerAuto = new LiveAutoTransportViewModel(
             _host.Panel,                                              // run lifecycle authority
@@ -487,9 +499,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _footerSelected,
             () => new List<string>(_scenario.Universe.Ids),          // scenario run universe
             () => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue);
-        _footer = new ReplayFooterView(
-            _transport, OnFooterPlayPause, OnFooterStep, OnFooterStop, OnFooterSpeed, _font,
-            _footerMode, _footerAuto, OnFooterMode);
+        _footer = new WorkspaceFooterView(_footerMode, _footerAuto, OnFooterMode, _font);
         _footer.Build(_footerContainer);
 
         // menu bar (V-host): File = Layout; the Venue submenu reuses the host's durable Conn/Coord so a
@@ -866,11 +876,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (_host.IsRunning) return;
 
+        // #76 S6b-β-clean U1/U5: the title-bar Run button shows the steady block reason (RunReadiness),
+        // and is only clickable when ready — so these click-time gates are defensive. Surface a click-
+        // time failure (a commit I/O exception, or a race that flipped readiness) on the menu notice line
+        // (the tile is scenario-editing-only now; it no longer carries a Run message).
         RunGateResult gate;
         try { gate = _scenario.TryStartRun(EditorFileProvider); }
-        catch (Exception e) { _tile.ShowRunMessage("Could not save scenario: " + e.Message); Debug.LogError("[BackcastWorkspaceRoot] commit failed: " + e); return; }
-        if (!gate.IsReady) { _tile.ShowRunMessage(gate.Message); Debug.LogWarning("[BackcastWorkspaceRoot] run blocked: " + gate.Message); return; }
-        _tile.ShowRunMessage(null);
+        catch (Exception e) { _menuBarView?.ShowMessage("Could not save scenario: " + e.Message); Debug.LogError("[BackcastWorkspaceRoot] commit failed: " + e); return; }
+        if (!gate.IsReady) { _menuBarView?.ShowMessage(gate.Message); Debug.LogWarning("[BackcastWorkspaceRoot] run blocked: " + gate.Message); return; }
 
         // Commit just wrote the sidecar to the CURRENT universe; re-prime the sidebar writeback's
         // _lastFlushed to match, so a later sidebar ×/add (the only path that flushes) diffs against
@@ -879,15 +892,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // (findings 0025 §12, Finding 1).
         _sidebarCtrl.PrimeWritebackFromCurrent();
 
-        if (!_isOwner) { _tile.ShowRunMessage("Not the Python owner — cannot run."); return; }
+        if (!_isOwner) { _menuBarView?.ShowMessage(RunReadinessViewModel.NotOwner); return; }
 
         _chartRendered.Clear();
         _depthRendered.Clear();        // #57: a fresh run invalidates the cached per-id ladder renders
         _lastDepthPayload = null;
         _lastPayload = null;
         _errLogged = false;
-        _finishedHandled = false;
-        _transport?.OnRunStarted();
 
         var req = new WorkspaceEngineHost.RunRequest
         {
@@ -902,26 +913,27 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     void Update()
     {
+        // #76 S6b-β-clean U1: drive the title-bar Run button readiness EVERY frame, BEFORE the owner
+        // guard — a non-owner session must still see Run greyed with "Not the Python owner". strategyReady
+        // = the provider's 5-condition supplyable (non-mutating); scenarioValid = no validation errors.
+        // Only Refresh the uGUI button when the readiness actually changed (change-gated like DriveFooter's
+        // _lastFooterSig), so a steady workspace costs the read but not the per-frame color/text churn.
+        _runReadiness.Evaluate(_isOwner, _host.IsRunning,
+            EditorFileProvider.TryGetStrategyFile(out _), !_scenario.Validate().Any);
+        string readySig = _runReadiness.CanRun + "|" + _runReadiness.BlockReason;
+        if (readySig != _lastRunReadySig) { _lastRunReadySig = readySig; _editorRunButton?.Refresh(_runReadiness); }
+
         if (!_isOwner) return;
 
+        // Surface a run failure on-screen (the footer no longer carries a replay phase, and the tile is
+        // scenario-only): the menu notice line shows the error so a failed run is not Console-only.
         string err = _host.StartError;
-        if (err != null && !_errLogged) { Debug.LogError("[BackcastWorkspaceRoot] FAIL: " + err); _errLogged = true; }
-
-        if (_host.RunFinished && !_finishedHandled)
-        {
-            _finishedHandled = true;
-            // Re-read AFTER observing RunFinished: the launcher writes _startError BEFORE _runFinished,
-            // so a value sampled before RunFinished can be a stale null and mis-latch a FAILED run as Done.
-            string termErr = _host.StartError;
-            if (termErr != null) _lifecycle.MarkFailed(termErr); else _lifecycle.MarkDone();
-        }
+        if (err != null && !_errLogged) { Debug.LogError("[BackcastWorkspaceRoot] FAIL: " + err); _menuBarView?.ShowMessage("Run failed: " + err); _errLogged = true; }
 
         string state = _host.LatestStateJson;
         if (state != null && state != _lastPayload)
         {
             _lastPayload = state;
-            try { _lifecycle.ApplyPoll(JsonUtility.FromJson<_StateLite>(state).replay_state); }
-            catch { /* malformed poll snapshot: keep the last phase */ }
 
             // per-id chart render (#60): each chart:<id> tile draws its OWN per_instrument[id].ohlc_points
             // (NOT the aggregate/primary top-level ohlc_points). _chartRendered dedups by series length.
@@ -1465,14 +1477,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_footer == null || _footerMode == null) return;
 
         if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); }
-        int sr = _footerStartResult;
-        if (sr != 0)
-        {
-            _footerStartResult = 0;
-            _footerAuto.NotifyStartResult(sr == 1, _footerStartedRunId);
-            // No live panels on the mainline yet (slice 3), so surface a start failure as a menu notice.
-            if (sr == 2) _menuBarView?.ShowMessage("LiveAuto start failed (see Console)");
-        }
 
         // venue login/logout acks (worker→main): apply the login ack to the poll-canonical Conn VM and
         // surface a failure notice; the badge otherwise tracks the poll (findings 0027 D5).
@@ -1520,42 +1524,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 _host.SetExecutionMode(FooterModeViewModel.Replay, ok => { if (!ok) _footerModeRejected = true; });
         }
 
-        // Refresh only when something the footer renders changed (DisplayMode/lock/venue/run/glyph/auto
-        // status, plus the Replay transport phase for the Replay-mode footer).
+        // Refresh only when something the footer renders changed (mode segments + the live-mode status):
+        // DisplayMode / lock / venue-live (segment visibility) + the LiveAuto run id (status line).
         string sig = _footerMode.DisplayMode + "|" + _footerMode.Locked + "|" + _footerMode.VenueLive
-                   + "|" + _footerAuto.HasActiveRun + "|" + _footerAuto.PlayGlyph + "|" + _autoStatus
-                   + "|" + _lifecycle.Phase;
+                   + "|" + _footerAuto.HasActiveRun + "|" + _footerAuto.ActiveRunId;
         if (sig != _lastFooterSig) { _lastFooterSig = sig; _footer.Refresh(); }
     }
 
-    // ---- footer click handlers → Host (mode-routed) ----
-    // ▶/⏸ is mode-routed (TTWR footer_pause_resume_system): LiveAuto → start/pause/resume on the live
-    // seam; Replay → the replay transport. step/stop/speed are Replay-only (the footer hides them in Live).
-    void OnFooterPlayPause()
-    {
-        // The ▶ is hidden in LiveManual (the view); guard the handler too so a stray click can't fall
-        // through to the Replay branch and start a REPLAY run while the engine mode is LiveManual.
-        if (_footerMode.DisplayMode == FooterModeViewModel.LiveManual) return;
-        if (_footerMode.DisplayMode == FooterModeViewModel.LiveAuto)
-        {
-            var d = _footerAuto.PlayPauseDecision();
-            switch (d.Action)
-            {
-                case LiveAutoAction.Start: FooterAutoStart(d.Start); break;
-                case LiveAutoAction.Pause: _host.PauseLiveStrategy(d.RunId, _ => { }); _autoStatus = "pausing…"; break;
-                case LiveAutoAction.Resume: _host.ResumeLiveStrategy(d.RunId, _ => { }); _autoStatus = "resuming…"; break;
-                case LiveAutoAction.None: _autoStatus = d.Message; break;
-            }
-            return;
-        }
-        switch (_transport.PlayPauseIntent())
-        {
-            case ReplayTransportIntent.Run: OnRun(); break;
-            case ReplayTransportIntent.Pause: _host.Pause(); break;
-            case ReplayTransportIntent.Resume: _host.Resume(); break;
-        }
-    }
-
+    // ---- footer mode segment → Host. #76 S6b-β-clean U4: the replay transport (▶/⏸/step/stop/speed)
+    // and the LiveAuto ▶ start are retired from the footer (ADR-0012 reactive model — Run is on the
+    // editor title bar, U1). Only the Replay/Manual/Auto mode segments remain (Live execution mode, not
+    // transport); LiveAuto start re-wiring is a separate Live epic. ----
     // footer mode segment → SetExecutionMode (D1) / stop-then-switch on leaving LiveAuto (D2).
     void OnFooterMode(string target)
     {
@@ -1585,25 +1564,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
     }
 
-    // LiveAuto ▶ at rest → register→start on the live seam. Pre-flight is already gated by the VM; the
-    // connection gate (the VM only checks a non-empty venue string) is re-asserted here.
-    void FooterAutoStart(LiveAutoStartRequest req)
-    {
-        // Surface the pre-flight block reason: _autoStatus is not rendered on the mainline (no live panel
-        // yet — slice 3), so a ▶ that silently no-ops (no instrument / no saved strategy / venue) was
-        // undiagnosable. Route it to the menu notice (findings 0027 §2.1 HITL observability).
-        if (req.Gate != LiveAutoStartGate.Ready) { _autoStatus = req.Message; _menuBarView?.ShowMessage("LiveAuto ▶: " + req.Message); return; }
-        if (!_host.ServerReady || !_host.Conn.IsConnected) { _autoStatus = "connect a venue before starting LiveAuto"; _menuBarView?.ShowMessage("connect a venue before starting LiveAuto"); return; }
-        _footerAuto.NotifyStartIssued();
-        _autoStatus = "register+start…";
-        _host.RegisterAndStartLiveAuto(req.StrategyFile, req.OriginalPath, req.InstrumentId, req.Venue,
-            (ok, runId) => { _footerStartedRunId = runId; _footerStartResult = ok ? 1 : 2; });
-    }
-
-    void OnFooterStep() => _host.Step();
-    void OnFooterStop() => _host.ForceStop();
-    void OnFooterSpeed(int mult) { if (_transport.SelectSpeed(mult)) _host.SetSpeed(mult); }
-
     // ---- File = Layout (findings 0025 §9) ----
     void OnFileNew()
     {
@@ -1614,6 +1574,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // the coordinator resets the notebook to one empty cell and rebuilds the cell windows — region_001
         // is reset IN PLACE (never destroyed), region_002+ cell windows are despawned. canvas pan/zoom +
         // Hakoniwa are NOT reset (§4 targets strategy/editor state).
+        //
+        // #76↔#81 reconciliation: #76's U2 seeded MarimoStrategyTemplate.NewStrategy into the single editor
+        // buffer. The #81 cell model (findings 0050) DELIBERATELY rejects body-seeding (marimo-faithful: a
+        // fresh cell is empty, with the host-API names shown as a placeholder, not as "example to delete").
+        // A one-empty-cell notebook still synthesises to a valid (runnable-once-saved) marimo app, and the
+        // "start from something runnable" intent is now served by U3 (boot OPENS the canonical v19 marimo),
+        // so File→New stays a true blank slate.
         _coordinator.New();
 
         // scenario buffer + universe (the in-memory clear the host owns).
@@ -1730,7 +1697,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // #69 (B2): boot resume — re-open the last document's layout from its <strategy>.json, or start
-    // untitled with the default workspace when there is no resumable document (fresh install / moved file).
+    // with the default workspace when there is no resumable document (fresh install / moved file).
+    // #76 S6b-β-clean U3: when there is no resume, the default workspace OPENS THE CANONICAL v19 marimo
+    // (v19_morning_cell.py — it ships a sidecar with scenario + scorer spec, so it is immediately
+    // runnable) into the adopted editor, instead of an untitled-empty buffer.
     void ResumeLastDocumentOrDefault()
     {
         string py = PlayerPrefs.GetString(ResumeKey, "");
@@ -1747,9 +1717,40 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 return;
             }
         }
-        ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace, untitled
-        _coordinator.SyncWindowsToNotebook(null);   // show the default notebook (one empty cell in region_001)
-        _currentLayoutPath = "";
+        ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace
+        _currentLayoutPath = "";                 // untitled document — boot leaves the canonical fixture unmodified
+        OpenCanonicalDefault();                  // U3: open the canonical v19 marimo into cell windows
+    }
+
+    // #76 S6b-β-clean U3 (#81-routed): the canonical boot strategy. DECOMPOSE the v19 marimo cell-DAG into
+    // N cell windows (via the coordinator) so a fresh launch shows a runnable reactive strategy (Run
+    // unblocks once ReseedFromEditor seeds the scenario from its sidecar). The layout document stays
+    // UNTITLED (_currentLayoutPath = "") so boot/quit never write into the canonical fixture's sidecar
+    // (OnFileSave delegates to Save As while untitled; quit autosave is a no-op). Best-effort: a pre-Python
+    // ProjectRoot/synth failure, a missing file, or a failed Open falls back to the untitled-empty notebook
+    // (no crash) — the same degrade-not-throw contract EnumerateStrategies upholds at this seam.
+    void OpenCanonicalDefault()
+    {
+        string py;
+        try { py = Path.Combine(PythonRuntimeLocator.ProjectRoot, CanonicalStrategyRelPath); }
+        catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] canonical boot path unresolved: " + e.Message); FallbackEmptyNotebook(); return; }
+        if (!File.Exists(py)) { Debug.Log("[BackcastWorkspaceRoot] canonical v19 marimo not found; booting untitled."); FallbackEmptyNotebook(); return; }
+
+        IReadOnlyList<Vector2> positions = null;
+        if (LayoutSidecarStore.TryReadLayout(py, out var cdoc)) positions = ToVectors(cdoc.cellPositions);
+        if (!_coordinator.Open(py, positions))
+        {
+            Debug.LogWarning("[BackcastWorkspaceRoot] canonical v19 marimo open failed (" + (_notebook?.LastError ?? "?") + "); booting untitled.");
+            FallbackEmptyNotebook();
+            return;
+        }
+        ReseedFromEditor();   // bind → seed scenario/universe/sidebar (the shared #78/#80 tail) so Run unblocks
+    }
+
+    // The fresh/unresumable fallback: an untitled empty notebook (one empty cell in region_001).
+    void FallbackEmptyNotebook()
+    {
+        _coordinator.SyncWindowsToNotebook(null);
         ReseedFromEditor();
     }
 

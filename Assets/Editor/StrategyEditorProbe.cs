@@ -52,7 +52,10 @@ public static class StrategyEditorProbe
                 ?? Section6_LayoutRoundTrip()
                 ?? Section7_Restore(spawned)
                 ?? Section8_MeshColoring(spawned)
-                ?? Section9_RegistryRunWiring();
+                ?? Section9_RegistryRunWiring()
+                ?? Section10_NotebookAggregate()
+                ?? Section11_SpawnPlacement()
+                ?? Section12_Coordinator(spawned);
         }
         catch (Exception e)
         {
@@ -78,7 +81,12 @@ public static class StrategyEditorProbe
                       "Open-failure keeps window) + non-scroll mesh colouring (real Text, token glyph vertex colour, Default unchanged, " +
                       "no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
                       "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
-                      "— Unity-owned, ADR-0003 capability parity, under Unity Mono");
+                      "+ #81 notebook aggregate (fresh=1 empty cell, AddCell dirties, body-edit dirties, SaveAs/Save->Open " +
+                      "round-trip preserves body+name+config, >=1 delete guard, Open fail-soft non-destructive, supplyable " +
+                      "5-condition, ResetUnboundEmpty) + SpawnPlacement (anchor-start, diagonal cascade, overlap-allowed, " +
+                      "<10 threshold, full-chain clear) + NotebookCellCoordinator (cell0->region_001, AddCell->region_002 spawn, " +
+                      "DeleteCell despawn region_002 / hide-dormant region_001, >=1 guard, dormant reuse, CapturePositions cell-order) " +
+                      "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
         else
@@ -603,6 +611,168 @@ public static class StrategyEditorProbe
         {
             Debug.LogWarning("[STRATEGY EDITOR] S8: TextGenerator unavailable in batchmode (" + e.Message + ") -> glyph-count cross-check HITL-only.");
         }
+        return null;
+    }
+
+    // ======================================================================
+    // 10. #81 MarimoNotebookDocument aggregate (ADR-0013 / findings 0050) — driven by the
+    //     Python-FREE FakeMarimoSynthesizer (the SAME round-trip contract the layer-2 pythonnet +
+    //     layer-3 marimo golden assert, so a drifting fake is caught mechanically).
+    // ======================================================================
+    static string Section10_NotebookAggregate()
+    {
+        Directory.CreateDirectory(TempDir);
+        var synth = new FakeMarimoSynthesizer();
+        var nb = new MarimoNotebookDocument(synth);
+
+        // fresh notebook: one empty cell, unbound, not dirty, not supplyable (>=1 invariant).
+        if (nb.CellCount != 1) return "S10: fresh notebook not 1 cell";
+        if (nb.IsBound || nb.IsDirty) return "S10: fresh notebook bound/dirty";
+        if (nb.TryGetStrategyFile(out _)) return "S10: unbound notebook supplyable";
+
+        // AddCell appends + dirties (structural change changes the .py).
+        nb.AddCell();
+        if (nb.CellCount != 2) return "S10: AddCell did not append";
+        if (!nb.IsDirty) return "S10: AddCell did not dirty";
+
+        // SaveAs writes + binds + clears dirty -> supplyable.
+        string py = Path.Combine(TempDir, "nb_agg.py");
+        if (!nb.SaveAs(py)) return "S10: SaveAs failed";
+        if (nb.IsDirty || !nb.IsBound) return "S10: SaveAs did not clear dirty / bind";
+        if (!nb.TryGetStrategyFile(out var sp) || sp != Path.GetFullPath(py)) return "S10: saved notebook not supplyable";
+
+        // a cell-body edit dirties the aggregate (Cell.SetBody -> dirty hook) -> not supplyable.
+        nb.Cells[0].SetBody("x = 1");
+        if (!nb.IsDirty) return "S10: cell body edit did not dirty the notebook";
+        if (nb.TryGetStrategyFile(out _)) return "S10: dirty notebook supplyable";
+
+        // Save -> Open round-trips the cell bodies (body fidelity through the seam).
+        nb.Cells[1].SetBody("y = x + 1");
+        if (!nb.Save()) return "S10: Save failed";
+        var nb2 = new MarimoNotebookDocument(synth);
+        if (!nb2.Open(py)) return "S10: Open failed";
+        if (nb2.CellCount != 2) return "S10: round-trip lost a cell";
+        if (nb2.Cells[0].Body != "x = 1" || nb2.Cells[1].Body != "y = x + 1") return "S10: round-trip body mismatch";
+
+        // names are carried opaquely through Open (the #76 named-cell guard; S1 never edits them).
+        string named = synth.Synthesize(new List<Cell> { new Cell("a = 1", "_config", "{}"), new Cell("b = 2", "_strat", "{}") });
+        string npath = Path.Combine(TempDir, "nb_named.py");
+        File.WriteAllText(npath, named);
+        var nb4 = new MarimoNotebookDocument(synth);
+        if (!nb4.Open(npath)) return "S10: Open of named notebook failed";
+        if (nb4.CellCount != 2 || nb4.Cells[0].Name != "_config" || nb4.Cells[1].Name != "_strat")
+            return "S10: cell names not carried through Open (seam dropped name+config)";
+
+        // >=1 delete guard: the last cell cannot be removed.
+        var single = new MarimoNotebookDocument(synth);
+        if (single.RemoveCell(single.Cells[0])) return "S10: removed the last cell (>=1 guard breached)";
+        if (single.CellCount != 1) return "S10: last-cell removal mutated count";
+        if (!nb2.RemoveCell(nb2.Cells[0])) return "S10: RemoveCell on a 2-cell notebook failed";
+        if (nb2.CellCount != 1) return "S10: RemoveCell did not shrink";
+
+        // Open fail-soft (broken / non-marimo .py): Open false, buffer NON-destructive, LastError set.
+        var failSynth = new FakeMarimoSynthesizer { FailDecompose = true };
+        var nb3 = new MarimoNotebookDocument(failSynth);
+        nb3.Cells[0].SetBody("keep me");
+        int before = nb3.CellCount;
+        if (nb3.Open(py)) return "S10: Open of a 'broken' .py should fail (fail-soft)";
+        if (nb3.CellCount != before || nb3.Cells[0].Body != "keep me") return "S10: fail-soft Open mutated the buffer";
+        if (nb3.LastError == null) return "S10: fail-soft Open did not set LastError";
+
+        // ResetUnboundEmpty = one empty cell, unbound (File→New).
+        nb2.ResetUnboundEmpty();
+        if (nb2.CellCount != 1 || nb2.Cells[0].Body != "" || nb2.IsBound) return "S10: ResetUnboundEmpty not 1 empty unbound cell";
+        return null;
+    }
+
+    // ======================================================================
+    // 11. #81 SpawnPlacement.Next — pure cascade (marimo calcSpawnPosition parity).
+    // ======================================================================
+    static string Section11_SpawnPlacement()
+    {
+        var anchor = new Vector2(100f, 200f);
+
+        // no existing windows -> the anchor itself.
+        if ((SpawnPlacement.Next(new List<Vector2>(), anchor, 30f) - anchor).sqrMagnitude > EPS)
+            return "S11: empty set should spawn at the anchor";
+
+        // a collision at the anchor -> diagonal cascade by (+offset,+offset).
+        if ((SpawnPlacement.Next(new List<Vector2> { anchor }, anchor, 30f) - new Vector2(130f, 230f)).sqrMagnitude > EPS)
+            return "S11: single collision did not cascade diagonally";
+
+        // a full diagonal chain -> the next free slot past the chain.
+        var chain = new List<Vector2> { anchor, new Vector2(130f, 230f), new Vector2(160f, 260f) };
+        if ((SpawnPlacement.Next(chain, anchor, 30f) - new Vector2(190f, 290f)).sqrMagnitude > EPS)
+            return "S11: cascade did not clear a full diagonal chain";
+
+        // a far window does NOT displace the spawn (overlap is allowed; threshold < 10).
+        if ((SpawnPlacement.Next(new List<Vector2> { new Vector2(1000f, 1000f) }, anchor, 30f) - anchor).sqrMagnitude > EPS)
+            return "S11: a far window wrongly displaced the spawn (overlap must be allowed)";
+
+        // a near window (within the <10 threshold) DOES trigger a cascade.
+        if ((SpawnPlacement.Next(new List<Vector2> { new Vector2(105f, 205f) }, anchor, 30f) - anchor).sqrMagnitude < EPS)
+            return "S11: a near (<10) window did not trigger a cascade";
+        return null;
+    }
+
+    // ======================================================================
+    // 12. #81 NotebookCellCoordinator — region_id<->Cell binding + window lifecycle on REAL
+    //     (bare-RT) windows: cell0->region_001, AddCell->region_002 spawn, delete routing
+    //     (despawn region_002 / hide-dormant region_001), >=1 guard, dormant reuse, positions.
+    // ======================================================================
+    static string Section12_Coordinator(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+
+        var layerGo = new GameObject("FWLayer12", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) => { var go = new GameObject("W_" + id, typeof(RectTransform)); spawned.Add(go); return go.GetComponent<RectTransform>(); },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        // adopt the scene-authored region_001 shell.
+        var adoptGo = new GameObject("region001", typeof(RectTransform));
+        spawned.Add(adoptGo);
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptGo.GetComponent<RectTransform>());
+
+        var synth = new FakeMarimoSynthesizer();
+        var nb = new MarimoNotebookDocument(synth);
+        var coord = new NotebookCellCoordinator(nb, controller, _ => null, () => Vector2.zero, new Vector2(520f, 380f));
+
+        // sync the default notebook -> cell 0 bound to region_001.
+        coord.SyncWindowsToNotebook(null);
+        if (!controller.Has(R1)) return "S12: region_001 missing after sync";
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S12: cell 0 not bound to region_001";
+
+        // AddCell -> a region_002 window spawned + bound.
+        var c2 = coord.AddCell();
+        if (coord.RegionOf(c2) != R2) return "S12: 2nd cell not region_002 (got " + coord.RegionOf(c2) + ")";
+        if (!controller.Has(R2)) return "S12: region_002 window not spawned";
+
+        // DeleteCell(region_002) -> despawned; notebook back to 1 cell.
+        if (!coord.DeleteCell(R2)) return "S12: DeleteCell(region_002) failed";
+        if (controller.Has(R2)) return "S12: region_002 not despawned on delete";
+        if (nb.CellCount != 1) return "S12: notebook not 1 cell after delete";
+
+        // >=1 guard: deleting the last cell (region_001) is refused, shell preserved.
+        if (coord.DeleteCell(R1)) return "S12: deleted the last cell (>=1 guard breached)";
+        if (!controller.Has(R1)) return "S12: region_001 destroyed by a refused delete";
+
+        // with 2 cells, delete the region_001 cell -> region_001 HIDDEN (dormant), NOT destroyed.
+        coord.AddCell();   // region_002 again
+        if (!coord.DeleteCell(R1)) return "S12: delete region_001 cell (2-cell) failed";
+        if (!controller.Has(R1)) return "S12: region_001 shell destroyed (must hide, dormant)";
+        if (controller.RectOf(R1).gameObject.activeSelf) return "S12: dormant region_001 still active";
+
+        // AddCell reuses the dormant region_001 shell (re-activated).
+        var c4 = coord.AddCell();
+        if (coord.RegionOf(c4) != R1) return "S12: AddCell did not reuse the dormant region_001";
+        if (!controller.RectOf(R1).gameObject.activeSelf) return "S12: reused region_001 not re-activated";
+
+        // CapturePositions is cell-order parallel (regenerated from live).
+        if (coord.CapturePositions().Count != nb.CellCount) return "S12: CapturePositions count != cell count";
         return null;
     }
 

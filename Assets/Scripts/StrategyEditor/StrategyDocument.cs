@@ -132,6 +132,18 @@ public class StrategyDocument : IStrategyFileProvider
         _openedOrSaved = false;
     }
 
+    // File→New marimo skeleton seed (#76 S6b-β-clean U2): set the buffer to a starter template while
+    // staying UNBOUND + CLEAN. Distinct from SetText (flips dirty) and ResetUnboundEmpty (empties):
+    // New seeds runnable starter text, not a user edit, so the document is unbound (untitled) and not
+    // dirty — Run is blocked only by "未保存" (TryGetStrategyFile false: no path) until the user saves.
+    public void SeedUnbound(string text)
+    {
+        _text = text ?? string.Empty;
+        _path = null;
+        _dirty = false;
+        _openedOrSaved = false;
+    }
+
     // IStrategyFileProvider — supplyable iff ALL 5 conditions hold (findings 0010 §5).
     public bool TryGetStrategyFile(out string path)
     {

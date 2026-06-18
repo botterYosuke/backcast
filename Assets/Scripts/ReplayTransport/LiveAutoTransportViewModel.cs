@@ -108,7 +108,8 @@ public sealed class LiveAutoTransportViewModel
     public bool IsRunning => Status == "RUNNING";
     public bool IsPaused => Status == "PAUSED";
 
-    // ▶ while at rest / paused, ⏸ while running (acts as Pause). Matches ReplayTransportViewModel.
+    // ▶ while at rest / paused, ⏸ while running (acts as Pause). Live-mode glyph (the footer's replay
+    // transport ▶/⏸ was retired in #76 S6b-β-clean; this stays for the Live epic's run controls).
     public string PlayGlyph => IsRunning ? "⏸" : "▶";
 
     // ---- ▶ is always clickable; the decision encodes Start/Pause/Resume or a block reason. ----

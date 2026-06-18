@@ -9,10 +9,12 @@
 //   Start / End (YYYY-MM-DD InputFields) · Granularity (Daily | Minute toggle buttons) ·
 //   Initial cash (InputField) · Universe (one InputField, whitespace/comma-separated ids →
 //   InstrumentRegistry.ReplaceAll — the minimal text-list editor #31's picker later replaces) ·
-//   per-field error labels · a Run button gated by validation + strategy supplyability.
+//   per-field error labels.
 //
-// Every edit calls the controller setter then Refresh(): error labels + Run.interactable are
-// recomputed from controller.Validate(), so AC④ (invalid → no run) is visible live.
+// #76 S6b-β-clean U5: the tile is SCENARIO-EDITING-ONLY. The Run button + run-readiness display
+// moved to the Strategy Editor title bar (RunReadinessViewModel / StrategyEditorRunButton); the
+// tile keeps the scenario fields and their per-field error labels. Every edit calls the controller
+// setter then Refresh(), so the field errors are visible live.
 //
 // COLORS (issue #44): no inline color constants — every graphic reads ThemeService.Current
 // (findings 0020). Retained graphic refs let ApplyTheme() repaint on a theme switch; the
@@ -27,12 +29,11 @@ using UnityEngine.UI;
 public sealed class ScenarioStartupTile
 {
     readonly ScenarioStartupController _ctrl;
-    readonly Action _onRun;
     readonly Font _font;
 
     InputField _startField, _endField, _cashField, _universeField;
-    Button _dailyBtn, _minuteBtn, _runBtn;
-    Text _startErr, _endErr, _cashErr, _universeErr, _granErr, _runMsg;
+    Button _dailyBtn, _minuteBtn;
+    Text _startErr, _endErr, _cashErr, _universeErr, _granErr;
 
     // Retained themed graphics (issue #44) so ApplyTheme() can repaint on a theme switch.
     Image _tileBg;
@@ -40,10 +41,9 @@ public sealed class ScenarioStartupTile
     readonly List<Text> _bodyTexts = new List<Text>();    // role: colors.text
     readonly List<Text> _errorTexts = new List<Text>();   // role: status.error
 
-    public ScenarioStartupTile(ScenarioStartupController ctrl, Action onRun, Font font)
+    public ScenarioStartupTile(ScenarioStartupController ctrl, Font font)
     {
         _ctrl = ctrl ?? throw new ArgumentNullException(nameof(ctrl));
-        _onRun = onRun;
         _font = font;
     }
 
@@ -81,10 +81,6 @@ public sealed class ScenarioStartupTile
         // (findings 0025 §12, Finding 2).
         _universeField.onEndEdit.AddListener(_ => PullUniverseField());
         _universeErr = MakeError(tile, ref y, errH);
-
-        y -= 6f;
-        _runBtn = MakeButton(tile, "Run Replay", 0f, ref y, 26f, OnRunClicked, advanceY: true, full: true);
-        _runMsg = MakeError(tile, ref y, errH);
 
         SyncFieldsFromController();
         Refresh();
@@ -143,13 +139,9 @@ public sealed class ScenarioStartupTile
         if (_ctrl?.Universe != null) _ctrl.Universe.Changed -= OnUniverseRegistryChanged;
     }
 
-    void OnRunClicked()
-    {
-        // The harness's onRun consults TryStartRun(provider); here we only forward the intent.
-        _onRun?.Invoke();
-    }
-
-    // Recompute error labels + granularity selection highlight + Run enablement from validation.
+    // Recompute the per-field error labels + the granularity selection highlight from validation.
+    // #76 S6b-β-clean U5: the tile is scenario-editing-only — Run + run-readiness moved to the
+    // Strategy Editor title bar (RunReadinessViewModel / StrategyEditorRunButton).
     public void Refresh()
     {
         var e = _ctrl.Validate();
@@ -158,12 +150,9 @@ public sealed class ScenarioStartupTile
         SetErr(_granErr, e.Granularity);
         SetErr(_cashErr, e.InitialCash);
         SetErr(_universeErr, e.Universe);
-        SetErr(_runMsg, null);
 
         Highlight(_dailyBtn, _ctrl.Params.Granularity == GranularityChoice.Daily);
         Highlight(_minuteBtn, _ctrl.Params.Granularity == GranularityChoice.Minute);
-
-        if (_runBtn != null) _runBtn.interactable = !e.Any;
     }
 
     // Repaint every retained graphic from the active theme (issue #44). Called by the owning
@@ -176,19 +165,8 @@ public sealed class ScenarioStartupTile
         foreach (var img in _fieldBgs) if (img != null) img.color = t.colors.element_background;
         foreach (var txt in _bodyTexts) if (txt != null) txt.color = t.colors.text;
         foreach (var txt in _errorTexts) if (txt != null) txt.color = t.status.error;
-        if (_runBtn != null)
-        {
-            var img = _runBtn.GetComponent<Image>();
-            if (img != null) img.color = t.colors.element_background;
-        }
-        // Refresh() clears _runMsg (externally-set run-gate reason); preserve it across a theme switch.
-        string runMsg = _runMsg != null ? _runMsg.text : null;
         Refresh();
-        if (!string.IsNullOrEmpty(runMsg)) ShowRunMessage(runMsg);
     }
-
-    // Surface a run-gate block reason (no supplyable strategy / invalid scenario) under Run.
-    public void ShowRunMessage(string msg) => SetErr(_runMsg, msg);
 
     // ---- widget helpers ----
     void SetErr(Text t, string msg)
@@ -264,13 +242,13 @@ public sealed class ScenarioStartupTile
     }
 
     Button MakeButton(RectTransform parent, string label, float xMin, ref float y, float h,
-        UnityEngine.Events.UnityAction onClick, bool advanceY, bool full = false)
+        UnityEngine.Events.UnityAction onClick, bool advanceY)
     {
         var go = new GameObject("btn:" + label, typeof(RectTransform), typeof(Image), typeof(Button));
         var rt = go.GetComponent<RectTransform>();
         rt.SetParent(parent, false);
-        float left = full ? 0.04f : 0.04f + xMin * 0.92f;
-        float right = full ? 0.96f : 0.04f + (xMin + 0.5f) * 0.92f - 0.01f;
+        float left = 0.04f + xMin * 0.92f;
+        float right = 0.04f + (xMin + 0.5f) * 0.92f - 0.01f;
         Anchor(rt, left, right, y, h);
         go.GetComponent<Image>().color = ThemeService.Current.colors.element_background;
 

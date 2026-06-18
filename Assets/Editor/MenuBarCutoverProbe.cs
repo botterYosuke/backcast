@@ -14,8 +14,9 @@
 //
 // SECTIONS (findings 0027 §2):
 //   1. File→New = full TTWR reset (findings 0017 §4) that HONOURS the adopt invariant (findings 0025 §8):
-//      the scene-authored adopted editor is reset-to-empty (NOT destroyed); ADDITIONAL editor windows are
-//      destroyed + unregistered; the scenario universe is cleared.
+//      the scene-authored adopted editor is reseeded to the marimo skeleton template (#76 S6b-β-clean U2,
+//      NOT destroyed, left untitled); ADDITIONAL editor windows are destroyed + unregistered; the
+//      scenario universe is cleared.
 
 using System;
 using System.Collections.Generic;
@@ -88,6 +89,9 @@ public static class MenuBarCutoverProbe
         ty.GetMethod("OnFileNew", BF).Invoke(root, null);
 
         // ---- assert: adopt invariant — the scene-authored region_001 is RESET, never destroyed ----
+        // (#76↔#81: U2's "seed the marimo template" is superseded by the #81 cell model — File→New is a
+        // blank notebook with one empty cell; the host-API names show as a placeholder, not a seeded body.
+        // The "boot something runnable" intent moved to U3 = boot OPENS the canonical v19, findings 0050.)
         if (!windows.Has(WINDOW_ID)) return "File→New DESTROYED the region_001 cell window (adopt invariant breached, findings 0025 §8)";
         if (windows.RectOf(WINDOW_ID) != adoptedRt) return "File→New REPLACED the region_001 window (must reset in place)";
         if (notebook.CellCount != 1) return "File→New did not reset the notebook to one empty cell";

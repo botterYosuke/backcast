@@ -96,7 +96,7 @@ def _bars():
     ]
 
 
-def _run(strategy, monkeypatch):
+def _run(strategy, monkeypatch, initial_cash=10_000_000.0):
     sink = _RecSink()
     monkeypatch.setattr(runner_mod, "load_universe_bars", lambda *a, **k: _bars())
     result = KernelRunner(
@@ -104,7 +104,7 @@ def _run(strategy, monkeypatch):
         instrument_ids=[IID],
         start="2024-01-01",
         end="2024-12-31",
-        initial_cash=10_000_000.0,
+        initial_cash=initial_cash,
         strategy=strategy,
         sink=sink,
     ).run()
@@ -189,6 +189,68 @@ def test_marimo_get_portfolio_target_position_parity(tmp_path, monkeypatch):
     # guard the fixture: a target-position strategy must place real BUYs and SELLs, bounded
     sides = {o[1] for o in t_sink.fills}
     assert sides == {OrderSide.BUY, OrderSide.SELL} and 0 < len(t_sink.fills) < 300
+
+    assert m_sink.fills == t_sink.fills
+    assert m_sink.equities == t_sink.equities
+    assert (m_result.fills, m_result.final_cash, m_result.realized_pnl) == (
+        t_result.fills,
+        t_result.final_cash,
+        t_result.realized_pnl,
+    )
+
+
+# ----------------------------------------- buying_power cash-aware sizing parity (S6b-α)
+
+_MARIMO_BP_SRC = """
+import marimo
+
+app = marimo.App()
+
+
+@app.cell
+def _buy_while_affordable():
+    bar = get_bar()       # noqa: F821  host-seeded bar driver
+    pf = get_portfolio()  # noqa: F821  host-seeded portfolio driver
+    # v19-style cash-aware sizing: buy 1 share whenever the PRE-FILL buying power covers it.
+    # buying_power shrinks as cash is spent, so this BLOCKS once the book is broke — proving
+    # get_portfolio().buying_power flows to the cell as the same pre-fill value the imperative
+    # self.buying_power() reads.
+    qty = 1.0 if pf.buying_power >= bar.close else 0.0
+    submit_market(qty)    # noqa: F821
+    return (qty,)
+"""
+
+
+class _BuyingPowerTwin(Strategy):
+    """Imperative twin: same affordability gate via self.buying_power() (the seam v19's
+    _cash_aware_picks reads)."""
+
+    def on_bar(self, bar) -> None:
+        if self.buying_power() >= bar.close:
+            self.submit_market(self.instrument_id, OrderSide.BUY, 1.0)
+
+
+def test_marimo_buying_power_cash_aware_sizing_parity(tmp_path, monkeypatch):
+    """A marimo cell sizing off get_portfolio().buying_power matches the imperative twin that
+    reads self.buying_power(). Small initial_cash makes the gate BITE (buying stops once broke,
+    not a vacuous always-affordable gate) — so this pins that buying_power is the same pre-fill
+    value on both paths (#76 S6b-α)."""
+    path = tmp_path / "strat_bp.py"
+    path.write_text(_MARIMO_BP_SRC, encoding="utf-8")
+
+    marimo_strat = MarimoStrategy(
+        app=load_app(str(path)), strategy_id="strat-marimo", instrument_id=IID
+    )
+    twin = _BuyingPowerTwin(strategy_id="strat-imp", instrument_id=IID)
+
+    m_result, m_sink = _run(marimo_strat, monkeypatch, initial_cash=5_000.0)
+    marimo_strat.close()
+    t_result, t_sink = _run(twin, monkeypatch, initial_cash=5_000.0)
+
+    # fixture guard: buying_power must actually BITE — a handful of BUYs then a block (the
+    # strategy keeps wanting to buy every bar, but runs out of cash), never every bar.
+    assert all(o[1] is OrderSide.BUY for o in t_sink.fills)
+    assert 0 < len(t_sink.fills) < 10, f"buying_power gate did not bite: {len(t_sink.fills)} fills"
 
     assert m_sink.fills == t_sink.fills
     assert m_sink.equities == t_sink.equities

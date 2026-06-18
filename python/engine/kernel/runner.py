@@ -132,7 +132,9 @@ class _Context:
         """Cell-facing read seam (#76): a frozen pre-fill snapshot marked to market at the
         current reference_prices (the bar close orders fill at). Called at on_bar entry —
         before this bar's fill — so the book is end-of-(N-1) = no-look-ahead."""
-        return self._portfolio.snapshot(self.reference_prices, instrument_id)
+        return self._portfolio.snapshot(
+            self.reference_prices, instrument_id, buying_power=self.buying_power()
+        )
 
 
 class KernelRunner:

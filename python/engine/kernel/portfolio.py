@@ -37,6 +37,10 @@ class PortfolioSnapshot:
     cash: float
     equity: float
     realized_pnl: float
+    # Cash-aware-sizing seam (v19 ``_cash_aware_picks`` reads ``self.buying_power()``). In
+    # Replay it == cash; the ctx seam overrides it with the venue value in Live. On the
+    # snapshot so a cell sizes off ``get_portfolio().buying_power`` (#76 S6b-α).
+    buying_power: float
     position: float
     # Excluded from the frozen dataclass's generated __hash__ (a MappingProxyType is
     # unhashable, which would make hashing the "value" snapshot raise TypeError) but kept in
@@ -153,7 +157,11 @@ class Portfolio:
         return [p for p in self._positions.values() if p.quantity != 0.0]
 
     def snapshot(
-        self, prices: dict[str, float], primary_instrument_id: Optional[str] = None
+        self,
+        prices: dict[str, float],
+        primary_instrument_id: Optional[str] = None,
+        *,
+        buying_power: Optional[float] = None,
     ) -> PortfolioSnapshot:
         """Build the frozen cell-facing snapshot (#76 portfolio-driver slice).
 
@@ -161,6 +169,9 @@ class Portfolio:
         ``on_bar`` entry — the bar close orders fill at), ``cash`` / ``realized_pnl`` are the
         live book, ``position`` is the primary instrument's signed net qty. Called at
         ``on_bar(N)`` entry (before this bar's fill) → the book is end-of-(N-1) = no-look-ahead.
+
+        ``buying_power`` is the cash-aware-sizing seam; it defaults to cash (the Replay
+        accounting value) and the Live ctx passes the venue value explicitly (#76 S6b-α).
         """
         positions = {p.instrument_id: p.quantity for p in self.open_positions()}
         primary = (
@@ -172,6 +183,7 @@ class Portfolio:
             cash=self._cash,
             equity=self.mark_to_market_equity(prices),
             realized_pnl=self._realized,
+            buying_power=self._cash if buying_power is None else float(buying_power),
             position=primary,
             positions=MappingProxyType(positions),
         )

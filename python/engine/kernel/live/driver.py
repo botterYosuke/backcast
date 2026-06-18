@@ -85,8 +85,11 @@ class _Ctx:
         # StrategyContext read seam (#76): kernel-mirror snapshot, symmetric with
         # buying_power's kernel-cash fallback. The marimo adapter is Replay-only in S6a;
         # Live's venue-authoritative 余力/建玉 integration is a future epic (like the
-        # buying_power_provider). Prices = the driver's last seen closes.
-        return self._driver._portfolio.snapshot(self._driver.last_prices, instrument_id)
+        # buying_power_provider). Prices = the driver's last seen closes; buying_power = the
+        # venue-aware value (#76 S6b-α), symmetric with the kernel-cash Replay default.
+        return self._driver._portfolio.snapshot(
+            self._driver.last_prices, instrument_id, buying_power=self.buying_power()
+        )
 
 
 class KernelLiveDriver:

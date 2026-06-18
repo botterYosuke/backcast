@@ -72,6 +72,19 @@ def test_snapshot_primary_position_is_per_instrument():
     assert pf.snapshot({A: 100.0, B: 200.0}, None).position == 0.0
 
 
+def test_snapshot_buying_power_defaults_to_cash_and_accepts_override():
+    """buying_power = the cash-aware-sizing seam (v19 ``_cash_aware_picks`` reads
+    ``self.buying_power()``). In Replay it == cash (pure accounting default); the ctx seam
+    passes a Live venue value explicitly. Exposed on the snapshot so a marimo cell can size
+    off ``get_portfolio().buying_power`` (#76 S6b-α)."""
+    pf = Portfolio(initial_cash=1_000_000.0)
+    assert pf.snapshot({}, A).buying_power == 1_000_000.0  # flat → cash
+    pf.apply_fill(_fill(A, OrderSide.BUY, 10.0, 100.0))  # cash -1000 → 999000
+    assert pf.snapshot({A: 100.0}, A).buying_power == pytest.approx(999_000.0)
+    # Live venue buying power differs from cash → the ctx provider overrides it explicitly.
+    assert pf.snapshot({A: 100.0}, A, buying_power=500_000.0).buying_power == 500_000.0
+
+
 def test_snapshot_is_frozen():
     snap = Portfolio(initial_cash=1.0).snapshot({}, A)
     with pytest.raises(dataclasses.FrozenInstanceError):

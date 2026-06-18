@@ -8,7 +8,8 @@
 // gates G1 (venue-drop while a LiveAuto run is active → the host MUST stop the run, not just flip to
 // Replay) and G2 (start ok → a first lifecycle of ERROR still re-arms ▶ — no stuck guard). The
 // engine-touching round-trip (real register→start→fill→teardown) is the MOCK/HITL in
-// ProductionLiveShell; this proves the branch logic. Mirrors ReplayTransportVerify (findings 0026 §6).
+// ProductionLiveShell; this proves the branch logic. (The footer ▶ that drove these VMs was retired in
+// #76 S6b-β-clean — the LiveAuto VM logic stays for the Live epic's run controls; this gate pins it.)
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;

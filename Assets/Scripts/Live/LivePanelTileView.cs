@@ -7,7 +7,7 @@
 // view NEVER decodes wire events or holds live state — it only renders a string the formatter
 // derives from the VM.
 //
-// REFRESH (parity with ReplayFooterView): the caller may Refresh(panel) every frame, but the Text is
+// REFRESH (parity with WorkspaceFooterView): the caller may Refresh(panel) every frame, but the Text is
 // only rewritten when the formatter output actually changes (cheap string compare), so a steady VM
 // costs one format + one compare per frame and no uGUI mesh rebuild.
 

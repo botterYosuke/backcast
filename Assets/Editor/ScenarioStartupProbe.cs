@@ -357,7 +357,7 @@ public static class ScenarioStartupProbe
             var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             var ctrl = new ScenarioStartupController();
             ctrl.Populate(Path.Combine(TempDir, "tile_strategy.py"), new DateTime(2026, 6, 14)); // empty universe
-            var tile = new ScenarioStartupTile(ctrl, null, font);
+            var tile = new ScenarioStartupTile(ctrl, font);
             tile.Build(tileRt);
 
             var fld = typeof(ScenarioStartupTile)
@@ -399,7 +399,7 @@ public static class ScenarioStartupProbe
             var ctrl = new ScenarioStartupController();
             ctrl.Populate(Path.Combine(TempDir, "tile_blur_strategy.py"), new DateTime(2026, 6, 14));
             ctrl.Universe.Add("A.TSE");                         // the SoT after a sidebar settled to [A]
-            var tile = new ScenarioStartupTile(ctrl, null, font);
+            var tile = new ScenarioStartupTile(ctrl, font);
             tile.Build(tileRt);
 
             var fld = typeof(ScenarioStartupTile)

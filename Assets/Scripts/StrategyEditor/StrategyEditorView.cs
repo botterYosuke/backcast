@@ -204,6 +204,17 @@ public class StrategyEditorView : MonoBehaviour
         SyncFromDocument();
     }
 
+    // File→New marimo skeleton (#76 S6b-β-clean U2): seed starter template text into the UNBOUND
+    // editor (mirrors ResetUnboundEmpty's reset→clear→sync boundary, but with starter text so a fresh
+    // workspace is immediately a valid — if unsaved — marimo strategy). History is dropped; the
+    // InputField + token surface re-sync so nothing stale renders.
+    public void SeedUnbound(string text)
+    {
+        Document.SeedUnbound(text);
+        _history.Clear();
+        SyncFromDocument();
+    }
+
     // Push the document's current text into the InputField without recording, and reset the
     // snapshot to match (used after open/restore/unbound-empty).
     void SyncFromDocument()

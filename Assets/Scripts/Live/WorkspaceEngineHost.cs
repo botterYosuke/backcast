@@ -202,7 +202,7 @@ public sealed class WorkspaceEngineHost
         return _panel.SecretRequiredCount > before;
     }
 
-    // ======================= Replay run + transport (unchanged API) =======================
+    // ======================= Replay run + force-stop teardown =======================
 
     // Launch the production Replay path on the persistent server. Refuses while a run is in flight or
     // the previous launcher is still alive (re-entrancy guard, unchanged from ReplayEngineHost).
@@ -274,41 +274,26 @@ public sealed class WorkspaceEngineHost
         }
     }
 
-    public void Pause() => CallTransport("pause_replay");
-    public void Resume() => CallTransport("resume_replay");
-    public void Step() => CallTransport("step_replay");
-    public void ForceStop() => CallTransport("force_stop_replay");
-
-    public void SetSpeed(int mult)
+    // #76 S6b-β-clean U6: the user replay transport (pause/resume/step/set_speed) is retired from the
+    // production surface (ADR-0012 reactive model — a reactive drain runs to completion, there is nothing
+    // to scrub). force_stop_replay is the LONE surviving server transport call: a TEARDOWN RPC that ends
+    // a synchronous start_engine so the launcher thread can exit (host lifecycle; the S6-2 teardown
+    // invariant — Stop() calls it to unblock the launcher's blocking run).
+    public void ForceStop()
     {
         if (!Volatile.Read(ref _serverReady)) return;
         try
         {
             using (Py.GIL())
-            using (PyObject res = _server.InvokeMethod("set_replay_speed", new PyInt(mult)))
-            using (PyObject ok = res["success"])
-            {
-                if (!ok.As<bool>()) Debug.LogWarning($"[WorkspaceEngineHost] set_replay_speed({mult}) rejected");
-            }
-        }
-        catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] set_replay_speed error (non-fatal): {e.Message}"); }
-    }
-
-    void CallTransport(string method)
-    {
-        if (!Volatile.Read(ref _serverReady)) return;
-        try
-        {
-            using (Py.GIL())
-            using (PyObject res = _server.InvokeMethod(method))
+            using (PyObject res = _server.InvokeMethod("force_stop_replay"))
             using (PyObject ok = res["success"])
             {
                 if (!ok.As<bool>())
                     using (PyObject em = res["error_message"])
-                        Debug.LogWarning($"[WorkspaceEngineHost] {method} rejected: {em.As<string>()}");
+                        Debug.LogWarning($"[WorkspaceEngineHost] force_stop_replay rejected: {em.As<string>()}");
             }
         }
-        catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] {method} error (non-fatal): {e.Message}"); }
+        catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] force_stop_replay error (non-fatal): {e.Message}"); }
     }
 
     // ======================= Live RPCs (#39 footer + venue) =======================

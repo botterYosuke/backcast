@@ -14,8 +14,9 @@
 //
 // SECTIONS (findings 0027 §2):
 //   1. File→New = full TTWR reset (findings 0017 §4) that HONOURS the adopt invariant (findings 0025 §8):
-//      the scene-authored adopted editor is reset-to-empty (NOT destroyed); ADDITIONAL editor windows are
-//      destroyed + unregistered; the scenario universe is cleared.
+//      the scene-authored adopted editor is reseeded to the marimo skeleton template (#76 S6b-β-clean U2,
+//      NOT destroyed, left untitled); ADDITIONAL editor windows are destroyed + unregistered; the
+//      scenario universe is cleared.
 
 using System;
 using System.Collections.Generic;
@@ -90,8 +91,13 @@ public static class MenuBarCutoverProbe
         if (!windows.Has(WINDOW_ID)) return "File→New DESTROYED the adopted editor window (adopt invariant breached, findings 0025 §8)";
         if (windows.RectOf(WINDOW_ID) != adoptedRt) return "File→New REPLACED the adopted editor (must reset in place)";
         if (!editors.TryGetValue(WINDOW_ID, out var adoptedAfter) || adoptedAfter == null) return "adopted editor dropped from _editors";
-        if (!string.IsNullOrEmpty(adoptedAfter.Document.Text)) return "File→New did not reset the adopted editor text to empty";
-        if (adoptedAfter.Document.CurrentPath != null) return "File→New did not unbind the adopted editor path (ResetUnboundEmpty)";
+        // #76 S6b-β-clean U2: File→New now SEEDS the marimo skeleton template (not empty), and leaves the
+        // editor UNBOUND (untitled). The seeded text is a marimo app (is_marimo_app_source would be true).
+        if (adoptedAfter.Document.Text != MarimoStrategyTemplate.NewStrategy) return "File→New did not seed the marimo skeleton template (U2)";
+        if (!adoptedAfter.Document.Text.Contains("import marimo")
+            || !adoptedAfter.Document.Text.Contains("marimo.App(")
+            || !adoptedAfter.Document.Text.Contains("@app.cell")) return "File→New template is not a marimo app (is_marimo_app_source would be false)";
+        if (adoptedAfter.Document.CurrentPath != null) return "File→New did not leave the adopted editor unbound (untitled)";
 
         // ---- assert: additional editor window destroyed + unregistered ----
         if (windows.Has(ADDITIONAL_ID)) return "File→New did not destroy the ADDITIONAL editor window";

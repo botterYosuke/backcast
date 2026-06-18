@@ -11,7 +11,9 @@ Seams (all already host-provided — this file authors NO model I/O, sklearn, or
   - ``submit_market(qty, instrument_id=)``     S4 signed-qty injected action
   - ``score_v19_rows(rows)``                   host-injected SERVICE (= score_universe bound
                                                to the model; sklearn stays host-side, T1)
-  - ``UNIVERSE`` / ``RS_REF``                  host-injected CONSTANTS (ordered universe + rs-ref)
+  - ``V19_UNIVERSE`` / ``V19_RS_REF``          host-injected CONSTANTS (ordered universe + rs-ref)
+  - ``V19_ADV_BASELINE`` / ``V19_PREV_CLOSE``  host-injected CONSTANTS (rel_turnover / gap inputs;
+                                               the production resolver loads them from artifacts, R2)
 
 The pure numeric logic (jst timing, features, build_rows, sizing) is imported from v19_core
 — the SAME functions the imperative strategy calls — so the two paths share byte-identical
@@ -29,8 +31,9 @@ app = marimo.App()
 @app.cell
 def _config():
     # Author-owned strategy knobs (T3): these are v19's ctor params written as cell
-    # constants. The host-injected UNIVERSE / RS_REF and the score_v19_rows service are
-    # free refs. The deterministic parity gate pins these to the imperative twin's ctor.
+    # constants. The host-injected V19_UNIVERSE / V19_RS_REF / V19_ADV_BASELINE /
+    # V19_PREV_CLOSE and the score_v19_rows service are free refs (the parity gate /
+    # production resolver pin these).
     TOP_K = 5
     ENTRY_MINUTE = 10 * 60        # 10:00 JST
     EXIT_MINUTE = 14 * 60 + 55    # 14:55 JST
@@ -101,8 +104,12 @@ def _strategy(
         # (through 09:59 — this bar is NOT accumulated, so no look-ahead) and buy the
         # cash-aware top-k. set_placed first so a later bar never re-enters (matches _enter).
         set_placed(True)
-        rows = v19_core.build_rows(snaps, UNIVERSE, RS_REF)  # noqa: F821  injected constants
-        scores = score_v19_rows(rows)                        # noqa: F821  injected service
+        rows = v19_core.build_rows(
+            snaps, V19_UNIVERSE, V19_RS_REF,            # noqa: F821  injected constants
+            adv_baseline=V19_ADV_BASELINE,              # noqa: F821  (rel_turnover feature)
+            prev_close=V19_PREV_CLOSE,                  # noqa: F821  (gap feature)
+        )
+        scores = score_v19_rows(rows)                   # noqa: F821  injected service
         if scores:
             top = sorted(scores, key=lambda k: scores[k], reverse=True)[:TOP_K]
             prices = (

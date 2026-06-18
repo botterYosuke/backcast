@@ -1,12 +1,18 @@
-"""v19 marimo↔imperative deterministic parity gate (#76 S6b-α step2 step5 / findings 0046 T5/T7).
+"""v19 marimo↔imperative deterministic parity gate (#76 S6b-α step2 / findings 0046 T5/T7/R2).
 
 The required deliverable of S6b-α step2: the marimo cell-DAG port (v19_morning_cell.py) and
 the REAL imperative ``V19MorningStrategy`` produce byte-identical order/fill/equity from the
-SAME synthetic bars, the SAME stub scorer, and the SAME cash — mount-independent (no DuckDB,
-no real model). Both inject the same stub model, so parity is structurally model-independent
-(T5). The fixture spans two JST days so v19's daily reset (re-entry/re-exit) is exercised (T7),
-buys multiple instruments (multi-iid routing), and the cash gate BITES (trims the 3rd pick) —
-so the gate is not vacuous.
+SAME synthetic bars, the SAME stub scorer, the SAME cash, and the SAME artifacts (universe /
+adv_baseline / prev_close) — mount-independent (no DuckDB, no real model). Both inject the same
+stub, so parity is model-independent (T5). The fixture spans two JST days so v19's daily reset
+is exercised (T7), buys multiple instruments (multi-iid), and the cash gate BITES (trims the
+3rd pick).
+
+NON-VACUOUS w.r.t. adv/prev_close (R2): the stub ranks by the **gap** feature (a function of
+prev_close), and the gap-rank is deliberately NOT the universe order — so if the marimo cell
+failed to thread prev_close into build_rows, the picks would change and parity would break. A
+sensitivity litmus proves it (imperative with empty prev_close picks a different set), and a
+feature guard proves rel_turnover (adv) and gap (prev_close) are non-zero.
 """
 from __future__ import annotations
 
@@ -14,6 +20,7 @@ import os
 import sys
 from datetime import datetime
 from functools import partial
+from types import MappingProxyType
 from zoneinfo import ZoneInfo
 
 _PY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -38,20 +45,43 @@ pytestmark = pytest.mark.marimo
 _JST = ZoneInfo("Asia/Tokyo")
 _CELL = os.path.join(_PY, "strategies", "v19", "v19_morning_cell.py")
 
-# 3 tradable instruments + an rs-ref (never traded). Base prices set the cross-sectional rank
-# (9984 > 6758 > 7203 by price_at_decision) so the stub's top-k is unambiguous; the cash gate
-# (¥35k) affords the top 2 but not the 3rd → a biting, multi-iid, non-vacuous fixture.
+# Universe ORDER (7203, 6758, 9984) + rs-ref (1306, never traded). The gap-rank below is
+# 9984 > 7203 > 6758 — deliberately NOT the universe order, so a dropped prev_close (gap→0,
+# ties broken by universe order) changes the picks.
 _UNIVERSE = ("7203.TSE", "6758.TSE", "9984.TSE", "1306.TSE")
 _RS_REF = "1306.TSE"
-_BASE = {"7203.TSE": 100.0, "6758.TSE": 120.0, "9984.TSE": 150.0, "1306.TSE": 200.0}
-_INITIAL_CASH = 35_000.0
+_IDX = {iid: i for i, iid in enumerate(_UNIVERSE)}
+_INITIAL_CASH = 260_000.0
+
+# Morning closes ≈ 1000 (so the three picks have near-equal notionals → a clean cash gate),
+# with a tiny per-instrument offset for non-degenerate features and a +0.01/min drift.
+_OPEN_MIN = 9 * 60 + 55  # 09:55 JST
+
+
+def _close(iid: str, minute: int) -> float:
+    return 1000.0 + _IDX[iid] * 1.0 + (minute - _OPEN_MIN) * 0.01
+
+
+# prev_close chosen so gap = o0/prev_close - 1 ranks 9984(0.10) > 7203(0.05) > 6758(0.01).
+# o0 = the 09:55 close = 1000 + idx.
+_GAP_TARGET = {"9984.TSE": 0.10, "7203.TSE": 0.05, "6758.TSE": 0.01}
+_PREV_CLOSE = MappingProxyType(
+    {iid: (1000.0 + _IDX[iid]) / (1.0 + g) for iid, g in _GAP_TARGET.items()}
+)
+# Non-zero ADV so rel_turnover is a real number (does not affect the gap-rank).
+_ADV_BASELINE = MappingProxyType({iid: 1_000_000.0 for iid in _GAP_TARGET})
+
+_GAP_COL = v19_core._FEATURES.index("gap")  # the stub ranks by this z-scored column
 
 
 class _StubModel:
-    """Deterministic scorer: rank by the row's price_at_decision (the last z-scored column)."""
+    """Deterministic scorer: rank by the z-scored ``gap`` column (a function of prev_close).
+
+    gap depends on prev_close, so this makes parity SENSITIVE to whether prev_close was
+    threaded into the features on both paths."""
 
     def predict(self, X):
-        return [float(row[-1]) for row in X]
+        return [float(row[_GAP_COL]) for row in X]
 
 
 def _ts(y: int, mo: int, d: int, hh: int, mm: int) -> int:
@@ -63,14 +93,12 @@ def _bar(iid: str, ts: int, close: float) -> Bar:
 
 
 def _synthetic_bars():
-    """Two JST business days × 4 instruments. Per day: five 09:5x snapshot bars, a 10:00
-    entry bar, a 10:30 bar (must NOT re-enter), a 14:55 exit bar. Time-merged (canonical)."""
     bars = []
     for (y, m, d) in [(2025, 1, 6), (2025, 1, 7)]:
         for (hh, mm) in [(9, 55), (9, 56), (9, 57), (9, 58), (9, 59), (10, 0), (10, 30), (14, 55)]:
-            for i, iid in enumerate(_UNIVERSE):
-                px = _BASE[iid] + (hh * 60 + mm) * 0.01 + i
-                bars.append(_bar(iid, _ts(y, m, d, hh, mm), px))
+            minute = hh * 60 + mm
+            for iid in _UNIVERSE:
+                bars.append(_bar(iid, _ts(y, m, d, hh, mm), _close(iid, minute)))
     return merge_bars_by_ts([bars])
 
 
@@ -111,17 +139,16 @@ def _run(strategy, monkeypatch):
     return result, sink
 
 
-def _make_imperative(stub):
+def _make_imperative(stub, *, adv=_ADV_BASELINE, prev_close=_PREV_CLOSE):
     """The REAL V19MorningStrategy with on_start stubbed (no artifact/model I/O) and the stub
-    model injected — the parity oracle. Default ctor knobs (top_k=5, 10:00/14:55, order_qty=100,
-    cash_gate, margin=0.95, lot=1) match the marimo cell's author constants."""
+    model + artifacts injected — the parity oracle. Default ctor knobs match the cell's."""
     strat = V19MorningStrategy(instrument_id=_UNIVERSE[0])
 
     def fake_on_start() -> None:
         strat._instruments = list(_UNIVERSE)
         strat._rs_ref = _RS_REF
-        strat._adv_baseline = {}
-        strat._prev_close = {}
+        strat._adv_baseline = dict(adv)
+        strat._prev_close = dict(prev_close)
         strat._model = stub
 
     strat.on_start = fake_on_start  # type: ignore[method-assign]
@@ -129,19 +156,27 @@ def _make_imperative(stub):
 
 
 def _make_marimo(stub):
-    """The marimo cell-DAG port, with the SAME stub bound into the score_v19_rows service and
-    the ordered universe / rs-ref as host constants — the public ctor seam (step3)."""
+    """The marimo cell-DAG port — SAME stub in the score_v19_rows service, SAME ordered universe
+    / rs-ref / adv / prev_close as host constants (the public ctor seam, step3 + R2)."""
     return MarimoStrategy(
         app=load_app(_CELL),
         strategy_id="strat-marimo",
         instrument_id=_UNIVERSE[0],
         services={"score_v19_rows": partial(v19_core.score_universe, model=stub)},
-        constants={"UNIVERSE": _UNIVERSE, "RS_REF": _RS_REF},
+        constants={
+            "V19_UNIVERSE": _UNIVERSE,
+            "V19_RS_REF": _RS_REF,
+            "V19_ADV_BASELINE": _ADV_BASELINE,
+            "V19_PREV_CLOSE": _PREV_CLOSE,
+        },
     )
 
 
+def _bought(sink):
+    return {f[0] for f in sink.fills if f[1] is OrderSide.BUY}
+
+
 def test_v19_marimo_parity_deterministic(monkeypatch):
-    # Same stub instance feeds both twins → parity is model-independent (mount-free).
     stub = _StubModel()
     imp_result, imp_sink = _run(_make_imperative(stub), monkeypatch)
 
@@ -152,13 +187,12 @@ def test_v19_marimo_parity_deterministic(monkeypatch):
     # ---- fixture guards (non-vacuous): multi-iid, daily reset, biting cash gate ----
     buys = [f for f in imp_sink.fills if f[1] is OrderSide.BUY]
     sells = [f for f in imp_sink.fills if f[1] is OrderSide.SELL]
-    # 2 days × 2 affordable picks = 4 BUYs (the 3rd pick is trimmed by the ¥35k cash gate),
-    # each flattened at 14:55 = 4 SELLs (daily round-trips, re-entry proves the reset).
+    # 2 days × 2 affordable gap-ranked picks = 4 BUYs (the 3rd is trimmed by the ¥260k cash
+    # gate), each flattened at 14:55 = 4 SELLs (daily round-trips prove the reset).
     assert len(buys) == 4, imp_sink.fills
     assert len(sells) == 4, imp_sink.fills
-    bought = {f[0] for f in buys}
-    # Top-2 by price are 9984 then 6758; 7203 is trimmed (cash bite), 1306 is rs-ref (never).
-    assert bought == {"9984.TSE", "6758.TSE"}, bought
+    # gap-rank top-2 = 9984, 7203; 6758 is trimmed (cash bite), 1306 is rs-ref (never traded).
+    assert _bought(imp_sink) == {"9984.TSE", "7203.TSE"}, _bought(imp_sink)
     assert imp_result.fills == 8
 
     # ---- the parity claim: marimo == imperative, order/fill/equity ----
@@ -169,5 +203,34 @@ def test_v19_marimo_parity_deterministic(monkeypatch):
         imp_result.final_cash,
         imp_result.realized_pnl,
     )
-    # Book is flat at the end of each day → realized P&L is the whole cash delta.
     assert mar_result.realized_pnl == pytest.approx(mar_result.final_cash - _INITIAL_CASH)
+
+
+def test_prev_close_changes_the_picks_so_the_parity_is_not_vacuous(monkeypatch):
+    """Sensitivity litmus (delete-the-production-logic): with prev_close the gap-rank buys
+    {9984, 7203}; with EMPTY prev_close (gap→0, ties broken by universe order) the imperative
+    twin buys a DIFFERENT set. So prev_close demonstrably drives the outcome — the parity gate
+    above is not vacuous w.r.t. the R2 adv/prev_close threading."""
+    stub = _StubModel()
+    _r1, with_pc = _run(_make_imperative(stub), monkeypatch)
+    _r2, no_pc = _run(_make_imperative(stub, prev_close={}), monkeypatch)
+    assert _bought(with_pc) == {"9984.TSE", "7203.TSE"}
+    assert _bought(no_pc) != _bought(with_pc), _bought(no_pc)
+
+
+def test_adv_and_prev_close_reach_nonzero_features():
+    """Feature guard: the injected adv_baseline / prev_close actually flow into build_rows and
+    produce non-zero rel_turnover / gap (so the constants are not silently dropped)."""
+    snaps = {
+        iid: [
+            {"open": _close(iid, m), "high": _close(iid, m), "low": _close(iid, m),
+             "close": _close(iid, m), "volume": 1000.0}
+            for m in range(_OPEN_MIN, _OPEN_MIN + 5)
+        ]
+        for iid in _UNIVERSE
+    }
+    rows = v19_core.build_rows(
+        snaps, _UNIVERSE, _RS_REF, adv_baseline=_ADV_BASELINE, prev_close=_PREV_CLOSE
+    )
+    assert rows["9984.TSE"]["rel_turnover"] != 0.0
+    assert rows["9984.TSE"]["gap"] != 0.0

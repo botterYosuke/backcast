@@ -430,7 +430,39 @@ owner が「完成形 API を spike 無しで凍結しない」と要求。3-ins
 - ⚠️ **actions と services の分離（owner 指摘・完成形要件）**: 現 `inject=` は cold run 中に callable を **inert stub** 化する（`submit_market` 等 action の spurious 発火を防ぐ S4 設計）。**scorer は値を返す service**なので inert 化すると footgun（cold run で None 返し）。→ thin_drain に **`services=`（cold run でも live な値返し callable）** を `inject=`（action）と別経路で追加する。v19 の neutral cold seed は minute<entry で score path 未到達だが、完成形として services を構造的に分ける。
 - **parity 精度の港戦略**: v19 の pure helper（`_compute_features`/`_cash_aware_picks`/`_alloc_a0_equal_nominal_e1`）を **共有 module へ抽出**し marimo-v19 と命令型 v19 が同一関数を import＝float 演算が構造的に一致（再導出しない＝byte parity リスク最小化）。marimo-v19 file は薄い cell-DAG（orchestration）に保つ。
 
-### 残務（順序・不変）
-**S6b-α step2**（thin_drain に `services=` 追加＋v19 pure helper 抽出＋marimo-v19 cell-DAG＋scorer 注入＋deterministic v19 parity gate）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+### S6b-α step2 設計の木（2026-06-18・`/grill-with-docs`・owner binding）
+step2 の未解決下位分岐を grill で確定（Q1–Q9）。コードで裏取り済み（thin_drain の inject/driver_seeds 経路・既存 v19 gate の `_StubModel` 注入規約・`MarimoStrategy` の strategy-agnostic な on_start）。
 
-> 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **T1 scorer seam＝`score(rows)→scores`** | 注入 service は **cross-sectional z-norm + `model.predict`** を所有。cell は shared helper で per-iid 特徴 dict を作り `score_v19_rows(rows)` を呼ぶだけ（cell に pandas/z-norm/sklearn/I-O を漏らさない・findings の「`score(features)`」字義通り） | z-norm は cell の戦略分岐ではなく model 前処理＝service 側が正。`predict(X)`-only 案（B）は z-norm/DataFrame 組立を cell へ押し出し v19 移植として重い |
+| **T2 z-norm＝共有・順序は契約** | z-norm+predict を共有 `score_universe(rows, model)` に抽出＝命令型 `_score_instruments` と host scorer factory の**両方が同一関数を call**。stub model を両 path へ同一注入で byte-parity 構造保証。`rows` は **universe 挿入順**で組む（top-k tie / stub の deterministic parity 保護） | service 内で z-norm 再実装すると float drift。順序差（universe 順 / rs_ref skip / None drop）も parity を揺らすので `build_rows` も共有（T8） |
+| **T3 config 切り分け＝B** | **knobs（top_k/entry/exit/order_qty/cash_gate/safety_margin/alloc_policy/lot_size）= author cell 定数**（strategy authoring・#64「editor=cell」）。**universe（順付き）+ rs_ref = host 注入**（artifact 由来・run identity）。**cold/static config で per-bar driver にしない**（mo.state にしない） | gate は命令型 twin ctor params と cell 定数を同値固定（fixture が束縛・全 host 注入は不要） |
+| **T4 thin_drain API＝services= ＋ constants= 分離** | 新 param 2 本。**`services=`**＝値返し live callable（`score_v19_rows`）。**`constants=`**＝immutable static data（`universe: tuple`/`rs_ref: str`・大 dict は `MappingProxyType`）。両者とも **cold run 前に real value を seed**（inject の inert→arm は services/constants には**不適用**＝services は cold で live＝owner の anti-footgun 要件）・**clobber guard は inject と対称**・setter/root なし（reachability は読む bar/portfolio 経由） | 同じ「live static free-ref」でも callable と data は意味/失敗モードが別。constants を immutable に寄せ cell の universe mutation で順序契約が壊れる道を塞ぐ |
+| **T5 twin＝本物の `V19MorningStrategy`** | gate の oracle は **production v19 を shared helper 呼び出しへ behavior-preserving refactor**し `._model = _StubModel()`（既存規約 `test_v19_replay_core.py:91`）を注入。marimo 移植が**実際に traded される v19** と一致することを証明 | 別 test twin（B）は production v19 と drift しても gate 緑＝slice の意味が弱る。refactor は score 計算の置き場共有のみ（発注/timing 不変）＝RED-first 特性化（既存 v19 gate）で挙動不変を固定してから進む |
+| **T6 prod wiring＝gate-first** | step2 = thin_drain `services=`/`constants=` ＋ `MarimoStrategy(.., services=, constants=)` ctor passthrough ＋ **real-v19 deterministic parity gate（stub 直接注入）**。**runtime API は完成形**。v19-specific production scorer resolver（sidecar spec→lazy joblib scorer discovery・universe source・picker default）は **named follow-up** | B3「実データ gate は mount 依存 skip 可・mount 非依存 deterministic が必須」＋ B2「marimo 既定化＝β」。α は parity 証明に集中＝committable。仮状態ではない（API は whole・v19 discovery だけ後送り） |
+| **T7 fixture＝複数日（daily reset exercise）** | synthetic bars は **≥2 JST 日**（各日 09:5x snaps→10:00 entry→14:55 exit ＋ 日境界 reset）。marimo の day-tracking feedback（`get_day` 等）＋ snaps/placed/exited reset が v19 `_reset_day` と byte 一致することを gate が証明。`_jst_day_minute` を共有（境界整合） | v19 の本質＝「一日一プロセス」。既存 `test_v19_timing_logic_daily_roundtrips`（2 営業日）と整合。観測点: 日付変更 reset・2 日目も entry・各日 entry/exit 1 回・entry bar 非 snapshot |
+| **T8 共有 module＝`v19_core.py`** | `python/strategies/v19/v19_core.py`。抽出: `_jst_day_minute` / `compute_features` / `current_price` / **`build_rows`**（universe 順 assembly・順序契約を構造化）/ `score_universe(rows, model)`（pandas lazy・**sklearn 非依存**＝model duck-typed）/ `cash_aware_picks` / `alloc_a0_equal_nominal_e1`。先頭 `_` を外し public-ish（移行 commit は compat wrapper 可）。**cell は `score_universe` を import しない**（host 注入 `score_v19_rows` 経由）が他 pure helper は import | 命令型 v19 と marimo-v19 が同一正本を共有＝再導出ゼロ |
+| **T9 marimo file＝`v19_morning_cell.py`・α は sidecar なし** | `python/strategies/v19/v19_morning_cell.py`。**α は .py のみ ship**（gate reference）。**sidecar（scenario + scorer-spec）と dispatch 配線は production resolver follow-up で一緒に**（runnable になった時点で sidecar も出す＝「走れると偽る sidecar」を避ける）。gate は sidecar 不要で direct `MarimoStrategy(app=.., services=.., constants=..)` を駆動 | α の成果物は parity-proven reference cell strategy＝まだ picker/canonical production artifact ではない（β が既定化） |
+
+### marimo-v19 cell-DAG の形（T1/T3/T7 から）
+```
+_config cell:    universe = get_universe()/free-ref constant; rs_ref; TOP_K=…; ENTRY/EXIT minute; ORDER_QTY; CASH_GATE; …(author 定数)
+_state cell:     get_day/set_day, get_snaps/set_snaps, get_placed/set_placed, get_exited/set_exited (mo.state feedback)
+_accumulate cell: bar=get_bar(); day,minute=_jst_day_minute(bar.ts); 日変化なら snaps/placed/exited reset; minute<ENTRY なら snaps[iid] へ OHLCV 蓄積
+_decide cell:    bar/pf=get_portfolio(); entry時=build_rows(snaps,universe,rs_ref,…)→score_v19_rows(rows)→rank top_k→cash_aware_picks(top,snaps,pf.buying_power,…)→submit_market(qty,instrument_id=iid); exit時=pf.positions を flatten
+```
+no-look-ahead は spike で実証済（entry bar 非 append＝prev-bar 蓄積を読む＝marimo bar-crossing feedback と一致）。
+
+### 実装順（各 RED-first・committable で coherent）
+1. **thin_drain `services=` ＋ `constants=`**（RED: services が cold で live に値返し / constants が immutable seed / 両者 clobber guard / offline gate の seam import 集合は不変）。
+2. **`v19_core.py` 抽出＋命令型 v19 refactor**（RED: 既存 v19 gate を characterization として先に走らせ・抽出後も byte 不変＝挙動保存）。
+3. **`MarimoStrategy(.., services=, constants=)` ctor passthrough**（`on_start` で `open_runtime(.., services=, constants=)` へ）。
+4. **`v19_morning_cell.py`** cell-DAG 作成。
+5. **deterministic v19 parity gate**（複数日 synthetic・real `V19MorningStrategy`＋stub model oracle・marimo は同一 stub を `services=` 経由・assert fills/equities/(fills,final_cash,realized_pnl)・fixture guard で multi-iid 発注＋cash gate bite を非 vacuous 化）。
+6. 全 suite＋#24 golden byte-identical＋offline/import-purity GREEN。
+
+### 残務（順序・不変）
+**S6b-α step2**（設計＝上記 T1–T9 ＋実装順で確定。実装着手）→ **v19 production scorer resolver**（T6 follow-up: sidecar scorer-spec→lazy joblib scorer discovery ＋ `v19_morning_cell.json` sidecar ＋ dispatch 配線・universe source 確定）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+
+> 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証・step2 設計の木は T1–T9 で確定。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。

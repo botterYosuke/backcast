@@ -381,3 +381,44 @@ adapter は `on_start` で `driver_seeds={get_bar: neutral_bar(close=0), get_por
 **S6b UI**（#15/#16→単一ボタン撤去→footer #30）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 
 > 🤖 `/grill-with-docs` セッション記録（Claude Code）。実装は tdd RED-first＋`code-review(simplify)`。
+
+---
+
+## S6b 設計の木（2026-06-18・`/grill-with-docs`）— UI パラダイム移行＋v19 marimo 移植
+
+`/grill-with-docs`（#76 S6b）で確定。S6a＋portfolio スライスで **marimo `.py` は既に production の再生ボタンから実走する**（C# `BackcastWorkspaceRoot.OnRun → start_engine{strategy_file} → _backend_impl._start_engine_duckdb → _select_replay_strategy`、コードで裏取り済み）。S6b に **Python 実走の残務は無い**。残るのは UI パラダイム移行（命令型＋transport replay → reactive cell-DAG＋単一 Run）と、それを実証する **v19 の marimo 移植＋parity**。
+
+### 現在地（grill 冒頭の逆向きチェック・git/code）
+- 先行スライス・常時不変条件に **blocked されていない**：#15/#16/#30 の UI 表面は **すべて `BackcastWorkspaceRoot`（#59 本線合体）に production-wired**（gh の「未マージ branch」は stale）。portfolio スライスは着地済（作業ツリー未コミット）。
+- 現状の run 入口は **2つ**：`ScenarioStartupTile` の Run ＋ `ReplayFooterView` の ▶（両方 `OnRun()` に収束）。footer は transport だけでなく **mode segments（Replay/LiveManual/LiveAuto）と run 入口 ▶** を持つ。
+- 現存戦略は `v19_morning.py` ただ1つ＝**命令型**（marimo 実例ゼロ）。`File→New` は空エディタ（テンプレ無し）。
+
+### 確定（owner binding）
+
+| # | 決定 | 機構・根拠 |
+|---|---|---|
+| **B1 footer transport 撤去** | transport（play/pause/step/speed/stop）を UI から撤去。**footer は存続**＝mode segments＋**アプリ全体で単一の Run 入口**。`ScenarioStartupTile` の Run は撤去し設定タイルは scenario 編集専用へ。**完成形・仮状態なし** | reactive drain は native 速度（0.3s/50k）で run→即完了＝scrub の affordance が古い。#30 transport は **ADR-0012（reactive 実行モデル）が supersede**（self-protection＝ADR 編集せず本 findings に記録）。footer は mode chrome＋global run として役割更新（`ReplayFooterView`→`WorkspaceFooterView` 的にリネーム候補）。参照消滅した `ReplayTransportViewModel`/`ReplayLifecycle`/#30 専用 enablement は削除、Python の pause/step/speed/stop RPC は production surface から退役（internal force-stop/teardown は host lifecycle 用に名前/所有者を整理して残す） |
+| **B2 editor=cell-DAG 既定化（widget 無改修）** | エディタ widget は無改修（marimo .py = plain Python＝既に編集可）。`File→New` が marimo App skeleton を seed・canonical/picker 上の既定戦略を marimo 版へ。命令型 v19 は legacy oracle/parity fixture として残置（**実走は sunset まで残る**が著者導線の正面に置かない） | #64「Strategy Editor = cell・最小 ceremony」＝marimo の plain-.py 形式で `@app.cell` 関数が cell。cell-aware editor（cell 境界描画/per-cell run）は不要（別途・任意）。命令型 sunset は後続 named スライス＝S6b 範囲外 |
+| **B3 v19 を marimo 移植（multi-instrument 含む）** | S6b の完成 gate は「小さい toy parity」ではなく **marimo-v19 vs 命令型-v19 で同一 bars・model stub・cash から order/fill/equity 一致**（mount 非依存の deterministic parity を必須・実データ gate は mount 依存 skip 可）| owner 方針「完成形・仮状態を残すな」＝最小例で済ませて v19 を後続に逃がさない。v19 はマルチ instrument のクロスセクショナル ML ランカー（universe `_snapshots` 蓄積→10:00 JST ranking→複数銘柄発注） |
+| **B4 driver=Option1（bar driver 不追加）** | **新しい host-owned multi-instrument bar driver は作らない**。マルチ instrument 性は ① 発注=`submit_market(qty, instrument_id=iid)`（S4 Q2・済）② 履歴=strategy 所有の `mo.state` feedback dict `snaps[iid]→[closes]`（D4 self-cycle・per-`get_bar()` 蓄積）③ 決定時クロスセクション=蓄積済 feedback dict 読み（朝場で全銘柄 stream 済＝live read 不要）④ 退出 position=`get_portfolio().positions`。唯一の真の host gap は **`buying_power` の cell 露出**（cash と同型の純追加・ctx には既存 seam） | **spike で実証**（下記）。no-look-ahead が自然一致：v19 `_enter` は `minute<entry` の bar しか append せず entry bar を含めない＝**決定は prev-bar 蓄積を読む**＝marimo の bar-crossing feedback（前 bar 値読み）と完全一致 |
+
+### driver-shape spike（throwaway・`python/spike/marimo_embed/v19_shape.py`・`[V19-SHAPE PASS]`）
+owner が「完成形 API を spike 無しで凍結しない」と要求。3-instrument の minimal marimo app（feedback dict 蓄積→entry top-2 rank→multi-iid submit→exit flatten）を **実 `KernelRunner`＋`MarimoStrategy` adapter** で命令型 twin と突合し全一致。潰した3リスク:
+1. **feedback dict 持続/更新**：朝場 A/B/C close が drain をまたいで蓄積（hot path で安定）
+2. **entry 時 snapshot 完備＋entry bar 非 append**：top-2=A,B が prev-bar 蓄積から ranking。fill 価格 `B@902`（B の entry-minute bar は A の entry drain より flat-list 後＝prev close でフィル）が命令型と byte 一致＝no-look-ahead 正しい
+3. **multi-iid production parity**：order/fill/equity 完全一致（adapter の `instrument_id=` ルーティングが実 fill まで命令型と同一）
+
+⚠️ spike は fixed qty（cash-aware 未行使）。`buying_power` 経路（v19 `_cash_aware_picks`/`_alloc_a0_equal_nominal_e1`）は **B4 の純追加 gap**として v19-port スライスで露出＋検証する（snapshot に `buying_power` 追加 or injected callable・cash と同型で低リスク）。
+
+### 実装スライス（順序・各 committable で coherent）
+コードが順序を固定する。**完成形・仮状態なし**は「中間に half-built な footer を出さない」意＝各中間も自己 coherent（footer transport は α/β の間そのまま動く）:
+1. **S6b-α（Python）**: `buying_power` cell 露出（snapshot 追加 or inject）＋ v19 を marimo cell-DAG へ移植（`python/strategies/v19/v19_morning_cell.py` 等）＋ **mount 非依存 deterministic v19 parity gate**（marimo-v19 ↔ 命令型-v19）。命令型 v19 は oracle/fixture として残置。
+2. **S6b-β（C#/Unity）**: `File→New` の marimo template seed＋canonical/picker 既定を marimo へ。run 入口単一化（`ScenarioStartupTile` の Run 撤去・footer ▶ へ統合）。HITL 要。
+3. **S6b-γ（C#/Unity＋Python cleanup）**: footer transport（pause/step/speed/stop）撤去＋`ReplayTransportViewModel`/`ReplayLifecycle` 等の参照消滅削除＋`ReplayFooterView` リネーム＋Python transport RPC 退役（internal teardown は残す）。HITL 要（旧 transport 機能喪失の owner 確認）。
+
+方針: [ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)（自己保護・編集せず本 findings に下位事実を記録）。B1 の「#30 transport 撤去」は ADR-0012 の reactive 実行モデルが strategy-authoring 表面を supersede したことの UI 帰結＝additive な新 ADR は不要（reactive モデルが target ＝transport は旧 affordance）。
+
+### 残務（順序・不変）
+**S6b-α**（buying_power 露出＋v19 marimo 移植＋parity）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+
+> 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。

@@ -15,7 +15,7 @@
 //
 // The document anchor is the .py (canonical absolute path = document identity, #78); the
 // .json sidecar is derived via LayoutSidecarStore.SidecarPathFor. So the picker filters for
-// *.py (matches the #80 strategy picker), and Save As defaults the extension to .py.
+// *.py, and Save As defaults the extension to .py.
 
 using System;
 

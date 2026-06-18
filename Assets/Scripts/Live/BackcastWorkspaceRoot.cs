@@ -545,9 +545,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _menuBarView?.ShowMessage("Delete cell: a notebook keeps at least one cell.");
     }
 
-    // The screen-fixed central "+ Python cell" overlay (marimo edit-app.tsx:454 — top-centre, ONE
-    // button, appends an empty cell). Its own ScreenSpaceOverlay canvas keeps it screen-fixed (it does
-    // NOT pan with the canvas) and above Content but below the secret modal (z帯, findings 0050).
+    // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override
+    // (2026-06-19): anchored BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate
+    // divergence from TTWR/marimo parity at the owner's request. Its own ScreenSpaceOverlay canvas keeps
+    // it screen-fixed (it does NOT pan with the canvas) and above Content but below the secret modal
+    // (z帯, findings 0050).
     void BuildAddCellButton()
     {
         var overlayGo = new GameObject("AddCellOverlay", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
@@ -559,9 +561,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var btnGo = new GameObject("AddCellButton", typeof(RectTransform), typeof(Image), typeof(Button));
         var rt = (RectTransform)btnGo.transform;
         rt.SetParent(overlayGo.transform, false);
-        rt.anchorMin = new Vector2(0.5f, 1f); rt.anchorMax = new Vector2(0.5f, 1f); rt.pivot = new Vector2(0.5f, 1f);
+        rt.anchorMin = new Vector2(1f, 0f); rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);
         rt.sizeDelta = new Vector2(170f, 30f);
-        rt.anchoredPosition = new Vector2(0f, -40f);   // top-centre, clear of the menu bar
+        rt.anchoredPosition = new Vector2(-20f, 56f);   // bottom-right; y = footer bar (40px, scene-authored) + 16px gap
         btnGo.GetComponent<Image>().color = new Color(0.20f, 0.50f, 0.35f, 0.95f);
 
         var lblGo = new GameObject("Label", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
@@ -1693,7 +1695,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             FallbackEmptyNotebook();
             return;
         }
-        ReseedFromEditor();   // bind → seed scenario/universe/sidebar (the shared #78/#80 tail) so Run unblocks
+        ReseedFromEditor();   // bind → seed scenario/universe/sidebar (the shared #78 tail) so Run unblocks
     }
 
     // The fresh/unresumable fallback: an untitled empty notebook (one empty cell in region_001).

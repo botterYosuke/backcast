@@ -231,3 +231,14 @@ S1（必須 ＝ #81 本体 AC：セル追加 UI・複数セル編集→Save→Ru
 - **Q2 = (c) 構造変化（追加/削除/Open）＋ focus-out（編集確定）で再計算**。marimo は矢印を keystroke でなく離散的なコード登録（run）で更新する（`runtime.py` の Variables broadcast は `_mutate_graph`→register 経路のみ）ので、live カーネルの無い backcast では focus-out が register の忠実な対応物。線の位置追従は毎フレーム C#（Python 不要）／focus-out で `(defs,refs)` 差分ゼロなら edge を re-push しない／構文壊れ→`load_app` 失敗時は直前の矢印を保持（fail-soft）。
 - **Q3（途中・骨格のみ）**: 単一 `MaskableGraphic`（EdgeOverlay）を `FloatingWindowLayer` 直背面・同 Content 配下に1枚（pan/zoom 追従無料・既存 `PythonSyntaxMeshEffect` の頂点描画イディオム）／ベジエ（marimo `type:"default"`）＋矢じり（`ArrowClosed`）＋固定ハンドル（元=窓下端中央・先=窓上端中央）／純関数 `EdgeGeometry`（rect→頂点）を層1 AFK で検証／矢印集合は Python・幾何は C# で**再結合しない**。未決＝animated 破線（marimo `animated:true`）を含めるか（保留）。
 - 検証層（復活時）: 層3 pytest golden（defs/refs→重複排除 index ペア・module 除外）／層1 純 C# AFK（`EdgeGeometry`）／層2 view AFK（実 pythonnet 1回＋mesh）／層4 HITL（矢印表示・ドラッグ追従・依存の増減で矢印 増減）。
+
+## 出荷後の owner 修正（2026-06-19）— [+] を右下へ（#80 メニュー退役は #76 命令型 sunset と統合）
+
+#81 出荷物への owner レビューで 2 点を修正。**[+] ボタンの位置**が本セッションの実質変更、**#80 Strategy メニュー退役**は並行ブランチ `feat/76-imperative-sunset`（commit `409fa33`）が既に実装済みだったため、そちらをカノニカルとして main に統合し（重複実装を破棄）、本セッションは [+] 修正のみを上乗せした（owner 判断: 統合先＝main）。
+
+- **[+] ボタン = 中央上 → 右下**（`BackcastWorkspaceRoot.BuildAddCellButton`）。marimo `edit-app.tsx:454` の top-centre 配置からの**意図的な逸脱**（[[ttwr-parity-first]] の divergence、根拠＝owner の明示要求）。anchor/pivot=(1,0)・`anchoredPosition=(-20,56)`（y=footer 40px＋16px gap で footer バーを避ける）。コメントに divergence 理由を明記。AFK probe は button geometry を assert しない（層4 HITL 正本）。
+- **#80 Strategy メニュー退役**は #76 sunset 側に記録済み（本 findings 上の「#76 命令型 sunset」節＋`docs/findings/0047` §5＋commit `409fa33`）。`MenuBarView` の Strategy 一式・root の `OnOpenStrategy`/`EnumerateStrategies`・`StrategyPickerModel`/`StrategyPickerProbe` を撤去。**挙動の帰結**: 既存戦略を開く UI は File→Open のみ（layout sidecar 必須）になり、sidecar 無しの素の `.py` を UI から開く #80 経路は失われる。
+- 統合時の cleanup（simplify pass）: `ReseedFromEditor` 呼出コメントの `#78/#80` → `#78`、`FileDialog.cs` の "(matches the #80 strategy picker)" 削除。
+- 検証: compile gate `error CS` 0・`MenuBarCutoverProbe` PASS（統合後ツリー）。
+
+正本: `docs/adr/0013`（immutable・不変）＋ 本 findings。

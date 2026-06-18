@@ -418,7 +418,19 @@ owner が「完成形 API を spike 無しで凍結しない」と要求。3-ins
 
 方針: [ADR-0012](../adr/0012-marimo-embed-reactive-strategy-execution-model.md)（自己保護・編集せず本 findings に下位事実を記録）。B1 の「#30 transport 撤去」は ADR-0012 の reactive 実行モデルが strategy-authoring 表面を supersede したことの UI 帰結＝additive な新 ADR は不要（reactive モデルが target ＝transport は旧 affordance）。
 
+### S6b-α 実装（着地中）
+- **step1 buying_power 露出（着地・commit `5a07232`）**: `PortfolioSnapshot` に `buying_power` field 追加（cell は `get_portfolio().buying_power` で cash-aware sizing）。`Portfolio.snapshot(.., *, buying_power=None)` は純会計のまま default=cash、ctx seam（`_Context`/`_Ctx`）が `self.buying_power()` を渡す（Replay=cash・Live=venue provider・pre-fill＝no-look-ahead）。gate=snapshot 単体＋**biting** production parity（small cash で block・vacuous でない）。全 suite 357 passed。
+- **step2 v19 marimo 移植＋deterministic parity（残）**: 下記 model-seam 決定で設計確定。
+
+### v19-port model seam 決定（2026-06-18・grill・owner binding）
+**A'＝host-owned scorer SERVICE 注入**（モデルオブジェクトでも cell 内 load でもない）:
+- marimo-v19 cell は **features→ranking→cash-aware sizing→multi-iid submit→exit** の戦略ロジックに集中。ML 採点は host が注入する **`score(features)` callable**（service）。
+- production は host が canonical `.py` path/sidecar/artifact から **lazy scorer** を組む（初回呼び出しで `joblib.load()`→`predict`）。cell に I/O・sklearn 依存・遅延ロードを漏らさない（#76 の「cell＝strategy logic」と整合）。
+- deterministic parity gate は marimo-v19 と命令型-v19 twin の**両方に同一 stub scorer を注入**＝mount 非依存が構造的に保証。
+- ⚠️ **actions と services の分離（owner 指摘・完成形要件）**: 現 `inject=` は cold run 中に callable を **inert stub** 化する（`submit_market` 等 action の spurious 発火を防ぐ S4 設計）。**scorer は値を返す service**なので inert 化すると footgun（cold run で None 返し）。→ thin_drain に **`services=`（cold run でも live な値返し callable）** を `inject=`（action）と別経路で追加する。v19 の neutral cold seed は minute<entry で score path 未到達だが、完成形として services を構造的に分ける。
+- **parity 精度の港戦略**: v19 の pure helper（`_compute_features`/`_cash_aware_picks`/`_alloc_a0_equal_nominal_e1`）を **共有 module へ抽出**し marimo-v19 と命令型 v19 が同一関数を import＝float 演算が構造的に一致（再導出しない＝byte parity リスク最小化）。marimo-v19 file は薄い cell-DAG（orchestration）に保つ。
+
 ### 残務（順序・不変）
-**S6b-α**（buying_power 露出＋v19 marimo 移植＋parity）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
+**S6b-α step2**（thin_drain に `services=` 追加＋v19 pure helper 抽出＋marimo-v19 cell-DAG＋scorer 注入＋deterministic v19 parity gate）→ **S6b-β**（template/canonical＋run 単一化・HITL）→ **S6b-γ**（footer transport 撤去＋cleanup・HITL）→ Live 配線（別 epic）→ D3 構造的 hot-list guard（任意）。
 
 > 🤖 `/grill-with-docs`（#76 S6b）セッション記録（Claude Code）。driver-shape は throwaway spike で実証。ADR-0012 は「方針」として参照（自己保護条項＝編集せず本 findings に下位事実を記録）。

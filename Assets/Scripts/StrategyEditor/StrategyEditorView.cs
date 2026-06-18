@@ -134,14 +134,20 @@ public class StrategyEditorView : MonoBehaviour
         if (_history.Redo(out string text, out int a, out int f)) ApplyHistoryState(text, a, f);
     }
 
-    void ApplyHistoryState(string text, int anchor, int focus)
+    void ApplyHistoryState(string text, int anchor, int focus) => ApplyTextAndSelection(text, anchor, focus);
+
+    // Drive the InputField to `text` with the given selection WITHOUT recording (the _suppress flag
+    // swallows the resulting onValueChanged), then sync the document, advance the snapshot, and
+    // re-tokenize. This is the SINGLE owner of the InputField↔document↔snapshot coupling — undo/redo
+    // (ApplyHistoryState) routes through it, and the #81 cell-as-window model (ADR-0013) reuses it for
+    // programmatic body edits so every path stays consistent. Restores the FULL selection
+    // (anchor+focus), not just a caret: setting caretPosition would collapse the selection to
+    // zero-length (Unity's caretPosition setter moves BOTH ends), losing the anchor the transaction
+    // recorded; selectionFocusPosition renders the caret at focus.
+    void ApplyTextAndSelection(string text, int anchor, int focus)
     {
         _suppress = true;
         _input.text = text;                       // fires onValueChanged -> ignored via _suppress
-        // Restore the FULL selection (anchor+focus), not just a caret: setting caretPosition here
-        // would collapse the selection to zero-length (Unity's caretPosition setter moves BOTH
-        // ends), losing the anchor the EditHistory transaction recorded. selectionFocusPosition
-        // already renders the caret at the focus end.
         _input.selectionAnchorPosition = anchor;
         _input.selectionFocusPosition = focus;
         _suppress = false;

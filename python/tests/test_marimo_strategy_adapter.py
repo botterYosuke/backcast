@@ -8,6 +8,13 @@ kernel contract's adaptation boundary (ADR-0012 Decision 2), KernelRunner unchan
 
 This is the production-binding parity gate (S6a): unlike test_strategy_runtime_thin_drain's
 order-parity (fake StrategyContext, mechanism unit), it runs the actual runtime seam.
+
+#81 / ADR-0013: the strategy fixtures are written in the **canonical on-disk form** the cell
+editor now produces — built from raw cell bodies via marimo's ``generate_filecontents``
+(``_synth``), NOT hand-authored. So this gate also pins that the production adapter runs the
+exact bytes Save writes: a ``__generated_with`` version line + run-guard footer, and host APIs
+promoted from free refs to hidden args (``def _(get_bar):``). The synthesis/decompose seam
+itself is the layer-3 drift guard in test_marimo_cell_synthesis_golden.py.
 """
 from __future__ import annotations
 
@@ -20,6 +27,8 @@ import pytest  # noqa: E402
 
 pytest.importorskip("marimo", reason="defensive: marimo is a prod dep since ADR-0012")
 
+from marimo._ast.cell import CellConfig  # noqa: E402
+from marimo._ast.codegen import generate_filecontents  # noqa: E402
 from marimo._ast.load import load_app  # noqa: E402
 
 import engine.kernel.runner as runner_mod  # noqa: E402
@@ -33,21 +42,28 @@ pytestmark = pytest.mark.marimo
 
 IID = "7203.T"
 
-# A host-seed marimo strategy: reads the bar as a free ref, signs the order by band.
-_MARIMO_SRC = """
-import marimo
 
-app = marimo.App()
+def _synth(*bodies: str) -> str:
+    """Synthesise the canonical on-disk .py (generate_filecontents) from raw cell bodies — the
+    exact form the #81 cell editor's Save writes. Host APIs (get_bar/submit_market/...) and any
+    cross-cell vars are lifted to hidden args / returns by marimo; we hand it only the body."""
+    return generate_filecontents(
+        codes=list(bodies),
+        names=["_"] * len(bodies),
+        cell_configs=[CellConfig() for _ in bodies],
+        config=None,
+    )
 
 
-@app.cell
-def _signal():
-    bar = get_bar()  # noqa: F821  host-seeded driver
-    signal = 1.0 if bar.close > 1010.0 else (-1.0 if bar.close < 990.0 else 0.0)
-    qty = signal * 10.0
-    submit_market(qty)  # noqa: F821  S4 injected signed-qty adapter
-    return (qty,)
-"""
+# A host-seed marimo strategy cell BODY: reads the bar (host API -> arg), signs the order by
+# band. Kept as a raw body literal and synthesised at the write site (NOT at import) so a marimo
+# codegen-API drift surfaces as the one failing test, never a whole-module collection error.
+_MARIMO_BODY = (
+    "bar = get_bar()  # noqa: F821  host-seeded driver\n"
+    "signal = 1.0 if bar.close > 1010.0 else (-1.0 if bar.close < 990.0 else 0.0)\n"
+    "qty = signal * 10.0\n"
+    "submit_market(qty)  # noqa: F821  S4 injected signed-qty adapter"
+)
 
 
 class _ImperativeTwin(Strategy):
@@ -113,7 +129,7 @@ def _run(strategy, monkeypatch, initial_cash=10_000_000.0):
 
 def test_marimo_adapter_order_fill_parity_with_imperative_twin(tmp_path, monkeypatch):
     path = tmp_path / "strat.py"
-    path.write_text(_MARIMO_SRC, encoding="utf-8")
+    path.write_text(_synth(_MARIMO_BODY), encoding="utf-8")
 
     marimo_strat = MarimoStrategy(
         app=load_app(str(path)), strategy_id="strat-marimo", instrument_id=IID
@@ -139,21 +155,13 @@ def test_marimo_adapter_order_fill_parity_with_imperative_twin(tmp_path, monkeyp
 
 # ----------------------------------------- portfolio-driver target-position parity (P3)
 
-_MARIMO_PF_SRC = """
-import marimo
-
-app = marimo.App()
-
-
-@app.cell
-def _rebal():
-    bar = get_bar()               # noqa: F821  host-seeded bar driver
-    pf = get_portfolio()          # noqa: F821  host-seeded portfolio driver
-    target = 10.0 if bar.close > 1010.0 else (-10.0 if bar.close < 990.0 else 0.0)
-    delta = target - pf.position  # delta to reach target off the PRE-FILL position
-    submit_market(delta)          # noqa: F821  S4 injected signed-qty adapter
-    return (delta,)
-"""
+_MARIMO_PF_BODY = (
+    "bar = get_bar()               # noqa: F821  host-seeded bar driver\n"
+    "pf = get_portfolio()          # noqa: F821  host-seeded portfolio driver\n"
+    "target = 10.0 if bar.close > 1010.0 else (-10.0 if bar.close < 990.0 else 0.0)\n"
+    "delta = target - pf.position  # delta to reach target off the PRE-FILL position\n"
+    "submit_market(delta)          # noqa: F821  S4 injected signed-qty adapter"
+)
 
 
 class _TargetPositionTwin(Strategy):
@@ -175,7 +183,7 @@ def test_marimo_get_portfolio_target_position_parity(tmp_path, monkeypatch):
     position (look-ahead), the marimo delta would diverge after the first fill — so this is
     also the no-look-ahead gate (snapshot captured at on_bar entry = end-of-prev-bar)."""
     path = tmp_path / "strat_pf.py"
-    path.write_text(_MARIMO_PF_SRC, encoding="utf-8")
+    path.write_text(_synth(_MARIMO_PF_BODY), encoding="utf-8")
 
     marimo_strat = MarimoStrategy(
         app=load_app(str(path)), strategy_id="strat-marimo", instrument_id=IID
@@ -201,24 +209,16 @@ def test_marimo_get_portfolio_target_position_parity(tmp_path, monkeypatch):
 
 # ----------------------------------------- buying_power cash-aware sizing parity (S6b-α)
 
-_MARIMO_BP_SRC = """
-import marimo
-
-app = marimo.App()
-
-
-@app.cell
-def _buy_while_affordable():
-    bar = get_bar()       # noqa: F821  host-seeded bar driver
-    pf = get_portfolio()  # noqa: F821  host-seeded portfolio driver
-    # v19-style cash-aware sizing: buy 1 share whenever the PRE-FILL buying power covers it.
-    # buying_power shrinks as cash is spent, so this BLOCKS once the book is broke — proving
-    # get_portfolio().buying_power flows to the cell as the same pre-fill value the imperative
-    # self.buying_power() reads.
-    qty = 1.0 if pf.buying_power >= bar.close else 0.0
-    submit_market(qty)    # noqa: F821
-    return (qty,)
-"""
+_MARIMO_BP_BODY = (
+    "bar = get_bar()       # noqa: F821  host-seeded bar driver\n"
+    "pf = get_portfolio()  # noqa: F821  host-seeded portfolio driver\n"
+    "# v19-style cash-aware sizing: buy 1 share whenever the PRE-FILL buying power covers it.\n"
+    "# buying_power shrinks as cash is spent, so this BLOCKS once the book is broke — proving\n"
+    "# get_portfolio().buying_power flows to the cell as the same pre-fill value the imperative\n"
+    "# self.buying_power() reads.\n"
+    "qty = 1.0 if pf.buying_power >= bar.close else 0.0\n"
+    "submit_market(qty)    # noqa: F821"
+)
 
 
 class _BuyingPowerTwin(Strategy):
@@ -236,7 +236,7 @@ def test_marimo_buying_power_cash_aware_sizing_parity(tmp_path, monkeypatch):
     not a vacuous always-affordable gate) — so this pins that buying_power is the same pre-fill
     value on both paths (#76 S6b-α)."""
     path = tmp_path / "strat_bp.py"
-    path.write_text(_MARIMO_BP_SRC, encoding="utf-8")
+    path.write_text(_synth(_MARIMO_BP_BODY), encoding="utf-8")
 
     marimo_strat = MarimoStrategy(
         app=load_app(str(path)), strategy_id="strat-marimo", instrument_id=IID
@@ -263,23 +263,15 @@ def test_marimo_buying_power_cash_aware_sizing_parity(tmp_path, monkeypatch):
 
 # ----------------------------------------- services=/constants= ctor passthrough (S6b-α step2 step3)
 
-_MARIMO_SVC_SRC = """
-import marimo
-
-app = marimo.App()
-
-
-@app.cell
-def _svc():
-    bar = get_bar()                           # noqa: F821  host-seeded driver
-    # host-injected SERVICE (value-returning) + CONSTANT (static data), both free refs —
-    # the seam the v19 parity gate uses to inject the stub scorer + ordered universe.
-    score = score_rows({"close": bar.close})  # noqa: F821  injected service
-    lots = len(UNIVERSE)                       # noqa: F821  injected constant (tuple)
-    qty = float(lots) if score > 1000.0 else 0.0
-    submit_market(qty)                         # noqa: F821
-    return (qty,)
-"""
+_MARIMO_SVC_BODY = (
+    "bar = get_bar()                           # noqa: F821  host-seeded driver\n"
+    "# host-injected SERVICE (value-returning) + CONSTANT (static data), both free refs —\n"
+    "# the seam the v19 parity gate uses to inject the stub scorer + ordered universe.\n"
+    'score = score_rows({"close": bar.close})  # noqa: F821  injected service\n'
+    "lots = len(UNIVERSE)                       # noqa: F821  injected constant (tuple)\n"
+    "qty = float(lots) if score > 1000.0 else 0.0\n"
+    "submit_market(qty)                         # noqa: F821"
+)
 
 
 class _SvcConstTwin(Strategy):
@@ -297,7 +289,7 @@ def test_marimo_adapter_services_and_constants_ctor_passthrough(tmp_path, monkey
     deterministic v19 parity gate drives). Parity with the imperative twin proves the injected
     values reach the cell unchanged; without the passthrough the cold compile would NameError."""
     path = tmp_path / "strat_svc.py"
-    path.write_text(_MARIMO_SVC_SRC, encoding="utf-8")
+    path.write_text(_synth(_MARIMO_SVC_BODY), encoding="utf-8")
 
     marimo_strat = MarimoStrategy(
         app=load_app(str(path)),
@@ -329,7 +321,7 @@ def test_marimo_adapter_teardown_allows_a_second_run(tmp_path, monkeypatch):
     """The adapter owns the headless-kernel lifetime: after close() a second run stands up a
     fresh kernel (no 'RuntimeContext already initialized'). The dispatch site calls close()."""
     path = tmp_path / "strat.py"
-    path.write_text(_MARIMO_SRC, encoding="utf-8")
+    path.write_text(_synth(_MARIMO_BODY), encoding="utf-8")
 
     for _ in range(2):
         strat = MarimoStrategy(app=load_app(str(path)), strategy_id="s", instrument_id=IID)
@@ -374,7 +366,7 @@ def _write_sidecar(path):
 
 def test_dispatch_routes_marimo_file_to_adapter(tmp_path):
     py = tmp_path / "strat.py"
-    py.write_text(_MARIMO_SRC, encoding="utf-8")
+    py.write_text(_synth(_MARIMO_BODY), encoding="utf-8")
     _write_sidecar(py)
 
     # Pass a STR (production gives a str via cfg.get) — guards the str→Path coercion in the

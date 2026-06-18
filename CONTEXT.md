@@ -347,15 +347,30 @@ caller の window factory が `kind=="strategy_editor"` のとき合成・contro
 （方向: ADR-0012 — target authored モデルは marimo cell-DAG（"Strategy Editor = cell"）に再定義済み。本 code buffer は
 移行期の暫定表面として共存し、実 UI 置換は #15/#16。本エントリの定義は移行期の現実を記述したもの）
 
+**cell window / marimo notebook（cell-DAG authoring 表面）**:
+marimo **3D モード**移植（#81・ADR-0013・findings 0050）。**1 セル = canvas 上の 1 floating window**
+（`strategy_editor:region_NNN`）で、窓に映るのは**セル本体だけ**（`@app.cell` / `def _(refs)` / `return defs`
+は画面に出さない＝marimo の `cellData.code` のみ表示・ラッパは codegen 形式）。N 個のセル窓は**ノート全体で 1 つの
+`.py`** を成し、本体↔`.py` の合成/分解と DAG 解析は **Python(marimo) 純正**（`generate_filecontents` /
+`load_app`）が担う——C# は空間 UI（窓・位置・矢印）だけを持ち def/ref 解析を再実装しない（[[ttwr-parity-first]]）。
+依存の **reactive 解決は marimo 側で閉じている**ので、窓間の依存矢印は refs/defs の**可視化**にすぎず実行には効かない。
+セルの追加 [+]・削除・drag/z-order・位置永続化を持つ（**notebook は常に ≥1 セル**＝最後の 1 個は削除不可・marimo parity）。
+_Avoid_: 窓ごとに別 `.py` ファイルを持つと解釈すること（ノート = 1 `.py`・[[strategy file provider（供給 seam）]] 参照）／
+`def _(refs)` / `return defs` を画面に出すこと（本体のみ）／合成/分解を C# に再実装すること（marimo 純正に委譲）／
+セル identity を窓 GameObject に 1:1 固定すること（物理窓 region_001 は never-Destroy・論理セルは hide-not-destroy で
+dormant 化・ADR-0013）／依存矢印を実行に必要と見なすこと（純粋可視化・Slice 2）
+
 **strategy file provider（供給 seam）**:
 編集・保存済みの strategy `.py` の**パス**を Replay/Live に `strategy_file` として渡す durable な境界（#16）。engine は
 パス（≠ ソース文字列）を消費し `_load_strategy` がディスクから開くため、供給するのはソースではなく**保存済みパス**。
 「**供給可能**」= path バインド済み ∧ not dirty ∧ 直近 Open/Save 成功 ∧ canonical absolute `.py` ∧ 呼出時点で実在、の
 すべてを満たすときに限る（dirty 時は stale パスを返さず拒否＝「provider が返すパス = ディスク内容が buffer と一致」を保証）。
-**active/current/default strategy の選択も run lifecycle も持たない**（run-UI / 別 slice の責務）。multi-instance（#15 の
-`strategy_editor:region_001` 等）は window id → provider の registry で lookup/列挙する（active 選択はしない）。
+**active/current/default strategy の選択も run lifecycle も持たない**（run-UI / 別 slice の責務）。
+cell-DAG モデル（#81・ADR-0013）では provider = **ノート集約（`MarimoNotebookDocument`）**：N 個の [[cell window / marimo notebook（cell-DAG authoring 表面）]] の本体を順に `generate_filecontents` で 1 `.py` に合成・保存し、その 1 パスを供給する。
+「供給可能」判定と dirty（本体編集／窓 add・delete・reorder で dirty）は**集約が持つ**（個々の窓は本体断片で path を持たない）。
 _Avoid_: **adapter と呼ぶこと**（adapter は engine/pythonnet 境界専用の予約語）／run trigger・`start_nautilus_replay`
-呼出・active 選択を #16 / provider に含めること／ソース文字列を供給すると解釈すること（パスが正）
+呼出・active 選択を #16 / provider に含めること／ソース文字列を供給すると解釈すること（パスが正）／cell window ごとに別
+provider/別 `.py` を持つと解釈すること（ノート集約が 1 .py の単一 provider・窓は本体断片）
 
 **orphan-absence invariant（orphan 不在の構造不変条件）**:
 「アプリが見かけ上死んでも裏でプロセスだけが実弾を出し続ける」状態が**構造的に在り得ない**こと

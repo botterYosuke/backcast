@@ -144,6 +144,16 @@ public class FloatingWindowController
             e.rt.SetAsLastSibling();
     }
 
+    // Reveal a hidden window AND raise it to the front (#81 reveal-on-insert). BringToFront only
+    // re-orders siblings; a window hidden via SetActive(false) needs SetActive(true) as well, so a
+    // cell added into a hidden editor becomes visible. No-op for an unknown id.
+    public void Show(string id)
+    {
+        if (_windows.TryGetValue(id, out var e) && e.rt != null)
+            e.rt.gameObject.SetActive(true);
+        BringToFront(id);   // keep the raise semantics in ONE place
+    }
+
     // live -> document. Each window becomes a FloatingWindowLayout in SIBLING order, with
     // zOrder = its 0-based rank among windows (contiguous, 0 = backmost): we read the live
     // sibling index and re-rank, so the captured z is always canonical even if the layer also

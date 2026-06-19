@@ -132,8 +132,10 @@ public static class FloatingWindowProbe
         BuildCanvasStack(spawned, out RectTransform viewport, out RectTransform content,
                          out RectTransform layer, out InfiniteCanvasController canvas);
 
-        // The FloatingWindowLayer MUST be identity under Content (else the persisted canvas-
-        // logical coords don't mean what the schema says, and child-follow can't reuse #13's math).
+        // This probe drives a NON-parallax controller (MakeController below), so the layer stays
+        // identity under Content here — the baseline for child-follow reusing #13's math. (Production
+        // adds a parallax offset to the layer under pan; that offset is compensated at spawn and is
+        // exercised by InfiniteCanvasProbe Section7, not here.)
         if (layer.localPosition != Vector3.zero || layer.localScale != Vector3.one)
             return $"S3: FloatingWindowLayer not identity (pos {layer.localPosition}, scale {layer.localScale})";
 

@@ -55,7 +55,8 @@ public static class InfiniteCanvasProbe
                 ?? Section3_CursorInvariant()
                 ?? Section4_ChildFollowAndController(spawned)
                 ?? Section5_DiskRoundTripNonVacuous()
-                ?? Section6_BackCompatAndSanitize();
+                ?? Section6_BackCompatAndSanitize()
+                ?? Section7_ParallaxForegroundLayer(spawned);
         }
         catch (Exception e)
         {
@@ -72,6 +73,7 @@ public static class InfiniteCanvasProbe
             Debug.Log("[INFINITE CANVAS PASS] pan arithmetic + zoom clamp[0.2,5.0] + cursor-centred invariant " +
                       "(normal+clamped, non-no-op) + real-RectTransform child-follow (engine==math) + " +
                       "Apply/Capture boundary + non-vacuous CanvasView disk round-trip + back-compat/sanitize " +
+                      "+ parallax foreground layer (offset=(1-F)*pan, zoom-independent, engine travel == F*base, strictly-more) " +
                       "(Unity-owned versioned schema, additive capability surface, ADR-0003 capability parity, under Unity Mono)");
             EditorApplication.Exit(0);
         }
@@ -282,6 +284,89 @@ public static class InfiniteCanvasProbe
             return "S6e: malformed JSON did not fall back to default";
         if (!CanvasView.Approx(e.canvasView, CanvasView.Identity(), EPS))
             return "S6e: default fallback view is not identity";
+        return null;
+    }
+
+    // ---- 7. parallax foreground layer: travels F× the base plane per unit pan (depth cue) ----
+    static string Section7_ParallaxForegroundLayer(List<GameObject> spawned)
+    {
+        const float F = 1.2f;
+
+        // (a) PURE MATH. factor=1 -> always zero (coplanar, today's behaviour), at any pan/zoom.
+        var coplanar = CanvasViewMath.ParallaxLayerOffset(new CanvasView(50f, -30f, 2f), 1f);
+        if (!Approx(coplanar.x, 0f) || !Approx(coplanar.y, 0f))
+            return $"S7: factor=1 must give zero offset (got {coplanar})";
+        // pan=0 -> zero even for a foreground factor (centred layout & persistence stay unchanged).
+        var centred = CanvasViewMath.ParallaxLayerOffset(new CanvasView(0f, 0f, 3f), F);
+        if (!Approx(centred.x, 0f) || !Approx(centred.y, 0f))
+            return $"S7: pan=0 must give zero offset (got {centred})";
+        // non-zero pan -> O = (1-F)*pan, and zoom-INDEPENDENT (Content-local units).
+        var off = CanvasViewMath.ParallaxLayerOffset(new CanvasView(40f, -25f, 1f), F);
+        if (!Approx(off.x, (1f - F) * 40f) || !Approx(off.y, (1f - F) * -25f))
+            return $"S7: offset != (1-F)*pan (got {off}, expected {(1f - F) * 40f},{(1f - F) * -25f})";
+        var offZoomed = CanvasViewMath.ParallaxLayerOffset(new CanvasView(40f, -25f, 4f), F);
+        if (!Approx(offZoomed.x, off.x) || !Approx(offZoomed.y, off.y))
+            return $"S7: offset must be zoom-independent (got {offZoomed} vs {off})";
+
+        // (b) ENGINE CROSS-CHECK (non-tautological): a real base-plane child (direct Content child)
+        // vs a real foreground child (inside a parallax layer), driven by the controller. The
+        // foreground must travel F× the base plane's screen distance for the SAME pan.
+        var viewportGo = new GameObject("S7Viewport", typeof(RectTransform));
+        spawned.Add(viewportGo);
+        var viewport = viewportGo.GetComponent<RectTransform>();
+        viewport.anchorMin = viewport.anchorMax = viewport.pivot = new Vector2(0.5f, 0.5f);
+        viewport.sizeDelta = new Vector2(1000f, 800f);
+
+        var contentGo = new GameObject("S7Content", typeof(RectTransform));
+        var content = contentGo.GetComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = content.anchorMax = content.pivot = new Vector2(0.5f, 0.5f);
+        content.sizeDelta = Vector2.zero;
+
+        var baseGo = new GameObject("S7Base", typeof(RectTransform));   // Hakoniwa-plane child
+        var baseChild = baseGo.GetComponent<RectTransform>();
+        baseChild.SetParent(content, false);
+        baseChild.anchorMin = baseChild.anchorMax = baseChild.pivot = new Vector2(0.5f, 0.5f);
+        baseChild.anchoredPosition = Vector2.zero;
+
+        var layerGo = new GameObject("S7Layer", typeof(RectTransform));   // FloatingWindowLayer
+        var layer = layerGo.GetComponent<RectTransform>();
+        layer.SetParent(content, false);
+        layer.anchorMin = layer.anchorMax = layer.pivot = new Vector2(0.5f, 0.5f);
+        layer.anchoredPosition = Vector2.zero;
+
+        var fgGo = new GameObject("S7Fg", typeof(RectTransform));   // a window inside the layer
+        var fgChild = fgGo.GetComponent<RectTransform>();
+        fgChild.SetParent(layer, false);
+        fgChild.anchorMin = fgChild.anchorMax = fgChild.pivot = new Vector2(0.5f, 0.5f);
+        fgChild.anchoredPosition = Vector2.zero;
+
+        var controller = new InfiniteCanvasController(content, layer, F);
+
+        var vA = new CanvasView(0f, 0f, 1f);
+        var vB = new CanvasView(15f, -10f, 1f);   // a pure pan step (zoom fixed)
+
+        controller.ApplyView(vA);
+        if (!Approx(layer.anchoredPosition.x, 0f) || !Approx(layer.anchoredPosition.y, 0f))
+            return $"S7: layer offset at pan=0 not zero (got {layer.anchoredPosition})";
+        Vector2 baseA = viewport.InverseTransformPoint(content.TransformPoint(baseChild.localPosition));
+        Vector2 fgA = viewport.InverseTransformPoint(layer.TransformPoint(fgChild.localPosition));
+
+        controller.ApplyView(vB);
+        Vector2 expectOff = CanvasViewMath.ParallaxLayerOffset(vB, F);
+        if (!Approx(layer.anchoredPosition.x, expectOff.x) || !Approx(layer.anchoredPosition.y, expectOff.y))
+            return $"S7: live layer offset != math (engine {layer.anchoredPosition}, math {expectOff})";
+        Vector2 baseB = viewport.InverseTransformPoint(content.TransformPoint(baseChild.localPosition));
+        Vector2 fgB = viewport.InverseTransformPoint(layer.TransformPoint(fgChild.localPosition));
+
+        Vector2 baseTravel = baseB - baseA;
+        Vector2 fgTravel = fgB - fgA;
+        if (Approx(baseTravel.x, 0f) && Approx(baseTravel.y, 0f))
+            return "S7: base plane did not move (vacuous)";
+        if (!Approx(fgTravel.x, F * baseTravel.x) || !Approx(fgTravel.y, F * baseTravel.y))
+            return $"S7: foreground travel != F*base (fg {fgTravel}, base {baseTravel}, F {F})";
+        if (Mathf.Abs(fgTravel.x) <= Mathf.Abs(baseTravel.x) + EPS)
+            return $"S7: foreground did not move MORE than base (no depth cue: fg {fgTravel}, base {baseTravel})";
         return null;
     }
 

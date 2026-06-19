@@ -73,6 +73,27 @@ public static class CanvasViewMath
             newZoom);
     }
 
+    // Parallax offset (Content-LOCAL units) for a foreground layer that should track pan at
+    // `factor`× the base (Content) plane — the depth cue for floating windows sitting "above"
+    // HakoniwaRoot. Both planes ride Content (move 1× for free); this extra offset on the
+    // foreground layer adds the remaining (factor−1)× so its NET screen travel is factor× per
+    // unit pan. Derivation (findings 0006 §2 coordinate model): a foreground point at layer-local
+    // w renders at viewport = zoom·((w + O) − pan); to make d(viewport)/d(pan) = −factor·zoom
+    // (factor× the base plane's −zoom) we need O = (1 − factor)·pan. So at pan=0 (centred) O=0 —
+    // the layer is identity and nothing existing shifts; the offset only grows as you pan away.
+    //   factor = 1  -> 0 (coplanar, today's behaviour)
+    //   factor > 1  -> foreground (moves MORE than Hakoniwa -> feels in front)
+    //   0 < factor < 1 -> background (moves less)
+    // Returned in Content-LOCAL units (the layer is a Content child), so it is zoom-independent:
+    // O = (1 − factor)·pan, and the live offset must NOT be persisted (CaptureView reads Content only).
+    public static Vector2 ParallaxLayerOffset(CanvasView v, float factor)
+    {
+        // Defend non-finite factor -> coplanar (no offset), mirroring SafeZoom's discipline so a
+        // bad live/serialized value can't push NaN/Inf into the layer's anchoredPosition.
+        if (float.IsNaN(factor) || float.IsInfinity(factor)) factor = 1f;
+        return new Vector2((1f - factor) * v.panX, (1f - factor) * v.panY);
+    }
+
     // Pan by a screen-pixel drag delta: grab-and-drag, so pan moves -d/zoom.
     public static CanvasView PanByScreenDelta(CanvasView v, Vector2 deltaScreen)
     {

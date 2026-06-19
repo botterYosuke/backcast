@@ -23,10 +23,18 @@ public class InfiniteCanvasController
 {
     readonly RectTransform _content;
 
-    public InfiniteCanvasController(RectTransform content)
+    // Optional foreground layer (e.g. the FloatingWindowLayer) given a PARALLAX depth cue: it
+    // rides Content like everything else, plus this controller adds CanvasViewMath.ParallaxLayerOffset
+    // so it travels `_parallaxFactor`× per unit pan. Null layer / factor 1 == today's coplanar behaviour.
+    readonly RectTransform _parallaxLayer;
+    readonly float _parallaxFactor;
+
+    public InfiniteCanvasController(RectTransform content, RectTransform parallaxLayer = null, float parallaxFactor = 1f)
     {
         if (content == null) throw new System.ArgumentNullException(nameof(content));
         _content = content;
+        _parallaxLayer = parallaxLayer;
+        _parallaxFactor = parallaxFactor;
     }
 
     // Current live view, read back from the Content transform.
@@ -42,6 +50,11 @@ public class InfiniteCanvasController
         CanvasViewMath.ViewToTransform(view, out Vector2 anchoredPosition, out Vector3 localScale);
         _content.anchoredPosition = anchoredPosition;
         _content.localScale = localScale;
+
+        // Drive the parallax foreground layer from the SAME view. Every pan/zoom funnels through
+        // ApplyView, so this single write keeps the depth cue in sync without a per-frame Update.
+        if (_parallaxLayer != null)
+            _parallaxLayer.anchoredPosition = CanvasViewMath.ParallaxLayerOffset(view, _parallaxFactor);
     }
 
     // Pan by a screen-pixel drag delta (grab-and-drag).

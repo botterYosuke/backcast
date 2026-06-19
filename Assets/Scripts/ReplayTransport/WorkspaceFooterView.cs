@@ -16,6 +16,14 @@ using UnityEngine.UI;
 
 public sealed class WorkspaceFooterView
 {
+    // #84 (findings 0053) — the footer is screen-fixed chrome and MUST sit above the sidebar's own
+    // override-sorting Canvas (UniverseSidebarView.SIDEBAR_SORT=500) so the status bar can never be
+    // overpainted by an overflowing sidebar (the original #84 symptom). MenuBarView.MENU_SORT=600
+    // (+ its 599 backdrop) stays in front so dropdowns continue to cover the footer band, matching
+    // desktop semantics. Values are DERIVED — Section13_ChromeZOrderLayering asserts the RELATIONS
+    // only (findings 0045 D2).
+    public const int FOOTER_SORT = 550;
+
     readonly FooterModeViewModel _modeVm;
     readonly LiveAutoTransportViewModel _autoVm;    // optional: drives the live-mode status line
     readonly Action<string> _onMode;                // segment click → "Replay"|"LiveManual"|"LiveAuto"
@@ -45,6 +53,11 @@ public sealed class WorkspaceFooterView
     // Build the footer under `bar` (a bottom-anchored RectTransform owned by the host).
     public void Build(RectTransform bar)
     {
+        // #84: promote the footer GO to its OWN override-sorting Canvas so it draws above the sidebar
+        // (SIDEBAR_SORT=500) and below the menu (MENU_SORT=600). The GraphicRaycaster routes mode-segment
+        // clicks through this Canvas's sortingOrder, matching the chrome contract (findings 0045 / 0053).
+        ChromeCanvas.Promote(bar.gameObject, FOOTER_SORT);
+
         var bg = bar.gameObject.GetComponent<Image>();
         if (bg == null) bg = bar.gameObject.AddComponent<Image>();
         _barBg = bg;

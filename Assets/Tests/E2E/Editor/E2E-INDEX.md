@@ -32,7 +32,7 @@
 |---|---|---:|---:|---:|---:|---:|---:|
 | [ReplayToHakoniwaE2ERunner](./ReplayToHakoniwaE2ERunner.md) ✅ | （7 step※） | 7 | 7 | 0 | 0 | 0 | 0 |
 | [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) ✅ | `JOURNEY-LAYOUT-01..15` | 15 | 15 | 0 | 0 | 0 | 0 |
-| [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) | `JOURNEY-AUTHOR-01..13` | 13 | 1 | 3 | 9 | 0 | 0 |
+| [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) ✅ | `JOURNEY-AUTHOR-01..13` | 13 | 13 | 0 | 0 | 0 | 0 |
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) | `JOURNEY-LIVE-01..15` | 15 | 0 | 9 | 4 | 2 | 0 |
 
 ※ `ReplayToHakoniwa` は Action-ID 採番より前に書かれた台本で 7 = ストーリーの step 数（Action-ID 行ではない）。
@@ -75,7 +75,8 @@
   ORDER-09 は接続済み host で非 vacuous 検査・ORDER-05 happy place が同一 host で lane 到達を実証。findings 0064）。
   ORDER-01..15 を `自動(E2E済)` へ、ORDER-16 は HITL専用。
   **12本目 = `LayoutPersistenceJourneyE2ERunner`**（Journey・全行新規オーサリング。実 `BackcastWorkspaceRoot` を反射合成し配置 5 次元〔canvas pan/zoom・箱庭 tile 順・floating window rect・notebook cell 位置・per-mode profile〕を `OnFileSave`→File→New→`OnFileOpen` で round-trip。Section1=JOURNEY-LAYOUT-01..13 の round-trip 本体・Section2=14 no-wipe bare open・Section3=15 Save As fork。per-mode profile は footer UI でなく `SyncBaseTilesToMode(bool)` 反射で駆動〔BackcastWorkspaceProbe S12 parity〕。⚠️ 生産の `OnFileNew` は canvas/Hakoniwa/floating geometry を reset しないので、round-trip 非空虚化は File→New 後の明示 perturb で担保。純データ probe〔`ReplayLayoutProbe`/`MultiDocLayoutProbe`〕は移送せず、それらが HITL と切り出した実 root 配線を縫う層として共存。findings 0065）。JOURNEY-LAYOUT-01..15 を `自動(E2E済)` へ。
-  残り未昇格: MenuBar ＋ Journey 2 本（AuthorToRun / LiveManualTrade）。順次昇格。
+  **13本目 = `AuthorToRunJourneyE2ERunner`**（Journey・全行新規オーサリング。実 `BackcastWorkspaceRoot` を反射合成し author→run の縦縫い〔空 notebook→セル編集→universe/scenario→Save As→provider 5 条件 supplyable→run gate commit→`host.TryStartRun` 受理〕を観測。Section1=JOURNEY-AUTHOR-01..10 の happy path〔steps 2-9 Python-FREE・step 10 のみ `host.InitializePython("MOCK")`＋`_isOwner=true` で受理観測〕・Section2=11/12 の reject〔空 universe→`BlockedInvalidScenario`＋sidecar 不変／dirty editor→`BlockedNoStrategy`〕。非空虚化: provider 弧 false〔03 未バインド〕→true〔08 Save As〕→false〔12 dirty〕、scenario commit は Save As も書くため step 9 は Save As 後の universe 成長分を TryStartRun の Commit に帰属。各 surface 単体は既存 runner が正本＝移送せず横断縫い目を観測。findings 0066）。JOURNEY-AUTHOR-01..12 を `自動(E2E済)` へ、13 は `自動(E2E済・ReplayToHakoniwa)`。
+  残り未昇格: MenuBar ＋ Journey 1 本（LiveManualTrade）。順次昇格。
 
 ## Issue release-gate slice runners
 

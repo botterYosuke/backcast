@@ -14,7 +14,7 @@
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..18` | 18 | 0 | 7 | 5 | 2 | 4 |
 | [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
-| [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) | `HAKONIWA-01..13` | 13 | 0 | 10 | 0 | 1 | 2 |
+| [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) ✅ | `HAKONIWA-01..13` | 13 | 10 | 0 | 0 | 1 | 2 |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) | `STRATEGY-01..18` | 18 | 0 | 13 | 2 | 2 | 1 |
@@ -51,7 +51,8 @@
   **6本目 = `DepthLadderE2ERunner`**（`WorkspaceDepthLadderProbe` → git mv・新規 section [DEPTH-03 固定21行/"---" / DEPTH-06 受信順 /
   DEPTH-09 Replay decode-skip / DEPTH-10 signature early-out] 追加・AFK RED(S6)→GREEN 確定 2026-06-19・findings 0059）。
   DEPTH-04（per-side 色）は `ThemeProbe` が正本のまま据え置き（findings 0054 で `hakoniwa_up/down/last` へ移行済）、DEPTH-11 は HITL。
-  残り未昇格: MenuBar / Hakoniwa / StrategyEditorNotebook / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
+  **7本目 = `HakoniwaE2ERunner`**（4 probe [`HakoniwaProbe` / `HakoniwaChartTileProbe` / `HakoniwaBaseModeProbe` / `HakoniwaProfileProbe`] → 1 runner 16 section へ集約・assert verbatim 移送・AFK GREEN 確定 2026-06-19・findings 0060）。HAKONIWA-01..10 を `自動(E2E済)` へ。ChartTile S2（ohlc decode）/ BaseMode S5（#65 panel empty-state）は Hakoniwa 外の関心事として元 probe に trim 据え置き（将来 Chart/Panel runner へ）、HakoniwaProbe/HakoniwaProfileProbe は git rm。
+  残り未昇格: MenuBar / StrategyEditorNotebook / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
 - 第二波の昇格優先度の目安: `自動(Probe有・要昇格)`（既存 assert 流用で安い）→ `要新規自動化`（新規）。
   `OrderTicket` は view 側フォーム＋検証ゲートの Probe が無く全 15 行が `要新規自動化` なので、第二波で最も手が要る。
 

@@ -16,7 +16,8 @@
 // (#11, findings 0003 §8). The tiles carry PRODUCTION-STABLE ids so a later slice can swap the
 // demo content for real chart/panel widgets without changing the persistence contract.
 //
-// The arithmetic + reorder + persistence gate is HakoniwaProbe (AFK, authoritative); this
+// The arithmetic + reorder + persistence gate is HakoniwaE2ERunner (AFK, authoritative; this
+// HITL harness's swap/reorder logic was promoted into it — findings 0060); this
 // harness is the human-feel half (the header-drag gesture + canvas follow), not a headless assert.
 
 using System.IO;

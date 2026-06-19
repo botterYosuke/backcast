@@ -41,9 +41,11 @@ divider resize と box 移動/リサイズは **未実装（将来 slice）**な
 | HAKONIWA-08 | LiveManual ⇄ LiveAuto（同一 Live shape）= no-op | `BackcastWorkspaceRoot.cs:717`（`SyncBaseTilesToMode(true)` 二度） | 2 度目の Live retile は despawn/respawn 無し（tile count・chart identity・startup 不在 不変） | 同一 shape を 2 度駆動し count/identity 不変を assert | 自動(E2E済) | §11（旧 `HakoniwaBaseModeProbe`） |
 | HAKONIWA-09 | mode 別 layout profile の復元（honor / canonical 落とし） | `BackcastWorkspaceRoot.ApplyProfileOrder`（`_profiles` seed 経由） | 保存 profile の base id 集合が `Kinds(mode)` と一致＝user の base 並びを honor、不一致/欠損/衝突 doc は canonical へ（#61 衝突安全）。chart 順は常に honor・membership は universe 再導出 | `HakoniwaLayoutProfiles` の validity 行列＋実 root の `ApplyProfileOrder` を assert | 自動(E2E済) | §12–§16（旧 `HakoniwaProfileProbe`／`HakoniwaBaseModeProbe`） |
 | HAKONIWA-10 | 欠損/未知/重複/破損 doc の tolerance（back-compat） | `HakoniwaController.cs:166`（`DeriveOrder`）／`:186`（`NormalizeOrder`） | doc 未知 id は無視・既知欠落 id は末尾・重複/範囲外 slot は contiguous へ collapse・破損 JSON は default 順 | tolerance doc を `Apply` し count 不変＋期待順を assert | 自動(E2E済) | §5,§6（旧 `HakoniwaProbe`） |
-| HAKONIWA-11 | ヘッダ drag の実感（header=swap・body=canvas pan の経路分離） | `HakoniwaTileHeaderInput.cs:41`（`OnEndDrag`） | 実ポインタ drag で tile が掴めて入れ替わる視覚、ヘッダのみ swap・body は下層 InfiniteCanvas へ落ちて pan、取りこぼし無し | — | HITL専用（実ピクセル＋実マウス＋EventSystem raycast・GPU/実ウィンドウ前提） | `HakoniwaHitlMenu` |
+| HAKONIWA-11a | 盤面 point の入力ルーティング決定（header→swap / body→pan / 盤外→pan の経路分離・math-pick） | `HakoniwaGridMath.RouteBoardPoint`（board-normalized point→(slot,inHeader)）←`HakoniwaStageMath.UnprojectToSlot` | header band（cell 上端 `headerFrac`）=(slot=S, inHeader=true)＝swap、body=(slot=S, inHeader=false)＝pan、盤外/隙間=(slot=-1)＝pan。production==gate（findings 0068 §12） | `HakoniwaPerspectiveStageProbe` §4（`Section4_BoardPointRouting`）が (a)/(b)/(c) を assert・RED→GREEN 実証（findings 0068 §14） | 自動(Probe有・要昇格)（issue #93 入力スライス gate。E2ERunner 昇格は #93 実配管時に `HakoniwaInputRoutingE2ERunner` へ） | `HakoniwaPerspectiveStageProbe` §4 |
+| HAKONIWA-11b | ヘッダ drag の実感（実 screen-press → 掴めて入れ替わる視覚・取りこぼし無し） | `HakoniwaTileHeaderInput.cs:41`（`OnEndDrag`）／#93 後は RawImage への screen-press→RT pixel→`RouteBoardPoint` dispatch | 実ポインタ drag で tile が掴めて入れ替わる視覚、ヘッダのみ swap・body は pan へ fall-through、取りこぼし無し（math-pick routing 決定は HAKONIWA-11a が AFK で固定済み） | — | HITL専用（実ピクセル＋実マウス＋実ウィンドウ＋GPU 前提） | `HakoniwaHitlMenu` |
 | HAKONIWA-12 | divider drag で列幅/行高の比率変更（resize） | — | — | — | 対象外（未実装・将来 slice。`HakoniwaGridMath.cs:12`「#14 does NOT do divider resize」・等分グリッド固定） | — |
 | HAKONIWA-13 | 箱（box）を drag で移動／drag-handle でリサイズ・位置/サイズを永続化 | — | — | — | 対象外（未実装・将来 slice。box 位置/サイズは derived・`tile/slot/tile swap`/`chart tile family` エントリで #14 外と明記） | — |
+| HAKONIWA-14 | hakoniwa が斜め俯瞰ジオラマ（perspective stage）で描画される（盤面が WorldSpace Stage canvas に載り perspective camera が透過 RT へ撮影 → `_content` の RawImage で合成） | `BackcastWorkspaceSceneBuilder.Build`（Stage canvas/perspective camera/RT/RawImage 配線・HakoniwaRoot reparent）／`BackcastWorkspaceRoot._hakoniwaRawImage` | Stage canvas=`WorldSpace`+専用 layer／perspective camera `targetTexture`=RT・`cullingMask`=当該 layer のみ・fov/位置が `StageParams.Default` 由来／Main camera が当該 layer 除外／board rotation=`Euler(pitch,yaw,0)`・寸法 Default 由来／HakoniwaRoot が `_content`→Stage canvas へ転出・RawImage が旧位置 | `BackcastWorkspaceProbe.Section16_HakoniwaStageWiring` ＋ Section2 反転（HakoniwaRoot 非 Content）＋ Section1 `_hakoniwaRawImage` ref（RED→GREEN staged・findings 0068 §15） | 自動(Probe有) RED→GREEN | `BackcastWorkspaceProbe` §16 / findings 0068 §15 |
 
 > tile rect は slot から派生する snapshot なので「rect を動かす行動」は無い（自由配置・overlap は不変条件違反）。
 > universe の編集自体は Universe サイドバー サーフェスの行動で、本台本は HAKONIWA-05 として **Hakoniwa 側の反映**を観測する。
@@ -53,7 +55,7 @@ divider resize と box 移動/リサイズは **未実装（将来 slice）**な
 - **HAKONIWA-01/02/03（swap）**: 本 runner §1（grid 算術＝`GridDims`/`CellRects`・等分/cover/非 overlap/空 6 番セル）、
   §2（`SlotAt` hit-test・cell 中心/空 6 番/枠外）、§3（実 RectTransform ツリー上で order→cell anchor・`Capture`/`Apply` 境界）、
   §5（no-op/重複/範囲外 tolerance）。旧 `HakoniwaProbe` S2–S6 を assert を 1 行も削らず移送。実ポインタ→drop の screen 変換と
-  EventSystem 経路（header が上に乗るので canvas が gesture を見ない）は HITL（HAKONIWA-11）。
+  EventSystem 経路（header が上に乗るので canvas が gesture を見ない）の実体感は HITL（HAKONIWA-11b）、#93 perspective stage の math-pick routing 決定（header/body/盤外）は AFK（HAKONIWA-11a / `HakoniwaPerspectiveStageProbe` §4）。
 - **HAKONIWA-04（永続化）**: 本 runner §4 が on-disk TEXT 証明（`"id":"run_result","slot":0` 等）＋fresh load で
   vacuous-green を kill。File→Save 連動（layout sidecar への書き込み）は MenuBar / Journey 側の責務。
 - **HAKONIWA-05/06（chart 同期・box-grow）**: 本 runner §8（`AddTile`/`RemoveTile`＋非デフォルト order の disk round-trip）と
@@ -88,7 +90,7 @@ divider resize と box 移動/リサイズは **未実装（将来 slice）**な
 | `HakoniwaChartTileProbe` | batchmode・pure＋実 RectTransform | box-grow（S1）→ §7、dynamic tile round-trip（S3）→ §8 を移送（HAKONIWA-05/06）。**S2（ohlc decode）は Hakoniwa 外の関心事として trim 据え置き**——将来の Chart カテゴリ runner へ移送予定 |
 | `HakoniwaBaseModeProbe` | batchmode・実 root 合成 | base retile/chart identity/profile（S1–S4）→ §9–§12 を移送（HAKONIWA-07/08/09）。**S5（#65 panel empty-state）は Hakoniwa 外の関心事として trim 据え置き**——将来の Panel カテゴリ runner へ移送予定 |
 | `HakoniwaProfileProbe` | batchmode・pure logic | **昇格済み**（`git rm`）。per-mode validity 行列／disk round-trip → 本 runner §13–§16（HAKONIWA-09） |
-| `HakoniwaHitlMenu` | HITL ハーネス | HAKONIWA-11 の視覚・経路確認用に**探索 Probe として残す** |
+| `HakoniwaHitlMenu` | HITL ハーネス | HAKONIWA-11b の視覚・実 screen-press 確認用に**探索 Probe として残す**（routing 決定 11a は AFK） |
 
 > 据え置き 2 section（ChartTile S2 / BaseMode S5）は Hakoniwa grid の不変条件ではない（チャート数値 decode / 口座 panel の
 > empty-state）ため本 runner には入れず、元 probe を **trimmed standing probe** として残し回帰を維持する（findings 0060）。

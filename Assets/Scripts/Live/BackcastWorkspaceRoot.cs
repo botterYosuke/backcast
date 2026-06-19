@@ -61,6 +61,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _content;
     [SerializeField] InfiniteCanvasInputSurface _inputSurface;
     [SerializeField] RectTransform _hakoniwaRoot;
+    // #93 perspective stage (findings 0068 §15 F1): the Content-side RawImage that displays the
+    // World-Space Hakoniwa Stage's perspective RenderTexture (the diorama "photo"). The RT + Stage
+    // canvas + camera are wired in 段2; the serialized field is authored in 段1 so the scene
+    // serialized-ref gate (Section1 / Section16) is satisfiable.
+    [SerializeField] RawImage _hakoniwaRawImage;
     [SerializeField] RectTransform _startupTile;
     [SerializeField] RectTransform _chartTile;
     [SerializeField] RectTransform _floatingLayer;

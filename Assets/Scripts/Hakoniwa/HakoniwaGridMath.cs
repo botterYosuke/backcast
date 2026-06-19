@@ -89,4 +89,28 @@ public static class HakoniwaGridMath
         }
         return -1;
     }
+
+    // Route a board-NORMALIZED point (0..1, Y up — UnprojectToSlot output space) to a slot and
+    // whether it landed in that slot's HEADER band (the swap handle). Returns the slot (or -1 if
+    // off-board/gap) and sets inHeader. slot<0 -> inHeader=false (off-board/gap -> pan). header band
+    // = the TOP `headerFrac` of the cell height (Y up -> [maxY - headerFrac*h .. maxY]); headerFrac
+    // is a board-normalized cell-height fraction (px->fraction is done at the Unity boundary, #14
+    // resolution-independent discipline / findings 0068 §13). (a) header -> swap, (b) body -> pan,
+    // (c) off-board -> pan (findings 0068 §14).
+    public static int RouteBoardPoint(IList<LayoutRect> cells, Vector2 pointNormalized, float headerFrac, out bool inHeader)
+    {
+        // GREEN (findings 0068 §14): pick the slot, then check whether the point landed in the TOP
+        // `headerFrac` band of that cell (Y up -> [maxY - headerFrac*h .. maxY] = swap handle).
+        // off-board/gap (slot<0) -> inHeader=false (pan fall-through).
+        int slot = SlotAt(cells, pointNormalized);
+        if (slot < 0)
+        {
+            inHeader = false;
+            return -1;
+        }
+        LayoutRect cell = cells[slot];
+        float h = cell.maxY - cell.minY;
+        inHeader = pointNormalized.y >= cell.maxY - headerFrac * h;
+        return slot;
+    }
 }

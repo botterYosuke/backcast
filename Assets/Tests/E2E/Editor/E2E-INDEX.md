@@ -7,14 +7,14 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（12 本・162 行）
+## Surface E2E（12 本・163 行）
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..18` | 18 | 0 | 7 | 5 | 2 | 4 |
 | [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
-| [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) ✅ | `HAKONIWA-01..13` | 13 | 10 | 0 | 0 | 1 | 2 |
+| [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) ✅ | `HAKONIWA-01..13`（11=11a/11b） | 14 | 10 | 1 | 0 | 1 | 2 |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..18` | 18 | 14 | 0 | 1 | 2 | 1 |

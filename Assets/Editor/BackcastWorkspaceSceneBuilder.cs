@@ -27,6 +27,17 @@ public static class BackcastWorkspaceSceneBuilder
     const string WINDOW_ID = "strategy_editor:region_001";
     const string ORDER_WINDOW_ID = "order:region_001";   // #23 re-home: adopted Order ticket window
 
+    // #93 perspective stage (findings 0068 §15): the dedicated Hakoniwa layer, the RT asset the stage
+    // camera renders into (and the Content RawImage displays), and the canvas-unit box for the grid.
+    // All stage FRAMING (fov / camDistance / tilt / board dims) derives from the math SoT
+    // HakoniwaStageMath.StageParams.Default — no scene magic numbers (§15 F4).
+    const string HAKONIWA_LAYER = "Hakoniwa";
+    const string STAGE_RT_PATH = "Assets/Settings/HakoniwaStage.renderTexture";
+    const int STAGE_RT_W = 1000;
+    const int STAGE_RT_H = 640;
+    const float HAKO_BOX_W = 1000f;
+    const float HAKO_BOX_H = 640f;
+
     [MenuItem("Tools/Backcast/Build Workspace Scene")]
     public static void Build()
     {
@@ -72,15 +83,64 @@ public static class BackcastWorkspaceSceneBuilder
         var content = NewRect("Content", viewport);
         Identity(content);
 
-        var hakoniwaRoot = NewRect("HakoniwaRoot", content);
+        // #93 perspective stage (findings 0068 §15): HakoniwaRoot lives on its OWN World-Space
+        // "Hakoniwa Stage" Canvas on a DEDICATED layer (NOT under Content). A perspective camera
+        // renders ONLY that layer into a transparent RT; the Content-side RawImage (authored below)
+        // shows the RT (the diorama "photo"). Framing derives from StageParams.Default (§15 F4).
+        int hakoLayer = EnsureHakoniwaLayer();
+        if (hakoLayer < 0) { Debug.LogError("[BackcastWorkspaceSceneBuilder] no free user layer for '" + HAKONIWA_LAYER + "'"); return; }
+        var stageRt = LoadOrCreateStageRT();
+        var stageParams = HakoniwaStageMath.StageParams.Default(stageRt.width, stageRt.height);
+
+        var stageCanvasGo = new GameObject("HakoniwaStage", typeof(Canvas));
+        stageCanvasGo.layer = hakoLayer;
+        var stageCanvas = stageCanvasGo.GetComponent<Canvas>();
+        stageCanvas.renderMode = RenderMode.WorldSpace;
+        var stageCanvasRt = (RectTransform)stageCanvasGo.transform;
+        stageCanvasRt.position = Vector3.zero;
+        stageCanvasRt.localScale = Vector3.one * (stageParams.boardW / HAKO_BOX_W);              // board spans boardW world units (§15 F4)
+        stageCanvasRt.rotation = Quaternion.Euler(stageParams.pitchDeg, stageParams.yawDeg, 0f); // the BOARD tilts, not the camera (§15 F3)
+
+        var hakoniwaRoot = NewRect("HakoniwaRoot", stageCanvasRt);
         Identity(hakoniwaRoot);
-        hakoniwaRoot.sizeDelta = new Vector2(1000f, 640f);   // a bounded box on the canvas for the grid
+        hakoniwaRoot.sizeDelta = new Vector2(HAKO_BOX_W, HAKO_BOX_H);   // a bounded box on the canvas for the grid
         var startupTile = NewRect("startup", hakoniwaRoot);
         var chartTile = NewRect("chart", hakoniwaRoot);
         // #23 re-home: three live data tiles (authored placeholders; runtime fills chrome + view).
         var ordersTile = NewRect("orders", hakoniwaRoot);
         var positionsTile = NewRect("positions", hakoniwaRoot);
         var runResultTile = NewRect("run_result", hakoniwaRoot);
+        SetLayerRecursive(stageCanvasGo, hakoLayer);   // tiles render via the stage camera ONLY (§15 F2)
+
+        // perspective stage camera: renders ONLY the Hakoniwa layer into the RT (§15 F2). Axis-parallel
+        // at (0,0,-camDistance) looking +Z so floating windows never shear (§3); FOV from the math SoT.
+        var stageCamGo = new GameObject("HakoniwaStageCamera", typeof(Camera));
+        var stageCam = stageCamGo.GetComponent<Camera>();
+        stageCam.orthographic = false;
+        stageCam.fieldOfView = stageParams.fovDeg;
+        stageCam.cullingMask = 1 << hakoLayer;
+        stageCam.clearFlags = CameraClearFlags.SolidColor;
+        stageCam.backgroundColor = new Color(0f, 0f, 0f, 0f);   // transparent RT (HITL §8c verifies compositing)
+        stageCam.targetTexture = stageRt;
+        stageCamGo.transform.position = new Vector3(0f, 0f, -stageParams.camDistance);
+        stageCamGo.transform.rotation = Quaternion.identity;
+        stageCanvas.worldCamera = stageCam;
+
+        // Main camera EXCLUDES the Hakoniwa layer (RT-exclusive, no double-draw — §15 F2).
+        var mainCam = Camera.main;
+        if (mainCam != null) mainCam.cullingMask &= ~(1 << hakoLayer);
+
+        // #93 perspective stage (findings 0068 §15 F1): a RawImage in Content shows the perspective
+        // camera's RenderTexture (the diorama "photo"), taking the old HakoniwaRoot slot. Authored
+        // before FloatingWindowLayer so the floating windows draw IN FRONT of the stage photo. 段2 wires
+        // the RT into .texture (the stage camera renders into the same RT — authored above).
+        var hakoniwaRawGo = new GameObject("HakoniwaRawImage", typeof(RectTransform), typeof(RawImage));
+        var hakoniwaRawImage = hakoniwaRawGo.GetComponent<RawImage>();
+        hakoniwaRawImage.texture = stageRt;
+        var hakoniwaRawRt = (RectTransform)hakoniwaRawGo.transform;
+        hakoniwaRawRt.SetParent(content, false);
+        Identity(hakoniwaRawRt);
+        hakoniwaRawRt.sizeDelta = new Vector2(HAKO_BOX_W, HAKO_BOX_H);   // mirrors the old HakoniwaRoot box
 
         var floatingLayer = NewRect("FloatingWindowLayer", content);
         Identity(floatingLayer);
@@ -115,6 +175,7 @@ public static class BackcastWorkspaceSceneBuilder
         SetRef(so, "_content", content);
         SetRef(so, "_inputSurface", inputSurface);
         SetRef(so, "_hakoniwaRoot", hakoniwaRoot);
+        SetRef(so, "_hakoniwaRawImage", hakoniwaRawImage);
         SetRef(so, "_startupTile", startupTile);
         SetRef(so, "_chartTile", chartTile);
         SetRef(so, "_floatingLayer", floatingLayer);
@@ -185,6 +246,53 @@ public static class BackcastWorkspaceSceneBuilder
         rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 0.5f);
         rt.offsetMin = new Vector2(0f, bottomInset);   // left=0, bottom=footer
         rt.offsetMax = new Vector2(w, -topInset);      // right=width, top=menu
+    }
+
+    // #93 perspective stage helpers (findings 0068 §15) ----
+
+    // Ensure a dedicated "Hakoniwa" user layer exists (idempotent); returns its index, or -1 if the
+    // 32 layer slots are exhausted. Section16's gate keys off hako.gameObject.layer != Default, not the
+    // NAME, so any free user slot (8..31) is valid; this just gives it a stable, readable name.
+    static int EnsureHakoniwaLayer()
+    {
+        int existing = LayerMask.NameToLayer(HAKONIWA_LAYER);
+        if (existing >= 0) return existing;
+        var assets = AssetDatabase.LoadAllAssetsAtPath("ProjectSettings/TagManager.asset");
+        if (assets == null || assets.Length == 0) { Debug.LogError("[BackcastWorkspaceSceneBuilder] TagManager.asset not found"); return -1; }
+        var tagManager = new SerializedObject(assets[0]);
+        var layers = tagManager.FindProperty("layers");
+        for (int i = 8; i < layers.arraySize; i++)   // 0..7 are Unity built-ins
+        {
+            var sp = layers.GetArrayElementAtIndex(i);
+            if (string.IsNullOrEmpty(sp.stringValue))
+            {
+                sp.stringValue = HAKONIWA_LAYER;
+                tagManager.ApplyModifiedProperties();
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    // Load (or create + persist) the transparent RenderTexture asset the stage camera renders into and
+    // the Content RawImage displays. It MUST be a project asset (not an in-memory RT) so the RawImage /
+    // camera references survive scene reload (the headless probe re-opens the committed scene).
+    static RenderTexture LoadOrCreateStageRT()
+    {
+        var rt = AssetDatabase.LoadAssetAtPath<RenderTexture>(STAGE_RT_PATH);
+        if (rt == null)
+        {
+            rt = new RenderTexture(STAGE_RT_W, STAGE_RT_H, 24, RenderTextureFormat.ARGB32) { name = "HakoniwaStage" };
+            System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(STAGE_RT_PATH));
+            AssetDatabase.CreateAsset(rt, STAGE_RT_PATH);
+        }
+        return rt;
+    }
+
+    static void SetLayerRecursive(GameObject go, int layer)
+    {
+        go.layer = layer;
+        foreach (Transform c in go.transform) SetLayerRecursive(c.gameObject, layer);
     }
 
     static void SetRef(SerializedObject so, string field, Object value)

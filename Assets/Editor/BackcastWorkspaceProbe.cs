@@ -63,7 +63,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section12_PerModeProfileFlipAndRestore()
                 ?? Section13_ChromeZOrderLayering()
                 ?? Section15_SidebarOverflowClipping()   // #84: complements Section13 (clip ↔ z-layer)
-                ?? Section14_FileOpenBareStrategy();
+                ?? Section14_FileOpenBareStrategy()
+                ?? Section16_HakoniwaStageWiring();   // #93/0068 §15: World-Space Stage + perspective RT wiring
         }
         catch (Exception e)
         {
@@ -115,6 +116,8 @@ public static class BackcastWorkspaceProbe
         {
             "_centerWorkspace", "_footerContainer", "_menuBarView", "_sidebarView",
             "_viewport", "_content", "_inputSurface", "_hakoniwaRoot", "_startupTile",
+            // #93 perspective stage: the RT display surface in Content (findings 0068 §15 F1).
+            "_hakoniwaRawImage",
             "_chartTile", "_floatingLayer", "_strategyEditorWindow", "_strategyEditorBody",
             "_strategyEditorTitleInput",
             // #23 re-home: three live data tiles + the adopted Order ticket window.
@@ -147,7 +150,13 @@ public static class BackcastWorkspaceProbe
         var body = Ref("_strategyEditorBody");
 
         if (content.parent != viewport) return "Content is not a child of Viewport";
-        if (hako.parent != content) return "HakoniwaRoot is not a child of Content";
+        // #93 perspective stage (findings 0068 §15 F1): HakoniwaRoot moved OUT of Content onto the
+        // World-Space Hakoniwa Stage canvas (Content now holds the RawImage showing the RT). This is the
+        // RED→GREEN inversion of the old "HakoniwaRoot is a child of Content" assertion (tdd inversion).
+        if (hako.parent == content) return "HakoniwaRoot still a child of Content (must move to the World-Space Hakoniwa Stage canvas, #93/0068 §15)";
+        var hakoCanvas = hako.GetComponentInParent<Canvas>();
+        if (hakoCanvas == null) return "HakoniwaRoot has no parent Canvas (Stage canvas missing)";
+        if (hakoCanvas.renderMode != RenderMode.WorldSpace) return "Hakoniwa Stage canvas is not RenderMode.WorldSpace";
         if (layer.parent != content) return "FloatingWindowLayer is not a child of Content";
         if (window.parent != layer) return "Strategy Editor window is not a child of FloatingWindowLayer";
         if (body.parent != window) return "Strategy Editor body is not a child of the window";
@@ -853,6 +862,83 @@ public static class BackcastWorkspaceProbe
         float footerTop = footerCorners[1].y;
         if (sidebarBottom < footerTop - 0.5f)
             return $"sidebar-clip: sidebar bottom (worldY={sidebarBottom:F1}) extends BELOW footer top (worldY={footerTop:F1}); sidebar must be inset above the footer";
+        return null;
+    }
+
+    // ── 16. #93 perspective stage scene wiring (findings 0068 §15) ──
+    // The runtime diorama plumbing: HakoniwaRoot lives on a World-Space "Hakoniwa Stage" Canvas on a
+    // DEDICATED layer; a perspective camera renders ONLY that layer into a transparent RenderTexture; a
+    // RawImage in Content shows the RT (the photo). The Main camera EXCLUDES the stage layer (RT-exclusive,
+    // no double-draw). Camera FOV + board tilt derive from HakoniwaStageMath.StageParams.Default — the math
+    // SoT, no scene magic numbers (§7 invariant discipline / §15 F4). Deep projection fidelity is the math
+    // probe (HakoniwaPerspectiveStageProbe) + HITL; this gates the SCENE WIRING only.
+    static string Section16_HakoniwaStageWiring()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "stage-wiring: BackcastWorkspaceRoot missing";
+        var so = new SerializedObject(root);
+        RectTransform Ref(string n) => so.FindProperty(n)?.objectReferenceValue as RectTransform;
+
+        var content = Ref("_content");
+        var hako = Ref("_hakoniwaRoot");
+        if (content == null || hako == null) return "stage-wiring: _content / _hakoniwaRoot missing";
+
+        // (1) RawImage: wired, a RawImage, child of Content (the old HakoniwaRoot slot — §15 F1).
+        var rawProp = so.FindProperty("_hakoniwaRawImage");
+        if (rawProp == null) return "stage-wiring: _hakoniwaRawImage serialized field missing on root (§15 F1)";
+        var raw = rawProp.objectReferenceValue as UnityEngine.UI.RawImage;
+        if (raw == null) return "stage-wiring: _hakoniwaRawImage not wired to a RawImage (§15 F1)";
+        if (raw.transform.parent != content) return "stage-wiring: RawImage is not a child of Content (must take the old HakoniwaRoot slot)";
+
+        // (2) Stage canvas: HakoniwaRoot's parent Canvas is World-Space on a DEDICATED (non-Default) layer.
+        var stageCanvas = hako.GetComponentInParent<Canvas>();
+        if (stageCanvas == null) return "stage-wiring: HakoniwaRoot has no parent Canvas (Stage canvas missing)";
+        if (stageCanvas.renderMode != RenderMode.WorldSpace) return "stage-wiring: Stage canvas is not RenderMode.WorldSpace";
+        int hakoLayer = hako.gameObject.layer;
+        if (hakoLayer == 0) return "stage-wiring: HakoniwaRoot still on the Default layer (needs a dedicated Hakoniwa layer, §15 F2)";
+        int hakoMask = 1 << hakoLayer;
+
+        // (3) the RT the RawImage displays.
+        var rt = raw.texture as RenderTexture;
+        if (rt == null) return "stage-wiring: RawImage.texture is not a RenderTexture (RT not wired, §15 F1)";
+
+        // (4) perspective camera renders ONLY the Hakoniwa layer into THAT RT; FOV from StageParams.Default.
+        Camera stageCam = null;
+        foreach (var c in UnityEngine.Object.FindObjectsByType<Camera>(FindObjectsSortMode.None))
+            if (c.targetTexture == rt) { stageCam = c; break; }
+        if (stageCam == null) return "stage-wiring: no Camera renders into the RawImage's RT (perspective stage camera missing, §15 F2)";
+        if (stageCam.orthographic) return "stage-wiring: stage camera is orthographic (perspective required, §15 F4)";
+        if (stageCam.cullingMask != hakoMask)
+            return $"stage-wiring: stage camera cullingMask must be the Hakoniwa layer ONLY (got {stageCam.cullingMask}, expected {hakoMask}, §15 F2)";
+
+        var p = HakoniwaStageMath.StageParams.Default(rt.width, rt.height);
+        if (Mathf.Abs(stageCam.fieldOfView - p.fovDeg) > 0.1f)
+            return $"stage-wiring: stage camera FOV {stageCam.fieldOfView} != StageParams.Default {p.fovDeg} (camera derives from the math SoT, §15 F4)";
+
+        // (5) board tilt derives from StageParams.Default — location-agnostic (canvas or root carries it, §15 F3).
+        var wantTilt = Quaternion.Euler(p.pitchDeg, p.yawDeg, 0f);
+        if (Quaternion.Angle(hako.rotation, wantTilt) > 0.5f)
+            return $"stage-wiring: HakoniwaRoot world rotation {hako.rotation.eulerAngles} != Euler({p.pitchDeg},{p.yawDeg},0) from StageParams.Default (§15 F3/F4)";
+
+        // (5b) board WORLD dimensions derive from StageParams.Default (§15 F4: "board 寸法も Default 由来").
+        // HakoniwaRoot is a center-anchored box (rect.size == sizeDelta) on the scaled Stage canvas, so its
+        // world size = rect.size * lossyScale must equal (boardW, boardH) from the math SoT.
+        float boardWorldW = hako.rect.width * hako.lossyScale.x;
+        float boardWorldH = hako.rect.height * hako.lossyScale.y;
+        if (Mathf.Abs(boardWorldW - p.boardW) > 0.01f || Mathf.Abs(boardWorldH - p.boardH) > 0.01f)
+            return $"stage-wiring: HakoniwaRoot world board {boardWorldW:F2}x{boardWorldH:F2} != StageParams.Default {p.boardW}x{p.boardH} (board dims must derive from the math SoT, §15 F4)";
+
+        // (6) Main camera EXCLUDES the Hakoniwa layer (RT-exclusive, no double-draw — §15 F2).
+        var mainCam = Camera.main;
+        if (mainCam == null) return "stage-wiring: Main camera missing";
+        if ((mainCam.cullingMask & hakoMask) != 0)
+            return "stage-wiring: Main camera does NOT exclude the Hakoniwa layer (double-draw / RT not exclusive, §15 F2)";
+
+        // (7) the RawImage (the RT photo) must be on a layer the MAIN camera renders — i.e. NOT the
+        // Hakoniwa stage layer (else it is excluded from Main and/or recurses into the RT, §15 F1/F2).
+        if ((mainCam.cullingMask & (1 << raw.gameObject.layer)) == 0)
+            return $"stage-wiring: RawImage (RT photo) layer {raw.gameObject.layer} is not rendered by the Main camera — diorama photo would be invisible (§15 F1/F2)";
         return null;
     }
 

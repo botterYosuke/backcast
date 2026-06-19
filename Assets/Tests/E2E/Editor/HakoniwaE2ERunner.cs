@@ -237,7 +237,7 @@ public static class HakoniwaE2ERunner
         if (c.Swap(2, 2)) return "S5: Swap(i,i) should be a no-op";
         if (c.Swap(0, 99)) return "S5: out-of-range Swap should be a no-op";
         if (c.Swap(-1, 1)) return "S5: negative Swap should be a no-op";
-        if (!SameOrder(c.Order, before)) return "S5: a no-op Swap changed the order";
+        if (!SeqEqual(c.Order, before)) return "S5: a no-op Swap changed the order";
 
         // duplicate + out-of-range + negative slots: must collapse to a contiguous order of
         // ALL known ids (no throw, no drop), sorted by raw slot then stable tie-break.
@@ -255,7 +255,7 @@ public static class HakoniwaE2ERunner
         // expected order by (slot, then original index): status(-5), positions(2), chart(7),
         // orders(7), run_result(99). chart before orders by stable original-order tie-break.
         string[] expected = { "status", "positions", "chart", "orders", "run_result" };
-        if (!SameOrder(c.Order, new List<string>(expected)))
+        if (!SeqEqual(c.Order, new List<string>(expected)))
             return "S5: duplicate/out-of-range slots did not normalize to the expected order";
         return null;
     }
@@ -790,26 +790,11 @@ public static class HakoniwaE2ERunner
         return ix > EPS_GRID && iy > EPS_GRID;
     }
 
-    static bool SameOrder(IReadOnlyList<string> a, IReadOnlyList<string> b)
-    {
-        if (a.Count != b.Count) return false;
-        for (int i = 0; i < a.Count; i++) if (a[i] != b[i]) return false;
-        return true;
-    }
-
     // float Approx for the grid-geometry sections (EPS_GRID = 1e-4f).
     static bool Approx(float a, float b) => Mathf.Abs(a - b) <= EPS_GRID;
 
     // Vector2 Approx for the box-grow section (EPS = 1e-3f).
     static bool Approx(Vector2 a, Vector2 b) => Mathf.Abs(a.x - b.x) < EPS && Mathf.Abs(a.y - b.y) < EPS;
-
-    // read the rendered Text of a LivePanelTileView via its private _content field.
-    static string ViewText(object view)
-    {
-        if (view == null) return null;
-        var content = view.GetType().GetField("_content", BF)?.GetValue(view) as Text;
-        return content != null ? content.text : null;
-    }
 
     // assert [startup, buying_power, orders, positions, run_result, chart…] with startup at slot 0.
     static string AssertCanonicalReplayBase(HakoniwaController hako)

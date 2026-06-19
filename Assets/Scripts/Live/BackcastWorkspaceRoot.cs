@@ -616,7 +616,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var rt = (RectTransform)btnGo.transform;
         rt.SetParent(overlayGo.transform, false);
         rt.anchorMin = new Vector2(1f, 0f); rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);
-        rt.sizeDelta = new Vector2(170f, 30f);
+        rt.sizeDelta = new Vector2(30f, 30f);
         rt.anchoredPosition = new Vector2(-20f, 56f);   // bottom-right; y = footer bar (40px, scene-authored) + 16px gap
         btnGo.GetComponent<Image>().color = new Color(0.20f, 0.50f, 0.35f, 0.95f);
 
@@ -626,7 +626,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
         var t = lblGo.GetComponent<Text>();
         t.font = _font;
-        t.text = "+ Python cell";
+        t.text = "+";
         t.alignment = TextAnchor.MiddleCenter;
         t.color = Color.white;
         t.fontSize = 14;

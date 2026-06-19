@@ -164,6 +164,10 @@ graceful cancel は best-effort・ローカル teardown は成立）。「user-l
 
 ### 検証実績（VM ロジック・2026-06-15）
 
+> #55 改名（findings 0055）: 本節以下の `FooterLiveAutoVerify`（`Assets/Editor/...`）は `FooterModeE2ERunner`
+> （`Assets/Tests/E2E/Editor/FooterModeE2ERunner.cs`）へ昇格・改名済み。現行の再走は `-executeMethod
+> FooterModeE2ERunner.Run` → `[E2E FOOTER MODE PASS]`（Bash `grep -a` で確認）。以下は当時の実走ログ。
+
 - **C# AFK PASS**: `Assets/Editor/FooterLiveAutoVerify.cs` を `Unity -batchmode -executeMethod FooterLiveAutoVerify.Run`
   で **29/29 PASS**・`error CS` 0 件（compile 成功）。カバレッジ: mode D1（poll 上書き・Live ロック→poll 解除・拒否解除・
   Replay 即時）／可視性（Manual/Auto は venue live 限定）／▶ 文脈分岐（Start/Pause/Resume/re-arm）＋pre-flight 4ゲート＋
@@ -200,8 +204,8 @@ graceful cancel は best-effort・ローカル teardown は成立）。「user-l
   RPC 発火も防止）。
 
 **LOW（未修正・記録のみ）**: lock 中 Replay セグメント無効化で abort 不可・lock タイムアウト無し・sig が ActiveRunId 欠落/_autoStatus
-余分・選択セグメントの lock 中 dim・ResolveInstrument の silent 代替（TTWR parity）。**owner 側 TODO**: 改変後の compile + `FooterLiveAutoVerify`
-再走（new gate の AFK 追補が望ましい）→ HITL。
+余分・選択セグメントの lock 中 dim・ResolveInstrument の silent 代替（TTWR parity）。**owner 側 TODO**: 改変後の compile + `FooterModeE2ERunner`
+再走（`-executeMethod FooterModeE2ERunner.Run`・#55 で昇格・改名済み）→ HITL。
 
 ---
 

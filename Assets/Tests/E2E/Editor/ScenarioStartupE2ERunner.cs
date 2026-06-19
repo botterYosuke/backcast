@@ -1,11 +1,17 @@
-// ScenarioStartupProbe.cs — issue #29 "Replay 実行設定パネル" (THROWAWAY AFK regression gate)
+// ScenarioStartupE2ERunner.cs — Scenario Startup tile サーフェスの E2E 回帰ゲート（台本: 同ディレクトリの
+// ScenarioStartupE2ERunner.md）。第二波で `ScenarioStartupProbe`（throwaway AFK gate, Assets/Editor）から
+// 昇格・改名（ADR-0015 の回帰ゲート命名規約。元 Probe は削除＝先例: ReplayToHakoniwaProbe→E2ERunner）。
+// 実証済み Probe の Section1〜10 を assert 1 行も削らず移送し、台本に無い SCENARIO-12（File→New Clear）を
+// Section11 として追加した。Python-FREE（validation/merge/registry/inline-read はすべて pure C#）。
 //
-// Headless, Python-FREE gate for the #29 FOUNDATION seams (stage 1): the scenario sidecar
-// MERGE-WRITE (ScenarioSidecarStore), the editing-buffer VALIDATION (ScenarioStartup
-// Validation), and the universe SoT (InstrumentRegistry). Run:
+//   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
+//           -executeMethod ScenarioStartupE2ERunner.Run -logFile <log>
+//   # expect: [E2E SCENARIO STARTUP PASS] ... / exit=0
+//   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。ログは UTF-8 = ripgrep で grep。
 //
-//   <Unity> -batchmode -nographics -projectPath <proj> -executeMethod ScenarioStartupProbe.Run -logFile <log>
-//   # expect: [SCENARIO STARTUP PASS] ... / exit=0
+// section ↔ Action ID は各 Section の `Covers:` コメント参照（台本の操作一覧表と双方向に追える）。共有 pure
+// validation（Section2 の Validate()）は Action ID ごとに人工分割せず一つの自然な検証単位で assert する
+// （E2E-CONVENTIONS.md「runner section ↔ Action ID 対応方針」）。
 //
 // THE NON-VACUOUS MERGE KILL (ADR-0005, the whole point): a JsonUtility-style writer that
 // silently DROPS unknown keys would still pass a naive "write panel fields → read them
@@ -23,9 +29,9 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
-public static class ScenarioStartupProbe
+public static class ScenarioStartupE2ERunner
 {
-    static string TempDir => Path.Combine(Application.temporaryCachePath, "scenario_startup_probe");
+    static string TempDir => Path.Combine(Application.temporaryCachePath, "scenario_startup_e2e");
     static string StrategyPath => Path.Combine(TempDir, "my_strategy.py");
     static string SidecarPath => Path.Combine(TempDir, "my_strategy.json");
 
@@ -46,7 +52,8 @@ public static class ScenarioStartupProbe
                 ?? Section7_TileResyncsFromSharedUniverse()
                 ?? Section8_TileBlurResyncsStaleField()
                 ?? Section9_IndividualWritersAreMutateExistingOnly()
-                ?? Section10_InlineReaderMatchesGolden();
+                ?? Section10_InlineReaderMatchesGolden()
+                ?? Section11_FileNewClearsInMemory();
         }
         catch (Exception e)
         {
@@ -55,17 +62,18 @@ public static class ScenarioStartupProbe
 
         if (fail == null)
         {
-            Debug.Log("[SCENARIO STARTUP PASS] merge-preserve + validation + registry verified");
-            if (Application.isBatchMode) EditorApplication.Exit(0);
+            Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear verified");
+            EditorApplication.Exit(0);
         }
         else
         {
-            Debug.LogError("[SCENARIO STARTUP FAIL] " + fail);
-            if (Application.isBatchMode) EditorApplication.Exit(1);
+            Debug.LogError("[E2E SCENARIO STARTUP FAIL] " + fail);
+            EditorApplication.Exit(1);
         }
     }
 
     // ---- 1. merge-write preserves untouched siblings (incl. nested dict) non-vacuously ----
+    // Covers: SCENARIO-11 (Commit が sidecar を merge 書き・兄弟キー保全)
     static string Section1_MergePreservesSiblingsNonVacuous()
     {
         // Seed a sidecar with v3 optionals the panel does NOT edit + a non-scenario sibling.
@@ -141,6 +149,8 @@ public static class ScenarioStartupProbe
     }
 
     // ---- 2. validation gate (AC④) ----
+    // Covers: SCENARIO-01, SCENARIO-02, SCENARIO-03, SCENARIO-04, SCENARIO-05, SCENARIO-08, SCENARIO-09
+    // (共有 pure validation = ScenarioStartupValidation.Validate/TryBuildForWrite。Action ID ごとに分割しない)
     static string Section2_Validation()
     {
         // all-valid buffer with a non-empty universe → no errors + buildable.
@@ -185,6 +195,7 @@ public static class ScenarioStartupProbe
     }
 
     // ---- 3. InstrumentRegistry SoT ----
+    // Covers: SCENARIO-05 (Universe 編集 = InstrumentRegistry の dedup/order/editable gate)
     static string Section3_InstrumentRegistry()
     {
         var reg = new InstrumentRegistry();
@@ -210,6 +221,7 @@ public static class ScenarioStartupProbe
     }
 
     // ---- 4. read fallbacks + brand-new sidecar creation ----
+    // Covers: SCENARIO-10 (Populate の優先順 sidecar>inline>seed・seed 既定値・新規 sidecar 作成所有権)
     static string Section4_ReadRoundTripAndNewSidecar()
     {
         // No sidecar at all → null (populate falls back to .py SCENARIO / defaults elsewhere).
@@ -244,6 +256,7 @@ public static class ScenarioStartupProbe
         public bool TryGetStrategyFile(out string path) { path = Path; return Supplyable; }
     }
 
+    // Covers: SCENARIO-09 (editing→validated-for-write run-gate), SCENARIO-10 (populate/restore round-trip)
     static string Section5_ControllerRoundTripAndRunGate()
     {
         string strat = Path.Combine(TempDir, "ctrl_strategy.py");
@@ -320,6 +333,7 @@ public static class ScenarioStartupProbe
     // ---- 6. universe SoT change-notification (#59 完成形: registry → second-view sync) ----
     // Changed fires ONLY on a real set change (the `return true` paths), never on a no-op — so a
     // subscriber re-pulls exactly when it must and never churns on idempotent edits.
+    // Covers: SCENARIO-07 (共有 SoT の Changed 通知 = held-mode 再 sync の前提)
     static string Section6_RegistryChangeNotifies()
     {
         var reg = new InstrumentRegistry();
@@ -348,6 +362,7 @@ public static class ScenarioStartupProbe
     // ---- 7. startup tile re-syncs its (held-mode uGUI) universe field when the SHARED SoT is
     // edited elsewhere (#31 sidebar) — the registry→tile one-directional gap. Without it the field
     // stays stale and a later tile edit ReplaceAll(stale)s away the sidebar's add. ----
+    // Covers: SCENARIO-07 (外部編集→held-mode 再 sync・Dispose unsubscribe)
     static string Section7_TileResyncsFromSharedUniverse()
     {
         var go = new GameObject("probe_tile", typeof(RectTransform));
@@ -389,6 +404,7 @@ public static class ScenarioStartupProbe
     // keystroke ReplaceAll(stale)s and erases the sidebar's change. Headless: isFocused is always
     // false, so we DIRECTLY stale the field, then fire onEndEdit (the REAL wiring, not the private
     // helper) and assert it reconciles to the SoT WITHOUT re-committing the stale text. ----
+    // Covers: SCENARIO-06 (Universe フィールド blur で SoT 再 pull・stale 上書き防止)
     static string Section8_TileBlurResyncsStaleField()
     {
         var go = new GameObject("probe_tile_blur", typeof(RectTransform));
@@ -436,6 +452,7 @@ public static class ScenarioStartupProbe
     // start_engine with STRATEGY_LOAD_FAILED. Mirrors TTWR set_instruments / set_startup_params
     // (atomic_mutate_scenario_object errors "missing scenario object" rather than create). Only
     // SetStartupParamsAndInstruments (Run-commit) may create, and it writes the full 5-key sidecar.
+    // Covers: SCENARIO-11 (個別 setter は mutate-existing-only・不完全 sidecar を作らない)
     static string Section9_IndividualWritersAreMutateExistingOnly()
     {
         // (a) SetInstruments on a path with NO sidecar → skip (null), create NOTHING. THE kill:
@@ -492,6 +509,8 @@ public static class ScenarioStartupProbe
     [Serializable] class GoldenEntry { public string path; public GoldenScenario scenario; }
     [Serializable] class GoldenFile { public GoldenEntry[] fixtures; }
 
+    // Covers: supporting golden pin（直接 Action 行ではない。SCENARIO-10 の populate fallback = inline reader を
+    // Python load_scenario SoT に cross-language で固定。台本「既存 Probe との対応」S10 参照）
     static string Section10_InlineReaderMatchesGolden()
     {
         // repo root = parent of <repo>/Assets (the golden + fixture paths are repo-relative).
@@ -560,6 +579,55 @@ public static class ScenarioStartupProbe
         ScenarioInlineReader.Read(Path.Combine(TempDir, "does_not_exist.py"), out ScenarioReadStatus missingStatus);
         if (missingStatus != ScenarioReadStatus.Absent)
             return "inline boundary: a missing .py must be Absent, got " + missingStatus;
+
+        return null;
+    }
+
+    // ---- 11. File→New clears the editing buffer IN-MEMORY ONLY (findings 0017 §4). Clear() empties
+    // Params + universe + errors and drops Dirty, but must NOT touch the on-disk sidecar (deleting it
+    // would be destructive over-reach — TTWR FileNewRequested is an in-memory reset). THE non-vacuous
+    // kill: seed a real sidecar on disk + a dirty edited buffer, Clear(), then assert the buffer is
+    // blank/unbound AND the sidecar TEXT is byte-identical. delete-the-logic litmus: drop Clear's
+    // Universe.ReplaceAll → universe survives (fails (b)); make Clear delete the sidecar → (d) fails.
+    // ----
+    // Covers: SCENARIO-12 (File→New で scenario を in-memory クリア・sidecar 不触)
+    static string Section11_FileNewClearsInMemory()
+    {
+        string strat = Path.Combine(TempDir, "clear_strategy.py");
+        var today = new DateTime(2026, 6, 14);
+
+        // seed a COMPLETE sidecar on disk (the document the user had open) + a dirty edited buffer.
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            strat, new StartupParamsForWrite("2024-01-01", "2024-06-01", "Daily", "900000"), new[] { "8918.TSE", "7203.TSE" });
+        string before = File.ReadAllText(ScenarioSidecarStore.SidecarPathFor(strat));
+
+        var ctrl = new ScenarioStartupController();
+        ctrl.Populate(strat, today);
+        ctrl.SetInitialCash("123");                            // dirty the buffer
+        ctrl.AddInstrument("9984.TSE");
+        if (!ctrl.Params.Dirty) return "clear: precondition — edits did not set Dirty";
+        if (ctrl.Universe.Count == 0) return "clear: precondition — universe empty before Clear";
+
+        ctrl.Clear();
+
+        // (a) buffer is blank + UNBOUND (NOT seeded — New is blank), not dirty.
+        if (!string.IsNullOrEmpty(ctrl.Params.Start) || !string.IsNullOrEmpty(ctrl.Params.End))
+            return "clear: dates not cleared (got '" + ctrl.Params.Start + "'/'" + ctrl.Params.End + "')";
+        if (!string.IsNullOrEmpty(ctrl.Params.InitialCash)) return "clear: initial cash not cleared";
+        if (ctrl.Params.Dirty) return "clear: buffer still Dirty after Clear (New must reset Dirty)";
+
+        // (b) universe emptied.
+        if (ctrl.Universe.Count != 0) return "clear: universe not emptied";
+
+        // (c) errors recompute to the blank-buffer flags (granularity unset + empty universe), proving
+        // the buffer really is blank/unbound — not stale from before the Clear.
+        var errs = ctrl.Validate();
+        if (errs.Granularity == null) return "clear: granularity not reset (Validate did not flag unset after Clear)";
+        if (errs.Universe == null) return "clear: universe not reset (Validate did not flag empty after Clear)";
+
+        // (d) THE non-vacuous kill: the on-disk sidecar is byte-identical (Clear is in-memory only).
+        string after = File.ReadAllText(ScenarioSidecarStore.SidecarPathFor(strat));
+        if (after != before) return "clear: Clear() mutated the on-disk sidecar (must be in-memory only — destructive over-reach)";
 
         return null;
     }

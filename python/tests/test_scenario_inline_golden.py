@@ -3,7 +3,7 @@
 Asserts the canonical run-time SoT (engine.strategy_runtime.scenario.load_scenario) still
 reproduces the committed golden for every fixture. If a fixture's SCENARIO is edited without
 re-running capture_scenario_inline_golden.py, this fails — keeping the golden honest so Leg B
-(the C# ScenarioStartupProbe) pins the C# parser to a TRUE oracle, not a stale one.
+(the C# ScenarioStartupE2ERunner) pins the C# parser to a TRUE oracle, not a stale one.
 
 Pairs with the C# reproduce leg: ScenarioInlineReader.Read(fixture) == committed golden.
 """

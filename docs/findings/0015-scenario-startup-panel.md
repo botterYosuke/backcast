@@ -36,8 +36,8 @@ strategy `.py` に co-locate した v3 scenario sidecar として永続化、pro
 - C#: `Assets/Scripts/ScenarioStartup/`（`ScenarioSidecarStore` / `InstrumentRegistry` /
   `ScenarioStartupParams`+`Validation` / `ScenarioStartupController` / `ScenarioStartupTile` /
   `ScenarioStartupHitlHarness`）。
-- AFK probe（Python-free・headless）: `Assets/Editor/ScenarioStartupProbe.cs` →
-  `[SCENARIO STARTUP PASS]`。非空 merge-preserve kill（nested `strategy_init_kwargs` 落ちを検出）＋ validation（AC④）
+- AFK gate（Python-free・headless）: `Assets/Tests/E2E/Editor/ScenarioStartupE2ERunner.cs` →
+  `[E2E SCENARIO STARTUP PASS]`（#54 で throwaway `ScenarioStartupProbe` から昇格・改名、findings 0054）。非空 merge-preserve kill（nested `strategy_init_kwargs` 落ちを検出）＋ validation（AC④）
   ＋ registry ＋ controller roundtrip（populate→edit→run-gate→commit→**restore**→fallback 優先順位）。
 - HITL（owner 実行・display＋catalog 要）: `ScenarioStartupHitlHarness`（`AutoBootstrapEnabled` を ON で Play 所有）。
   Startup タイル編集→Run→production path（`load_replay_data`→`start_engine`）→チャート bar-by-bar。

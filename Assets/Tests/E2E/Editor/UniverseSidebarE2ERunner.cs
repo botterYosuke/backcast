@@ -1,25 +1,35 @@
-// UniverseSidebarProbe.cs — issue #31 "instrument picker / universe sidebar" (AFK regression gate)
+// UniverseSidebarE2ERunner.cs — ユニバース sidebar サーフェスの E2E 回帰ゲート（台本: 同ディレクトリの
+// UniverseSidebarE2ERunner.md）。第二波で `UniverseSidebarProbe`（throwaway AFK gate, Assets/Editor）から昇格・改名
+// （ADR-0015 の回帰ゲート命名規約。先例 ScenarioStartup=findings 0054 / FooterMode=findings 0055）。実証済み
+// `Section1`〜`Section8`（picker open/lock、status placeholder、filter/sort/take15、add/debounce、remove、focus/Live-hook、
+// writeback、depth-follow）を assert 1 行も削らず移送し SIDEBAR-01〜10 を Covers 化、台本の `要新規自動化` 2 行
+// （SIDEBAR-11 view 反映 / SIDEBAR-14 空ラベル）を view 反射 section として追加した。Python-FREE（brain は pure C#、
+// view section は実 root 不要で `UniverseSidebarView` を bare RectTransform へ Bind するだけ）。
 //
-// Headless, Python-FREE gate for the #31 brain seams. Run:
+//   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
+//           -executeMethod UniverseSidebarE2ERunner.Run -logFile <log>
+//   # expect: [E2E UNIVERSE SIDEBAR PASS] ... / exit=0
+//   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。ログは UTF-8 = ripgrep/Bash grep。
 //
-//   <Unity> -batchmode -nographics -projectPath <proj> -executeMethod UniverseSidebarProbe.Run -logFile <log>
-//   # expect: [UNIVERSE SIDEBAR PASS] ... / exit=0
+// section ↔ Action ID は各 Section の `Covers:` コメント参照（台本の操作一覧表と双方向に追える）。共有の自然な
+// 検証単位（picker BuildList / writeback 不変条件）は Action ID ごとに人工分割しない（E2E-CONVENTIONS.md
+// 「runner section ↔ Action ID 対応方針」）。SIDEBAR-11 の SoT 側回帰（`PruneRetain`→`Changed`→downstream mirror）は
+// 別 probe `UniversePruneProbe` 所有のまま据え置き — 本 runner は sidebar VIEW の `Registry.Changed`→`Rebuild` 反映だけを補う。
 //
-// Covers (findings 0024): picker open/lock/force-close, status→rows/placeholder for EVERY
-// UniverseStatus (stub-injected, D3), query filter/sort/take15/no-matches/already-added,
-// click→registry add + 100ms debounce + lock no-op, × remove + lock no-op, row→SelectedSymbol
-// (+ Live deferred-subscribe hook, Replay does not fire it, D5), revision/content-diff
-// writeback with Replay gate + editable gate + path-unresolved skip + Prime (D4), and the
-// real consumer: DepthDecoder follows SelectedSymbol (D2). The view (IMGUI) is HITL-only.
+// 観測対象の重要前提（grill で確認済み）: 実 `IAvailableInstrumentsProvider`（DuckDB/venue universe）は未配線で、
+// production は `MockAvailableInstrumentsProvider`（6 銘柄ハードコード）のみ。本 runner は stub provider 経由で
+// status→行マッピングの固定までを観測し、「実 DuckDB を assert」は対象外（別 issue 所有）。
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UI;
 
-public static class UniverseSidebarProbe
+public static class UniverseSidebarE2ERunner
 {
     static string TempDir => Path.Combine(Application.temporaryCachePath, "universe_sidebar_probe");
     static string StrategyPath => Path.Combine(TempDir, "my_strategy.py");
@@ -53,7 +63,9 @@ public static class UniverseSidebarProbe
                 ?? Section5_RemoveAndLock()
                 ?? Section6_SelectFocusAndLiveHook()
                 ?? Section7_Writeback()
-                ?? Section8_DepthFollowsSelection();
+                ?? Section8_DepthFollowsSelection()
+                ?? Section9_ViewReflectsExternalRegistryChange()
+                ?? Section10_ViewEmptyUniverseLabel();
         }
         catch (Exception e)
         {
@@ -62,13 +74,13 @@ public static class UniverseSidebarProbe
 
         if (fail == null)
         {
-            Debug.Log("[UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow verified");
-            if (Application.isBatchMode) EditorApplication.Exit(0);
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect verified");
+            EditorApplication.Exit(0);
         }
         else
         {
-            Debug.LogError("[UNIVERSE SIDEBAR FAIL] " + fail);
-            if (Application.isBatchMode) EditorApplication.Exit(1);
+            Debug.LogError("[E2E UNIVERSE SIDEBAR FAIL] " + fail);
+            EditorApplication.Exit(1);
         }
     }
 
@@ -80,6 +92,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 1. picker open / lock guard / force-close ----
+    // Covers: SIDEBAR-05 (＋Add 開閉・Replay は scenario.end snapshot / Live は null), SIDEBAR-10 (ロック中は開かず・開放中ロックで force-close)
     static string Section1_PickerOpenLockForceClose()
     {
         var ctrl = NewController(out var reg, out _, new StubProvider());
@@ -114,6 +127,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 2. every UniverseStatus → its placeholder (D3) ----
+    // Covers: SIDEBAR-09 (供給ステータス別 placeholder。stub provider 経由＝実 DuckDB/venue 配線は別 issue 所有・対象外)
     static string Section2_StatusPlaceholders()
     {
         var provider = new StubProvider();
@@ -146,6 +160,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 3. Ready → filter + sort + take(15) + no-matches + already-added ----
+    // Covers: SIDEBAR-06 (検索フィルタ・ordinal sort・take15・no-matches), SIDEBAR-08 (追加済み ✓ AlreadyAdded フラグ)
     static string Section3_QueryFilterAndRows()
     {
         var provider = new StubProvider();
@@ -182,6 +197,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 4. click → registry add + 100ms same-id debounce + lock no-op ----
+    // Covers: SIDEBAR-07 (候補追加・100ms debounce・ロック no-op), SIDEBAR-08 (dedup no-op で SoT 不変)
     static string Section4_ClickAddDebounceAndLock()
     {
         var ctrl = NewController(out var reg, out _, new StubProvider());
@@ -211,6 +227,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 5. × remove + lock no-op ----
+    // Covers: SIDEBAR-03 (× で SoT 削除), SIDEBAR-04 (ロック registry で × no-op・TTWR parity)
     static string Section5_RemoveAndLock()
     {
         var ctrl = NewController(out var reg, out _, new StubProvider());
@@ -227,6 +244,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 6. row → SelectedSymbol (+ Live deferred hook, Replay does not fire) ----
+    // Covers: SIDEBAR-01 (行クリックで focus 移動・Selected フラグ), SIDEBAR-02 (Live のみ LiveSubscribeHook 発火・Replay は focus のみ)
     static string Section6_SelectFocusAndLiveHook()
     {
         var ctrl = NewController(out var reg, out var sel, new StubProvider());
@@ -266,6 +284,7 @@ public static class UniverseSidebarProbe
     // inline .py SCENARIO (load_scenario prefers the sidecar) and break register_live_strategy with
     // STRATEGY_LOAD_FAILED. So a flush before a complete sidecar exists SKIPS (edit stays in the
     // in-memory registry, persisted later by #29's Run-commit which writes the full sidecar).
+    // Covers: SIDEBAR-03 (× remove → Replay-gated flush・既存 sidecar mutate-existing), SIDEBAR-07 (候補追加 → flush)
     static string Section7_Writeback()
     {
         var wb = new UniverseWriteback();
@@ -333,6 +352,7 @@ public static class UniverseSidebarProbe
     }
 
     // ---- 8. the real consumer: DepthDecoder follows SelectedSymbol (D2) ----
+    // Covers: SIDEBAR-01 (focus→depth：DepthDecoder が SelectedSymbol を追従＝行クリック観測点の実消費者)
     static string Section8_DepthFollowsSelection()
     {
         var sel = new SelectedSymbol();
@@ -356,5 +376,114 @@ public static class UniverseSidebarProbe
         if (!d2.HasDepth || Math.Abs(d2.Bids[0].Price - 200.0) > 1e-9 || d2.TimestampMs != 222)
             return "depth did not re-point to 9984.TSE on focus change";
         return null;
+    }
+
+    // ---- view reflection helpers (SIDEBAR-11/14) -----------------------------------------
+    // Build the real UniverseSidebarView (a MonoBehaviour) under a bare RectTransform and Bind it to a
+    // headless controller. Bind self-promotes a ChromeCanvas (idempotent, no scene needed) and reads
+    // ThemeService.Current (lazy-dark default), so no real BackcastWorkspaceRoot is required — the rows
+    // are rebuilt into _rowsContent during Rebuild() BEFORE Relayout (which early-returns at rect.height==0
+    // headless), so child reflection is layout-independent.
+    static UniverseSidebarView BuildView(out GameObject go, out UniverseSidebarController ctrl, out InstrumentRegistry reg)
+    {
+        go = new GameObject("universe_sidebar_view_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        reg = new InstrumentRegistry();
+        ctrl = new UniverseSidebarController(reg, new SelectedSymbol(), new UniverseWriteback(), new StubProvider());
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        view.Bind(ctrl, new StubStrategyProvider { Path = null }, font, "2024-12-31");
+        return view;
+    }
+
+    static RectTransform RowsContent(UniverseSidebarView view)
+    {
+        var f = typeof(UniverseSidebarView).GetField("_rowsContent", BindingFlags.NonPublic | BindingFlags.Instance);
+        return f?.GetValue(view) as RectTransform;
+    }
+
+    // true iff _rowsContent has a child GameObject named "row:<id>" (BuildRow names each row that way).
+    static bool HasRowFor(RectTransform rowsContent, string id)
+    {
+        if (rowsContent == null) return false;
+        for (int i = 0; i < rowsContent.childCount; i++)
+            if (rowsContent.GetChild(i).name == "row:" + id) return true;
+        return false;
+    }
+
+    // true iff _rowsContent carries a Text child reading exactly `label` (the empty-universe placeholder).
+    static bool HasLabel(RectTransform rowsContent, string label)
+    {
+        if (rowsContent == null) return false;
+        for (int i = 0; i < rowsContent.childCount; i++)
+        {
+            var txt = rowsContent.GetChild(i).GetComponent<Text>();
+            if (txt != null && txt.text == label) return true;
+        }
+        return false;
+    }
+
+    // ---- 9. sidebar VIEW reflects an EXTERNAL edit of the shared universe SoT (#29 text field / system
+    // prune both mutate the same InstrumentRegistry → Registry.Changed → Rebuild, polling-free). The SoT
+    // 側回帰 (PruneRetain→Changed→downstream) is UniversePruneProbe's; here we pin only that the uGUI view
+    // RE-MATERIALIZES rows from the Changed event. Non-vacuous: assert the row is ABSENT first, present
+    // after the external Add, and gone again after the external Remove (so a dead/never-subscribed
+    // Rebuild can't false-green a static "row exists" snapshot). ----
+    // Covers: SIDEBAR-11 (外部編集→sidebar view 反映。SoT 側回帰は UniversePruneProbe 所有)
+    static string Section9_ViewReflectsExternalRegistryChange()
+    {
+        var view = BuildView(out var go, out _, out var reg);
+        try
+        {
+            var rows = RowsContent(view);
+            if (rows == null) return "view: _rowsContent not reflectable (field renamed?)";
+
+            // presence guard: the id is NOT rendered before any edit (vacuous-negative kill).
+            if (HasRowFor(rows, "7203.TSE")) return "view: row:7203.TSE present before any external add";
+
+            // an EXTERNAL edit into the SHARED SoT (mirrors #29 text field / system prune).
+            reg.Add("7203.TSE");
+            if (!HasRowFor(rows, "7203.TSE"))
+                return "view: external registry Add did NOT rebuild the sidebar row (Registry.Changed→Rebuild gap)";
+
+            // a second external add also materializes (the subscription stays live across rebuilds).
+            reg.Add("9984.TSE");
+            if (!HasRowFor(rows, "9984.TSE")) return "view: second external add not reflected";
+
+            // and an external remove tears the row down (Changed fires on real removes too).
+            reg.Remove("7203.TSE");
+            if (HasRowFor(rows, "7203.TSE")) return "view: external Remove did not rebuild (stale row survived)";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 10. empty universe renders the "No instruments" placeholder (UniverseSidebarView.Rebuild adds
+    // it only when Registry.Count==0 and reserves one ROW_H so the rows pane keeps its height). Non-vacuous:
+    // the placeholder must be GONE once a real row exists, proving it is gated by Count==0 and not a static
+    // label that would also "pass" if the empty-check were deleted. ----
+    // Covers: SIDEBAR-14 (空ユニバースの "No instruments" 表示)
+    static string Section10_ViewEmptyUniverseLabel()
+    {
+        var view = BuildView(out var go, out _, out var reg);
+        try
+        {
+            var rows = RowsContent(view);
+            if (rows == null) return "view: _rowsContent not reflectable (field renamed?)";
+
+            // fresh registry is empty → exactly the placeholder, no real rows.
+            if (!HasLabel(rows, "No instruments")) return "view: empty universe did not render 'No instruments' label";
+            if (HasRowFor(rows, "1301.TSE")) return "view: phantom row present on empty universe";
+
+            // once a real instrument exists the placeholder must disappear (gated by Count==0).
+            reg.Add("1301.TSE");
+            if (HasLabel(rows, "No instruments")) return "view: 'No instruments' label survived a non-empty universe (empty-check not gating)";
+            if (!HasRowFor(rows, "1301.TSE")) return "view: real row not rendered after add";
+
+            // emptying again brings the placeholder back.
+            reg.Remove("1301.TSE");
+            if (!HasLabel(rows, "No instruments")) return "view: 'No instruments' label not restored after universe emptied";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 }

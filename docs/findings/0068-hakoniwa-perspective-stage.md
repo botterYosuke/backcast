@@ -173,6 +173,54 @@ issue #93: 現状の hakoniwa は `HakoniwaController` が `RectTransform` の `
 
     **owner HITL 確認事項**: boardH=6.4（＝確立盤面 1000×640 aspect 踏襲）は square ではない。盤面アスペクトの最終 feel は HITL sign-off（yaw 非対称と同枠）。
 
+## R3 — 入力ディスパッチャ実配管 + runtime layer 伝播（grill 決定 / lead 承認 2026-06-20）
+
+17. **(a) 入力ディスパッチャ = RawImage 上の単一 seam**（grill ロック・lead 承認、新 owner 判断なし）。§5/§11-14 の math-pick routing 決定（pure `RouteBoardPoint`）を **実 screen-press に配線する production 実体**。挙動が flat header-drag から「RawImage への screen-press → RT pixel → `UnprojectToSlot` → `RouteBoardPoint` → swap/pan dispatch」へ変わる。
+
+    **(a) 確定設計**:
+    - **単一 seam**: 新規 `HakoniwaStageInputSurface`（MonoBehaviour）を Content 側 `_hakoniwaRawImage`（RT を表示する「写真」）に 1 つだけ付与。盤面タイルは RT に焼かれ EventSystem に直接当たらない（World-Space Stage canvas 上）ため、live 入力経路はこの 1 seam に集約。
+    - **`IBeginDrag`/`IDrag`/`IEndDrag` のみ実装**。scroll は実装せず viewport へ bubble＝既存 photo-zoom（`InfiniteCanvasController.ApplyView`）無改変（§2）。
+    - **dispatch**: drag press を RawImage-local 正規化 → RT pixel（`rtW,rtH` = `HakoniwaStageMath.StageParams.Default` 由来）→ `HakoniwaStageMath.UnprojectToSlot` → `HakoniwaGridMath.RouteBoardPoint` → `(slot, inHeader)`。`inHeader` なら当該 source slot から swap 開始、drag END が別 cell なら `HakoniwaController.Swap` 発火。body/盤外 press は pan へ fall-through（`Swap` 非発火）。
+    - **既存 `HakoniwaTileHeaderInput` は inert 残置**（削除しない）。RT 化でこの per-tile handler は EventSystem に当たらず dead だが、swap ロジック（`SlotOf`/`SlotAtNormalized`/`Swap`）は無改変前提（§据え置き節）なので残す。後続で削除可（Navigator 判断）。
+
+18. **(b) layer culling モデル = 実機 GPU-batchmode preflight で確定**（§11 RAYCAST-DEAD 教訓: 「動きそう」を断定しない）。runtime spawn される `chart:<id>` タイル（`BackcastWorkspaceRoot` L672 `SetParent(_hakoniwaRoot)`）が perspective camera の `cullingMask`（Hakoniwa layer のみ）に乗るかは、Unity の World-Space Canvas culling が **canvas 単位か renderer 単位か**に依存（§15 残課題）。throwaway `HakoniwaInputCullPreflightProbe`（GPU batchmode・RT readback）で実測:
+    - **CANVAS-CULL**（canvas layer が支配・child layer 無視）→ root-only layer-set で十分・step 4（再帰）不要。
+    - **PER-RENDERER-CULL**（renderer ごとに own layer で cull）→ 全 descendant Graphic へ再帰 layer-set（step 4）。
+    - **INCONCLUSIVE**（macOS GPU batchmode が RT に rasterize せず＝control Graphic も非描画）→ (b) の分岐を owner HITL（既定の「live Chart が傾いた RT に出るか」）に畳む。
+    note: タイルは sub-canvas を持たず単一 Stage canvas 配下の plain Graphic（`BuildTileChrome`/chart spawn に `Canvas` 追加なし）＝CANVAS-CULL 寄りだが empirical で確定する。
+
+    **verdict 確定 → CANVAS-CULL**（2026-06-20 GPU batchmode 実走・lockfile 無し / editor 非起動を確認）。`HakoniwaInputCullPreflightProbe` を `<Unity.app>/Contents/MacOS/Unity -batchmode -projectPath /Users/sasac/backcast -executeMethod HakoniwaInputCullPreflightProbe.Run -logFile <log>`（`-nographics` 無し＝RT readback に GPU 必須）で実走:
+    ```
+    UNITY_EXIT=0
+    [HAKONIWA CULL PREFLIGHT] CANVAS-CULL rtCreated=True controlLit=True subjectLit=True hakoLayer=8 rt=1000x640 — a child on the EXCLUDED layer STILL rendered: culling is decided at the Canvas level. Root-only layer-set suffices; per-renderer recursion (step 4) NOT needed.
+    ```
+    `rtCreated/controlLit/subjectLit` 全 True＝GPU batchmode で RT readback が faithful（INCONCLUSIVE 不成立）。excluded layer（Default=0）の child Graphic も RT に描画された＝**culling は Canvas root の layer で決定**。→ runtime spawn される `chart:<id>` / BuyingPower タイルは **Stage Canvas 配下にある限り layer 0 のままでも perspective camera の RT に描画される**。**step 4（ChartView/DepthLadder Render 末尾の per-renderer 再帰 layer 伝播）は不要**と確定。throwaway probe（`HakoniwaInputCullPreflightProbe.cs`）は verdict を記録した本項が正本＝後続で削除可（Navigator 判断）。
+
+19. **step 3 interim layer-set**（§18 で **CANVAS-CULL 確定**）: tile root を `_hakoniwaRoot.gameObject.layer` に揃える（spawn 経路 `BuildTileShell` L672 付近 ＋ base tile 構築）。CANVAS-CULL 確定後、この root-only layer-set は描画上は **harmless no-op に縮退**するが、(i) AFK 不変条件のアンカー、(ii) CANVAS-CULL 前提を守る guard として残す。step 3 AFK assert は次を含める: 「**spawn 後の tile root layer == `_hakoniwaRoot.layer`**」＋「**Stage Canvas root の layer == Hakoniwa**」＋「**spawn される tile / Stage subtree に nested Canvas が混入しない**」（nested Canvas は別 cull root になり CANVAS-CULL 前提＝Canvas-level culling を崩すため）。
+
+20. **behavior-to-e2e（formal invoke 済み 2026-06-20）**: R3 は「挙動が変わる＋新不変条件（screen→RT pixel→slot dispatch / header→swap / body→pan / runtime layer 伝播）＋ AFK RED→GREEN」に該当。gate 配置:
+    - **新規 probe `HakoniwaStageInputProbe.cs`**（探索 Probe・batchmode・後続で `HakoniwaInputRoutingE2ERunner` へ昇格＝台帳 HAKONIWA-11a が予告した昇格先）。pure-math の `HakoniwaPerspectiveStageProbe`（Camera/RT-free 契約）を汚さないため別 probe にする。合成 `PointerEventData` を `HakoniwaStageInputSurface` の handler へ直接注入（EventSystem dispatch は bypass＝RAYCAST-DEAD を踏まない。real EventSystem routing は HITL HAKONIWA-11b に残置）。section:
+      - (1) header band press → 正しい source slot 捕捉。
+      - (2) 別 cell へ drag END → `Swap` 発火・`_order` が入れ替わる。
+      - (3) body press → pan spy が受領・`Swap` 非発火。
+      - (4) screen→RawImage-local→RT pixel 変換が正しい（既知 rect で決定的に assert）。
+      - (5) runtime spawn 後の `chart:<id>` tile root layer == `_hakoniwaRoot.layer`（step 3 不変条件）。
+    - **台帳 HAKONIWA-15**（入力ディスパッチャ実配管）＋ **HAKONIWA-16**（runtime layer 伝播）を `HakoniwaE2ERunner.md` に追加（probe land と同時＝step 2 commit）。HAKONIWA-11a の「screen→RT pixel 変換は HITL」を AFK 化（`PointerEventData` 注入）し、11b は real-pixel/real-mouse HITL のみへ縮退。
+    - RED→GREEN を本 §17 に実走ログで記録（後続）。
+
+## R3 review consolidation — code-review (3 観点) ＋ Finding 1 cheap hardening（2026-06-20）
+
+21. **独立 3 観点 review pass で Medium 以上ゼロを確定**（reviewer1=correctness / reviewer2=cross-file impact / reviewer3=cleanup-altitude、read-only Explore で live diff をレビュー）。確定事項:
+    - **Finding 2 REFUTED**（pan fall-through が OnEndDrag を forward しない件）: `InfiniteCanvasInputSurface` は `IEndDragHandler` を実装せず `OnBeginDrag` も空＝pan は drag 跨ぎで stateless（各 `OnDrag` が live view を読む）。Begin+Drag のみ forward で正しく、End forward 不要。
+    - **raycast 順序 OK**: `_hakoniwaRawImage.raycastTarget=true` でも `BackcastWorkspaceSceneBuilder` が RawImage を FloatingWindowLayer より前に author＝floating window が前面 raycast、RawImage は他ハンドラを shadow しない。
+    - **double-swap 無し**: RT 焼き後 `HakoniwaTileHeaderInput` は EventSystem に当たらず inert（§17）。唯一の live swap 経路は `HakoniwaStageInputSurface`。
+    - **StageParams/RT 整合**: production は `_hakoniwaRawImage.texture`(RT) 実寸から `StageParams` を導出（fallback 1000×640）＝scene-authored RT(1000×640・§16 boardH=6.4) と一致。
+    - reviewer3 は Low のみ（probe の magic-number mirroring は意図的 decoupling・throwaway probe は削除可）。**Medium 以上ゼロ → tdd RED-first 修正は不要**。
+
+22. **Finding 1（cheap hardening 採用）**: `HakoniwaStageInputSurface.ScreenToRtPixel` が `RectTransformUtility.ScreenPointToLocalPointInRectangle` の bool を無視していた。Content RawImage の press camera は overlay(null)＝実害は無く sibling `InfiniteCanvasInputSurface` も同 bool を無視する house convention だが、本 surface の route は order state を mutate する（`Swap`）ため、projection 失敗時の garbage `local` が spurious swap を撃つ理論リスクを 1 行 guard で clean no-route（`TryRoute` が NaN で false）に畳んだ。既存の degenerate-rect NaN guard と同じ防御姿勢で挙動変化ゼロ（overlay では bool 常に true）。**correctness bug ではなく防御 hardening のため GREEN-only**（再現に camera-space Content が要り存在しない＝RED 不能）。`HakoniwaStageInputProbe.Run` 再走で GREEN 維持（exit=0 `[HAKONIWA STAGE INPUT PASS]`、Section④ null-cam で guard 透過）。
+
+23. **throwaway preflight probe 2 種を削除（commit から除外）**: `HakoniwaInputPreflightProbe.cs`（RAYCAST-DEAD verdict・§11）/ `HakoniwaInputCullPreflightProbe.cs`（CANVAS-CULL verdict・§18）は診断 scaffolding で verdict は本 findings に蒸留済み（再走コマンドも記載）＝regression gate ではないため削除。durable gate `HakoniwaStageInputProbe`（HAKONIWA-15/16 昇格予定）は残置。
+
 ## 実装フェーズの必須ゲート
 
 本作業は「**挙動が変わる ＋ 新しい不変条件（構図 = 奥収束/厚み可視/再投影ラウンドトリップ）が生まれる ＋ AFK probe RED→GREEN**」に該当する。spike 着手時に `behavior-to-e2e` を formal invoke すること（手書き RED は代替にならない）。

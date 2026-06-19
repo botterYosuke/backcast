@@ -124,6 +124,13 @@ public class HakoniwaController
     public int SlotAtNormalized(Vector2 pointNormalized) =>
         HakoniwaGridMath.SlotAt(HakoniwaGridMath.CellRects(_order.Count), pointNormalized);
 
+    // root-local board-NORMALIZED point (0..1, Y up) -> (slot, inHeader) via RouteBoardPoint (header
+    // band = the top `headerFrac` of the cell). The #93 perspective-stage input seam
+    // (HakoniwaStageInputSurface) calls this after UnprojectToSlot maps an RT pixel to board space:
+    // inHeader -> swap handle, body/off-board (slot<0) -> pan fall-through (findings 0068 §14).
+    public int RouteNormalized(Vector2 pointNormalized, float headerFrac, out bool inHeader) =>
+        HakoniwaGridMath.RouteBoardPoint(HakoniwaGridMath.CellRects(_order.Count), pointNormalized, headerFrac, out inHeader);
+
     // live -> document. slot = the tile's index in the order; rect = its DERIVED cell (so the
     // doc faithfully mirrors the on-screen layout, findings 0007 §3); visible = activeSelf.
     public LayoutDocument Capture()

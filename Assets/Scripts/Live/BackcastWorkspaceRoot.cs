@@ -399,6 +399,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _hako.Reorder(HakoniwaBaseTiles.Kinds(false));   // canonical [startup, buying_power, orders, positions, run_result]
         _baseLive = false;
 
+        // #93 R3 (findings 0068 §17): the single live-input seam for the perspective stage. The board
+        // tiles are baked into the RT on the World-Space Stage canvas, so live drags land on the
+        // Content-side RawImage; this surface re-dispatches them via the math-pick route (screen→RT
+        // pixel→UnprojectToSlot→RouteNormalized) — header→swap, body→pan fall-through to InfiniteCanvas.
+        if (_hakoniwaRawImage != null)
+        {
+            _hakoniwaRawImage.raycastTarget = true;   // must receive EventSystem drags (else pan eats them)
+            var stageRt = _hakoniwaRawImage.texture as RenderTexture;
+            var stageParams = stageRt != null
+                ? HakoniwaStageMath.StageParams.Default(stageRt.width, stageRt.height)
+                : HakoniwaStageMath.StageParams.Default(1000f, 640f);
+            var stageInput = _hakoniwaRawImage.gameObject.GetComponent<HakoniwaStageInputSurface>()
+                             ?? _hakoniwaRawImage.gameObject.AddComponent<HakoniwaStageInputSurface>();
+            stageInput.Initialize(_hako, _hakoniwaRawImage.rectTransform, stageParams, HAKO_HEADER_FRAC,
+                _inputSurface != null ? (Action<PointerEventData>)_inputSurface.OnBeginDrag : null,
+                _inputSurface != null ? (Action<PointerEventData>)_inputSurface.OnDrag : null);
+        }
+
         SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow (#60)
         _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
@@ -644,6 +662,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // box drag handle, so dragHeight = 0 (#63 supplies the real height with the box drag strip).
     static readonly Vector2 HAKO_MIN_TILE = new Vector2(280f, 180f);
     static readonly Vector2 HAKO_DEFAULT_BOX = new Vector2(700f, 450f);
+    // #93 R3 (findings 0068 §13): the swap-handle header band as a board-normalized fraction of the
+    // cell height (px→fraction is done at this Unity boundary; the pure core stays resolution-free).
+    const float HAKO_HEADER_FRAC = 0.2f;
 
     // Reconcile the live chart tiles to _scenario.Universe (the membership SoT): despawn tiles whose
     // instrument left the universe, spawn one for each newly-present instrument, then box-grow. Bound
@@ -670,6 +691,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var go = new GameObject(id, typeof(RectTransform), typeof(Image));
         var rt = (RectTransform)go.transform;
         rt.SetParent(_hakoniwaRoot, false);
+        go.layer = _hakoniwaRoot.gameObject.layer;   // §18/§19: runtime tiles ride the Hakoniwa cull layer (perspective camera RT)
         body = BuildTileChrome(rt, id, out HakoniwaTileHeaderInput header);
         _hako.AddTile(id, rt);                     // box-size-free Rebuild lays the new cell
         header.Initialize(_hako, _hakoniwaRoot, id);

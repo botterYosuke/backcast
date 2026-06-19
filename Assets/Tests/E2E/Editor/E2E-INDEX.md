@@ -31,7 +31,7 @@
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
 | [ReplayToHakoniwaE2ERunner](./ReplayToHakoniwaE2ERunner.md) ✅ | （7 step※） | 7 | 7 | 0 | 0 | 0 | 0 |
-| [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) | `JOURNEY-LAYOUT-01..15` | 15 | 0 | 5 | 10 | 0 | 0 |
+| [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) ✅ | `JOURNEY-LAYOUT-01..15` | 15 | 15 | 0 | 0 | 0 | 0 |
 | [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) | `JOURNEY-AUTHOR-01..13` | 13 | 1 | 3 | 9 | 0 | 0 |
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) | `JOURNEY-LIVE-01..15` | 15 | 0 | 9 | 4 | 2 | 0 |
 
@@ -74,7 +74,8 @@
   [ORDER-12/13off/14/15]・SectionD=接続済み MOCK lane[ORDER-05/09/10/11b/13on]。gate 順 connect→instrument より
   ORDER-09 は接続済み host で非 vacuous 検査・ORDER-05 happy place が同一 host で lane 到達を実証。findings 0064）。
   ORDER-01..15 を `自動(E2E済)` へ、ORDER-16 は HITL専用。
-  残り未昇格: MenuBar ＋ Journey 3 本。順次昇格。
+  **12本目 = `LayoutPersistenceJourneyE2ERunner`**（Journey・全行新規オーサリング。実 `BackcastWorkspaceRoot` を反射合成し配置 5 次元〔canvas pan/zoom・箱庭 tile 順・floating window rect・notebook cell 位置・per-mode profile〕を `OnFileSave`→File→New→`OnFileOpen` で round-trip。Section1=JOURNEY-LAYOUT-01..13 の round-trip 本体・Section2=14 no-wipe bare open・Section3=15 Save As fork。per-mode profile は footer UI でなく `SyncBaseTilesToMode(bool)` 反射で駆動〔BackcastWorkspaceProbe S12 parity〕。⚠️ 生産の `OnFileNew` は canvas/Hakoniwa/floating geometry を reset しないので、round-trip 非空虚化は File→New 後の明示 perturb で担保。純データ probe〔`ReplayLayoutProbe`/`MultiDocLayoutProbe`〕は移送せず、それらが HITL と切り出した実 root 配線を縫う層として共存。findings 0065）。JOURNEY-LAYOUT-01..15 を `自動(E2E済)` へ。
+  残り未昇格: MenuBar ＋ Journey 2 本（AuthorToRun / LiveManualTrade）。順次昇格。
 
 ## Issue release-gate slice runners
 

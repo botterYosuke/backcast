@@ -13,6 +13,9 @@
 //   * ChooseSave(isBound): bound → SaveThenQuit（terminal）／ untitled → SaveAsThenQuit（後続 ResolveSaveAs を要する）。
 //   * ChooseDiscard(): → QuitWithoutSave（isBound 非依存・保存せず終了続行）。
 //   * ChooseCancel(): → AbortQuit（終了中断・ドキュメント据え置き）。
+//   * ResolveSave(saved): ChooseSave(true) で閉じた後、配線が実 Save() を走らせた結果を解決する standalone
+//     resolver（IsOpen ガードはしない）。saved → SaveThenQuit（終了続行）／ 書込失敗で still dirty → AbortQuit
+//     （データ保護ガード＝編集を失わず終了を中断。これが #89 の核）。ResolveSaveAs と対称。
 //   * ResolveSaveAs(pickerReturnedPath): 案A。ChooseSave(false) がダイアログを閉じた後の picker 結果を
 //     解決する standalone resolver（IsOpen ガードはしない）。path あり → SaveAsThenQuit（終了続行）／
 //     picker cancel → AbortQuit（終了取りやめ・ダイアログ再表示なし）。
@@ -58,6 +61,16 @@ public class QuitConfirmController
         if (!IsOpen) return QuitOutcome.AbortQuit;
         Close(QuitOutcome.AbortQuit);
         return QuitOutcome.AbortQuit;
+    }
+
+    /// Save 後処理（データ保護ガード・#89 の核）。ChooseSave(true) が既にダイアログを閉じた後に配線が実
+    /// Save() を走らせ、その成否（保存後も dirty なら失敗）をここで解決する standalone resolver（IsOpen ガード
+    /// はしない）。saved → SaveThenQuit（終了続行）／ 書込失敗 → AbortQuit（編集を失わず終了を中断）。ResolveSaveAs と対称。
+    public QuitOutcome ResolveSave(bool saved)
+    {
+        var outcome = saved ? QuitOutcome.SaveThenQuit : QuitOutcome.AbortQuit;
+        LastOutcome = outcome;
+        return outcome;
     }
 
     /// Save As 後処理（案A）。ChooseSave(false) が既にダイアログを閉じた後に配線が native picker を開き、

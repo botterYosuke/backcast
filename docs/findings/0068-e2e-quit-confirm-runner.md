@@ -41,6 +41,12 @@ QuitOutcome ChooseSave(bool isBound)
 QuitOutcome ChooseDiscard()  // → QuitWithoutSave （IsOpen=false・LastOutcome=QuitWithoutSave）
 QuitOutcome ChooseCancel()   // → AbortQuit       （IsOpen=false・LastOutcome=AbortQuit）
 
+// Save 後処理（データ保護ガード・#89 の核）。ChooseSave(true) でダイアログを閉じた後の実 Save() 成否を解決する
+// standalone resolver（IsOpen ガードはしない）。ResolveSaveAs と対称。
+QuitOutcome ResolveSave(bool saved)
+  // true  → SaveThenQuit （保存成功＝終了続行・LastOutcome=SaveThenQuit）
+  // false → AbortQuit    （書込失敗で still dirty → 終了取りやめ・編集保全・LastOutcome=AbortQuit）
+
 // Save As 後処理（案A）。ChooseSave(false) でダイアログを閉じた後の picker 結果を解決する standalone resolver
 // （IsOpen ガードはしない＝ダイアログは既に閉じている）。
 QuitOutcome ResolveSaveAs(bool pickerReturnedPath)
@@ -85,6 +91,7 @@ QuitOutcome ResolveSaveAs(bool pickerReturnedPath)
 | 07 | dirty+untitled+Discard → QuitWithoutSave | `ChooseDiscard()==QuitWithoutSave`（isBound 非依存） |
 | 08 | batchmode → 確認抑制 | headless は `wantsToQuit` を購読しない＝決してブロックしない（配線不変条件） |
 | 09 | 実 OS ウィンドウ×close ＋ 実 native picker | HITL（AFK 不可観測） |
+| 10 | bound Save 後 書込失敗(still dirty) → 終了中断・編集保全 | `ResolveSave(true)==SaveThenQuit`(commit) / `ResolveSave(false)==AbortQuit`（decision のみ自動。実 `.py` 書込と `!IsDirty` 検出は配線/HITL） |
 
 ## RED→GREEN 計画
 
@@ -115,4 +122,4 @@ QuitOutcome ResolveSaveAs(bool pickerReturnedPath)
 
 - QUIT-08（batchmode 抑制・latch）= 要新規自動化（実 `BackcastWorkspaceRoot` 反射 harness を要する）。
 - QUIT-09（実 OS ウィンドウ close・実 native picker）= HITL専用（実 OS ウィンドウ・OS ネイティブダイアログ依存）。
-- QUIT-10（save-failure → quit abort）= **配線側不変条件 ＋ HITL確認項目**（pure controller では検証不能）。配線 `OnQuitSave` は実 `Save()`/`SaveAs()` 後に `_notebook.IsDirty` を再チェックし、**まだ dirty なら（書込失敗 / Save As picker cancel）`ConfirmAndQuit()` を呼ばず終了を中断**してドキュメントを保全する（旧「quit 時の無言 autosave」を置換するデータ保護ガード）。AFK の pure-logic gate は実 `Save()` を持たないため観測できず、HITL（書込失敗を擬似注入、または read-only パスへ Save As）で確認する。
+- QUIT-10（save-failure → quit abort）= **decision は自動(E2E済)・実 I/O は HITL**（2026-06-20 更新）。当初は「pure controller では検証不能」として全体 deferred だったが、`ResolveSaveAs`（案A）と対称な **`ResolveSave(bool saved)` resolver** を controller に足し、配線 `OnQuitSave` の bound-Save 枝を `ChooseSave(true)`→実 `Save()`→`ResolveSave(_notebook!=null && !_notebook.IsDirty)` と流すようにした。これで「保存成功→終了続行 / 書込失敗→AbortQuit（終了中断・編集保全）」という **#89 の核データ保護判定**が `QuitConfirmE2ERunner.SaveResolve` で両値 assert され、delete-the-production-logic litmus（`ResolveSave` の `false→AbortQuit` を消す→QUIT-10 RED）が効く。**残る HITL** は実 `Save()` の書込成否そのものと `!IsDirty` 検出（pure gate は実 `Save()` を持たない）＝書込失敗を擬似注入、または read-only パスへ保存して終了が中断されドキュメントが保全されることを目視確認する。なお同じ data-protection 判定の untitled 側は QUIT-06 の `ResolveSaveAs(false)→AbortQuit` で既に自動カバー済み。

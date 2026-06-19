@@ -36,9 +36,12 @@ OS ウィンドウを閉じる／終了する（`wantsToQuit`）→ dirty なら
 | QUIT-07 | dirty（untitled）で「保存しない」 → 保存せず終了 | `QuitConfirmController.ChooseDiscard` | `ChooseDiscard()==QuitWithoutSave`（isBound 非依存） | untitled でも `ChooseDiscard`→`QuitWithoutSave` を assert | 自動(E2E済) | `QuitConfirmE2ERunner`(ChooseOutcomes) |
 | QUIT-08 | batchmode（headless）では確認抑制 | `BackcastWorkspaceRoot`（`Application.isBatchMode` ガード） | batchmode では `wantsToQuit` を購読しない＝AFK `-quit` をモーダルで止めない | — | 要新規自動化 | — |
 | QUIT-09 | 実 OS ウィンドウ×close ＋ 実 native picker | `BackcastWorkspaceRoot`(wantsToQuit)／native `SaveStrategyAs` | 実ウィンドウ close で確認ダイアログ、実 picker で path/cancel | — | HITL専用（実 OS ウィンドウ・OS ネイティブダイアログ依存） | — |
+| QUIT-10 | bound「保存」後に書込失敗（still dirty）→ 終了中断・編集保全（#89 の核データ保護ガード） | `QuitConfirmController.ResolveSave`／`BackcastWorkspaceRoot.OnQuitSave` | `ResolveSave(true)==SaveThenQuit`(commit) / `ResolveSave(false)==AbortQuit`（saved=`!IsDirty`） | `ChooseSave(true)`→実 Save()→`ResolveSave(saved)` の **decision** を両値 assert。実 `.py` 書込と IsDirty 検出は配線/HITL | 自動(E2E済・decision のみ) | `QuitConfirmE2ERunner`(SaveResolve) |
 
 > QUIT-08 は入力起点でない**配線不変条件**だが、終了ライフサイクルの不変条件として台帳に載せる。`_quitConfirmed`
 > latch（2 回目の `wantsToQuit` が true）は配線側責務で別 Action 行にはしない（findings 0068）。
+> QUIT-10 は `ResolveSaveAs`（案A）と対称な `ResolveSave` resolver で、bound Save のデータ保護判定（保存失敗→
+> 終了中断）を pure gate で assert する。実 `Save()` 書込成否の **検出**（`!IsDirty`）と実ファイル I/O は配線/HITL。
 
 ## 観測点（詳細）
 

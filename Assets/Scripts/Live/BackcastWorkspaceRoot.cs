@@ -1747,8 +1747,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (outcome == QuitOutcome.SaveThenQuit)
         {
             OnFileSave();
-            if (_notebook != null && !_notebook.IsDirty) ConfirmAndQuit();   // .py persisted → quit
-            // still dirty → Save failed: abort quit, keep the document (data-protection guard)
+            bool saved = _notebook != null && !_notebook.IsDirty;
+            if (_quitController.ResolveSave(saved) == QuitOutcome.SaveThenQuit) ConfirmAndQuit();   // .py persisted → quit
+            // still dirty → Save failed: ResolveSave returns AbortQuit, keep the document (data-protection guard)
         }
         else if (outcome == QuitOutcome.SaveAsThenQuit) // (untitled): native picker, then resolve via the controller (案A)
         {

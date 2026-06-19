@@ -32,6 +32,7 @@ public static class QuitConfirmE2ERunner
             RequestQuitGate();
             ChooseOutcomes();
             SaveAsResolve();
+            SaveResolve();
         }
         catch (Exception e) { _fail.Add("exception: " + e); }
 
@@ -39,7 +40,8 @@ public static class QuitConfirmE2ERunner
         {
             Debug.Log("[E2E QUIT CONFIRM PASS] clean→QuitNow (QUIT-01) / dirty→Confirm+IsOpen (QUIT-02) / " +
                       "Save(bound)→SaveThenQuit (QUIT-03) / Discard→QuitWithoutSave (QUIT-04,07) / " +
-                      "Cancel→AbortQuit (QUIT-05) / Save(untitled)→SaveAsThenQuit + ResolveSaveAs path/cancel (QUIT-06) — " +
+                      "Cancel→AbortQuit (QUIT-05) / Save(untitled)→SaveAsThenQuit + ResolveSaveAs path/cancel (QUIT-06) / " +
+                      "ResolveSave saved→SaveThenQuit / failed→AbortQuit (QUIT-10 decision) — " +
                       "pure QuitConfirmController, findings 0068, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -114,6 +116,27 @@ public static class QuitConfirmE2ERunner
         c2.ChooseSave(false);
         Check(c2.ResolveSaveAs(false) == QuitOutcome.AbortQuit, "picker cancel should abort the quit (案A)");
         Check(c2.LastOutcome == QuitOutcome.AbortQuit, "LastOutcome after picker cancel should be AbortQuit");
+    }
+
+    // Covers: QUIT-10 decision (bound Save 後のデータ保護ガード — #89 の核)。配線は ChooseSave(true)→実 Save()→
+    //         ResolveSave(saved) と流す。saved→終了続行 / 書込失敗(still dirty)→AbortQuit で終了中断・編集保全。
+    //         実 .py 書込と IsDirty 検出自体は配線/HITL（pure gate では実 Save() を持たない）。
+    static void SaveResolve()
+    {
+        // bound で「保存」→ SaveThenQuit・ダイアログ閉じる（QUIT-03 の遷移を前提として再確認）。
+        var c = Opened();
+        Check(c.ChooseSave(true) == QuitOutcome.SaveThenQuit, "bound Save should be SaveThenQuit");
+        Check(!c.IsOpen, "dialog must close after bound Save");
+
+        // 実 Save() が成功（保存後 not dirty）→ 終了続行（commit）。
+        Check(c.ResolveSave(true) == QuitOutcome.SaveThenQuit, "saved Save should commit SaveThenQuit");
+        Check(c.LastOutcome == QuitOutcome.SaveThenQuit, "LastOutcome after saved commit should be SaveThenQuit");
+
+        // 実 Save() が失敗（保存後も dirty）→ 終了取りやめ（データ保護ガード・編集を失わない）。
+        var c2 = Opened();
+        c2.ChooseSave(true);
+        Check(c2.ResolveSave(false) == QuitOutcome.AbortQuit, "failed Save should abort the quit (data-protection guard)");
+        Check(c2.LastOutcome == QuitOutcome.AbortQuit, "LastOutcome after failed Save should be AbortQuit");
     }
 
     // dirty で開いた modal を返すヘルパ。

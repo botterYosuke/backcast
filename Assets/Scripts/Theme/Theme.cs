@@ -71,7 +71,7 @@ public sealed class Theme
 
         var colors = new ThemeColors
         {
-            background = Distinct(0), surface_background = Distinct(1), elevated_surface_background = Distinct(2),
+            background = Distinct(0), workspace_background = Distinct(54), surface_background = Distinct(1), elevated_surface_background = Distinct(2),
             panel_background = Distinct(3), panel_focused_border = Distinct(4), status_bar_background = Distinct(5),
             title_bar_background = Distinct(6), toolbar_background = Distinct(7), tab_bar_background = Distinct(8),
             tab_active_background = Distinct(9), tab_inactive_background = Distinct(10), border = Distinct(11),

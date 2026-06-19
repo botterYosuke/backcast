@@ -312,6 +312,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _canvas = new InfiniteCanvasController(_content);
         if (_inputSurface != null) _inputSurface.Initialize(_canvas, _viewport);
 
+        // theme the infinite-canvas FIELD (the viewport bg) from workspace_background and follow theme
+        // switches (parity with ChartView/DepthLadderView self-subscription, #44 AC②). Applied at runtime
+        // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
+        ThemeService.Changed += ApplyViewportTheme;
+        ApplyViewportTheme();
+
         _catalog = FloatingWindowCatalog.Default();
         _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildEditorWindowFrame);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
@@ -493,6 +499,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // writeback. The restored ids are not an unsaved edit (#31 D4).
         _sidebarCtrl.PrimeWritebackFromCurrent();
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, EditorFileProvider, _font);   // #78: editor's .py sidecar; #77: uGUI font
+    }
+
+    // Re-paint the infinite-canvas field (the viewport bg) from the active theme's workspace_background.
+    // Subscribed to ThemeService.Changed in BuildWorkspace; null-safe so a probe that never authored the
+    // viewport Image is a no-op.
+    void ApplyViewportTheme()
+    {
+        if (_viewport == null) return;
+        var img = _viewport.GetComponent<Image>();
+        if (img != null) img.color = ThemeService.Current.colors.workspace_background;
     }
 
     // window factory for ADDITIONAL saved editor windows (the scene-authored one is adopted). Uses
@@ -1821,6 +1837,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
+        ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

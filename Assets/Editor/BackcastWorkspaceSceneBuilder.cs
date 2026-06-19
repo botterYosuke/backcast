@@ -63,7 +63,10 @@ public static class BackcastWorkspaceSceneBuilder
         var viewport = (RectTransform)viewportGo.transform;
         viewport.SetParent(center, false);
         Stretch(viewport);
-        viewportGo.GetComponent<Image>().color = new Color(0.07f, 0.07f, 0.09f, 1f);
+        // Field bg from the theme's workspace_background (the single source). This bakes an editor PREVIEW
+        // value into the scene; at Play BackcastWorkspaceRoot.ApplyViewportTheme re-applies it live, so the
+        // hue is changed by editing the theme alone — no scene re-bake required.
+        viewportGo.GetComponent<Image>().color = ThemeService.Current.colors.workspace_background;
         var inputSurface = viewportGo.GetComponent<InfiniteCanvasInputSurface>();
 
         var content = NewRect("Content", viewport);

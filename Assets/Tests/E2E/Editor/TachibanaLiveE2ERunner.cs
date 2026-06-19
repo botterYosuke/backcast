@@ -41,6 +41,7 @@ public static class TachibanaLiveE2ERunner
     const int LOGIN_TIMEOUT_MS = 30000;        // venue_login（REQUEST login + WS 接続 + set_mode）
     const int CONNECT_TIMEOUT_MS = 15000;      // poll が venue_state=CONNECTED に収束するまで
     const int EC_WS_GATE_TIMEOUT_MS = 60000;   // #85 step 2.5: EC WS handshake (SSL 含む) が成立し最初のフレーム到達まで。SSL handshake (2-5s) + KP keepalive (5-12s server-driven) + 1 reconnect cycle (backoff ≥1s) ＋ flaky network 余裕で 60s。code-review G#2 で 30s→60s に bump。
+    const int SUBSCRIBE_TIMEOUT_MS = 15000;    // #85 follow-up step 2.4: piggyback EC on per-ticker FD WS — subscribe ack（WS open + first frame poll）
     const int PLACE_TIMEOUT_MS = 60000;        // place_order ack（secret resolve 30s 含む）
     const int FILL_TIMEOUT_MS = 30000;         // EC fill push（場中のみ来る）
     const int CANCEL_TIMEOUT_MS = 45000;       // #85 不具合 3: cancel も _resolve_secret を内部で呼ぶため 30s+ 余裕
@@ -51,6 +52,8 @@ public static class TachibanaLiveE2ERunner
     static int s_loginDone;
     static bool s_loginOk;
     static string s_loginEc;
+    static int s_subscribeDone;
+    static OrderRpcResult s_subscribe;
     static int s_placeDone;
     static OrderRpcResult s_place;
     static int s_cancelDone;
@@ -93,7 +96,7 @@ public static class TachibanaLiveE2ERunner
     static string Execute(out char[] second)
     {
         second = null;
-        s_loginDone = 0; s_placeDone = 0; s_cancelDone = 0;
+        s_loginDone = 0; s_subscribeDone = 0; s_placeDone = 0; s_cancelDone = 0;
 
         // ── step 0: 資格情報を解決。EnvConfig = process env 優先 → <repo>/.env → <repo>/python/.env
         // （`set -a; source .env` / CI の env 注入も拾える）。USER_ID/PASSWORD は os.environ へ、第二暗証は
@@ -142,16 +145,34 @@ public static class TachibanaLiveE2ERunner
         if (!SpinUntil(() => { conn.ApplyStatePoll(host.LatestStateJson); return conn.IsConnected; }, CONNECT_TIMEOUT_MS))
             return "logged in but venue_state never reached CONNECTED (got " + conn.VenueState + ")";
 
+        // ── step 2.4: market-data subscribe で per-ticker FD WS を開き、EC 通知を相乗りで受ける ──
+        // #85 follow-up (2026-06-19 後場 2 回連続実証): account-level standalone EC stream
+        // (p_issue_code 抜き subscription) は p_rid=22 でも p_rid=0 でもサーバが ST p_errno=2
+        // (仮想URL無効) を返し続け、EC frame が一度も届かない。e-station 参照実装に揃えて
+        // per-ticker FD subscription の p_evt_cmd に EC,SS,US を相乗りさせる方式へ移行
+        // (event_protocol.md §EC「e-station は EC を per-ticker FD 接続に相乗りさせる」)。
+        // 本 Runner は 7203.TSE (発注ターゲット) を carrier に subscribe し、その WS で EC を待つ。
+        // EC は口座単位で全件配信されるため carrier ticker と発注 ticker は一致しなくてもよいが、
+        // 同じにしておくと無関係 FD frame が来ない (本 issue では使わない depth/trades 経路も透過)。
+        host.Lanes.SubmitSubscribeMarketData(INSTRUMENT, r =>
+        {
+            s_subscribe = r; Volatile.Write(ref s_subscribeDone, 1);
+        });
+        if (!SpinUntil(() => Volatile.Read(ref s_subscribeDone) == 1, SUBSCRIBE_TIMEOUT_MS))
+            return "subscribe_market_data did not return within " + (SUBSCRIBE_TIMEOUT_MS / 1000) + "s";
+        if (!s_subscribe.Success)
+            return "subscribe_market_data failed: " + s_subscribe.ErrorCode +
+                   " — carrier ticker (FD WS) が立たないと EC 通知が来ない";
+
         // ── step 2.5: EC WS (SSL ハンドシェイク含む) が成立し最初のフレームが届くまで gate ──
-        // SUBSCRIBED badge は market-data 購読成立でしか立たないため、本 Runner のように
-        // market-data を購読しない経路では SUBSCRIBED に到達しない。Python 側 adapter が露出する
-        // ec_ws_subscribed (= EC WS で 1 フレーム以上受信した = SSL ハンドシェイク済) を独立
-        // シグナルにし、SSL 失敗時 / WS 未確立時に place する前に fail-fast する。これで demo に
-        // 未約定 ACCEPTED order が残置するルートを根本から塞ぐ (findings 0053 §issue#85 / 不具合 2)。
+        // step 2.4 で開いた per-ticker FD WS は KP / FD / SS frame を流す。_make_callback が
+        // 非 FD frame を _dispatch_event_frame に転送するので、`ec_ws_first_recv_ts_ms` が
+        // 最初の KP / SS / FD で立つ → ec_ws_subscribed=True。SSL 失敗時 / WS 未確立時に place
+        // する前に fail-fast する (findings 0053 §issue#85 真因 #4)。
         if (!SpinUntil(() => { conn.ApplyStatePoll(host.LatestStateJson); return conn.IsConnected && conn.EcWsSubscribed; }, EC_WS_GATE_TIMEOUT_MS))
             return "EC WS never subscribed within " + (EC_WS_GATE_TIMEOUT_MS / 1000) + "s " +
                    "(venue_state=" + conn.VenueState + ", ec_ws_subscribed=" + conn.EcWsSubscribed +
-                   ") — SSL ハンドシェイク失敗 / WS 未確立を疑う; state=" + host.LatestStateJson;
+                   ") — SSL ハンドシェイク失敗 / WS 未確立 / piggyback URL 不整合を疑う; state=" + host.LatestStateJson;
 
         // ── step 3: 成行 BUY を発注し、発注中に push される SecretRequired を第二暗証で応答 ──
         host.Lanes.SubmitPlaceOrder(VENUE, INSTRUMENT, SIDE, QTY, null, ORDER_TYPE, TIF, r =>

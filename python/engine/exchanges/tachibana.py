@@ -405,6 +405,15 @@ class TachibanaAdapter:
             # Phase 8 §3.2 A3.3 review fix (High): EVENT WS は必須クエリを
             # build_event_url で組み立てる。市場コードは MVP "00" 固定
             # (TSE 想定)。名証/福証/札証対応時は master lookup へ。
+            #
+            # #85 follow-up (2026-06-19 後場 実証): `p_evt_cmd` に **EC,SS,US** を
+            # 含めて per-ticker FD subscription に口座レベル通知を相乗りさせる
+            # (e-station 参照実装 / event_protocol.md §EC「e-station は EC を
+            # per-ticker FD 接続に相乗りさせる」)。account-level standalone EC
+            # stream (`_ensure_ec_stream` の旧実装) は `p_issue_code` 抜きで
+            # `ST p_errno=2` (仮想URL無効) を返されることが実 demo で empirically
+            # 確定 (`p_rid=22` でも `p_rid=0` でも同じ)。EC は口座単位で全件配信
+            # されるため、carrier ticker (= subscribe された ticker 1 つ) で十分。
             ws_url = build_event_url(
                 EventUrl(self._session.url_event_ws),
                 {
@@ -414,7 +423,7 @@ class TachibanaAdapter:
                     "p_issue_code": ticker,
                     "p_mkt_code": "00",
                     "p_eno": "0",
-                    "p_evt_cmd": "ST,KP,FD",
+                    "p_evt_cmd": "ST,KP,EC,SS,US,FD",
                 },
             )
             hub = TickerEventWsHub(
@@ -450,8 +459,17 @@ class TachibanaAdapter:
         self, instrument_id: InstrumentId, processor: FdFrameProcessor
     ):
         async def _cb(frame_type: str, fields: dict, recv_ts_ms: int) -> None:
+            # #85 follow-up (2026-06-19 後場): account-level frame (ST/KP/EC/SS/US) は
+            # `_dispatch_event_frame` に転送して `ec_ws_first_recv_ts_ms` sticky の前進と
+            # EC→OrderEvent / SS→閉局検知のルーティングを共通化する (e-station piggyback)。
+            # ここで先に呼ぶことで `ec_ws_first_recv_ts_ms` が FD frame 到来前に立ち得る
+            # (KP/SS は通常 FD より早く来る) → Runner step 2.5 gate が即通る。FD frame は
+            # 下の processor.process(...) で従来通り depth/trades を生成する。
             if frame_type != "FD":
+                await self._dispatch_event_frame(frame_type, fields, recv_ts_ms)
                 return
+            # FD frame: account-level signal も前進させてから per-ticker 処理へ。
+            await self._dispatch_event_frame(frame_type, fields, recv_ts_ms)
             trade, depth = processor.process(fields, recv_ts_ms)
             if depth is not None:
                 ts_ns = int(depth["recv_ts_ms"]) * 1_000_000
@@ -747,31 +765,22 @@ class TachibanaAdapter:
     # ------------------------------------------------------------------
 
     def _ensure_ec_stream(self) -> None:
-        """口座レベルの EC WS を 1 本だけ起動する (hooks 設定済み & session 有時)。
+        """口座レベル EC 通知の購読 — 現在は **per-ticker FD subscription に相乗り** する。
 
-        FD (時価) の per-ticker hub とは別。EC は口座単位で接続毎に全件再送される
-        ため、ticker 購読とは独立に 1 本維持する。on_order_event 未設定 (mock/kabu)
-        では起動しない。
+        #85 follow-up (2026-06-19 後場 2 回連続実証): account-level standalone EC WS
+        (`p_issue_code` 抜きの subscription) は `p_rid=22` でも `p_rid=0` でも server が
+        `ST p_errno=2` (仮想URL無効) を返し続け、EC frame が一度も配信されない。
+        e-station 参照実装 (event_protocol.md §EC) と同じく、EC/SS/US は per-ticker
+        `subscribe(instrument_id, ...)` の p_evt_cmd (`ST,KP,EC,SS,US,FD`) に含めて受信する。
+        EC は口座単位で全件配信されるため、carrier ticker (subscribe された任意の ticker)
+        が 1 つあれば全注文の EC frame が届く。
+
+        本関数は backward-compat のため残り **何もしない** (以前の呼び出し点は無害)。
+        FD subscription が無い口座 (純粋ポートフォリオ用) では EC が受信できないが本 issue
+        スコープ外 — Runner は step 2.4 で `subscribe_market_data(7203.TSE)` を呼んで carrier
+        を立てる。
         """
-        if self._on_order_event is None or self._session is None:
-            return
-        if self._ec_task is not None and not self._ec_task.done():
-            return
-        # ⚠️ TENTATIVE: 口座レベル EC URL のクエリ構成 (issue 非依存) は実 Demo で
-        # 要検証 (api_event_if.xlsx / 計画 §5.1 layer-3)。FD と同じ build_event_url
-        # を使い、p_evt_cmd に EC/SS/US を含める。
-        ws_url = build_event_url(
-            EventUrl(str(self._session.url_event_ws)),
-            {
-                "p_rid": "22",
-                "p_board_no": "1000",
-                "p_eno": "0",
-                "p_evt_cmd": "ST,KP,EC,SS,US",
-            },
-        )
-        self._ec_stop = asyncio.Event()
-        self._ec_ws = TachibanaEventWs(ws_url, self._ec_stop, ticker="EVENT")
-        self._ec_task = asyncio.create_task(self._ec_ws.run(self._dispatch_event_frame))
+        return
 
     async def _stop_ec_stream(self) -> None:
         if self._ec_stop is not None:
@@ -856,11 +865,18 @@ class TachibanaAdapter:
         self, frame_type: str, fields: dict[str, str], recv_ts_ms: int
     ) -> None:
         """EC を OrderEvent に、SS=システムステータスを閉局検知に回す (KP/ST/US は無視)。"""
-        # #85 Q1 (A'): frame_type 分岐より前に EC WS signal を前進させる。1 度立てた
-        # first_recv は sticky (None でないことが SSL ハンドシェイク済の意味)、
-        # last_recv は dispatch 毎に更新 (staleness 検出用)。frame_type に依らないので
-        # 市場閉局時の SS-only push でも signal が立つ (KP / EC は閉局時に来ない)。
-        if self.ec_ws_first_recv_ts_ms is None:
+        # #85 Q1 (A') + #85 follow-up defensive 強化 (2026-06-19 後場 実証):
+        # EC WS handshake signal の更新ポリシー — ST p_errno!=0 は subscription 不成立 / 死を
+        # 意味するので first_recv (sticky) を立てない & 立っていれば剥がす (Runner step 2.5 gate
+        # が再 spin する)。それ以外の frame_type (KP / FD / EC / SS / US / ST p_errno="0") は
+        # 従来通り frame_type 分岐より前で signal を前進 (市場閉局時の SS-only push でも signal が
+        # 立つ invariant を保つ — findings 0053 §issue#85 Q1 (A'))。last_recv は受信活動の記録
+        # なので常に更新 (staleness watchdog 用 / 死フレームでも「サーバが応答した」事実は残す)。
+        # 安全側: ST の p_errno field 欠落も error 扱い (parser 不一致 / server bug 時の trap door 防止)。
+        is_st_error = frame_type == "ST" and fields.get("p_errno", "") != "0"
+        if is_st_error:
+            self.ec_ws_first_recv_ts_ms = None   # sticky 解除 → gate が再 spin
+        elif self.ec_ws_first_recv_ts_ms is None:
             self.ec_ws_first_recv_ts_ms = recv_ts_ms
         self.ec_ws_last_recv_ts_ms = recv_ts_ms
         if frame_type == "SS":

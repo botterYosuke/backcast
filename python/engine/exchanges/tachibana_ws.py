@@ -153,6 +153,15 @@ class TachibanaEventWs:
         # ctor 注入 (self._ssl_ctx) > module-level default (_TLS_CTX=certifi) の優先順。
         if self._url.startswith("wss://"):
             connect_kwargs["ssl"] = self._ssl_ctx if self._ssl_ctx is not None else _TLS_CTX
+        # #85 follow-up: empirical diagnostic — log the URL (with ND=token masked) on
+        # the first connect of each ticker so failures with ST p_errno=2 (仮想URL無効) can
+        # be diagnosed without re-instrumenting. Token is masked at source so logs cannot
+        # leak the per-session secret (R10). WARNING level so it survives INFO suppression
+        # in pythonnet-embedded runs (batchmode E2E only sees WARNING+).
+        if self._conn_count == 1:
+            import re as _re
+            masked = _re.sub(r"ND=[^/?&]+", "ND=<token>", self._url)
+            log.warning("tachibana ws: connecting ticker=%s url=%s", self._ticker, masked)
         async with websockets.connect(self._url, **connect_kwargs) as ws:
             log.info(
                 "tachibana ws: connected ticker=%s conn=#%d",

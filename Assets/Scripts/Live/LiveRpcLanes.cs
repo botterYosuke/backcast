@@ -169,6 +169,30 @@ public class LiveRpcLanes
                                   Action<OrderRpcResult> onResult)
         => EnqueueWrite(() => CallModify(venue, orderId, newQty, newPrice), onResult);
 
+    // #85 follow-up: piggyback EC subscription on per-ticker FD WS (e-station style).
+    // subscribe_market_data is blocking (opens WS, awaits handshake) — must run off the
+    // main thread. Reusing the write lane gives serial ordering against order operations
+    // and the same _coord book-keeping; the call neither triggers SecretRequired nor
+    // emits an OrderEvent, so we collapse its ack into OrderRpcResult.{Success,ErrorCode}.
+    // (server signature is `subscribe_market_data(instrument_id)` — venue is implicit
+    // via the configured live session.)
+    public void SubmitSubscribeMarketData(string instrumentId,
+                                          Action<OrderRpcResult> onResult)
+        => EnqueueWrite(() => CallSubscribeMarketData(instrumentId), onResult);
+
+    OrderRpcResult CallSubscribeMarketData(string instrumentId)
+    {
+        using (Py.GIL())
+        using (var pi = new PyString(instrumentId))
+        using (PyObject res = _server.InvokeMethod("subscribe_market_data", pi))
+        {
+            var r = new OrderRpcResult { Status = "", OrderId = "" };
+            using (PyObject ok = res.GetItem("success")) r.Success = ok.As<bool>();
+            using (PyObject ec = res.GetItem("error_code")) r.ErrorCode = ec.As<string>() ?? "";
+            return r;
+        }
+    }
+
     OrderRpcResult CallModify(string venue, string orderId, double? newQty, double? newPrice)
     {
         using (Py.GIL())

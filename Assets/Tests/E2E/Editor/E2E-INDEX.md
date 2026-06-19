@@ -22,7 +22,7 @@
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) | `ORDER-01..16` | 16 | 0 | 0 | 15 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) ✅ | `DEPTH-01..11` | 11 | 9 | 1 | 0 | 1 | 0 |
-| [SecretModalE2ERunner](./SecretModalE2ERunner.md) | `SECRET-01..13` | 13 | 0 | 7 | 4 | 2 | 0 |
+| [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
 
 ## Journey E2E（3 本＋既存 1 本・50 行）
 
@@ -56,7 +56,12 @@
   Covers 付与・findings 0061）。STRATEGY-01..04,06..10,12,15,16,17 を `自動(E2E済)` へ、STRATEGY-13（CapturePositions）は
   S12 が既存 assert のため `自動(E2E済)` へ再分類。STRATEGY-11（placeholder hint）は実 view harness を要するため
   `要新規自動化` のまま据え置き。STRATEGY-15 の MenuBar 側は `MenuBarCutoverProbe`（MENU-02）が正本のまま。
-  残り未昇格: MenuBar / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
+  **9本目 = `SecretModalE2ERunner`**（`SecretModalM2Probe` → git mv・5 section verbatim 移送・各 section に Covers 付与・
+  findings 0062）。SECRET-01/02/04/05/06/11＋03/10（controller leg）を `自動(E2E済)` へ。SECRET-07/08/09（root 連携=
+  focus drop / open gate / open-time id バインド）は実 BackcastWorkspaceRoot 反射 harness を要するため `要新規自動化` の
+  まま据え置き、SECRET-12/13 は HITL専用。SECRET-03 の lane roundtrip / SECRET-10 の wire no-leak は `VenueLoginSecretProbe`
+  （pythonnet・据え置き）が正本のまま。INDEX 旧値 `7 | 4` は台本正本（8 要昇格 / 3 要新規）との drift だったため昇格に合わせ整合。
+  残り未昇格: MenuBar / RunButton / OrderTicket ＋ Journey 3 本。順次昇格。
 
 ## Issue release-gate slice runners
 

@@ -19,7 +19,7 @@
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..18` | 18 | 14 | 0 | 1 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
-| [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
+| [RunButtonE2ERunner](./RunButtonE2ERunner.md) ✅ | `RUN-01..12` | 12 | 8 | 0 | 2 | 1 | 1 |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) | `ORDER-01..16` | 16 | 0 | 0 | 15 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) ✅ | `DEPTH-01..11` | 11 | 9 | 1 | 0 | 1 | 0 |
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
@@ -61,7 +61,13 @@
   focus drop / open gate / open-time id バインド）は実 BackcastWorkspaceRoot 反射 harness を要するため `要新規自動化` の
   まま据え置き、SECRET-12/13 は HITL専用。SECRET-03 の lane roundtrip / SECRET-10 の wire no-leak は `VenueLoginSecretProbe`
   （pythonnet・据え置き）が正本のまま。INDEX 旧値 `7 | 4` は台本正本（8 要昇格 / 3 要新規）との drift だったため昇格に合わせ整合。
-  残り未昇格: MenuBar / RunButton / OrderTicket ＋ Journey 3 本。順次昇格。
+  **10本目 = `RunButtonE2ERunner`**（throwaway `WorkspaceUiCutoverProbe` の S1=readiness 真理値表・S2=single Run entry を
+  verbatim 移送＝SectionA/C、新規 SectionB=block-reason ラベル view（RUN-03）・SectionD=OnRun→host 配線（RUN-01/05/06）。
+  RUN-01/05/06 は sealed `WorkspaceEngineHost` のため spy 不可 → 実 root＋`host.InitializePython("MOCK")` で server-ready にし
+  host private `_req` を観測（非 vacuous: blocked が `_req` 既定・ready が `_req` 充填）。findings 0063）。RUN-01..08 を
+  `自動(E2E済)` へ、RUN-09/10 は `要新規自動化` 据え置き・RUN-11 HITL・RUN-12 対象外。`WorkspaceUiCutoverProbe` は
+  S3（boot→File→New）のみ残置。
+  残り未昇格: MenuBar / OrderTicket ＋ Journey 3 本。順次昇格。
 
 ## Issue release-gate slice runners
 

@@ -8,27 +8,25 @@
 //   # expect: [WORKSPACE UI CUTOVER PASS] ... / exit=0
 //
 // Sections:
-//   1. U1 Run-readiness truth table (pure RunReadinessViewModel — the OnRun gate order).
-//   2. U1/U4/U5 single Run entry (structural): the adopted editor title bar HAS a Run button; the
-//      footer has the mode segments but NO transport buttons (▶/⏭/⏹/speed); the startup tile has NO
-//      Run button.
 //   3. U3 boot → File→New blank state: a no-resume boot lands in the File→New state (an untitled,
 //      UNBOUND empty notebook), NOT a strategy — strategies open via File→Open (#76 2026-06-19).
+//
+// (Sections 1 + 2 — the U1 Run-readiness truth table + the U1/U4/U5 single Run entry — were PROMOTED
+// to the durable RunButtonE2ERunner (Assets/Tests/E2E/Editor, ADR-0015 wave-2 #3) as its readiness /
+// single-entry sections, and removed here so the Run-button surface has ONE canonical runner. This
+// probe now pins only the boot→File→New blank state, pending its own surface promotion.)
 //
 // It composes the REAL BackcastWorkspaceRoot via reflection (BuildWorkspace — Awake's Python init is
 // gated off in batchmode and never reached here), then value-asserts the seams.
 
 using System;
-using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.UI;
 
 public static class WorkspaceUiCutoverProbe
 {
-    const string WINDOW_ID = "strategy_editor:region_001";
     const string ResumeKey = "backcast.lastDocument";   // mirrors BackcastWorkspaceRoot.ResumeKey
     const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
 
@@ -37,9 +35,7 @@ public static class WorkspaceUiCutoverProbe
         string fail;
         try
         {
-            fail = Section1_RunReadinessTruthTable()
-                ?? Section2_SingleRunEntry()
-                ?? Section3_BootFileNew();
+            fail = Section3_BootFileNew();
         }
         catch (Exception e) { fail = "driver: " + e; }
 
@@ -53,62 +49,6 @@ public static class WorkspaceUiCutoverProbe
             Debug.LogError("[WORKSPACE UI CUTOVER FAIL] " + fail);
             if (Application.isBatchMode) EditorApplication.Exit(1);
         }
-    }
-
-    // ── 1. U1 Run-readiness truth table (pure VM; the OnRun gate order). ──
-    static string Section1_RunReadinessTruthTable()
-    {
-        // all gates pass → Run enabled, no reason.
-        if (RunReadinessViewModel.Reason(true, false, true, true) != null) return "readiness: all-OK should be runnable";
-
-        // each single block, in isolation.
-        if (RunReadinessViewModel.Reason(true, true, true, true) != RunReadinessViewModel.Running) return "readiness: running not blocked";
-        if (RunReadinessViewModel.Reason(true, false, false, true) != RunReadinessViewModel.NoStrategy) return "readiness: unsaved strategy not blocked";
-        if (RunReadinessViewModel.Reason(true, false, true, false) != RunReadinessViewModel.InvalidScenario) return "readiness: invalid scenario not blocked";
-        if (RunReadinessViewModel.Reason(false, false, true, true) != RunReadinessViewModel.NotOwner) return "readiness: not-owner not blocked";
-
-        // precedence (OnRun order: running → no-strategy → invalid-scenario → not-owner).
-        if (RunReadinessViewModel.Reason(true, true, false, false) != RunReadinessViewModel.Running) return "readiness: running must win over strategy/scenario";
-        if (RunReadinessViewModel.Reason(true, false, false, false) != RunReadinessViewModel.NoStrategy) return "readiness: no-strategy must win over scenario/owner";
-        if (RunReadinessViewModel.Reason(false, false, true, false) != RunReadinessViewModel.InvalidScenario) return "readiness: invalid-scenario must win over owner";
-
-        // Evaluate() mirrors Reason() into CanRun / BlockReason.
-        var vm = new RunReadinessViewModel();
-        vm.Evaluate(true, false, true, true);
-        if (!vm.CanRun || vm.BlockReason != null) return "readiness: Evaluate(all-OK) should be CanRun";
-        vm.Evaluate(true, false, false, true);
-        if (vm.CanRun || vm.BlockReason != RunReadinessViewModel.NoStrategy) return "readiness: Evaluate(unsaved) should block";
-        return null;
-    }
-
-    // ── 2. U1/U4/U5 single Run entry (structural). ──
-    static string Section2_SingleRunEntry()
-    {
-        var root = ComposeRoot(out var ty);
-        if (root == null) return "BackcastWorkspaceRoot missing in scene";
-
-        // U1: the adopted editor title bar HAS a Run button (built + a "RunButton" GameObject on the bar).
-        if (ty.GetField("_editorRunButton", BF).GetValue(root) == null) return "U1: adopted editor title-bar Run button not built";
-        var titleInput = ty.GetField("_strategyEditorTitleInput", BF).GetValue(root) as Component;
-        if (titleInput == null) return "U1: adopted editor title input missing in scene";
-        if (FindChildButton((RectTransform)titleInput.transform, "RunButton") == null)
-            return "U1: no 'RunButton' under the adopted editor title bar";
-
-        // U4: the footer has the mode segments and NO replay-transport buttons.
-        var footerContainer = ty.GetField("_footerContainer", BF).GetValue(root) as RectTransform;
-        if (footerContainer == null) return "U4: footer container missing in scene";
-        var footerBtnNames = ButtonNames(footerContainer);
-        foreach (var seg in new[] { "btn:Replay", "btn:Manual", "btn:Auto" })
-            if (!footerBtnNames.Contains(seg)) return "U4: footer missing mode segment " + seg;
-        foreach (var transport in new[] { "btn:▶", "btn:⏸", "btn:⏭", "btn:⏹", "btn:1x", "btn:2x", "btn:5x", "btn:10x", "btn:50x" })
-            if (footerBtnNames.Contains(transport)) return "U4: footer still has a retired transport button " + transport;
-
-        // U5: the startup tile has NO Run button.
-        var startupTile = ty.GetField("_startupTile", BF).GetValue(root) as RectTransform;
-        if (startupTile == null) return "U5: startup tile missing in scene";
-        if (ButtonNames(startupTile).Contains("btn:Run Replay")) return "U5: startup tile still has its Run button";
-
-        return null;
     }
 
     // ── 3. U3 boot → File→New blank state (#76 2026-06-19): a no-resume boot lands in the File→New
@@ -143,19 +83,5 @@ public static class WorkspaceUiCutoverProbe
         ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
         return root;
-    }
-
-    static HashSet<string> ButtonNames(RectTransform rt)
-    {
-        var names = new HashSet<string>();
-        foreach (var b in rt.GetComponentsInChildren<Button>(true)) names.Add(b.gameObject.name);
-        return names;
-    }
-
-    static Button FindChildButton(RectTransform rt, string name)
-    {
-        foreach (var b in rt.GetComponentsInChildren<Button>(true))
-            if (b.gameObject.name == name) return b;
-        return null;
     }
 }

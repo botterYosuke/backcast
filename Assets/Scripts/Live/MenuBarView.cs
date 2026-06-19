@@ -91,11 +91,7 @@ public sealed class MenuBarView : MonoBehaviour
         _built = true;
 
         // own override-sorting Canvas so the bar + dropdowns sit above the sidebar deterministically.
-        _canvas = gameObject.GetComponent<Canvas>();
-        if (_canvas == null) _canvas = gameObject.AddComponent<Canvas>();
-        _canvas.overrideSorting = true;
-        _canvas.sortingOrder = MENU_SORT;
-        if (gameObject.GetComponent<GraphicRaycaster>() == null) gameObject.AddComponent<GraphicRaycaster>();
+        _canvas = ChromeCanvas.Promote(gameObject, MENU_SORT);
 
         var c = ThemeService.Current.colors;
 

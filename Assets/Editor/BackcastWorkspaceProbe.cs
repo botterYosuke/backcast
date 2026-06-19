@@ -62,6 +62,7 @@ public static class BackcastWorkspaceProbe
                 ?? Section11_EditorSeedsUniverseAndGatesRun()
                 ?? Section12_PerModeProfileFlipAndRestore()
                 ?? Section13_ChromeZOrderLayering()
+                ?? Section15_SidebarOverflowClipping()   // #84: complements Section13 (clip ↔ z-layer)
                 ?? Section14_FileOpenBareStrategy();
         }
         catch (Exception e)
@@ -769,21 +770,89 @@ public static class BackcastWorkspaceProbe
         if (side == null) return "zorder: UniverseSidebarView missing";
         if (secret == null) return "zorder: SecretModalOverlay missing";
 
-        // both chrome views must be uGUI (own overrideSorting Canvas + raycaster), NOT IMGUI.
+        // #84 (findings 0053): the footer is now a first-class chrome layer with its OWN override-sorting
+        // Canvas — locate it via the _footerContainer field on the root (the bar GameObject is where
+        // WorkspaceFooterView.Build promoted the Canvas).
+        var ft = typeof(BackcastWorkspaceRoot).GetField("_footerContainer", BF);
+        var footerRt = ft != null ? ft.GetValue(root) as RectTransform : null;
+        if (footerRt == null) return "zorder: BackcastWorkspaceRoot._footerContainer missing (footer not authored?)";
+
+        // chrome views must be uGUI (own overrideSorting Canvas + raycaster), NOT IMGUI / NOT main Canvas.
         string e = AssertChromeCanvas(menu.gameObject, "MenuBarView", out var menuCanvas); if (e != null) return e;
         e = AssertChromeCanvas(side.gameObject, "UniverseSidebarView", out var sideCanvas); if (e != null) return e;
+        e = AssertChromeCanvas(footerRt.gameObject, "WorkspaceFooterView (footer container)", out var footerCanvas); if (e != null) return e;
 
         var secretCanvas = secret.GetComponent<Canvas>();
         if (secretCanvas == null) return "zorder: SecretModalOverlay has no Canvas";
 
-        // the layering contract (findings 0045): sidebar > 0, menu > sidebar (dropdown over sidebar),
-        // secret modal > menu (modal stays topmost). Values are derived; only the RELATIONS are gated.
+        // the layering contract (findings 0045 + 0053): sidebar > 0, footer > sidebar (footer always
+        // visible over an overflowing sidebar — #84), menu > footer (dropdowns still cover the footer
+        // band per desktop semantics), secret modal > menu (modal stays topmost). Values are derived;
+        // only the RELATIONS are gated.
         if (sideCanvas.sortingOrder <= 0)
             return $"zorder: sidebar sortingOrder must be > 0 chrome layer (got {sideCanvas.sortingOrder})";
-        if (menuCanvas.sortingOrder <= sideCanvas.sortingOrder)
-            return $"zorder: menu sortingOrder ({menuCanvas.sortingOrder}) must be > sidebar ({sideCanvas.sortingOrder}) so the dropdown draws over the sidebar";
+        if (footerCanvas.sortingOrder <= sideCanvas.sortingOrder)
+            return $"zorder: footer sortingOrder ({footerCanvas.sortingOrder}) must be > sidebar ({sideCanvas.sortingOrder}) so the status bar can't be hidden by overflowing sidebar content (#84)";
+        if (menuCanvas.sortingOrder <= footerCanvas.sortingOrder)
+            return $"zorder: menu sortingOrder ({menuCanvas.sortingOrder}) must be > footer ({footerCanvas.sortingOrder}) so the dropdown draws over the footer band";
         if (secretCanvas.sortingOrder <= menuCanvas.sortingOrder)
             return $"zorder: secret modal sortingOrder ({secretCanvas.sortingOrder}) must be > menu ({menuCanvas.sortingOrder}) so the modal stays topmost";
+        return null;
+    }
+
+    // #84 (findings 0053): structural overflow clipping inside the sidebar. The sidebar is constrained
+    // BOTH by its own RectTransform (inset above the footer in the scene) AND by RectMask2D viewports
+    // around rows and picker list — so even a 1000-instrument universe cannot escape the sidebar's
+    // visual bounds. The dual guarantee (this + Section13's footer-above-sidebar z-layer) makes
+    // #84 structurally non-regressible from either side of the contract.
+    static string Section15_SidebarOverflowClipping()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "sidebar-clip: BackcastWorkspaceRoot missing";
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var side = UnityEngine.Object.FindFirstObjectByType<UniverseSidebarView>();
+        if (side == null) return "sidebar-clip: UniverseSidebarView missing";
+
+        // rows ScrollRect with a RectMask2D viewport must exist (overflow can never escape).
+        var rowsScroll = side.GetComponentInChildren<UnityEngine.UI.ScrollRect>(true);
+        if (rowsScroll == null)
+            return "sidebar-clip: rows ScrollRect missing (sidebar rows would overflow the sidebar rect, #84 regression)";
+        if (rowsScroll.viewport == null)
+            return "sidebar-clip: rows ScrollRect.viewport unwired";
+        if (rowsScroll.viewport.GetComponent<UnityEngine.UI.RectMask2D>() == null)
+            return "sidebar-clip: rows ScrollRect.viewport has no RectMask2D (rows would still overflow visually)";
+        if (rowsScroll.horizontal || !rowsScroll.vertical)
+            return $"sidebar-clip: rows ScrollRect must be vertical-only (horizontal={rowsScroll.horizontal} vertical={rowsScroll.vertical})";
+
+        // The sidebar's own RectTransform must still be inset above the footer (the scene-authored
+        // bottom inset == FOOTER_H = 40px; this is the OTHER half of the dual guarantee — without it,
+        // the sidebar Canvas itself would extend into the footer band). Shape-agnostic check via world
+        // corners (anchor/pivot/sizeDelta combinations the future scene-author may pick don't matter —
+        // what matters is that the sidebar's bottom edge sits ABOVE the footer's top edge).
+        var ft2 = typeof(BackcastWorkspaceRoot).GetField("_footerContainer", BF);
+        var fRt = ft2 != null ? ft2.GetValue(root) as RectTransform : null;
+        if (fRt == null) return "sidebar-clip: BackcastWorkspaceRoot._footerContainer missing";
+        var sideRt = side.GetComponent<RectTransform>();
+        var sideCorners = new Vector3[4];
+        var footerCorners = new Vector3[4];
+        // F6 (#84 round-2 review): in batchmode the Canvas layout pass is deferred until end-of-frame,
+        // so RectTransform.GetWorldCorners on a just-built scene returns stale (often-zero) world coords
+        // → the comparison trivially passes and the gate becomes a no-op. ForceUpdateCanvases runs the
+        // layout pass synchronously so the world corners reflect the actual geometry under test.
+        Canvas.ForceUpdateCanvases();
+        sideRt.GetWorldCorners(sideCorners);     // [0]=BL [1]=TL [2]=TR [3]=BR (world coords)
+        fRt.GetWorldCorners(footerCorners);
+        float sidebarBottom = sideCorners[0].y;
+        float footerTop = footerCorners[1].y;
+        if (sidebarBottom < footerTop - 0.5f)
+            return $"sidebar-clip: sidebar bottom (worldY={sidebarBottom:F1}) extends BELOW footer top (worldY={footerTop:F1}); sidebar must be inset above the footer";
         return null;
     }
 

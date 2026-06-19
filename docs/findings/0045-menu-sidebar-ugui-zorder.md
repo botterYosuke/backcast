@@ -28,16 +28,24 @@ View のみ OnGUI→uGUI に差し替え。
 
 | 層 | sortingOrder | 実体 |
 |---|---|---|
-| field / windows / footer | 0 | メイン Canvas（既定） |
+| field / windows | 0 | メイン Canvas（既定） |
 | sidebar | `UniverseSidebarView.SIDEBAR_SORT` = **500** | nested |
+| footer | `WorkspaceFooterView.FOOTER_SORT` = **550** | nested（**#84 で追加**・findings 0053） |
 | menu backdrop | **599**（MENU_SORT−1） | 全画面・menu 展開中のみ |
 | menu bar + dropdown | `MenuBarView.MENU_SORT` = **600** | nested |
 | secret modal | **1000** | 独自 ScreenSpaceOverlay（既存・不変） |
 
-menu(600) > sidebar(500) なので dropdown は確定的に sidebar の前面。secret(1000) > menu(600) なので modal は
-最前面を維持。値は派生で、ガード（probe Section13）は**関係のみ**を assert（menu>sidebar>0、secret>menu）。
-container は authored RectTransform（top strip / left column）のまま＝描画領域は derived（hardcode 禁止を踏襲）。
-dropdown は 1 行 container の外へ伸びる（uGUI はマスク無しで子をクリップしない）。
+menu(600) > footer(550) > sidebar(500) > 0 なので dropdown は確定的に footer/sidebar の前面、status bar は
+sidebar overflow の前面。secret(1000) > menu(600) なので modal は最前面を維持。値は派生で、ガード
+（probe Section13）は**関係のみ**を assert（menu > footer > sidebar > 0、secret > menu）。
+container は authored RectTransform（top strip / left column / bottom strip）のまま＝描画領域は derived
+（hardcode 禁止を踏襲）。dropdown は 1 行 container の外へ伸びる（uGUI はマスク無しで子をクリップしない）。
+
+**#84 の追記**: 当初 D2 は footer を `field/windows/footer | 0` でメイン Canvas 同居に置いていた。
+これにより sidebar Canvas(500) の overflow 子が footer を上書きできる構造的欠落があり、
+50 銘柄 universe（`v19_morning_cell.json`）で実発火した（findings 0053）。footer に own override-sorting
+Canvas を与え `FOOTER_SORT=550` で sidebar 上・menu 下に固定して塞いだ。menu backdrop(599) は依然 footer の
+前にあるので「menu 展開中の外側クリックで menu を閉じる」desktop semantic は保たれる。
 
 ### D3 — 入力ブリードは backdrop ＋ 最前面 raycaster 解決で断つ
 uGUI ボタンは EventSystem のポインタイベントしか消費せず IMGUI の `Event.current` は素通りするため、案1 単体だと
@@ -58,8 +66,9 @@ sidebar の銘柄行・picker 候補は毎フレーム再生成せず、controll
 
 - **headless（正本 AFK・RED→GREEN 済）**: `BackcastWorkspaceProbe` Section13「chrome z-order layering」。
   fix 前 RED＝`zorder: MenuBarView has no Canvas (still IMGUI?)`、fix 後 `[BACKCAST WORKSPACE PASS] all sections
-  green.`（全13 section・origin/main merge 後）。構造契約（両 chrome が overrideSorting Canvas + GraphicRaycaster／menu>sidebar>0／
-  secret>menu）を assert。pixel z-order とクリック貫通は owner HITL。
+  green.`。構造契約（chrome view が overrideSorting Canvas + GraphicRaycaster／**menu > footer > sidebar > 0**／
+  secret > menu）を assert。**#84 amendment**: footer も first-class chrome 層として assert に加わった
+  （findings 0053）。pixel z-order とクリック貫通は owner HITL。
 - **owner HITL（manual-gate・PASS 2026-06-17）**: ① File/Edit/Venue/Help の dropdown が sidebar の前面に描かれ
   全項目クリック可、② dropdown 直下の sidebar 行が同クリックで発火しない、③ menu 外クリックで閉じる、
   ④ secret modal が menu より前面（構造上 1000>600・接続環境がある場合）、⑤ sidebar の select/×remove/+Add/

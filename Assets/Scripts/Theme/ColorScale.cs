@@ -42,99 +42,105 @@ public sealed class ColorScale
 
     // -- Dark scales (Radix: slate / iris / red / grass / amber / blue) --------------------
 
+    // Cyberpunk neon palette (2026-06-20 owner re-skin): deep-space navy base + cyan(Blue.Step9)
+    // / magenta(Accent.Step9) / purple(Accent.Step8) neons. Step 9 anchors the user-specified
+    // brand hues; Step 8 is intentionally a sibling neon (purple) rather than a monotonic
+    // luminance step, so panel_focused_border / strong_border read as a second-accent rather
+    // than a dimmed brand. Step 11/12 stay desaturated for text legibility on the dark base.
+
     public static ColorScale NeutralDark() => new ColorScale(new[]
     {
-        new Color(0.0706f, 0.0784f, 0.0902f), //  1 #121316 app bg
-        new Color(0.0941f, 0.1020f, 0.1176f), //  2 #181a1e subtle bg
-        new Color(0.1255f, 0.1373f, 0.1569f), //  3 #202328 ui bg
-        new Color(0.1529f, 0.1686f, 0.1922f), //  4 #272b31 ui hover
-        new Color(0.1843f, 0.2039f, 0.2314f), //  5 #2f343b ui pressed
-        new Color(0.2235f, 0.2471f, 0.2784f), //  6 #393f47 subtle border
-        new Color(0.2745f, 0.3020f, 0.3373f), //  7 #464d56 ui border
-        new Color(0.3608f, 0.3922f, 0.4314f), //  8 #5c646e strong border
-        new Color(0.4314f, 0.4627f, 0.5020f), //  9 #6e7680 solid
-        new Color(0.4824f, 0.5137f, 0.5529f), // 10 #7b838d solid hover
-        new Color(0.7059f, 0.7255f, 0.7529f), // 11 #b4b9c0 low-contrast text
-        new Color(0.9255f, 0.9333f, 0.9451f), // 12 #ecedf1 high-contrast text
+        new Color(0.0392f, 0.0549f, 0.1529f), //  1 #0a0e27 app bg (owner brand bg)
+        new Color(0.0510f, 0.0667f, 0.1882f), //  2 #0d1130 subtle bg
+        new Color(0.0745f, 0.0941f, 0.2510f), //  3 #131840 ui bg
+        new Color(0.1020f, 0.1255f, 0.3137f), //  4 #1a2050 ui hover
+        new Color(0.1333f, 0.1608f, 0.3765f), //  5 #222960 ui pressed
+        new Color(0.1725f, 0.2039f, 0.4392f), //  6 #2c3470 subtle border
+        new Color(0.2275f, 0.2588f, 0.5294f), //  7 #3a4287 ui border
+        new Color(0.3020f, 0.3529f, 0.6392f), //  8 #4d5aa3 strong border
+        new Color(0.4000f, 0.4706f, 0.7216f), //  9 #6678b8 solid
+        new Color(0.4784f, 0.5490f, 0.7804f), // 10 #7a8cc7 solid hover
+        new Color(0.6588f, 0.7216f, 0.8784f), // 11 #a8b8e0 low-contrast text
+        new Color(0.8784f, 0.9176f, 1.0000f), // 12 #e0eaff high-contrast text
     });
 
     public static ColorScale AccentDark() => new ColorScale(new[]
     {
-        new Color(0.0745f, 0.0745f, 0.1176f), //  1 #13131e
-        new Color(0.0902f, 0.0863f, 0.1451f), //  2 #171625
-        new Color(0.1255f, 0.1255f, 0.2392f), //  3 #20203d
-        new Color(0.1490f, 0.1490f, 0.3216f), //  4 #262652
-        new Color(0.1765f, 0.1725f, 0.4000f), //  5 #2d2c66
-        new Color(0.2196f, 0.2118f, 0.4745f), //  6 #383679
-        new Color(0.2706f, 0.2627f, 0.5373f), //  7 #454389
-        new Color(0.3412f, 0.3255f, 0.7765f), //  8 #5753c6
-        new Color(0.3569f, 0.3569f, 0.8392f), //  9 #5b5bd6 brand solid
-        new Color(0.4314f, 0.4157f, 0.8706f), // 10 #6e6ade
-        new Color(0.6941f, 0.6627f, 1.0000f), // 11 #b1a9ff low-contrast text
-        new Color(0.8784f, 0.8745f, 1.0000f), // 12 #e0dfff high-contrast text
+        new Color(0.1020f, 0.0157f, 0.1255f), //  1 #1a0420
+        new Color(0.1333f, 0.0235f, 0.1569f), //  2 #220628
+        new Color(0.2196f, 0.0392f, 0.2431f), //  3 #380a3e
+        new Color(0.3020f, 0.0549f, 0.3216f), //  4 #4d0e52
+        new Color(0.3686f, 0.0627f, 0.3882f), //  5 #5e1063
+        new Color(0.4627f, 0.0784f, 0.4706f), //  6 #761478
+        new Color(0.5725f, 0.1020f, 0.5569f), //  7 #921a8e
+        new Color(0.6941f, 0.2902f, 0.9294f), //  8 #b14aed strong border / focus (owner purple)
+        new Color(1.0000f, 0.0000f, 0.6667f), //  9 #ff00aa brand solid (owner magenta)
+        new Color(1.0000f, 0.2667f, 0.7373f), // 10 #ff44bc solid hover
+        new Color(1.0000f, 0.5608f, 0.8314f), // 11 #ff8fd4 low-contrast text
+        new Color(1.0000f, 0.8157f, 0.9216f), // 12 #ffd0eb high-contrast text
     });
 
     public static ColorScale RedDark() => new ColorScale(new[]
     {
-        new Color(0.0980f, 0.0667f, 0.0667f), //  1 #191111
-        new Color(0.1255f, 0.0745f, 0.0784f), //  2 #201314
-        new Color(0.2314f, 0.0706f, 0.0980f), //  3 #3b1219
-        new Color(0.3137f, 0.0588f, 0.1098f), //  4 #500f1c
-        new Color(0.3804f, 0.0863f, 0.1373f), //  5 #611623
-        new Color(0.4471f, 0.1373f, 0.1765f), //  6 #72232d
-        new Color(0.5490f, 0.2000f, 0.2275f), //  7 #8c333a
-        new Color(0.7098f, 0.2706f, 0.2824f), //  8 #b54548
-        new Color(0.8980f, 0.2824f, 0.3020f), //  9 #e5484d brand solid
-        new Color(0.9255f, 0.3647f, 0.3686f), // 10 #ec5d5e
-        new Color(1.0000f, 0.5843f, 0.5725f), // 11 #ff9592 low-contrast text
-        new Color(1.0000f, 0.8196f, 0.8510f), // 12 #ffd1d9 high-contrast text
+        new Color(0.1255f, 0.0314f, 0.0314f), //  1 #200808
+        new Color(0.1647f, 0.0392f, 0.0392f), //  2 #2a0a0a
+        new Color(0.2902f, 0.0471f, 0.0706f), //  3 #4a0c12
+        new Color(0.3882f, 0.0627f, 0.0941f), //  4 #631018
+        new Color(0.4784f, 0.0784f, 0.1098f), //  5 #7a141c
+        new Color(0.5843f, 0.0941f, 0.1333f), //  6 #951822
+        new Color(0.7216f, 0.1176f, 0.1725f), //  7 #b81e2c
+        new Color(0.8510f, 0.1569f, 0.2510f), //  8 #d92840
+        new Color(1.0000f, 0.1569f, 0.3333f), //  9 #ff2855 brand solid (hot pink-red)
+        new Color(1.0000f, 0.3451f, 0.4706f), // 10 #ff5878
+        new Color(1.0000f, 0.5608f, 0.6392f), // 11 #ff8fa3 low-contrast text
+        new Color(1.0000f, 0.8157f, 0.8471f), // 12 #ffd0d8 high-contrast text
     });
 
     public static ColorScale GreenDark() => new ColorScale(new[]
     {
-        new Color(0.0549f, 0.0824f, 0.0667f), //  1 #0e1511
-        new Color(0.0784f, 0.1020f, 0.0824f), //  2 #141a15
-        new Color(0.1059f, 0.1647f, 0.1176f), //  3 #1b2a1e
-        new Color(0.1137f, 0.2275f, 0.1412f), //  4 #1d3a24
-        new Color(0.1451f, 0.2824f, 0.1765f), //  5 #25482d
-        new Color(0.1765f, 0.3412f, 0.2118f), //  6 #2d5736
-        new Color(0.2118f, 0.4039f, 0.2510f), //  7 #366740
-        new Color(0.2431f, 0.4745f, 0.2863f), //  8 #3e7949
-        new Color(0.2745f, 0.6549f, 0.3451f), //  9 #46a758 brand solid
-        new Color(0.3255f, 0.7020f, 0.3961f), // 10 #53b365
-        new Color(0.4431f, 0.8157f, 0.5137f), // 11 #71d083 low-contrast text
-        new Color(0.7608f, 0.9412f, 0.7608f), // 12 #c2f0c2 high-contrast text
+        new Color(0.0000f, 0.1020f, 0.0588f), //  1 #001a0f
+        new Color(0.0078f, 0.1412f, 0.0784f), //  2 #022414
+        new Color(0.0196f, 0.2275f, 0.1216f), //  3 #053a1f
+        new Color(0.0235f, 0.3020f, 0.1569f), //  4 #064d28
+        new Color(0.0314f, 0.3765f, 0.1882f), //  5 #086030
+        new Color(0.0392f, 0.4588f, 0.2275f), //  6 #0a753a
+        new Color(0.0510f, 0.5647f, 0.2824f), //  7 #0d9048
+        new Color(0.0627f, 0.7098f, 0.3451f), //  8 #10b558
+        new Color(0.0000f, 1.0000f, 0.5333f), //  9 #00ff88 brand solid (neon lime)
+        new Color(0.3020f, 1.0000f, 0.6275f), // 10 #4dffa0
+        new Color(0.5608f, 1.0000f, 0.7490f), // 11 #8fffbf low-contrast text
+        new Color(0.8157f, 1.0000f, 0.8784f), // 12 #d0ffe0 high-contrast text
     });
 
     public static ColorScale YellowDark() => new ColorScale(new[]
     {
-        new Color(0.0863f, 0.0706f, 0.0471f), //  1 #16120c
-        new Color(0.1137f, 0.0941f, 0.0588f), //  2 #1d180f
-        new Color(0.1882f, 0.1255f, 0.0314f), //  3 #302008
-        new Color(0.2471f, 0.1529f, 0.0000f), //  4 #3f2700
-        new Color(0.3020f, 0.1882f, 0.0000f), //  5 #4d3000
-        new Color(0.3608f, 0.2392f, 0.0196f), //  6 #5c3d05
-        new Color(0.4431f, 0.3098f, 0.0980f), //  7 #714f19
-        new Color(0.5608f, 0.3922f, 0.1412f), //  8 #8f6424
-        new Color(1.0000f, 0.7725f, 0.2392f), //  9 #ffc53d brand solid
-        new Color(1.0000f, 0.8392f, 0.0392f), // 10 #ffd60a
-        new Color(1.0000f, 0.7922f, 0.0863f), // 11 #ffca16 low-contrast text
-        new Color(1.0000f, 0.9059f, 0.7020f), // 12 #ffe7b3 high-contrast text
+        new Color(0.1216f, 0.1020f, 0.0078f), //  1 #1f1a02
+        new Color(0.1647f, 0.1373f, 0.0196f), //  2 #2a2305
+        new Color(0.2706f, 0.2235f, 0.0392f), //  3 #45390a
+        new Color(0.3608f, 0.2902f, 0.0510f), //  4 #5c4a0d
+        new Color(0.4510f, 0.3608f, 0.0627f), //  5 #735c10
+        new Color(0.5490f, 0.4392f, 0.0784f), //  6 #8c7014
+        new Color(0.6784f, 0.5412f, 0.1020f), //  7 #ad8a1a
+        new Color(0.8392f, 0.6588f, 0.1255f), //  8 #d6a820
+        new Color(1.0000f, 0.8431f, 0.0000f), //  9 #ffd700 brand solid (neon amber)
+        new Color(1.0000f, 0.8784f, 0.3020f), // 10 #ffe04d
+        new Color(1.0000f, 0.9176f, 0.5608f), // 11 #ffea8f low-contrast text
+        new Color(1.0000f, 0.9608f, 0.8157f), // 12 #fff5d0 high-contrast text
     });
 
     public static ColorScale BlueDark() => new ColorScale(new[]
     {
-        new Color(0.0510f, 0.0824f, 0.1255f), //  1 #0d1520
-        new Color(0.0667f, 0.0980f, 0.1529f), //  2 #111927
-        new Color(0.0510f, 0.1569f, 0.2784f), //  3 #0d2847
-        new Color(0.0000f, 0.2000f, 0.3843f), //  4 #003362
-        new Color(0.0000f, 0.2510f, 0.4549f), //  5 #004074
-        new Color(0.0627f, 0.3020f, 0.5294f), //  6 #104d87
-        new Color(0.1255f, 0.3647f, 0.6196f), //  7 #205d9e
-        new Color(0.1569f, 0.4392f, 0.7412f), //  8 #2870bd
-        new Color(0.0000f, 0.5647f, 1.0000f), //  9 #0090ff brand solid
-        new Color(0.2314f, 0.6196f, 1.0000f), // 10 #3b9eff
-        new Color(0.4392f, 0.7216f, 1.0000f), // 11 #70b8ff low-contrast text
-        new Color(0.7608f, 0.9020f, 1.0000f), // 12 #c2e6ff high-contrast text
+        new Color(0.0000f, 0.1020f, 0.1255f), //  1 #001a20
+        new Color(0.0078f, 0.1373f, 0.1647f), //  2 #02232a
+        new Color(0.0157f, 0.2196f, 0.2706f), //  3 #043845
+        new Color(0.0196f, 0.2980f, 0.3686f), //  4 #054c5e
+        new Color(0.0235f, 0.3765f, 0.4588f), //  5 #066075
+        new Color(0.0314f, 0.4588f, 0.5608f), //  6 #08758f
+        new Color(0.0392f, 0.5647f, 0.6902f), //  7 #0a90b0
+        new Color(0.0510f, 0.7098f, 0.8549f), //  8 #0db5da
+        new Color(0.0000f, 0.9412f, 1.0000f), //  9 #00f0ff brand solid (owner cyan)
+        new Color(0.3020f, 0.9608f, 1.0000f), // 10 #4df5ff
+        new Color(0.5608f, 0.9725f, 1.0000f), // 11 #8ff8ff low-contrast text
+        new Color(0.8157f, 0.9882f, 1.0000f), // 12 #d0fcff high-contrast text
     });
 }

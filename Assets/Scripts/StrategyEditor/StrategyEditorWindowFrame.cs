@@ -13,8 +13,10 @@ using UnityEngine.UI;
 public static class StrategyEditorWindowFrame
 {
     public const float TitleHeight = 28f;
-    static readonly Color BodyColor = new Color(0.13f, 0.14f, 0.17f, 0.98f);
-    static readonly Color TitleColor = new Color(0.24f, 0.27f, 0.34f, 1f);
+    // Cyberpunk re-skin 2026-06-20: body = Neutral.Step3 (#131840), title = Accent.Step8 purple
+    // (#b14aed) so the editor frame glows with the brand purple. TODO: route via ThemeService.
+    static readonly Color BodyColor = new Color(0.0745f, 0.0941f, 0.2510f, 0.98f);
+    static readonly Color TitleColor = new Color(0.6941f, 0.2902f, 0.9294f, 1f);
 
     // Build a window-frame subtree rooted at a new GameObject (NOT parented/positioned — the caller
     // owns that). `titleInput` is the title bar's FloatingWindowTitleInput (the caller Initialize()s
@@ -69,7 +71,7 @@ public static class StrategyEditorWindowFrame
         float side = TitleHeight - 6f;
         btnRt.sizeDelta = new Vector2(side, side);
         btnRt.anchoredPosition = new Vector2(-3f, -3f);
-        btnGo.GetComponent<Image>().color = new Color(0.45f, 0.18f, 0.20f, 1f);
+        btnGo.GetComponent<Image>().color = new Color(1.0000f, 0.1569f, 0.3333f, 1f); // #ff2855 hot pink-red close (cyberpunk)
 
         var label = new GameObject("X", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var labelRt = (RectTransform)label.transform;

@@ -57,22 +57,24 @@ public sealed class ThemeColors
         return new ThemeColors
         {
             background = n.Step1,
-            workspace_background = new Color(0.4980f, 0.6431f, 0.7451f), // #7fa4be — owner-chosen field hue (raw sRGB, findings 0020)
-            // hakoniwa FARM palette (findings 0054) — inspired by "The Farmer Was Replaced": the box-garden
-            // reads like a farm plot. grass-green field behind tiles; soil-brown tile headers/frames; light
-            // tilled-earth + cream surfaces so charts/panels stay legible (the dark-scale status green/red read
-            // like crops on cream); dark-soil text. NOT near-white (washes out ladder bid/ask). Swap + Play to tune.
-            hakoniwa_root_background  = new Color(0.4157f, 0.6078f, 0.2549f), // #6a9b41 — grass-green field (ground tiles sit on)
-            hakoniwa_tile_background  = new Color(0.8902f, 0.8353f, 0.6902f), // #e3d5b0 — tilled-earth tile card (panel bg)
-            hakoniwa_tile_header      = new Color(0.5412f, 0.3843f, 0.2235f), // #8a6239 — soil-brown header bar / frame
-            hakoniwa_chart_background = new Color(0.9373f, 0.9059f, 0.8235f), // #efe7d2 — cream crop face (chart + ladder)
-            hakoniwa_panel_surface    = new Color(0.9216f, 0.8824f, 0.7843f), // #ebe1c8 — warm cream (startup tile)
-            hakoniwa_tile_header_text = new Color(0.9529f, 0.9255f, 0.8471f), // #f3ecd8 — cream label on soil-brown header
-            hakoniwa_text             = new Color(0.1843f, 0.1490f, 0.0863f), // #2f2616 — dark-soil text on cream
-            hakoniwa_text_muted       = new Color(0.4353f, 0.3686f, 0.2471f), // #6f5e3f — mid-brown axes / change% / ladder header
-            hakoniwa_up               = new Color(0.1804f, 0.4314f, 0.1922f), // #2e6e31 — crop-green: candle up / change% gain / ladder bid (cream-legible)
-            hakoniwa_down             = new Color(0.6275f, 0.1765f, 0.1216f), // #a02d1f — barn-red: candle down / change% loss / ladder ask
-            hakoniwa_last             = new Color(0.4784f, 0.3529f, 0.0706f), // #7a5a12 — dark-amber: ladder LAST marker
+            workspace_background = new Color(0.0824f, 0.0314f, 0.1647f), // #15082a — cyberpunk void with magenta tint (raw sRGB, owner re-skin 2026-06-20)
+            // hakoniwa CYBERPUNK palette (2026-06-20 owner re-skin, replaces the 0054 farm theme):
+            // dark neon void instead of cream tiles. tile body sits on Neutral.Step3 so it reads as a
+            // proper card on the deeper #0a0e27 root; purple-neon header (Accent.Step8) frames the tile;
+            // up/down/LAST swap to neon lime / hot pink-red / cyan so candles + ladder glow on the dark
+            // chart face. Owner literals (raw sRGB, scale-non-derived) so a future light scale can't
+            // silently re-recolor them; swap these + Play to tune.
+            hakoniwa_root_background  = new Color(0.0235f, 0.0314f, 0.0941f), // #060818 — deepest void (ground)
+            hakoniwa_tile_background  = new Color(0.0745f, 0.0941f, 0.2510f), // #131840 — tile card (matches Neutral.Step3)
+            hakoniwa_tile_header      = new Color(0.6941f, 0.2902f, 0.9294f), // #b14aed — neon purple header / frame
+            hakoniwa_chart_background = new Color(0.0510f, 0.0667f, 0.1882f), // #0d1130 — near-black chart face for neon contrast
+            hakoniwa_panel_surface    = new Color(0.0745f, 0.0941f, 0.2510f), // #131840 — same tile-card hue (startup tile)
+            hakoniwa_tile_header_text = new Color(1.0000f, 0.8157f, 0.9216f), // #ffd0eb — light pink label on neon-purple header
+            hakoniwa_text             = new Color(0.8157f, 0.9882f, 1.0000f), // #d0fcff — cyan-white text on dark
+            hakoniwa_text_muted       = new Color(0.5608f, 0.9725f, 1.0000f), // #8ff8ff — cyan-grey axes / change% / ladder header
+            hakoniwa_up               = new Color(0.0000f, 1.0000f, 0.5333f), // #00ff88 — neon lime: candle up / change% gain / ladder bid
+            hakoniwa_down             = new Color(1.0000f, 0.1569f, 0.3333f), // #ff2855 — hot pink-red: candle down / change% loss / ladder ask
+            hakoniwa_last             = new Color(0.0000f, 0.9412f, 1.0000f), // #00f0ff — cyan: ladder LAST marker
             surface_background = n.Step2,
             elevated_surface_background = n.Step3,
             panel_background = n.Step2,

@@ -599,7 +599,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         rt.anchorMin = new Vector2(1f, 0f); rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);
         rt.sizeDelta = new Vector2(30f, 30f);
         rt.anchoredPosition = new Vector2(-20f, 56f);   // bottom-right; y = footer bar (40px, scene-authored) + 16px gap
-        btnGo.GetComponent<Image>().color = new Color(0.20f, 0.50f, 0.35f, 0.95f);
+        btnGo.GetComponent<Image>().color = new Color(0.0000f, 1.0000f, 0.5333f, 0.95f); // #00ff88 neon-lime "Go" (cyberpunk re-skin 2026-06-20)
 
         var lblGo = new GameObject("Label", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var lrt = (RectTransform)lblGo.transform;

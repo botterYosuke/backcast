@@ -31,9 +31,10 @@ public sealed class OrderTicketView
     public string Qty => _qty != null ? _qty.text : "";
     public string Price => _price != null ? _price.text : "";
 
-    static readonly Color BtnColor = new Color(0.22f, 0.25f, 0.31f, 1f);
-    static readonly Color FieldColor = new Color(0.10f, 0.11f, 0.13f, 1f);
-    static readonly Color TextColor = new Color(0.92f, 0.93f, 0.95f, 1f);
+    // Cyberpunk re-skin 2026-06-20 (raw literals, TODO: route via ThemeService).
+    static readonly Color BtnColor = new Color(0.1020f, 0.1255f, 0.3137f, 1f);   // #1a2050 Neutral.Step4
+    static readonly Color FieldColor = new Color(0.0510f, 0.0667f, 0.1882f, 1f); // #0d1130 Neutral.Step2 (input bg)
+    static readonly Color TextColor = new Color(0.8784f, 0.9176f, 1.0000f, 1f);  // #e0eaff Neutral.Step12
 
     public void Build(RectTransform body, Font font)
     {

@@ -16,7 +16,7 @@
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) | `HAKONIWA-01..13` | 13 | 0 | 10 | 0 | 1 | 2 |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
-| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) | `WINDOW-01..12` | 12 | 9 | 1 | 0 | 1 | 1 |
+| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) | `STRATEGY-01..18` | 18 | 0 | 13 | 2 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
@@ -45,8 +45,9 @@
   を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。
   **2本目 = `FooterModeE2ERunner`**（`FooterLiveAutoVerify` → 改名・FOOTER-06/07 view section＋FOOTER-10 追加・LiveAuto は
   supporting pin・AFK RED→GREEN、findings 0055）。
-  **`InfiniteCanvas` / `FloatingWindow` / `UniverseSidebar` は並行ブランチ（parallax `af963a2` 等）が昇格済み**（E2ERunner.cs 実在・
-  台本カバー状態は更新済み。本 rollup の件数 stale を 2026-06-19 に台本へ整合＝doc-only）。FloatingWindow は WINDOW 1 行のみ `要昇格` 残。
+  **3〜5本目 = `InfiniteCanvasE2ERunner`（findings 0056）/ `FloatingWindowE2ERunner`（0057）/ `UniverseSidebarE2ERunner`（0058）**
+  も昇格済み（throwaway probe → 改名・新規 section [CANVAS-05 / WINDOW-04,05,08 / SIDEBAR-11,14] 追加・AFK GREEN 確定 2026-06-19）。
+  rollup 件数を 3 行とも `E2E済` へ整合（FloatingWindow の WINDOW 1 行残を解消）。
   残り未昇格: MenuBar / Hakoniwa / StrategyEditorNotebook / RunButton / OrderTicket / DepthLadder / SecretModal ＋ Journey 3 本。順次昇格。
 - 第二波の昇格優先度の目安: `自動(Probe有・要昇格)`（既存 assert 流用で安い）→ `要新規自動化`（新規）。
   `OrderTicket` は view 側フォーム＋検証ゲートの Probe が無く全 15 行が `要新規自動化` なので、第二波で最も手が要る。

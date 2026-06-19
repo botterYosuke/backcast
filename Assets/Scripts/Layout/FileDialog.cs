@@ -18,12 +18,31 @@
 // *.py, and Save As defaults the extension to .py.
 
 using System;
+using UnityEngine;
 
 // returns the chosen ABSOLUTE .py path, or null when the user cancels.
 public interface IFileDialog
 {
     string SaveStrategyAs(string initialDir, string initialFileName);
     string OpenStrategy(string initialDir);
+}
+
+// Picks the native dialog for the current OS: Win32 (comdlg32) on Windows, the Editor's Cocoa panel
+// on Mac (dev / HITL). Each no-ops gracefully off its own platform, so File→Open works in the Unity
+// Editor on BOTH Windows and Mac. The AFK gate injects a StubFileDialog over this via SetFileDialog.
+public static class PlatformFileDialog
+{
+    public static IFileDialog Default()
+    {
+        switch (Application.platform)
+        {
+            case RuntimePlatform.OSXEditor:
+            case RuntimePlatform.OSXPlayer:
+                return new MacFileDialog();
+            default:
+                return new Win32FileDialog();
+        }
+    }
 }
 
 // AFK seam: the probe sets NextResult (null = cancel) and drives Save As / Open without a

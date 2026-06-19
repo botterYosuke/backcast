@@ -64,5 +64,1317 @@
     "universe_path": "artifacts/v19_live_universe.json",
     "adv_path": "artifacts/v19_live_adv_baseline.json",
     "prev_close_path": "artifacts/v19_live_prev_close.json"
+  },
+  "layout": {
+    "version": 1,
+    "panels": [
+      {
+        "id": "startup",
+        "slot": 0,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.8571428656578064,
+          "maxX": 0.125,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "buying_power",
+        "slot": 1,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.8571428656578064,
+          "maxX": 0.25,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "orders",
+        "slot": 2,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.8571428656578064,
+          "maxX": 0.375,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "positions",
+        "slot": 3,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.8571428656578064,
+          "maxX": 0.5,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "run_result",
+        "slot": 4,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.8571428656578064,
+          "maxX": 0.625,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "chart:6920.TSE",
+        "slot": 5,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.8571428656578064,
+          "maxX": 0.75,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "chart:6146.TSE",
+        "slot": 6,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.8571428656578064,
+          "maxX": 0.875,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "chart:8035.TSE",
+        "slot": 7,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.8571428656578064,
+          "maxX": 1.0,
+          "maxY": 1.0
+        }
+      },
+      {
+        "id": "chart:7011.TSE",
+        "slot": 8,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.71428573131561279,
+          "maxX": 0.125,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:6857.TSE",
+        "slot": 9,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.71428573131561279,
+          "maxX": 0.25,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:8306.TSE",
+        "slot": 10,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.71428573131561279,
+          "maxX": 0.375,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:9984.TSE",
+        "slot": 11,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.71428573131561279,
+          "maxX": 0.5,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:7203.TSE",
+        "slot": 12,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.71428573131561279,
+          "maxX": 0.625,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:8316.TSE",
+        "slot": 13,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.71428573131561279,
+          "maxX": 0.75,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:9983.TSE",
+        "slot": 14,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.71428573131561279,
+          "maxX": 0.875,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:6758.TSE",
+        "slot": 15,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.71428573131561279,
+          "maxX": 1.0,
+          "maxY": 0.8571428656578064
+        }
+      },
+      {
+        "id": "chart:6501.TSE",
+        "slot": 16,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.57142853736877441,
+          "maxX": 0.125,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:7974.TSE",
+        "slot": 17,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.57142853736877441,
+          "maxX": 0.25,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:8411.TSE",
+        "slot": 18,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.57142853736877441,
+          "maxX": 0.375,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:7012.TSE",
+        "slot": 19,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.57142853736877441,
+          "maxX": 0.5,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:6861.TSE",
+        "slot": 20,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.57142853736877441,
+          "maxX": 0.625,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:7013.TSE",
+        "slot": 21,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.57142853736877441,
+          "maxX": 0.75,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:5803.TSE",
+        "slot": 22,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.57142853736877441,
+          "maxX": 0.875,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:6526.TSE",
+        "slot": 23,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.57142853736877441,
+          "maxX": 1.0,
+          "maxY": 0.71428573131561279
+        }
+      },
+      {
+        "id": "chart:4063.TSE",
+        "slot": 24,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.42857140302658081,
+          "maxX": 0.125,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:6098.TSE",
+        "slot": 25,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.42857140302658081,
+          "maxX": 0.25,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:8058.TSE",
+        "slot": 26,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.42857140302658081,
+          "maxX": 0.375,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:6723.TSE",
+        "slot": 27,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.42857140302658081,
+          "maxX": 0.5,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:9104.TSE",
+        "slot": 28,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.42857140302658081,
+          "maxX": 0.625,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:9107.TSE",
+        "slot": 29,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.42857140302658081,
+          "maxX": 0.75,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:9432.TSE",
+        "slot": 30,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.42857140302658081,
+          "maxX": 0.875,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:9101.TSE",
+        "slot": 31,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.42857140302658081,
+          "maxX": 1.0,
+          "maxY": 0.57142853736877441
+        }
+      },
+      {
+        "id": "chart:7267.TSE",
+        "slot": 32,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.28571426868438721,
+          "maxX": 0.125,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:9501.TSE",
+        "slot": 33,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.28571426868438721,
+          "maxX": 0.25,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:8766.TSE",
+        "slot": 34,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.28571426868438721,
+          "maxX": 0.375,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:7735.TSE",
+        "slot": 35,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.28571426868438721,
+          "maxX": 0.5,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:4755.TSE",
+        "slot": 36,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.28571426868438721,
+          "maxX": 0.625,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:8001.TSE",
+        "slot": 37,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.28571426868438721,
+          "maxX": 0.75,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:2914.TSE",
+        "slot": 38,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.28571426868438721,
+          "maxX": 0.875,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:8031.TSE",
+        "slot": 39,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.28571426868438721,
+          "maxX": 1.0,
+          "maxY": 0.42857140302658081
+        }
+      },
+      {
+        "id": "chart:6367.TSE",
+        "slot": 40,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": 0.14285710453987122,
+          "maxX": 0.125,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:4568.TSE",
+        "slot": 41,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": 0.14285710453987122,
+          "maxX": 0.25,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:7003.TSE",
+        "slot": 42,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": 0.14285710453987122,
+          "maxX": 0.375,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:9433.TSE",
+        "slot": 43,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": 0.14285710453987122,
+          "maxX": 0.5,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:4502.TSE",
+        "slot": 44,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": 0.14285710453987122,
+          "maxX": 0.625,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:7201.TSE",
+        "slot": 45,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": 0.14285710453987122,
+          "maxX": 0.75,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:5401.TSE",
+        "slot": 46,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": 0.14285710453987122,
+          "maxX": 0.875,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:6315.TSE",
+        "slot": 47,
+        "visible": true,
+        "rect": {
+          "minX": 0.875,
+          "minY": 0.14285710453987122,
+          "maxX": 1.0,
+          "maxY": 0.28571426868438721
+        }
+      },
+      {
+        "id": "chart:6594.TSE",
+        "slot": 48,
+        "visible": true,
+        "rect": {
+          "minX": 0.0,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.125,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:6981.TSE",
+        "slot": 49,
+        "visible": true,
+        "rect": {
+          "minX": 0.125,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.25,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:4385.TSE",
+        "slot": 50,
+        "visible": true,
+        "rect": {
+          "minX": 0.25,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.375,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:7741.TSE",
+        "slot": 51,
+        "visible": true,
+        "rect": {
+          "minX": 0.375,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.5,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:4661.TSE",
+        "slot": 52,
+        "visible": true,
+        "rect": {
+          "minX": 0.5,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.625,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:3382.TSE",
+        "slot": 53,
+        "visible": true,
+        "rect": {
+          "minX": 0.625,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.75,
+          "maxY": 0.14285710453987122
+        }
+      },
+      {
+        "id": "chart:1306.TSE",
+        "slot": 54,
+        "visible": true,
+        "rect": {
+          "minX": 0.75,
+          "minY": -4.4703483581542969E-08,
+          "maxX": 0.875,
+          "maxY": 0.14285710453987122
+        }
+      }
+    ],
+    "canvasView": {
+      "panX": -673.20831298828125,
+      "panY": -128.2103271484375,
+      "zoom": 0.292820006608963
+    },
+    "floatingWindows": [
+      {
+        "id": "order:region_001",
+        "kind": "order",
+        "x": 40.0,
+        "y": -40.0,
+        "w": 360.0,
+        "h": 300.0,
+        "zOrder": 0,
+        "visible": false
+      }
+    ],
+    "strategyEditors": [],
+    "hakoniwaProfiles": {
+      "replay": {
+        "panels": [
+          {
+            "id": "startup",
+            "slot": 0,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.8571428656578064,
+              "maxX": 0.125,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "buying_power",
+            "slot": 1,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.8571428656578064,
+              "maxX": 0.25,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "orders",
+            "slot": 2,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.8571428656578064,
+              "maxX": 0.375,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "positions",
+            "slot": 3,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.8571428656578064,
+              "maxX": 0.5,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "run_result",
+            "slot": 4,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.8571428656578064,
+              "maxX": 0.625,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "chart:6920.TSE",
+            "slot": 5,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.8571428656578064,
+              "maxX": 0.75,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "chart:6146.TSE",
+            "slot": 6,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.8571428656578064,
+              "maxX": 0.875,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "chart:8035.TSE",
+            "slot": 7,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.8571428656578064,
+              "maxX": 1.0,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "chart:7011.TSE",
+            "slot": 8,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.71428573131561279,
+              "maxX": 0.125,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:6857.TSE",
+            "slot": 9,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.71428573131561279,
+              "maxX": 0.25,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:8306.TSE",
+            "slot": 10,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.71428573131561279,
+              "maxX": 0.375,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:9984.TSE",
+            "slot": 11,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.71428573131561279,
+              "maxX": 0.5,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:7203.TSE",
+            "slot": 12,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.71428573131561279,
+              "maxX": 0.625,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:8316.TSE",
+            "slot": 13,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.71428573131561279,
+              "maxX": 0.75,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:9983.TSE",
+            "slot": 14,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.71428573131561279,
+              "maxX": 0.875,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:6758.TSE",
+            "slot": 15,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.71428573131561279,
+              "maxX": 1.0,
+              "maxY": 0.8571428656578064
+            }
+          },
+          {
+            "id": "chart:6501.TSE",
+            "slot": 16,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.57142853736877441,
+              "maxX": 0.125,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:7974.TSE",
+            "slot": 17,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.57142853736877441,
+              "maxX": 0.25,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:8411.TSE",
+            "slot": 18,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.57142853736877441,
+              "maxX": 0.375,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:7012.TSE",
+            "slot": 19,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.57142853736877441,
+              "maxX": 0.5,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:6861.TSE",
+            "slot": 20,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.57142853736877441,
+              "maxX": 0.625,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:7013.TSE",
+            "slot": 21,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.57142853736877441,
+              "maxX": 0.75,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:5803.TSE",
+            "slot": 22,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.57142853736877441,
+              "maxX": 0.875,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:6526.TSE",
+            "slot": 23,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.57142853736877441,
+              "maxX": 1.0,
+              "maxY": 0.71428573131561279
+            }
+          },
+          {
+            "id": "chart:4063.TSE",
+            "slot": 24,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.42857140302658081,
+              "maxX": 0.125,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:6098.TSE",
+            "slot": 25,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.42857140302658081,
+              "maxX": 0.25,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:8058.TSE",
+            "slot": 26,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.42857140302658081,
+              "maxX": 0.375,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:6723.TSE",
+            "slot": 27,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.42857140302658081,
+              "maxX": 0.5,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:9104.TSE",
+            "slot": 28,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.42857140302658081,
+              "maxX": 0.625,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:9107.TSE",
+            "slot": 29,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.42857140302658081,
+              "maxX": 0.75,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:9432.TSE",
+            "slot": 30,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.42857140302658081,
+              "maxX": 0.875,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:9101.TSE",
+            "slot": 31,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.42857140302658081,
+              "maxX": 1.0,
+              "maxY": 0.57142853736877441
+            }
+          },
+          {
+            "id": "chart:7267.TSE",
+            "slot": 32,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.28571426868438721,
+              "maxX": 0.125,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:9501.TSE",
+            "slot": 33,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.28571426868438721,
+              "maxX": 0.25,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:8766.TSE",
+            "slot": 34,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.28571426868438721,
+              "maxX": 0.375,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:7735.TSE",
+            "slot": 35,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.28571426868438721,
+              "maxX": 0.5,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:4755.TSE",
+            "slot": 36,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.28571426868438721,
+              "maxX": 0.625,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:8001.TSE",
+            "slot": 37,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.28571426868438721,
+              "maxX": 0.75,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:2914.TSE",
+            "slot": 38,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.28571426868438721,
+              "maxX": 0.875,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:8031.TSE",
+            "slot": 39,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.28571426868438721,
+              "maxX": 1.0,
+              "maxY": 0.42857140302658081
+            }
+          },
+          {
+            "id": "chart:6367.TSE",
+            "slot": 40,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.14285710453987122,
+              "maxX": 0.125,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:4568.TSE",
+            "slot": 41,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": 0.14285710453987122,
+              "maxX": 0.25,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:7003.TSE",
+            "slot": 42,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": 0.14285710453987122,
+              "maxX": 0.375,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:9433.TSE",
+            "slot": 43,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": 0.14285710453987122,
+              "maxX": 0.5,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:4502.TSE",
+            "slot": 44,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": 0.14285710453987122,
+              "maxX": 0.625,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:7201.TSE",
+            "slot": 45,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": 0.14285710453987122,
+              "maxX": 0.75,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:5401.TSE",
+            "slot": 46,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": 0.14285710453987122,
+              "maxX": 0.875,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:6315.TSE",
+            "slot": 47,
+            "visible": true,
+            "rect": {
+              "minX": 0.875,
+              "minY": 0.14285710453987122,
+              "maxX": 1.0,
+              "maxY": 0.28571426868438721
+            }
+          },
+          {
+            "id": "chart:6594.TSE",
+            "slot": 48,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.125,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:6981.TSE",
+            "slot": 49,
+            "visible": true,
+            "rect": {
+              "minX": 0.125,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.25,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:4385.TSE",
+            "slot": 50,
+            "visible": true,
+            "rect": {
+              "minX": 0.25,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.375,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:7741.TSE",
+            "slot": 51,
+            "visible": true,
+            "rect": {
+              "minX": 0.375,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.5,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:4661.TSE",
+            "slot": 52,
+            "visible": true,
+            "rect": {
+              "minX": 0.5,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.625,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:3382.TSE",
+            "slot": 53,
+            "visible": true,
+            "rect": {
+              "minX": 0.625,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.75,
+              "maxY": 0.14285710453987122
+            }
+          },
+          {
+            "id": "chart:1306.TSE",
+            "slot": 54,
+            "visible": true,
+            "rect": {
+              "minX": 0.75,
+              "minY": -4.4703483581542969E-08,
+              "maxX": 0.875,
+              "maxY": 0.14285710453987122
+            }
+          }
+        ]
+      },
+      "live": {
+        "panels": [
+          {
+            "id": "chart",
+            "slot": 0,
+            "visible": true,
+            "rect": {
+              "minX": 0.0,
+              "minY": 0.0,
+              "maxX": 0.62000000476837158,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "status",
+            "slot": 1,
+            "visible": true,
+            "rect": {
+              "minX": 0.62999999523162842,
+              "minY": 0.75,
+              "maxX": 1.0,
+              "maxY": 1.0
+            }
+          },
+          {
+            "id": "positions",
+            "slot": 2,
+            "visible": true,
+            "rect": {
+              "minX": 0.62999999523162842,
+              "minY": 0.5,
+              "maxX": 1.0,
+              "maxY": 0.75
+            }
+          },
+          {
+            "id": "orders",
+            "slot": 3,
+            "visible": true,
+            "rect": {
+              "minX": 0.62999999523162842,
+              "minY": 0.25,
+              "maxX": 1.0,
+              "maxY": 0.5
+            }
+          },
+          {
+            "id": "run_result",
+            "slot": 4,
+            "visible": true,
+            "rect": {
+              "minX": 0.62999999523162842,
+              "minY": 0.0,
+              "maxX": 1.0,
+              "maxY": 0.25
+            }
+          }
+        ]
+      }
+    },
+    "cellPositions": [
+      {
+        "x": -1468.884765625,
+        "y": 289.71685791015625
+      },
+      {
+        "x": -1225.9217529296875,
+        "y": -321.95272827148438
+      },
+      {
+        "x": -393.25439453125,
+        "y": -330.49835205078125
+      }
+    ]
   }
 }

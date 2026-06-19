@@ -157,7 +157,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // other. _currentLayoutPath is the OPEN document's .py (TTWR buffer.original_path): the Save
     // target and resume anchor. "" = untitled (no document) -> File→Save delegates to Save As.
     string _currentLayoutPath = "";
-    IFileDialog _fileDialog = new Win32FileDialog();   // native picker; AFK injects a StubFileDialog
+    IFileDialog _fileDialog = PlatformFileDialog.Default();   // native picker (Win32/Mac per OS); AFK injects a StubFileDialog
     const string ResumeKey = "backcast.lastDocument";  // PlayerPrefs resume pointer (B2: no global layout file)
 
     // #69 AFK seam: a probe injects a StubFileDialog so Save As / Open round-trips run headless

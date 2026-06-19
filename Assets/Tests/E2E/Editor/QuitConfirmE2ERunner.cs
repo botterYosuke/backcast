@@ -123,10 +123,9 @@ public static class QuitConfirmE2ERunner
     //         実 .py 書込と IsDirty 検出自体は配線/HITL（pure gate では実 Save() を持たない）。
     static void SaveResolve()
     {
-        // bound で「保存」→ SaveThenQuit・ダイアログ閉じる（QUIT-03 の遷移を前提として再確認）。
+        // setup: bound で「保存」（ChooseSave(true)→SaveThenQuit の遷移自体は QUIT-03 が正本）。
         var c = Opened();
-        Check(c.ChooseSave(true) == QuitOutcome.SaveThenQuit, "bound Save should be SaveThenQuit");
-        Check(!c.IsOpen, "dialog must close after bound Save");
+        c.ChooseSave(true);
 
         // 実 Save() が成功（保存後 not dirty）→ 終了続行（commit）。
         Check(c.ResolveSave(true) == QuitOutcome.SaveThenQuit, "saved Save should commit SaveThenQuit");

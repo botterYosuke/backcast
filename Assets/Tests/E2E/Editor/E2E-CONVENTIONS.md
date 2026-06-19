@@ -56,3 +56,12 @@
 - ファイルダイアログは `StubFileDialog`、メニュー/ボタンは対応する `On*` を反射 invoke。
 - 実行: `<Unity> -batchmode -nographics -quit -projectPath . -executeMethod <Name>.Run -logFile <log>`。
   compile-only ゲートは `-executeMethod` を外した同コマンド。Unity ログは UTF-8 なので **ripgrep で grep**。
+
+## runner の section ↔ Action ID 対応方針
+
+Runner の section は原則として台本の Action ID と対応づける。ただし、既存 Probe の実証済み section や
+共有 pure validation のように、複数 Action ID を一つの自然な検証単位で assert するほうが保守性が高い場合は、
+1 section が複数 Action ID を cover してよい（`Validate()` のような共有純関数を Action ID ごとに人工分割しない
+＝検証単位が自然なまとまりであることを優先する。保守コストだけ増えて E2E の信頼性は上がらないため）。
+
+その場合、section header/comment に `Covers: <Action IDs>` を明記し、台本側から runner section へ追跡できるようにする。

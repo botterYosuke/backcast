@@ -6,7 +6,7 @@ computed from the C# reader's assumptions (findings 0043 §2, golden doctrine #2
 committed golden is then a frozen fixture both legs pin to:
   - Leg A (test_scenario_inline_golden.py): load_scenario(fixture) == committed golden
     (Python-side staleness guard),
-  - Leg B (C# ScenarioStartupProbe): ScenarioInlineReader.Read(fixture) == committed golden
+  - Leg B (C# ScenarioStartupE2ERunner): ScenarioInlineReader.Read(fixture) == committed golden
     (cross-language faithfulness of the C# parser).
 
 `test_scenario_inline_golden.py` never writes; only this script does. Updating the golden is

@@ -18,7 +18,7 @@
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) | `CANVAS-01..09` | 9 | 0 | 7 | 1 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) | `WINDOW-01..12` | 12 | 0 | 7 | 3 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) | `STRATEGY-01..18` | 18 | 0 | 13 | 2 | 2 | 1 |
-| [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) | `SCENARIO-01..14` | 14 | 0 | 11 | 1 | 2 | 0 |
+| [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) | `ORDER-01..16` | 16 | 0 | 0 | 15 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) | `DEPTH-01..11` | 11 | 0 | 6 | 4 | 1 | 0 |
@@ -41,7 +41,8 @@
 ## 合計
 
 - **Surface 12 本 ＝ 162 行 ／ Journey 4 本 ＝ 50 行 ／ 総計 212 行**。
-- `ReplayToHakoniwaE2ERunner` のみ第一波時点で実装済み回帰ゲート（`自動(E2E済)`）。残りは第二波で `.cs` runner へ昇格。
+- `ReplayToHakoniwaE2ERunner` が第一波時点の実装済み回帰ゲート（`自動(E2E済)`）。**第二波1本目 = `ScenarioStartupE2ERunner`
+  を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。残りは順次昇格。
 - 第二波の昇格優先度の目安: `自動(Probe有・要昇格)`（既存 assert 流用で安い）→ `要新規自動化`（新規）。
   `OrderTicket` は view 側フォーム＋検証ゲートの Probe が無く全 15 行が `要新規自動化` なので、第二波で最も手が要る。
 

@@ -35,8 +35,8 @@ greyed Run が無言にならない）。
 | RUN-02 | ▶ enable/disable（4 ゲート評価） | `BackcastWorkspaceRoot.cs:879`→`Update`→`RunReadinessViewModel.cs:33`→`Evaluate` | gate 順 running→no-strategy→invalid-scenario→not-owner、全 pass のみ `CanRun=true`→`Refresh(vm)` で `_btn.interactable`＋alpha | `RunReadinessViewModel.Reason/Evaluate` の真理値表（純ロジック）を直接 assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
 | RUN-03 | block reason ラベル表示 | `StrategyEditorRunButton.cs:77`→`Refresh`→`_status` | `vm.BlockReason` を `_status.text` に出し `enabled` 切替（Running/NoStrategy/InvalidScenario/NotOwner の単一語彙） | `Refresh(vm)` 後の `_status.text`/`.enabled` を reflection で assert（read-only 観測点） | 要新規自動化 | `WorkspaceUiCutoverProbe`(S1) |
 | RUN-04 | ▶ が running 中はクリックしても起動しない | `BackcastWorkspaceRoot.cs:835`（`_host.IsRunning` early-return）＋`RunReadinessViewModel.cs:42` | running 中は `CanRun=false`＋reason `Running…`、`OnRun` も先頭で return（多重起動防止） | running フラグ立て→`Reason` が `Running` ＆ `OnRun` が `host.TryStartRun` を呼ばないを assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
-| RUN-05 | strategy 未供給で Run ブロック | `BackcastWorkspaceRoot.cs:842`→`TryStartRun`→`ScenarioStartupController.cs:132`（provider false） | supplyable provider 0 → `BlockedNoStrategy`＋`NoStrategy` 文言、`host.TryStartRun` 不呼出（CONTEXT「active strategy 選択」） | unbound/dirty editor で `OnRun`→`ShowMessage(NoStrategy)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupProbe`(S5) `WorkspaceUiCutoverProbe`(S1) |
-| RUN-06 | scenario 不正で Run ブロック | `BackcastWorkspaceRoot.cs:844`→`gate.IsReady` false（`Commit` false） | 供給可能だが scenario 不正 → `BlockedInvalidScenario`＋`InvalidScenario` 文言、sidecar 不変・host 不呼出（AC④） | 空 universe 等で `OnRun`→`ShowMessage(InvalidScenario)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupProbe`(S5) |
+| RUN-05 | strategy 未供給で Run ブロック | `BackcastWorkspaceRoot.cs:842`→`TryStartRun`→`ScenarioStartupController.cs:132`（provider false） | supplyable provider 0 → `BlockedNoStrategy`＋`NoStrategy` 文言、`host.TryStartRun` 不呼出（CONTEXT「active strategy 選択」） | unbound/dirty editor で `OnRun`→`ShowMessage(NoStrategy)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupE2ERunner`(S5) `WorkspaceUiCutoverProbe`(S1) |
+| RUN-06 | scenario 不正で Run ブロック | `BackcastWorkspaceRoot.cs:844`→`gate.IsReady` false（`Commit` false） | 供給可能だが scenario 不正 → `BlockedInvalidScenario`＋`InvalidScenario` 文言、sidecar 不変・host 不呼出（AC④） | 空 universe 等で `OnRun`→`ShowMessage(InvalidScenario)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupE2ERunner`(S5) |
 | RUN-07 | 非 owner で Run ブロック | `BackcastWorkspaceRoot.cs:853`（`!_isOwner`）＋`RunReadinessViewModel.cs:45` | readiness は毎フレーム owner ガード前に評価され、非 owner は Run greyed＋`NotOwner`、click-time も防御 return | `_isOwner=false` で `Reason==NotOwner`＋`OnRun` が host 不呼出を assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
 | RUN-08 | 単一 Run 入口の構造（タイトルバーに ▶・footer/tile に無し） | `BackcastWorkspaceRoot.cs:408`→`new StrategyEditorRunButton(OnRun)`／`:409` Build | adopted editor タイトルバーに `RunButton` GameObject、footer に transport ボタン無し、startup tile に Run 無し（U1/U4/U5） | 実 scene 合成で `_editorRunButton` 構築＋`RunButton` 子・footer/tile 不在を assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S2) |
 | RUN-09 | commit I/O 例外/race を click-time に surface | `BackcastWorkspaceRoot.cs:843`（try/catch）／`:844` | commit 例外は `ShowMessage("Could not save scenario: …")`、race で readiness が反転しても `gate.IsReady` false で防御 | commit を投げる stub で `OnRun`→notice 表示＋host 不呼出を assert（防御経路） | 要新規自動化 | — |
@@ -57,7 +57,7 @@ greyed Run が無言にならない）。
   Section1 が真理値表＋precedence＋`Evaluate`→`CanRun`/`BlockReason` の正本。
 - **RUN-01/05/06/09（click-time ゲート）**: `OnRun` は ①`IsRunning` early-return → ②`TryStartRun`（commit 含む）→
   ③`gate.IsReady` 判定 → ④`PrimeWritebackFromCurrent` → ⑤`!_isOwner` 防御 → ⑥`RunRequest` 組立 → ⑦`host.TryStartRun`。
-  `ScenarioStartupController.TryStartRun`（`ScenarioStartupProbe` Section5）が `BlockedNoStrategy`/`BlockedInvalidScenario`/
+  `ScenarioStartupController.TryStartRun`（`ScenarioStartupE2ERunner` Section5）が `BlockedNoStrategy`/`BlockedInvalidScenario`/
   `Ready` の振り分けを既に assert。Surface 側で残るのは「`OnRun` が gate 結果に応じて host を呼ぶ/呼ばない・notice を
   出す」配線で、**要新規自動化**（MOCK host で host 呼出有無を観測）。
 - **RUN-08（単一 Run 入口）**: `WorkspaceUiCutoverProbe` Section2 が U1（タイトルバーに `RunButton`）/U4（footer に
@@ -84,7 +84,7 @@ greyed Run が無言にならない）。
 |---|---|---|
 | `WorkspaceUiCutoverProbe` S1 | EditMode・pure VM | RUN-02/03/04/07 の readiness 真理値表・precedence の昇格元 |
 | `WorkspaceUiCutoverProbe` S2 | batchmode・root 合成 | RUN-08 の単一 Run 入口（U1/U4/U5 構造）の正本 |
-| `ScenarioStartupProbe` S5 | pure controller | RUN-05/06 の `TryStartRun` ゲート振り分け（BlockedNoStrategy/InvalidScenario/Ready） |
+| `ScenarioStartupE2ERunner` S5 | pure controller | RUN-05/06 の `TryStartRun` ゲート振り分け（BlockedNoStrategy/InvalidScenario/Ready） |
 | `ReplayToHakoniwaE2ERunner` | Journey | RUN-12（▶→replay→箱庭）の縦串の正本。本 Surface は参照のみ |
 
 ## 将来の `RunButtonE2ERunner.cs` 実装方針（第二波）

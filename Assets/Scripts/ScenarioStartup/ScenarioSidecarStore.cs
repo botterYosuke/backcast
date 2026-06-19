@@ -59,6 +59,21 @@ public static class ScenarioSidecarStore
         return ScenarioSnapshot.FromJObject(scenario);
     }
 
+    // ---- READ (tolerant; the editor-seed seam). Same as ReadScenario, but ANY failure reading or
+    // parsing the sidecar returns FALSE instead of throwing — so File→Open can open a broken .py BARE
+    // and degrade the scenario to inline/empty (findings 0051 D3) rather than crash. The bare catch
+    // mirrors LayoutSidecarStore.TryReadLayout's: not only malformed JSON (ScenarioSidecarException)
+    // but a structurally-wrong scenario value — e.g. {"start":{}} makes FromJObject's (string) cast
+    // throw ArgumentException — and an I/O lock (File.ReadAllText) must all degrade, not escape the
+    // open. Other callers keep the fail-loud ReadScenario (a corrupt user file IS a real error to
+    // surface). `snap` is null both when there is no scenario AND when the sidecar is unreadable;
+    // the bool distinguishes (false == unreadable, true+null == absent → fall through to inline). ----
+    public static bool TryReadScenario(string strategyPath, out ScenarioSnapshot snap)
+    {
+        try { snap = ReadScenario(strategyPath); return true; }
+        catch { snap = null; return false; }
+    }
+
     // ---- WRITE: startup params (start/end/granularity/initial_cash). MUTATE-EXISTING-ONLY
     // (#67): merges into an EXISTING "scenario" object and preserves siblings; returns null
     // (writes NOTHING) when no sidecar/scenario object exists. A window-only sidecar (no

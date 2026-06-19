@@ -61,7 +61,8 @@ public static class BackcastWorkspaceProbe
                 ?? Section10_ChartTileFamily()
                 ?? Section11_EditorSeedsUniverseAndGatesRun()
                 ?? Section12_PerModeProfileFlipAndRestore()
-                ?? Section13_ChromeZOrderLayering();
+                ?? Section13_ChromeZOrderLayering()
+                ?? Section14_FileOpenBareStrategy();
         }
         catch (Exception e)
         {
@@ -583,6 +584,91 @@ public static class BackcastWorkspaceProbe
         if (startField.text != "2024-01-01")
             return "editor-seed: Startup tile Start field NOT re-synced after restore-seed (shows [" +
                    startField.text + "], Params=" + scenario3.Params.Start + ") — WYSIWYR break (findings 0044 §6)";
+        return null;
+    }
+
+    // ── 14. File→Open opens a BARE strategy .py (no layout key) — #80 intent / findings 0051 ──
+    // The owner's repro: File→Open a fresh v19 whose <strategy>.json carries ONLY a "scenario" key (no
+    // "layout"). The OLD strict read ABORTED ("無効な layout"); the fix OPENS it bare (keep the current
+    // geometry, reseed so Run unblocks). A CORRUPT sidecar is ALSO opened bare (owner D3) — never abort.
+    // D4's no-wipe guarantee still holds: geometry is touched ONLY by ApplyLayout, which a bare open skips.
+    // Drives the real OnFileOpen (StubFileDialog → the picked .py), not a hand-called coordinator.Open.
+    static string Section14_FileOpenBareStrategy()
+    {
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+
+        BackcastWorkspaceRoot Compose()
+        {
+            EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+            var r = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+            if (r == null) return null;
+            ty.GetField("_font", BF).SetValue(r, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            r.SetSynthesizer(new FakeMarimoSynthesizer());        // Python-free cell synthesis
+            ty.GetMethod("BuildWorkspace", BF).Invoke(r, null);   // _coordinator / _scenario / _tile
+            return r;
+        }
+        string CurrentPath(BackcastWorkspaceRoot r) => ty.GetField("_currentLayoutPath", BF).GetValue(r) as string;
+        ScenarioStartupController Scenario(BackcastWorkspaceRoot r) => ty.GetField("_scenario", BF).GetValue(r) as ScenarioStartupController;
+        void FileOpen(BackcastWorkspaceRoot r) => ty.GetMethod("OnFileOpen", BF).Invoke(r, null);
+
+        // (a) scenario-only sidecar = the v19 shape (<strategy>.json has "scenario", NO "layout").
+        string barePy = Path.Combine(TempDir, "open_bare.py");
+        File.WriteAllText(barePy, "x = 1\n");
+        ScenarioSidecarStore.SetStartupParamsAndInstruments(
+            barePy, new StartupParamsForWrite("2025-03-03", "2025-03-07", "Daily", "1000000"),
+            new[] { "BARE.TSE" });
+        if (LayoutSidecarStore.TryReadLayout(barePy, out _))   // precondition: must NOT have a layout key
+            return "S14a: precondition broken — scenario-only sidecar unexpectedly carries a layout key";
+
+        var rootA = Compose();
+        if (rootA == null) return "S14a: BackcastWorkspaceRoot missing";
+        rootA.SetFileDialog(new StubFileDialog { NextResult = barePy });
+        FileOpen(rootA);
+
+        if (CurrentPath(rootA) != Path.GetFullPath(barePy))
+            return "S14a: File→Open ABORTED a scenario-only .py (currentPath=[" + CurrentPath(rootA) +
+                   "]) — #80/0051: a bare v19 (no layout key) must OPEN, not abort";
+        var idsA = Scenario(rootA).Universe.Ids;
+        if (idsA.Count != 1 || idsA[0] != "BARE.TSE")
+            return "S14a: bare open did NOT reseed the universe from the scenario sidecar (got [" +
+                   string.Join(",", idsA) + "]) — Run would stay blocked";
+
+        // (b) CORRUPT sidecar JSON → STILL opens bare (owner D3); universe stays empty (unreadable).
+        string corruptPy = Path.Combine(TempDir, "open_corrupt.py");
+        File.WriteAllText(corruptPy, "y = 2\n");
+        File.WriteAllText(ScenarioSidecarStore.SidecarPathFor(corruptPy), "{ not json");
+
+        var rootB = Compose();
+        if (rootB == null) return "S14b: BackcastWorkspaceRoot missing";
+        rootB.SetFileDialog(new StubFileDialog { NextResult = corruptPy });
+        FileOpen(rootB);
+
+        if (CurrentPath(rootB) != Path.GetFullPath(corruptPy))
+            return "S14b: File→Open ABORTED a corrupt-sidecar .py (currentPath=[" + CurrentPath(rootB) +
+                   "]) — owner D3: a corrupt sidecar must STILL open bare (no abort); the Run gate blocks";
+        if (Scenario(rootB).Universe.Count != 0)
+            return "S14b: corrupt sidecar seeded a universe ([" + string.Join(",", Scenario(rootB).Universe.Ids) +
+                   "]) — must be empty (sidecar unreadable, no inline)";
+
+        // (c) STRUCTURALLY corrupt sidecar: VALID JSON but a wrong-type "start" makes FromJObject's
+        // (string) cast throw ArgumentException — NOT a ScenarioSidecarException. TryReadScenario's bare
+        // catch must still degrade (no crash), or the D3 guarantee only covers malformed-JSON corruption.
+        string structPy = Path.Combine(TempDir, "open_struct.py");
+        File.WriteAllText(structPy, "z = 3\n");
+        File.WriteAllText(ScenarioSidecarStore.SidecarPathFor(structPy), "{\"scenario\":{\"start\":{}}}");
+
+        var rootC = Compose();
+        if (rootC == null) return "S14c: BackcastWorkspaceRoot missing";
+        rootC.SetFileDialog(new StubFileDialog { NextResult = structPy });
+        FileOpen(rootC);   // must NOT throw out of OnFileOpen
+
+        if (CurrentPath(rootC) != Path.GetFullPath(structPy))
+            return "S14c: File→Open ABORTED/crashed on a structurally-corrupt sidecar (currentPath=[" +
+                   CurrentPath(rootC) + "]) — TryReadScenario must catch the non-JSON ArgumentException too";
+        if (Scenario(rootC).Universe.Count != 0)
+            return "S14c: structurally-corrupt sidecar seeded a universe ([" +
+                   string.Join(",", Scenario(rootC).Universe.Ids) + "]) — must be empty";
         return null;
     }
 

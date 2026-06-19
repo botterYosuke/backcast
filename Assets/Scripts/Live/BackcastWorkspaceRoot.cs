@@ -277,8 +277,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!EditorFileProvider.TryGetStrategyFile(out string strategyPath)) return;
 
         ScenarioSnapshot inlineFallback = ScenarioInlineReader.Read(strategyPath, out var inlineStatus);
-        _scenario.Populate(strategyPath, DateTime.Now, inlineFallback);
-        if (inlineStatus == ScenarioReadStatus.Unparseable)
+        // findings 0051 D3: a CORRUPT scenario sidecar must NOT crash File→Open — read it TOLERANTLY and
+        // degrade to the inline fallback (or empty) instead of throwing out of the open. The sidecar still
+        // wins over inline when readable. The Run gate then blocks on the empty universe; the user opens
+        // the .py to FIX the sidecar.
+        bool sidecarOk = ScenarioSidecarStore.TryReadScenario(strategyPath, out var sidecar);
+        _scenario.PopulateFrom(sidecar ?? inlineFallback, DateTime.Now);
+        // Surface the ACTUAL state: a corrupt sidecar is its own message (the inline fallback may still
+        // have populated the universe, so don't claim "to set the universe"); an unreadable inline with
+        // no sidecar keeps the original guidance.
+        if (!sidecarOk)
+            _menuBarView?.ShowMessage("scenario sidecar unreadable — fix " + Path.GetFileName(ScenarioSidecarStore.SidecarPathFor(strategyPath)));
+        else if (inlineStatus == ScenarioReadStatus.Unparseable)
             _menuBarView?.ShowMessage("strategy SCENARIO unreadable — save a scenario sidecar to set the universe");
     }
 
@@ -1551,31 +1561,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         string py = _fileDialog.OpenStrategy(InitialDir());
         if (string.IsNullOrEmpty(py)) { _menuBarView?.ShowMessage("Open: cancelled."); return; }
 
-        // strict layout read FIRST: on a missing/malformed/no-layout-key sidecar, ABORT and keep the
-        // current workspace (findings 0048 D4 — boot's fail-soft→Default would wipe the user's work).
-        if (!LayoutSidecarStore.TryReadLayout(py, out var doc))
-        {
-            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' は無効な layout");
-            return;   // _currentLayoutPath + workspace unchanged
-        }
+        // Layout is OPTIONAL (#80 intent / findings 0051). A valid "layout" key RESTORES the saved
+        // geometry; a missing / scenario-only / corrupt sidecar still OPENS the .py BARE — keep the
+        // current geometry and reseed so Run unblocks (the door for a fresh v19 whose <strategy>.json
+        // carries only a "scenario" key). findings 0048 D4's no-wipe guarantee still holds: geometry is
+        // touched ONLY by ApplyLayout below, which a bare open skips (so a bad sidecar can't wipe the work).
+        bool layoutOk = LayoutSidecarStore.TryReadLayout(py, out var doc);
 
         // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load (findings 0017 §1).
         // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
-        SendModeSideEffect(_menuBar.FileOpenModeSideEffect());
+        // `?.` — the mode side-effect is OPTIONAL (the headless AFK gate drives Open with no menu VM wired).
+        SendModeSideEffect(_menuBar?.FileOpenModeSideEffect());
 
-        // #81: the picked .py IS the notebook document — decompose it into N cell windows at the saved
-        // cellPositions (the coordinator), then apply geometry/non-cell windows/profiles around it. A
-        // non-marimo / unreadable `.py` fails fail-soft (buffer kept) -> abort, keep the workspace.
-        if (!_coordinator.Open(py, ToVectors(doc.cellPositions)))
+        // #81: the picked .py IS the notebook document — decompose it into N cell windows (saved
+        // cellPositions when we have a layout, else auto-cascade). The NOTEBOOK itself failing to open
+        // (non-marimo / unreadable .py) is the ONLY abort — keep the workspace, change nothing.
+        if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null))
         {
             _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "is not a notebook"));
             return;
         }
-        ApplyLayout(doc);
+        if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present
         _currentLayoutPath = py;
         PersistResumePointer(py);
         ReseedFromEditor();
-        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py));
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + (layoutOk ? "" : " (no saved layout)"));
     }
 
     // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op

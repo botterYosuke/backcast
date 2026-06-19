@@ -45,9 +45,17 @@ public sealed class ScenarioStartupController
     // sidecar wins over the fallback (it is the going-forward source). ----
     public void Populate(string strategyPath, DateTime today, ScenarioSnapshot fallback = null)
     {
-        if (Params.Dirty) return; // dirty-guard: never clobber an in-flight edit
+        if (Params.Dirty) return; // dirty-guard BEFORE the (fail-loud) read, as before
+        PopulateFrom(ScenarioSidecarStore.ReadScenario(strategyPath) ?? fallback, today);
+    }
 
-        ScenarioSnapshot snap = ScenarioSidecarStore.ReadScenario(strategyPath) ?? fallback;
+    // ---- POPULATE from an ALREADY-RESOLVED snapshot (no sidecar read). The editor-seed seam
+    // pre-reads the sidecar TOLERANTLY (ScenarioSidecarStore.TryReadScenario) so a CORRUPT sidecar
+    // degrades to inline/empty instead of throwing out of File→Open (findings 0051 D3) — null snap =
+    // seed defaults + empty universe (Run then blocks on the empty universe). ----
+    public void PopulateFrom(ScenarioSnapshot snap, DateTime today)
+    {
+        if (Params.Dirty) return; // dirty-guard: never clobber an in-flight edit
         if (snap != null)
         {
             Params = new ScenarioStartupParams

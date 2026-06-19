@@ -16,6 +16,11 @@ dependencies = [
     "pydantic>=2.13.4",
     "httpx>=0.27",
     "websockets>=16.0",
+    # #85: 外部 venue WS (立花 wss://) の TLS trust を certifi で固定する。
+    # httpx の transitive 依存に乗ると、httpx の major で certifi を外された / 差し替えられた
+    # ときに silent regression (CERTIFICATE_VERIFY_FAILED で EC push が全滅) を起こすため
+    # direct 宣言する。findings 0053 §issue#85 / CONTEXT.md "certifi" 参照。
+    "certifi>=2024.0",
     "joblib>=1.5.3",
     # Pinned to the 1.8.x line: the v19 strategy model (#72) is saved by scikit-learn
     # 1.8.0 and fails to unpickle under 1.9.x (`ModuleNotFoundError: No module named

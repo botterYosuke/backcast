@@ -12,11 +12,11 @@
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..18` | 18 | 0 | 7 | 5 | 2 | 4 |
-| [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) | `SIDEBAR-01..14` | 14 | 0 | 10 | 2 | 2 | 0 |
+| [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
 | [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) | `HAKONIWA-01..13` | 13 | 0 | 10 | 0 | 1 | 2 |
-| [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) | `CANVAS-01..09` | 9 | 0 | 7 | 1 | 1 | 0 |
-| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) | `WINDOW-01..12` | 12 | 0 | 7 | 3 | 1 | 1 |
+| [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
+| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) | `WINDOW-01..12` | 12 | 9 | 1 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) | `STRATEGY-01..18` | 18 | 0 | 13 | 2 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
@@ -44,7 +44,10 @@
 - `ReplayToHakoniwaE2ERunner` が第一波時点の実装済み回帰ゲート（`自動(E2E済)`）。**第二波1本目 = `ScenarioStartupE2ERunner`
   を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。
   **2本目 = `FooterModeE2ERunner`**（`FooterLiveAutoVerify` → 改名・FOOTER-06/07 view section＋FOOTER-10 追加・LiveAuto は
-  supporting pin・AFK RED→GREEN、findings 0055）。残りは順次昇格。
+  supporting pin・AFK RED→GREEN、findings 0055）。
+  **`InfiniteCanvas` / `FloatingWindow` / `UniverseSidebar` は並行ブランチ（parallax `af963a2` 等）が昇格済み**（E2ERunner.cs 実在・
+  台本カバー状態は更新済み。本 rollup の件数 stale を 2026-06-19 に台本へ整合＝doc-only）。FloatingWindow は WINDOW 1 行のみ `要昇格` 残。
+  残り未昇格: MenuBar / Hakoniwa / StrategyEditorNotebook / RunButton / OrderTicket / DepthLadder / SecretModal ＋ Journey 3 本。順次昇格。
 - 第二波の昇格優先度の目安: `自動(Probe有・要昇格)`（既存 assert 流用で安い）→ `要新規自動化`（新規）。
   `OrderTicket` は view 側フォーム＋検証ゲートの Probe が無く全 15 行が `要新規自動化` なので、第二波で最も手が要る。
 

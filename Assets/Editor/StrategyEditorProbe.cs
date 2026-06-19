@@ -82,7 +82,7 @@ public static class StrategyEditorProbe
                       "no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
                       "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
                       "+ #81 notebook aggregate (fresh=1 empty cell, AddCell dirties, body-edit dirties, SaveAs/Save->Open " +
-                      "round-trip preserves body+name+config, >=1 delete guard, Open fail-soft non-destructive, supplyable " +
+                      "round-trip preserves body+name+config, >=1 delete guard, non-marimo Open wraps as 1 cell (#86), supplyable " +
                       "5-condition, ResetUnboundEmpty) + SpawnPlacement (anchor-start, diagonal cascade, overlap-allowed, " +
                       "<10 threshold, full-chain clear) + NotebookCellCoordinator (cell0->region_001, AddCell->region_002 spawn, " +
                       "DeleteCell despawn region_002 / hide-dormant region_001, >=1 guard, dormant reuse, CapturePositions cell-order) " +
@@ -670,14 +670,25 @@ public static class StrategyEditorProbe
         if (!nb2.RemoveCell(nb2.Cells[0])) return "S10: RemoveCell on a 2-cell notebook failed";
         if (nb2.CellCount != 1) return "S10: RemoveCell did not shrink";
 
-        // Open fail-soft (broken / non-marimo .py): Open false, buffer NON-destructive, LastError set.
+        // #86: Open of a non-marimo `.py` (Decompose returns null) BOOTSTRAPS a 1-cell wrap whose body
+        // is the raw file content verbatim — Open SUCCEEDS, the notebook binds, and Run becomes possible
+        // (the on-disk file is still imperative, so Run goes through the imperative branch until Save).
+        // The synthesiser's null contract is unchanged; the wrap is the aggregate's policy.
         var failSynth = new FakeMarimoSynthesizer { FailDecompose = true };
         var nb3 = new MarimoNotebookDocument(failSynth);
-        nb3.Cells[0].SetBody("keep me");
-        int before = nb3.CellCount;
-        if (nb3.Open(py)) return "S10: Open of a 'broken' .py should fail (fail-soft)";
-        if (nb3.CellCount != before || nb3.Cells[0].Body != "keep me") return "S10: fail-soft Open mutated the buffer";
-        if (nb3.LastError == null) return "S10: fail-soft Open did not set LastError";
+        string rawPath = Path.Combine(TempDir, "nb_nonmarimo.py");
+        string rawContent = "class V19MorningStrategy(Strategy):\n    def on_bar(self, bar):\n        pass\n";
+        File.WriteAllText(rawPath, rawContent);
+        if (!nb3.Open(rawPath)) return "S10: Open of a non-marimo .py should succeed via 1-cell wrap";
+        if (nb3.CellCount != 1) return "S10: non-marimo wrap should produce exactly 1 cell";
+        if (nb3.Cells[0].Body != rawContent) return "S10: 1-cell wrap body != raw file content";
+        if (nb3.Cells[0].Name != "_") return "S10: 1-cell wrap should use anonymous name '_'";
+        if (!nb3.IsBound || nb3.IsDirty) return "S10: 1-cell wrap should bind + not be dirty";
+        if (!nb3.TryGetStrategyFile(out _)) return "S10: 1-cell wrap notebook not supplyable";
+        // Lock the wrap-cell dirty hook: editing the wrapped body must flip IsDirty (a future refactor
+        // that drops the per-cell BindBodyChanged loop would otherwise pass S10 yet break supplyable).
+        nb3.Cells[0].SetBody(rawContent + "# edited\n");
+        if (!nb3.IsDirty) return "S10: wrap cell body edit did not dirty the notebook (BindBodyChanged lost)";
 
         // ResetUnboundEmpty = one empty cell, unbound (File→New).
         nb2.ResetUnboundEmpty();

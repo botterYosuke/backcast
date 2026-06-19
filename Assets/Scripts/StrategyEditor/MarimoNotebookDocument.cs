@@ -115,10 +115,15 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         return true;
     }
 
-    // Open an existing `.py`: read -> decompose -> REPLACE the cell list. On ANY failure (bad path /
-    // extension / read error / non-marimo source) the notebook is UNCHANGED (buffer non-destructive,
-    // fail-soft); the caller reads LastError and shows a notice. A VALID but empty/0-cell `.py` opens
-    // with one bootstrapped empty cell (>=1 invariant) bound to the path.
+    // Open an existing `.py`: read -> decompose -> REPLACE the cell list. The notebook is unchanged
+    // ONLY for path/IO failures (bad path / wrong extension / missing file / read error); those set
+    // LastError and the caller shows a notice. The synthesiser's fail-soft null (non-marimo or broken
+    // source) is NOT an Open failure: per #86 the file content is BOOTSTRAPPED as a single anonymous
+    // cell (body = the raw file text verbatim, name = "_", default config) so any `.py` File->Open
+    // picks opens. This makes the editor a general Python editor at Open time; Save then synthesises
+    // through `generate_filecontents` (owner: destructive overwrite into marimo form is OK), so a
+    // non-marimo `.py` opened + saved is a ONE-WAY migration into the cell-DAG model. A VALID but
+    // empty/0-cell marimo `.py` opens with one bootstrapped empty cell (>=1 invariant).
     public bool Open(string path)
     {
         _lastError = null;
@@ -135,8 +140,14 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         try { content = File.ReadAllText(full, Encoding.UTF8); }
         catch { return Fail("read failed"); }
 
-        IReadOnlyList<Cell> decomposed = _synth.Decompose(content);
-        if (decomposed == null) return Fail("not a marimo notebook");   // fail-soft
+        // #86: a non-marimo / unparseable `.py` (Decompose -> null) wraps the WHOLE file text as ONE
+        // anonymous cell so the editor opens it as-is. The synthesiser seam still says "null = not a
+        // marimo notebook" (the Python contract is unchanged); the wrap is the aggregate's policy.
+        // Route through NewCell so the wrap cell shares the same factory as every other constructor
+        // in this file — the foreach below re-binds the decomposed-list cells too, but going through
+        // NewCell keeps the wrap path on the file's own MarkDirty wiring (invariant locality).
+        IReadOnlyList<Cell> decomposed = _synth.Decompose(content)
+            ?? new List<Cell> { NewCell(content, "_", "{}") };
 
         _cells.Clear();
         foreach (var c in decomposed)
@@ -144,7 +155,10 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
             c.BindBodyChanged(MarkDirty);
             _cells.Add(c);
         }
-        if (_cells.Count == 0) _cells.Add(NewCell("", "_", "{}"));   // empty `.py` -> bootstrap cell 1
+        // Reachable only when Decompose returns a non-null but empty list — a VALID marimo header
+        // (`app = marimo.App()`) with zero `@app.cell` defs. The non-marimo / unparseable case takes
+        // the wrap above (always >=1 cell); a 0-byte non-marimo `.py` becomes a 1-cell wrap of body="".
+        if (_cells.Count == 0) _cells.Add(NewCell("", "_", "{}"));
 
         _path = full;
         _dirty = false;

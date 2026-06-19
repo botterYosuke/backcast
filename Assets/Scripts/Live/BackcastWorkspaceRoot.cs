@@ -1632,11 +1632,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         SendModeSideEffect(_menuBar?.FileOpenModeSideEffect());
 
         // #81: the picked .py IS the notebook document — decompose it into N cell windows (saved
-        // cellPositions when we have a layout, else auto-cascade). The NOTEBOOK itself failing to open
-        // (non-marimo / unreadable .py) is the ONLY abort — keep the workspace, change nothing.
+        // cellPositions when we have a layout, else auto-cascade). #86 widened Open so a non-marimo
+        // `.py` BOOTSTRAPS as one anonymous cell (raw file text as body) — the only Open failures
+        // now are path/IO errors (missing file / unreadable / wrong extension). On any failure the
+        // workspace is untouched and we surface LastError.
         if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null))
         {
-            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "is not a notebook"));
+            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "could not be opened"));
             return;
         }
         if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present

@@ -17,7 +17,7 @@
 | [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) ✅ | `HAKONIWA-01..13` | 13 | 10 | 0 | 0 | 1 | 2 |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
-| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) | `STRATEGY-01..18` | 18 | 0 | 13 | 2 | 2 | 1 |
+| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..18` | 18 | 14 | 0 | 1 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) | `RUN-01..12` | 12 | 0 | 6 | 4 | 1 | 1 |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) | `ORDER-01..16` | 16 | 0 | 0 | 15 | 1 | 0 |
@@ -52,7 +52,11 @@
   DEPTH-09 Replay decode-skip / DEPTH-10 signature early-out] 追加・AFK RED(S6)→GREEN 確定 2026-06-19・findings 0059）。
   DEPTH-04（per-side 色）は `ThemeProbe` が正本のまま据え置き（findings 0054 で `hakoniwa_up/down/last` へ移行済）、DEPTH-11 は HITL。
   **7本目 = `HakoniwaE2ERunner`**（4 probe [`HakoniwaProbe` / `HakoniwaChartTileProbe` / `HakoniwaBaseModeProbe` / `HakoniwaProfileProbe`] → 1 runner 16 section へ集約・assert verbatim 移送・AFK GREEN 確定 2026-06-19・findings 0060）。HAKONIWA-01..10 を `自動(E2E済)` へ。ChartTile S2（ohlc decode）/ BaseMode S5（#65 panel empty-state）は Hakoniwa 外の関心事として元 probe に trim 据え置き（将来 Chart/Panel runner へ）、HakoniwaProbe/HakoniwaProfileProbe は git rm。
-  残り未昇格: MenuBar / StrategyEditorNotebook / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
+  **8本目 = `StrategyEditorNotebookE2ERunner`**（`StrategyEditorProbe` → git mv・12 section verbatim 移送・各 section に
+  Covers 付与・findings 0061）。STRATEGY-01..04,06..10,12,15,16,17 を `自動(E2E済)` へ、STRATEGY-13（CapturePositions）は
+  S12 が既存 assert のため `自動(E2E済)` へ再分類。STRATEGY-11（placeholder hint）は実 view harness を要するため
+  `要新規自動化` のまま据え置き。STRATEGY-15 の MenuBar 側は `MenuBarCutoverProbe`（MENU-02）が正本のまま。
+  残り未昇格: MenuBar / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
 
 ## Issue release-gate slice runners
 

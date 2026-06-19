@@ -1,28 +1,29 @@
-// StrategyEditorProbe.cs — issue #16 "Strategy Editor" (THROWAWAY AFK regression gate)
+// StrategyEditorNotebookE2ERunner.cs — Strategy Editor / marimo notebook サーフェス（cell-as-floating-window）の
+// E2E 回帰ゲート（台本: 同ディレクトリの StrategyEditorNotebookE2ERunner.md）。第二波8本目。throwaway AFK gate
+// `StrategyEditorProbe`（Assets/Editor）から git mv＋改名（ADR-0015 の回帰ゲート命名規約。先例 ScenarioStartup=
+// findings 0054 / FooterMode=0055 / InfiniteCanvas=0056 / FloatingWindow=0057 / UniverseSidebar=0058 /
+// DepthLadder=0059 / Hakoniwa=0060）。12 section を assert 1 行も削らず verbatim 移送し、各 section に台本の
+// Action ID を `Covers:` で付与（findings 0061）。Python-FREE（cell 合成/分解は FakeMarimoSynthesizer・marimo
+// round-trip 契約を共有）。
 //
-// The headless, Python-FREE regression gate for the Strategy Editor seam. Run:
+//   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
+//           -executeMethod StrategyEditorNotebookE2ERunner.Run -logFile <log>
+//   # expect: [E2E STRATEGY NOTEBOOK PASS] ... / exit=0
+//   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。ログは UTF-8 = ripgrep で grep。
 //
-//   <Unity> -batchmode -projectPath /Users/sasac/backcast \
-//           -executeMethod StrategyEditorProbe.Run -logFile <log>
-//   # expect: [STRATEGY EDITOR PASS] ... / exit=0
+// section ↔ Action ID は各 Section の `Covers:` コメント参照（台本の操作一覧表と双方向に追える）。gate 形は probe の
+// Execute()-形（各 section が null=PASS、最初の失敗文字列を返す）をそのまま温存。`EditorApplication.Exit` は
+// self-failing gate として無条件化（PASS=Exit(0) / FAIL・例外=Exit(1)）。
 //
-// AUTHORITATIVE for the lexical highlighter, the undo/redo history, the file model, the provider
-// contract + registry, the layout round-trip, the restore semantics, and the (non-scroll) mesh
-// colouring (findings 0010 §9). The editing FEEL — InputField sync, undo/redo keys, IME, and
-// visible-range SCROLL colouring — is the owner-launched HITL harness (Tools > Backcast >
-// Strategy Editor HITL). Like #12–#15 this spawns no auto-bootstrap.
+// SUPPORTING PIN（STRATEGY Action ID に直接対応しない pure core を温存——別サーフェスが正本）:
+//   S3 legacy StrategyDocument 原子 .py 書込（AtomicPyFile が §3 を参照）/ S5 StrategyProviderRegistry /
+//   S6 layout round-trip（spatial 永続化の正本は Layout/FloatingWindow 台本）/ S7 restore full-replacement /
+//   S9 #78 RegistryStrategyFileProvider run-wiring（正本は RunButtonE2ERunner）。verbatim 移送・改名のみ。
 //
-// EIGHT SECTIONS (findings 0010 §9); #12–#15 regression is run by executing those probes
-// individually (recorded in findings §11), not from inside this one.
-//   1. PythonHighlighter lexical tokens + ascending/non-overlap/in-range invariant
-//   2. EditHistory boundary coalescing + cap-200
-//   3. StrategyDocument file model (Open/Save/atomic-replace-preserves)
-//   4. IStrategyFileProvider 5-condition contract
-//   5. StrategyProviderRegistry lookup + deterministic ordinal enumeration
-//   6. layout round-trip (REAL JsonUtility) + sanitize + back-compat + Clone/StructurallyEqual
-//   7. restore full-replacement on REAL windows/controller (Open-failure keeps the window)
-//   8. non-scroll mesh colouring (real Text component + synthetic base mesh; real TextGenerator
-//      glyph count cross-check when available, else HITL fallback per findings §9)
+// 据え置き（台本「カバー状態」）: STRATEGY-11（単一セル placeholder hint）は実 StrategyEditorView+InputField+
+// placeholder Graphic harness を要するため本昇格では追加せず 要新規自動化 のまま（findings 0061）。
+// STRATEGY-05(scroll 着色)/STRATEGY-18(IME・実キーボード) は HITL専用、STRATEGY-14(click-to-front) は
+// FloatingWindow 共有ロジックで 対象外。
 
 using System;
 using System.Collections.Generic;
@@ -31,7 +32,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
 
-public static class StrategyEditorProbe
+public static class StrategyEditorNotebookE2ERunner
 {
     const float EPS = 1e-4f;
 
@@ -69,7 +70,7 @@ public static class StrategyEditorProbe
 
         if (fail == null)
         {
-            Debug.Log("[STRATEGY EDITOR PASS] lexical highlighter (keyword/string/comment/number/decorator/definition; " +
+            Debug.Log("[E2E STRATEGY NOTEBOOK PASS] lexical highlighter (keyword/string/comment/number/decorator/definition; " +
                       "triple-unterminated, f-string whole, comment-vs-string, print-not-builtin, surrogate offset, " +
                       "ascending/non-overlap invariant) + edit history (boundary coalescing: insert run / directional " +
                       "backspace+delete / newline standalone / multi-char standalone / redo-clear / save-boundary-undoable / " +
@@ -91,13 +92,14 @@ public static class StrategyEditorProbe
         }
         else
         {
-            Debug.LogError("[STRATEGY EDITOR FAIL] " + fail);
+            Debug.LogError("[E2E STRATEGY NOTEBOOK FAIL] " + fail);
             EditorApplication.Exit(1);
         }
     }
 
     // ======================================================================
     // 1. PythonHighlighter
+    // Covers: STRATEGY-04 (lexical token 計算)
     // ======================================================================
     static string Section1_Highlighter()
     {
@@ -175,6 +177,7 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 2. EditHistory
+    // Covers: STRATEGY-01, STRATEGY-02, STRATEGY-03 (edit/undo/redo history)
     // ======================================================================
     static string Section2_History()
     {
@@ -253,6 +256,8 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 3. StrategyDocument file model
+    // SUPPORTING PIN: legacy StrategyDocument 原子 .py 書込（AtomicPyFile が §3 を参照）。
+    //   STRATEGY-17 の atomic save / STRATEGY-12 の provider 契約が乗る pure core。
     // ======================================================================
     static string Section3_FileModel()
     {
@@ -304,13 +309,14 @@ public static class StrategyEditorProbe
             File.SetAttributes(TempDir, File.GetAttributes(TempDir) & ~FileAttributes.ReadOnly);
         }
         if (!forced)
-            Debug.LogWarning("[STRATEGY EDITOR] S3: could not force a save failure on this platform " +
+            Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S3: could not force a save failure on this platform " +
                              "(read-only dir still writable, e.g. running as root) -> replace-preservation HITL-only.");
         return null;
     }
 
     // ======================================================================
     // 4. IStrategyFileProvider 5-condition contract
+    // Covers: STRATEGY-12 (供給可能性の5条件 — dirty→false / save→path / unbound→false)
     // ======================================================================
     static string Section4_Provider()
     {
@@ -347,6 +353,8 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 5. StrategyProviderRegistry
+    // SUPPORTING PIN: provider registry lookup/ordinal 列挙。STRATEGY Action ID に直接対応しない
+    //   （#78 run-wiring の土台 — 正本は RunButtonE2ERunner）。
     // ======================================================================
     static string Section5_Registry()
     {
@@ -378,6 +386,7 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 9. RegistryStrategyFileProvider — the #78 run-layer wiring (findings 0044 §2-1):
+    //    SUPPORTING PIN: #78 WYSIWYR run-wiring。STRATEGY 表面ではなく Run ゲートの土台（正本 RunButtonE2ERunner）。
     //    Run/Step/LiveAuto hold THIS adapter; it re-resolves the editor's live provider through the
     //    registry on every call, so "未ロード/未保存/欠落 → false → Run封鎖" comes for free and a saved
     //    editor .py flows straight through (WYSIWYR). No env-default path anywhere.
@@ -423,6 +432,8 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 6. layout round-trip (REAL JsonUtility) + sanitize + back-compat
+    // SUPPORTING PIN: layout sidecar round-trip。空間永続化の正本は Layout/FloatingWindow 台本
+    //   （STRATEGY-13 の窓位置は CapturePositions=S12、sidecar 書込は MenuBar MENU-05）。
     // ======================================================================
     static string Section6_LayoutRoundTrip()
     {
@@ -493,6 +504,8 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 7. restore full-replacement on REAL windows / controller
+    // SUPPORTING PIN: restore full-replacement（state-none→unbound / Open-failure は窓保持）。
+    //   layout 復元の土台 — 正本は Layout 台本。
     // ======================================================================
     static string Section7_Restore(List<GameObject> spawned)
     {
@@ -549,6 +562,7 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 8. non-scroll mesh colouring (real Text component + synthetic base mesh)
+    // Covers: STRATEGY-05 (実 mesh 着色の non-scroll 部 — scroll 着色は HITL専用)
     // ======================================================================
     static string Section8_MeshColoring(List<GameObject> spawned)
     {
@@ -602,20 +616,23 @@ public static class StrategyEditorProbe
             text.cachedTextGenerator.Populate(src, settings);
             int visible = text.cachedTextGenerator.vertexCount / 4;
             if (visible > 0 && visible != rank)
-                Debug.LogWarning($"[STRATEGY EDITOR] S8: real TextGenerator visible glyphs {visible} != synthetic {rank} " +
+                Debug.LogWarning($"[E2E STRATEGY NOTEBOOK] S8: real TextGenerator visible glyphs {visible} != synthetic {rank} " +
                                  "-> whitespace-skipping premise needs the HITL check.");
             else if (visible == 0)
-                Debug.LogWarning("[STRATEGY EDITOR] S8: TextGenerator produced no glyphs in batchmode -> glyph-count cross-check HITL-only.");
+                Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S8: TextGenerator produced no glyphs in batchmode -> glyph-count cross-check HITL-only.");
         }
         catch (Exception e)
         {
-            Debug.LogWarning("[STRATEGY EDITOR] S8: TextGenerator unavailable in batchmode (" + e.Message + ") -> glyph-count cross-check HITL-only.");
+            Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S8: TextGenerator unavailable in batchmode (" + e.Message + ") -> glyph-count cross-check HITL-only.");
         }
         return null;
     }
 
     // ======================================================================
     // 10. #81 MarimoNotebookDocument aggregate (ADR-0013 / findings 0050) — driven by the
+    //     Covers: STRATEGY-01, STRATEGY-10, STRATEGY-12, STRATEGY-15, STRATEGY-16, STRATEGY-17
+    //     (notebook 集約: add/edit dirty・≥1 guard・supplyable・ResetUnboundEmpty(File→New aggregate 側,
+    //      MenuBar MENU-02 が正本)・Open 分解・Save 合成 round-trip)
     //     Python-FREE FakeMarimoSynthesizer (the SAME round-trip contract the layer-2 pythonnet +
     //     layer-3 marimo golden assert, so a drifting fake is caught mechanically).
     // ======================================================================
@@ -742,6 +759,7 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 11. #81 SpawnPlacement.Next — pure cascade (marimo calcSpawnPosition parity).
+    // Covers: STRATEGY-06, STRATEGY-07 (セル追加/dormant 再利用の cascade spawn 位置)
     // ======================================================================
     static string Section11_SpawnPlacement()
     {
@@ -772,6 +790,9 @@ public static class StrategyEditorProbe
 
     // ======================================================================
     // 12. #81 NotebookCellCoordinator — region_id<->Cell binding + window lifecycle on REAL
+    //     Covers: STRATEGY-06, STRATEGY-07, STRATEGY-08, STRATEGY-09, STRATEGY-10, STRATEGY-13, STRATEGY-16
+    //     (add region_002 / dormant reuse / delete despawn・hide-dormant / ≥1 guard /
+    //      CapturePositions cell-order / Open orphan 一掃)
     //     (bare-RT) windows: cell0->region_001, AddCell->region_002 spawn, delete routing
     //     (despawn region_002 / hide-dormant region_001), >=1 guard, dormant reuse, positions.
     // ======================================================================

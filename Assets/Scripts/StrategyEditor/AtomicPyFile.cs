@@ -7,7 +7,7 @@
 //   * a BOOL result — a failed replace leaves the destination's prior content intact (findings 0010
 //     §3: replace-failure preserves it), so the caller can retain dirty/path on failure.
 // Shared by MarimoNotebookDocument (the #81 notebook aggregate) and the retiring StrategyDocument so
-// the .py-write semantics live in one place (a fix is one edit, not two). StrategyEditorProbe §3 pins
+// the .py-write semantics live in one place (a fix is one edit, not two). StrategyEditorNotebookE2ERunner §3 pins
 // the replace-failure-preserves contract.
 
 using System;

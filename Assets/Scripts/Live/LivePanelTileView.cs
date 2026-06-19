@@ -39,7 +39,7 @@ public sealed class LivePanelTileView
         _content = go.GetComponent<Text>();
         _content.font = font;
         _content.fontSize = 12;
-        _content.color = new Color(0.90f, 0.92f, 0.94f, 1f);
+        _content.color = ThemeService.Current.colors.hakoniwa_text;   // findings 0054: Hakoniwa-isolated panel text (read at Build; tile chrome bg is the caller's)
         _content.alignment = TextAnchor.UpperLeft;
         _content.horizontalOverflow = HorizontalWrapMode.Wrap;
         _content.verticalOverflow = VerticalWrapMode.Truncate;

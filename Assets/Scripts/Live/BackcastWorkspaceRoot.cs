@@ -320,6 +320,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
         ThemeService.Changed += ApplyViewportTheme;
         ApplyViewportTheme();
+        // findings 0054: the Hakoniwa tile chrome (root box / tile cards / headers / labels) reads
+        // dedicated hakoniwa_* roles and follows theme switches too (it used to be painted once from
+        // hard literals). Re-applied to the retained chrome graphics on every Changed.
+        ThemeService.Changed += ApplyHakoniwaChromeTheme;
 
         _catalog = FloatingWindowCatalog.Default();
         _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildEditorWindowFrame);
@@ -330,7 +334,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // space field (else tile bg ≈ field and the grid is invisible), and HakoniwaTileHeaderInput
         // makes header-drag SWAP while body-drag falls through to pan. Mirrors HakoniwaHitlHarness's
         // durable construction (HakoniwaController only lays cells; the caller owns tile chrome).
-        EnsureRootImage(_hakoniwaRoot, HAKO_ROOT_COLOR);
+        EnsureRootImage(_hakoniwaRoot);
 
         RectTransform startupBody = BuildTileChrome(_startupTile, "startup", out HakoniwaTileHeaderInput startupHeader);
         _tile = new ScenarioStartupTile(_scenario, _font);   // #76 S6b-β-clean U5: scenario-editing-only (Run moved to the editor title bar)
@@ -711,6 +715,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         _hako.RemoveTile("chart:" + instrumentId);
         if (_chartTiles.TryGetValue(instrumentId, out var rt) && rt != null) DestroyTileGo(rt.gameObject);
+        _hakoChrome.RemoveAll(c => c.card == null);   // findings 0054: prune this tile's chrome eagerly (destroyed → Unity-null), so the retention list can't leak across spawn/despawn churn when the theme never switches
         _chartTiles.Remove(instrumentId);
         _chartViews.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
@@ -804,18 +809,44 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // ---- Hakoniwa tile chrome (panel bg + header swap handle), so tiles read against the field ----
-    static readonly Color HAKO_ROOT_COLOR = new Color(0.12f, 0.12f, 0.15f, 1f);
-    static readonly Color HAKO_TILE_COLOR = new Color(0.16f, 0.18f, 0.22f, 1f);
-    static readonly Color HAKO_HEADER_COLOR = new Color(0.27f, 0.30f, 0.38f, 1f);
-    static readonly Color HAKO_LABEL_COLOR = new Color(0.92f, 0.92f, 0.94f, 1f);
+    // findings 0054: chrome reads dedicated hakoniwa_* roles (was hard literals), so Hakoniwa can be
+    // brightened in isolation from the editor/footer/sidebar. Retained refs let ApplyHakoniwaChromeTheme
+    // re-paint on a theme switch (the literals were painted once and never followed Changed).
     const float HAKO_HEADER_H = 26f;
+    Image _hakoRootImg;
+    struct TileChrome { public Image card; public Image header; public Text label; }
+    readonly List<TileChrome> _hakoChrome = new List<TileChrome>();
 
-    static void EnsureRootImage(RectTransform root, Color color)
+    // Single source of truth for chrome graphic → theme role, shared by build-time painting, the
+    // Changed re-apply, and ThemeProbe's wiring-kill so the three can't drift (findings 0054).
+    public static void PaintHakoniwaRoot(Theme t, Image root)
+    {
+        if (root != null) root.color = t.colors.hakoniwa_root_background;
+    }
+    public static void PaintTileChrome(Theme t, Image card, Image header, Text label)
+    {
+        if (card != null) card.color = t.colors.hakoniwa_tile_background;
+        if (header != null) header.color = t.colors.hakoniwa_tile_header;
+        if (label != null) label.color = t.colors.hakoniwa_tile_header_text;
+    }
+
+    void EnsureRootImage(RectTransform root)
     {
         var img = root.GetComponent<Image>();
         if (img == null) img = root.gameObject.AddComponent<Image>();
-        img.color = color;
+        _hakoRootImg = img;
+        PaintHakoniwaRoot(ThemeService.Current, img);
         img.raycastTarget = false;   // gaps between tiles fall through to canvas pan
+    }
+
+    // Re-paint the retained Hakoniwa chrome from the active theme. Subscribed to ThemeService.Changed
+    // in BuildWorkspace; null-safe so a probe that never authored the chrome is a no-op (findings 0054).
+    void ApplyHakoniwaChromeTheme()
+    {
+        var t = ThemeService.Current;
+        PaintHakoniwaRoot(t, _hakoRootImg);
+        _hakoChrome.RemoveAll(c => c.card == null);   // drop chrome whose tile was despawned (findings 0054)
+        foreach (var c in _hakoChrome) PaintTileChrome(t, c.card, c.header, c.label);
     }
 
     // tile = body Image (NOT a raycast target, so body-drag pans) + a header bar (raycast target +
@@ -824,7 +855,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         var tileImg = tile.GetComponent<Image>();
         if (tileImg == null) tileImg = tile.gameObject.AddComponent<Image>();
-        tileImg.color = HAKO_TILE_COLOR;
         tileImg.raycastTarget = false;
 
         var headerGo = new GameObject("Header", typeof(RectTransform), typeof(Image), typeof(HakoniwaTileHeaderInput));
@@ -832,7 +862,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         hRt.SetParent(tile, false);
         hRt.anchorMin = new Vector2(0f, 1f); hRt.anchorMax = new Vector2(1f, 1f); hRt.pivot = new Vector2(0.5f, 1f);
         hRt.offsetMin = new Vector2(2f, -HAKO_HEADER_H); hRt.offsetMax = new Vector2(-2f, -2f);
-        headerGo.GetComponent<Image>().color = HAKO_HEADER_COLOR;   // opaque -> raycast target for the drag
+        var headerImg = headerGo.GetComponent<Image>();   // opaque -> raycast target for the drag
         header = headerGo.GetComponent<HakoniwaTileHeaderInput>();
 
         var labelGo = new GameObject("Label", typeof(RectTransform), typeof(Text));
@@ -841,8 +871,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
         lRt.offsetMin = new Vector2(8f, 0f); lRt.offsetMax = new Vector2(-8f, 0f);
         var t = labelGo.GetComponent<Text>();
-        t.font = _font; t.fontSize = 12; t.color = HAKO_LABEL_COLOR; t.alignment = TextAnchor.MiddleLeft;
+        t.font = _font; t.fontSize = 12; t.alignment = TextAnchor.MiddleLeft;
         t.text = id; t.raycastTarget = false;
+
+        // retain + paint from the active theme (findings 0054).
+        _hakoChrome.Add(new TileChrome { card = tileImg, header = headerImg, label = t });
+        PaintTileChrome(ThemeService.Current, tileImg, headerImg, t);
 
         var bodyGo = new GameObject("Body", typeof(RectTransform));
         var body = (RectTransform)bodyGo.transform;
@@ -1846,6 +1880,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
+        ThemeService.Changed -= ApplyHakoniwaChromeTheme;   // Hakoniwa chrome theme unsubscribe (findings 0054)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

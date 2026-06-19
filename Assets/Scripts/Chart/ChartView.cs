@@ -144,7 +144,7 @@ public class ChartView : MonoBehaviour
 
     // Render the cumulative OHLC series. Same algorithm the 3 harnesses shared: autoscale to the
     // visible min/max, x = open_time_ms normalized across the range, wick = high/low, body =
-    // open/close, color = close>=open ? status.long : status.short. Rebuild only on a new bar.
+    // open/close, color = close>=open ? hakoniwa_up : hakoniwa_down (findings 0054 P1). Rebuild only on a new bar.
     public void Render(ReplayBarFrame frame)
     {
         var pts = frame.Ohlc;
@@ -175,8 +175,8 @@ public class ChartView : MonoBehaviour
         float h = _plot.rect.height;
         float bodyW = Mathf.Max(1f, (w / n) * 0.6f);
 
-        var up = ThemeService.Current.status.@long;
-        var down = ThemeService.Current.status.@short;
+        var up = ThemeService.Current.colors.hakoniwa_up;     // findings 0054 P1: cream-legible (was status.long)
+        var down = ThemeService.Current.colors.hakoniwa_down; // (was status.short)
 
         for (int i = 0; i < n; i++)
         {
@@ -225,13 +225,13 @@ public class ChartView : MonoBehaviour
     public void ApplyTheme()
     {
         var th = ThemeService.Current;
-        if (_bg != null) _bg.color = th.colors.background;
-        if (_yAxis != null) _yAxis.color = th.colors.text_muted;
-        if (_xAxis != null) _xAxis.color = th.colors.text_muted;
+        if (_bg != null) _bg.color = th.colors.hakoniwa_chart_background;   // findings 0054: Hakoniwa-isolated bg
+        if (_yAxis != null) _yAxis.color = th.colors.hakoniwa_text_muted;
+        if (_xAxis != null) _xAxis.color = th.colors.hakoniwa_text_muted;
         for (int i = 0; i < _candles.Count; i++)
         {
             var part = _candles[i];
-            if (part.image != null) part.image.color = part.bullish ? th.status.@long : th.status.@short;
+            if (part.image != null) part.image.color = part.bullish ? th.colors.hakoniwa_up : th.colors.hakoniwa_down;   // findings 0054 P1: cream-legible
         }
         UpdateTitle();
     }
@@ -242,26 +242,26 @@ public class ChartView : MonoBehaviour
     {
         if (!_showTitleBar) return;
         var th = ThemeService.Current;
-        if (_titleLabel != null) _titleLabel.color = th.colors.text;
+        if (_titleLabel != null) _titleLabel.color = th.colors.hakoniwa_text;
 
         if (!_hasFrame)
         {
-            if (_priceText != null) { _priceText.text = "—"; _priceText.color = th.colors.text; }
-            if (_changeText != null) { _changeText.text = "—"; _changeText.color = th.colors.text_muted; }
+            if (_priceText != null) { _priceText.text = "—"; _priceText.color = th.colors.hakoniwa_text; }
+            if (_changeText != null) { _changeText.text = "—"; _changeText.color = th.colors.hakoniwa_text_muted; }
             return;
         }
 
         if (_priceText != null)
         {
             _priceText.text = _lastClose.ToString("0.00");
-            _priceText.color = th.colors.text;
+            _priceText.color = th.colors.hakoniwa_text;
         }
         if (_changeText != null)
         {
             if (_firstOpen == 0.0)
             {
                 _changeText.text = "—";
-                _changeText.color = th.colors.text_muted;
+                _changeText.color = th.colors.hakoniwa_text_muted;
             }
             else
             {
@@ -270,7 +270,7 @@ public class ChartView : MonoBehaviour
                 double pct = System.Math.Round((_lastClose - _firstOpen) / _firstOpen * 100.0, 2);
                 bool gain = pct >= 0.0;
                 _changeText.text = (gain ? "+" : "-") + System.Math.Abs(pct).ToString("0.00") + "%";
-                _changeText.color = gain ? th.status.@long : th.status.@short;
+                _changeText.color = gain ? th.colors.hakoniwa_up : th.colors.hakoniwa_down;   // findings 0054 P1: cream-legible
             }
         }
     }

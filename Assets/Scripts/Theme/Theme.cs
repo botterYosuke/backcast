@@ -72,6 +72,11 @@ public sealed class Theme
         var colors = new ThemeColors
         {
             background = Distinct(0), workspace_background = Distinct(54), surface_background = Distinct(1), elevated_surface_background = Distinct(2),
+            // hakoniwa_* verification values (findings 0054) — free indices 55–59 + 84–89 (avoid status 60–83 / syntax 90+).
+            hakoniwa_root_background = Distinct(55), hakoniwa_tile_background = Distinct(56), hakoniwa_tile_header = Distinct(57),
+            hakoniwa_chart_background = Distinct(58), hakoniwa_panel_surface = Distinct(59),
+            hakoniwa_tile_header_text = Distinct(84), hakoniwa_text = Distinct(85), hakoniwa_text_muted = Distinct(86),
+            hakoniwa_up = Distinct(87), hakoniwa_down = Distinct(88), hakoniwa_last = Distinct(89),
             panel_background = Distinct(3), panel_focused_border = Distinct(4), status_bar_background = Distinct(5),
             title_bar_background = Distinct(6), toolbar_background = Distinct(7), tab_bar_background = Distinct(8),
             tab_active_background = Distinct(9), tab_inactive_background = Distinct(10), border = Distinct(11),

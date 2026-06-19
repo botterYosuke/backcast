@@ -23,6 +23,20 @@ public sealed class ThemeColors
     // the content surfaces keep `background` (dark). Kept distinct from `background` precisely so changing
     // the field hue does NOT lighten chart / ladder / editor backgrounds.
     public Color workspace_background;
+    // hakoniwa_* — the Hakoniwa-ISOLATED surface roles (findings 0054). The chart / ladder / panel
+    // tiles and the tile chrome (card / header / label) read THESE, not the shared `background` /
+    // `panel_background`, so brightening Hakoniwa does NOT lighten the strategy editor / footer /
+    // sidebar (which keep the dark shared roles). All owner literals (raw sRGB, scale-non-derived,
+    // same流儀 as workspace_background) so a future light scale can't silently recolor them; swap
+    // these literals + Play to try a new palette (no scene re-bake).
+    public Color hakoniwa_root_background, hakoniwa_tile_background, hakoniwa_tile_header;
+    public Color hakoniwa_chart_background, hakoniwa_panel_surface;
+    public Color hakoniwa_tile_header_text, hakoniwa_text, hakoniwa_text_muted;
+    // hakoniwa trading colors (findings 0054 P1): the `status.*` green/red/warning are dark-scale steps
+    // tuned for a DARK bg and wash out on the bright/cream Hakoniwa surfaces (WCAG ~1.3–2.5:1). These are
+    // darker, cream-legible crop-green / barn-red / dark-amber used by ChartView candles + change% and the
+    // ladder bid/ask/LAST — Hakoniwa-isolated so the rest of the app keeps semantic status.* unchanged.
+    public Color hakoniwa_up, hakoniwa_down, hakoniwa_last;
     public Color panel_focused_border, status_bar_background, title_bar_background;
     public Color toolbar_background, tab_bar_background, tab_active_background, tab_inactive_background;
     public Color border, border_variant, border_focused, border_selected, border_disabled, border_transparent;
@@ -44,6 +58,21 @@ public sealed class ThemeColors
         {
             background = n.Step1,
             workspace_background = new Color(0.4980f, 0.6431f, 0.7451f), // #7fa4be — owner-chosen field hue (raw sRGB, findings 0020)
+            // hakoniwa FARM palette (findings 0054) — inspired by "The Farmer Was Replaced": the box-garden
+            // reads like a farm plot. grass-green field behind tiles; soil-brown tile headers/frames; light
+            // tilled-earth + cream surfaces so charts/panels stay legible (the dark-scale status green/red read
+            // like crops on cream); dark-soil text. NOT near-white (washes out ladder bid/ask). Swap + Play to tune.
+            hakoniwa_root_background  = new Color(0.4157f, 0.6078f, 0.2549f), // #6a9b41 — grass-green field (ground tiles sit on)
+            hakoniwa_tile_background  = new Color(0.8902f, 0.8353f, 0.6902f), // #e3d5b0 — tilled-earth tile card (panel bg)
+            hakoniwa_tile_header      = new Color(0.5412f, 0.3843f, 0.2235f), // #8a6239 — soil-brown header bar / frame
+            hakoniwa_chart_background = new Color(0.9373f, 0.9059f, 0.8235f), // #efe7d2 — cream crop face (chart + ladder)
+            hakoniwa_panel_surface    = new Color(0.9216f, 0.8824f, 0.7843f), // #ebe1c8 — warm cream (startup tile)
+            hakoniwa_tile_header_text = new Color(0.9529f, 0.9255f, 0.8471f), // #f3ecd8 — cream label on soil-brown header
+            hakoniwa_text             = new Color(0.1843f, 0.1490f, 0.0863f), // #2f2616 — dark-soil text on cream
+            hakoniwa_text_muted       = new Color(0.4353f, 0.3686f, 0.2471f), // #6f5e3f — mid-brown axes / change% / ladder header
+            hakoniwa_up               = new Color(0.1804f, 0.4314f, 0.1922f), // #2e6e31 — crop-green: candle up / change% gain / ladder bid (cream-legible)
+            hakoniwa_down             = new Color(0.6275f, 0.1765f, 0.1216f), // #a02d1f — barn-red: candle down / change% loss / ladder ask
+            hakoniwa_last             = new Color(0.4784f, 0.3529f, 0.0706f), // #7a5a12 — dark-amber: ladder LAST marker
             surface_background = n.Step2,
             elevated_surface_background = n.Step3,
             panel_background = n.Step2,

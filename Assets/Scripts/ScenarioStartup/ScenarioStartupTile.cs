@@ -37,8 +37,8 @@ public sealed class ScenarioStartupTile
 
     // Retained themed graphics (issue #44) so ApplyTheme() can repaint on a theme switch.
     Image _tileBg;
-    readonly List<Image> _fieldBgs = new List<Image>();   // role: element_background
-    readonly List<Text> _bodyTexts = new List<Text>();    // role: colors.text
+    readonly List<Image> _fieldBgs = new List<Image>();   // role: hakoniwa_tile_background (findings 0054 — Hakoniwa-isolated inset surface)
+    readonly List<Text> _bodyTexts = new List<Text>();    // role: hakoniwa_text
     readonly List<Text> _errorTexts = new List<Text>();   // role: status.error
 
     public ScenarioStartupTile(ScenarioStartupController ctrl, Font font)
@@ -53,7 +53,7 @@ public sealed class ScenarioStartupTile
         var bg = tile.gameObject.GetComponent<Image>();
         if (bg == null) bg = tile.gameObject.AddComponent<Image>();
         _tileBg = bg;
-        bg.color = ThemeService.Current.colors.panel_background;
+        bg.color = ThemeService.Current.colors.hakoniwa_panel_surface;   // findings 0054: Hakoniwa-isolated startup surface
 
         float y = -8f;
         const float rowH = 22f, errH = 14f, gap = 2f;
@@ -157,13 +157,13 @@ public sealed class ScenarioStartupTile
 
     // Repaint every retained graphic from the active theme (issue #44). Called by the owning
     // harness on ThemeService.Changed. Re-runs Refresh() so the granularity selection highlight
-    // (element_selected vs element_background) re-derives from controller state under the new theme.
+    // (element_selected vs hakoniwa_tile_background) re-derives from controller state under the new theme.
     public void ApplyTheme()
     {
         var t = ThemeService.Current;
-        if (_tileBg != null) _tileBg.color = t.colors.panel_background;
-        foreach (var img in _fieldBgs) if (img != null) img.color = t.colors.element_background;
-        foreach (var txt in _bodyTexts) if (txt != null) txt.color = t.colors.text;
+        if (_tileBg != null) _tileBg.color = t.colors.hakoniwa_panel_surface;
+        foreach (var img in _fieldBgs) if (img != null) img.color = t.colors.hakoniwa_tile_background;
+        foreach (var txt in _bodyTexts) if (txt != null) txt.color = t.colors.hakoniwa_text;
         foreach (var txt in _errorTexts) if (txt != null) txt.color = t.status.error;
         Refresh();
     }
@@ -182,7 +182,7 @@ public sealed class ScenarioStartupTile
         var img = b.GetComponent<Image>();
         if (img == null) return;
         var c = ThemeService.Current.colors;
-        img.color = on ? c.element_selected : c.element_background;
+        img.color = on ? c.element_selected : c.hakoniwa_tile_background;   // findings 0054: off-state matches inset surface
     }
 
     Text MakeLabel(RectTransform parent, string text, ref float y, float h, bool bold = false)
@@ -192,7 +192,7 @@ public sealed class ScenarioStartupTile
         rt.SetParent(parent, false);
         Anchor(rt, 0.04f, 0.96f, y, h);
         var t = go.GetComponent<Text>();
-        t.font = _font; t.color = ThemeService.Current.colors.text; t.text = text; t.fontSize = bold ? 14 : 11;
+        t.font = _font; t.color = ThemeService.Current.colors.hakoniwa_text; t.text = text; t.fontSize = bold ? 14 : 11;
         t.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
         t.alignment = TextAnchor.MiddleLeft;
         _bodyTexts.Add(t);
@@ -208,7 +208,7 @@ public sealed class ScenarioStartupTile
         rt.SetParent(parent, false);
         Anchor(rt, 0.04f, 0.96f, y, h);
         var fieldBg = go.GetComponent<Image>();
-        fieldBg.color = ThemeService.Current.colors.element_background;
+        fieldBg.color = ThemeService.Current.colors.hakoniwa_tile_background;
         _fieldBgs.Add(fieldBg);
 
         var textGo = new GameObject("text", typeof(RectTransform), typeof(Text));
@@ -216,7 +216,7 @@ public sealed class ScenarioStartupTile
         trt.SetParent(rt, false);
         Stretch(trt, 4f);
         var txt = textGo.GetComponent<Text>();
-        txt.font = _font; txt.color = ThemeService.Current.colors.text; txt.fontSize = 11; txt.alignment = TextAnchor.MiddleLeft;
+        txt.font = _font; txt.color = ThemeService.Current.colors.hakoniwa_text; txt.fontSize = 11; txt.alignment = TextAnchor.MiddleLeft;
         txt.supportRichText = false;
         _bodyTexts.Add(txt);
 
@@ -250,14 +250,14 @@ public sealed class ScenarioStartupTile
         float left = 0.04f + xMin * 0.92f;
         float right = 0.04f + (xMin + 0.5f) * 0.92f - 0.01f;
         Anchor(rt, left, right, y, h);
-        go.GetComponent<Image>().color = ThemeService.Current.colors.element_background;
+        go.GetComponent<Image>().color = ThemeService.Current.colors.hakoniwa_tile_background;
 
         var textGo = new GameObject("text", typeof(RectTransform), typeof(Text));
         var trt = textGo.GetComponent<RectTransform>();
         trt.SetParent(rt, false);
         Stretch(trt, 0f);
         var t = textGo.GetComponent<Text>();
-        t.font = _font; t.color = ThemeService.Current.colors.text; t.text = label; t.fontSize = 12;
+        t.font = _font; t.color = ThemeService.Current.colors.hakoniwa_text; t.text = label; t.fontSize = 12;
         t.alignment = TextAnchor.MiddleCenter;
         _bodyTexts.Add(t);
 

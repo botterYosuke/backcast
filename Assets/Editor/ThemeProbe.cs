@@ -5,7 +5,7 @@
 //   <Unity> -batchmode -nographics -projectPath <proj> -executeMethod ThemeProbe.Run -logFile <log>
 //   # expect: [THEME PASS] ... / exit=0
 //
-// Four sections (findings 0020 Q9):
+// Five sections (findings 0020 Q9; §5 added by findings 0054):
 //   1. DERIVATION PARITY — representative semantic roles equal the right Radix scale step (the
 //      from_scales single-source-of-truth, TTWR theme_scale_accent_step_9 parity).
 //   2. NonDefault != Dark — the verification palette actually differs from shipped dark, so the
@@ -16,10 +16,14 @@
 //      that kept an inline color would NOT move → FAIL. Covers ScenarioStartupTile (panel),
 //      PythonSyntaxMeshEffect (syntax), and the ThemeHitlHarness montage (chart/ladder/accents) —
 //      the same production-path wiring the HITL gate uses.
+//   5. CHROME SUBSCRIPTION KILL — build the REAL BackcastWorkspaceRoot, sample tile chrome under dark,
+//      then SetTheme(NonDefault) and ONLY that; assert chrome followed via its Changed subscription.
 
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -38,6 +42,7 @@ public static class ThemeProbe
             Section2_NonDefaultDiffers();
             Section3_ServiceSemantics();
             Section4_WiringKill();
+            Section5_ChromeSubscriptionKill();
         }
         catch (Exception e)
         {
@@ -77,6 +82,25 @@ public static class ThemeProbe
         // it is DISTINCT from background, so the viewport field can't silently collapse back onto dark.
         Eq(t.colors.workspace_background, new Color(0.4980f, 0.6431f, 0.7451f), "colors.workspace_background == #7fa4be (owner literal)");
         Ne(t.colors.workspace_background, t.colors.background, "workspace_background != background (field stays distinct from content bg)");
+        // hakoniwa_* are owner literals (findings 0054), NOT scale steps — assert the bright sample values
+        // AND that the Hakoniwa bg roles differ from the shared dark roles they replaced (else the editor /
+        // footer / sidebar would leak back into Hakoniwa and the isolation is vacuous).
+        Eq(t.colors.hakoniwa_root_background,  new Color(0.4157f, 0.6078f, 0.2549f), "hakoniwa_root_background == #6a9b41 (grass field)");
+        Eq(t.colors.hakoniwa_tile_background,  new Color(0.8902f, 0.8353f, 0.6902f), "hakoniwa_tile_background == #e3d5b0 (tilled earth)");
+        Eq(t.colors.hakoniwa_tile_header,      new Color(0.5412f, 0.3843f, 0.2235f), "hakoniwa_tile_header == #8a6239 (soil brown)");
+        Eq(t.colors.hakoniwa_chart_background, new Color(0.9373f, 0.9059f, 0.8235f), "hakoniwa_chart_background == #efe7d2 (cream)");
+        Eq(t.colors.hakoniwa_panel_surface,    new Color(0.9216f, 0.8824f, 0.7843f), "hakoniwa_panel_surface == #ebe1c8 (warm cream)");
+        Eq(t.colors.hakoniwa_tile_header_text, new Color(0.9529f, 0.9255f, 0.8471f), "hakoniwa_tile_header_text == #f3ecd8 (cream label)");
+        Eq(t.colors.hakoniwa_text,             new Color(0.1843f, 0.1490f, 0.0863f), "hakoniwa_text == #2f2616 (dark soil)");
+        Eq(t.colors.hakoniwa_text_muted,       new Color(0.4353f, 0.3686f, 0.2471f), "hakoniwa_text_muted == #6f5e3f (mid brown)");
+        // hakoniwa trading colors (findings 0054 P1) — cream-legible, isolated from the dark-scale status.*.
+        Eq(t.colors.hakoniwa_up,   new Color(0.1804f, 0.4314f, 0.1922f), "hakoniwa_up == #2e6e31 (crop green)");
+        Eq(t.colors.hakoniwa_down, new Color(0.6275f, 0.1765f, 0.1216f), "hakoniwa_down == #a02d1f (barn red)");
+        Eq(t.colors.hakoniwa_last, new Color(0.4784f, 0.3529f, 0.0706f), "hakoniwa_last == #7a5a12 (dark amber)");
+        Ne(t.colors.hakoniwa_up, t.status.@long, "hakoniwa_up != status.long (cream-legible, not the dark-bg step)");
+        Ne(t.colors.hakoniwa_down, t.status.@short, "hakoniwa_down != status.short");
+        Ne(t.colors.hakoniwa_chart_background, t.colors.background, "hakoniwa_chart_background != background (chart/ladder isolated from editor)");
+        Ne(t.colors.hakoniwa_panel_surface, t.colors.panel_background, "hakoniwa_panel_surface != panel_background (startup isolated from footer/sidebar)");
         Eq(t.colors.surface_background, n.Step2, "colors.surface_background == neutral.2");
         Eq(t.colors.text, n.Step12, "colors.text == neutral.12");
         Eq(t.colors.text_muted, n.Step11, "colors.text_muted == neutral.11");
@@ -111,6 +135,15 @@ public static class ThemeProbe
         // that kill could pass vacuously (stale == target) if the two ever coincided for that role.
         Ne(nd.colors.background, dark.colors.background, "NonDefault.background != dark");
         Ne(nd.colors.workspace_background, dark.colors.workspace_background, "NonDefault.workspace_background != dark");
+        // hakoniwa_* roles the Section4 switch-kill samples (chrome + chart/ladder + startup + text).
+        Ne(nd.colors.hakoniwa_root_background, dark.colors.hakoniwa_root_background, "NonDefault.hakoniwa_root_background != dark");
+        Ne(nd.colors.hakoniwa_tile_background, dark.colors.hakoniwa_tile_background, "NonDefault.hakoniwa_tile_background != dark");
+        Ne(nd.colors.hakoniwa_tile_header, dark.colors.hakoniwa_tile_header, "NonDefault.hakoniwa_tile_header != dark");
+        Ne(nd.colors.hakoniwa_chart_background, dark.colors.hakoniwa_chart_background, "NonDefault.hakoniwa_chart_background != dark");
+        Ne(nd.colors.hakoniwa_panel_surface, dark.colors.hakoniwa_panel_surface, "NonDefault.hakoniwa_panel_surface != dark");
+        Ne(nd.colors.hakoniwa_tile_header_text, dark.colors.hakoniwa_tile_header_text, "NonDefault.hakoniwa_tile_header_text != dark");
+        Ne(nd.colors.hakoniwa_text, dark.colors.hakoniwa_text, "NonDefault.hakoniwa_text != dark");
+        Ne(nd.colors.hakoniwa_text_muted, dark.colors.hakoniwa_text_muted, "NonDefault.hakoniwa_text_muted != dark");
         Ne(nd.colors.surface_background, dark.colors.surface_background, "NonDefault.surface_background != dark");
         Ne(nd.colors.panel_background, dark.colors.panel_background, "NonDefault.panel_background != dark");
         Ne(nd.colors.text, dark.colors.text, "NonDefault.text != dark");
@@ -119,6 +152,9 @@ public static class ThemeProbe
         Ne(nd.status.bid, dark.status.bid, "NonDefault.bid != dark");
         Ne(nd.status.ask, dark.status.ask, "NonDefault.ask != dark");
         Ne(nd.status.warning, dark.status.warning, "NonDefault.warning != dark");
+        Ne(nd.colors.hakoniwa_up, dark.colors.hakoniwa_up, "NonDefault.hakoniwa_up != dark");
+        Ne(nd.colors.hakoniwa_down, dark.colors.hakoniwa_down, "NonDefault.hakoniwa_down != dark");
+        Ne(nd.colors.hakoniwa_last, dark.colors.hakoniwa_last, "NonDefault.hakoniwa_last != dark");
         Ne(nd.syntax.keyword, dark.syntax.keyword, "NonDefault.keyword != dark");
         Ne(nd.players.Get(0), dark.players.Get(0), "NonDefault.players[0] != dark");
         Ne(nd.players.Get(2), dark.players.Get(2), "NonDefault.players[2] != dark");
@@ -152,10 +188,10 @@ public static class ThemeProbe
         var tile = new ScenarioStartupTile(new ScenarioStartupController(), font);
         tile.Build(tileGo.GetComponent<RectTransform>());
         var tileBg = tileGo.GetComponent<Image>();
-        Eq(tileBg.color, Theme.Dark().colors.panel_background, "tile bg == dark panel_background");
+        Eq(tileBg.color, Theme.Dark().colors.hakoniwa_panel_surface, "tile bg == dark hakoniwa_panel_surface (findings 0054)");
         ThemeService.SetTheme(Theme.NonDefault());
         tile.ApplyTheme();
-        Eq(tileBg.color, ThemeService.Current.colors.panel_background, "tile bg switched to NonDefault panel_background");
+        Eq(tileBg.color, ThemeService.Current.colors.hakoniwa_panel_surface, "tile bg switched to NonDefault hakoniwa_panel_surface");
 
         // -- 4b PythonSyntaxMeshEffect (syntax) --
         ThemeService.ResetForTests();
@@ -191,9 +227,9 @@ public static class ThemeProbe
         True(ladderBid != null, "DepthLadderView produced a best-bid row to sample");
         True(ladderAsk != null, "DepthLadderView produced a best-ask row to sample");
         True(ladderLast != null, "DepthLadderView produced a LAST row to sample");
-        Eq(harness.Samples["chart_bg"].color, d.colors.background, "ChartView (production) chart_bg == dark background");
-        if (candleUp != null) Eq(candleUp.color, d.status.@long, "ChartView (production) candle_up == dark long");
-        if (candleDown != null) Eq(candleDown.color, d.status.@short, "ChartView (production) candle_down == dark short");
+        Eq(harness.Samples["chart_bg"].color, d.colors.hakoniwa_chart_background, "ChartView (production) chart_bg == dark hakoniwa_chart_background (findings 0054)");
+        if (candleUp != null) Eq(candleUp.color, d.colors.hakoniwa_up, "ChartView (production) candle_up == hakoniwa_up (findings 0054 P1)");
+        if (candleDown != null) Eq(candleDown.color, d.colors.hakoniwa_down, "ChartView (production) candle_down == hakoniwa_down");
 
         // -- 4c-ii title bar (#53): the 2-bar mock is firstOpen=100 / lastClose=105 → +5.00% gain.
         // Value-asserts the NEW title port (price/change% formatting incl. sign) AND that the change%
@@ -204,15 +240,15 @@ public static class ThemeProbe
         {
             Eq(title.PriceText.text, "105.00", "ChartView title price == last close (105)");
             Eq(title.ChangeText.text, "+5.00%", "ChartView title change% == +5.00% (mock +5% gain)");
-            Eq(title.ChangeText.color, d.status.@long, "ChartView title change% colored long (gain) under dark");
+            Eq(title.ChangeText.color, d.colors.hakoniwa_up, "ChartView title change% colored hakoniwa_up (gain) under dark");
         }
-        if (ladderBid != null) Eq(ladderBid.color, d.status.bid, "DepthLadderView (production) ladder_bid == dark bid");
-        if (ladderAsk != null) Eq(ladderAsk.color, d.status.ask, "DepthLadderView (production) ladder_ask == dark ask");
-        if (ladderLast != null) Eq(ladderLast.color, d.status.warning, "DepthLadderView (production) ladder_last == dark warning");
+        if (ladderBid != null) Eq(ladderBid.color, d.colors.hakoniwa_up, "DepthLadderView (production) ladder_bid == hakoniwa_up (findings 0054 P1)");
+        if (ladderAsk != null) Eq(ladderAsk.color, d.colors.hakoniwa_down, "DepthLadderView (production) ladder_ask == hakoniwa_down");
+        if (ladderLast != null) Eq(ladderLast.color, d.colors.hakoniwa_last, "DepthLadderView (production) ladder_last == hakoniwa_last");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
-        // ladder_bg == colors.background (TTWR overlays_ladder.rs:206 pane bg parity, #54 findings 0024).
-        Eq(harness.Samples["ladder_bg"].color, d.colors.background, "DepthLadderView (production) ladder_bg == dark background");
+        // ladder_bg == hakoniwa_chart_background (findings 0054: chart + ladder share one Hakoniwa-isolated bg role).
+        Eq(harness.Samples["ladder_bg"].color, d.colors.hakoniwa_chart_background, "DepthLadderView (production) ladder_bg == dark hakoniwa_chart_background");
         Eq(harness.Samples["editor_bg"].color, d.colors.background, "montage editor_bg == dark background");
         Eq(harness.Samples["accents_bg"].color, d.colors.surface_background, "montage accents_bg == dark surface");
         Eq(harness.Samples["code_text"].color, d.colors.text, "montage code_text == dark text");
@@ -221,21 +257,68 @@ public static class ThemeProbe
         ThemeService.SetTheme(Theme.NonDefault());
         harness.ApplyTheme();
         var nd = ThemeService.Current;
-        Eq(harness.Samples["ladder_bg"].color, nd.colors.background, "DepthLadderView (production) ladder_bg switched");
+        Eq(harness.Samples["ladder_bg"].color, nd.colors.hakoniwa_chart_background, "DepthLadderView (production) ladder_bg switched");
         Eq(harness.Samples["editor_bg"].color, nd.colors.background, "montage editor_bg switched");
         Eq(harness.Samples["accents_bg"].color, nd.colors.surface_background, "montage accents_bg switched");
         Eq(harness.Samples["code_text"].color, nd.colors.text, "montage code_text switched");
-        Eq(harness.Samples["chart_bg"].color, nd.colors.background, "ChartView (production) chart_bg switched");
-        if (candleUp != null) Eq(candleUp.color, nd.status.@long, "ChartView (production) candle_up switched");
-        if (candleDown != null) Eq(candleDown.color, nd.status.@short, "ChartView (production) candle_down switched");
+        Eq(harness.Samples["chart_bg"].color, nd.colors.hakoniwa_chart_background, "ChartView (production) chart_bg switched");
+        if (candleUp != null) Eq(candleUp.color, nd.colors.hakoniwa_up, "ChartView (production) candle_up switched");
+        if (candleDown != null) Eq(candleDown.color, nd.colors.hakoniwa_down, "ChartView (production) candle_down switched");
         // title change% color must ALSO follow the switch (gain stays long, now NonDefault's long) (#53).
-        if (title != null) Eq(title.ChangeText.color, nd.status.@long, "ChartView title change% recolors on switch");
-        if (ladderBid != null) Eq(ladderBid.color, nd.status.bid, "DepthLadderView (production) ladder_bid switched");
-        if (ladderAsk != null) Eq(ladderAsk.color, nd.status.ask, "DepthLadderView (production) ladder_ask switched");
-        if (ladderLast != null) Eq(ladderLast.color, nd.status.warning, "DepthLadderView (production) ladder_last switched");
+        if (title != null) Eq(title.ChangeText.color, nd.colors.hakoniwa_up, "ChartView title change% recolors on switch");
+        if (ladderBid != null) Eq(ladderBid.color, nd.colors.hakoniwa_up, "DepthLadderView (production) ladder_bid switched");
+        if (ladderAsk != null) Eq(ladderAsk.color, nd.colors.hakoniwa_down, "DepthLadderView (production) ladder_ask switched");
+        if (ladderLast != null) Eq(ladderLast.color, nd.colors.hakoniwa_last, "DepthLadderView (production) ladder_last switched");
         Eq(harness.Samples["accent_editor"].color, nd.players.Get(0), "montage accent_editor switched");
         Eq(harness.Samples["accent_order"].color, nd.players.Get(2), "montage accent_order switched");
         Eq(harness.SyntaxEffect.keyword, nd.syntax.keyword, "montage syntax keyword switched");
+    }
+
+    // 5 — Hakoniwa tile chrome: REAL subscription kill (findings 0054, P2 review). The chrome used to be
+    // painted from hard literals that ignored theme. Build the ACTUAL BackcastWorkspaceRoot (the same
+    // headless compose BackcastWorkspaceProbe uses: scene open + reflect _font + ResolvePaths +
+    // BuildWorkspace — Python-free in batchmode), sample the root box + a real tile's card/header/label
+    // under dark, then call SetTheme(NonDefault) and ONLY that — do NOT repaint by hand. If the
+    // `ThemeService.Changed += ApplyHakoniwaChromeTheme` wiring in BuildWorkspace is removed, the chrome
+    // stays dark and this FAILS (the earlier hand-repaint version passed even with the subscription gone).
+    static void Section5_ChromeSubscriptionKill()
+    {
+        ThemeService.ResetForTests();   // pristine dark + drop subscribers BEFORE the root subscribes
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) { _fails.Add("chrome: BackcastWorkspaceRoot missing in scene"); return; }
+
+        var ty = typeof(BackcastWorkspaceRoot);
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);   // paints chrome under dark + subscribes ApplyHakoniwaChromeTheme
+
+        // Sample the REAL chrome graphics: root box Image + the orders tile's card / header / label.
+        var hakoRoot = ty.GetField("_hakoniwaRoot", BF).GetValue(root) as RectTransform;
+        var ordersTile = ty.GetField("_ordersTile", BF).GetValue(root) as RectTransform;
+        if (hakoRoot == null || ordersTile == null) { _fails.Add("chrome: _hakoniwaRoot/_ordersTile not found (renamed?)"); return; }
+        var rootImg = hakoRoot.GetComponent<Image>();
+        var cardImg = ordersTile.GetComponent<Image>();
+        var headerRt = ordersTile.Find("Header");
+        var headImg = headerRt != null ? headerRt.GetComponent<Image>() : null;
+        var labelTxt = headerRt != null ? headerRt.Find("Label")?.GetComponent<Text>() : null;
+        if (rootImg == null || cardImg == null || headImg == null || labelTxt == null)
+        { _fails.Add("chrome: tile chrome graphics not found (card/header/label structure changed?)"); return; }
+
+        var d = Theme.Dark();
+        Eq(rootImg.color, d.colors.hakoniwa_root_background, "chrome root == dark hakoniwa_root_background");
+        Eq(cardImg.color, d.colors.hakoniwa_tile_background, "chrome card == dark hakoniwa_tile_background");
+        Eq(headImg.color, d.colors.hakoniwa_tile_header, "chrome header == dark hakoniwa_tile_header");
+        Eq(labelTxt.color, d.colors.hakoniwa_tile_header_text, "chrome label == dark hakoniwa_tile_header_text");
+
+        // THE kill: switch theme and nothing else. The chrome must follow via its Changed subscription.
+        ThemeService.SetTheme(Theme.NonDefault());
+        var nd = ThemeService.Current;
+        Eq(rootImg.color, nd.colors.hakoniwa_root_background, "chrome root followed SetTheme (subscription live)");
+        Eq(cardImg.color, nd.colors.hakoniwa_tile_background, "chrome card followed SetTheme (subscription live)");
+        Eq(headImg.color, nd.colors.hakoniwa_tile_header, "chrome header followed SetTheme (subscription live)");
+        Eq(labelTxt.color, nd.colors.hakoniwa_tile_header_text, "chrome label followed SetTheme (subscription live)");
     }
 
     // ---- helpers ----

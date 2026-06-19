@@ -11,15 +11,17 @@
 // an IMMEDIATE-mode Bevy system (rows despawn+respawn each changed frame) — there is no "view
 // component" to port 1:1. This retained uGUI widget (rows rebuilt on Render) is a backcast-ORIGINAL
 // structure forced by the framework gap, exactly like findings 0023's ChartView. Parity is held at
-// the VISUAL/SEMANTIC level: pane bg = colors.background (overlays_ladder.rs:206, shared with the
-// chart pane), the board is drawn in faithful WIRE order (findings 0012 §2.2 — no re-sort), and the
+// the VISUAL/SEMANTIC level: pane bg = colors.hakoniwa_chart_background (findings 0054 — Hakoniwa-isolated,
+// shared with the chart pane; was colors.background), the board is drawn in faithful WIRE order
+// (findings 0012 §2.2 — no re-sort), and the
 // LAYOUT now matches TTWR — a fixed 21-row DOM ladder (10 ask + LAST + 10 bid) with "---" fill and
 // per-side alpha row backgrounds.
 //
-// COLOR ROLE DIVERGENCE (findings 0024): bid = status.bid (green.11) / ask = status.ask (red.11).
-// TTWR reused status.long/short (green.9/red.9) for the ladder; backcast's #44 theme added a
-// DEDICATED bid/ask role (Radix step 11) — a settled #44 divergence, not introduced here. The LAST
-// row mirrors TTWR (element_background bg, status.warning text).
+// COLOR ROLES (findings 0024 → 0054 P1): bid/ask were status.bid/ask (green.11/red.11, a #44 divergence
+// from TTWR's status.long/short). findings 0054 moved the Hakoniwa surfaces to a bright/cream palette,
+// on which those dark-scale steps wash out (WCAG ~1.5–1.7:1), so the ladder now reads the cream-legible
+// Hakoniwa trading roles: bid = hakoniwa_up (crop-green) / ask = hakoniwa_down (barn-red) / LAST text =
+// hakoniwa_last (dark-amber), LAST row bg = hakoniwa_tile_background (was element_background).
 //
 // LAYOUT (TTWR overlays_ladder.rs parity — supersedes #54's initial A案 extraction, findings 0024):
 //   * fixed 21 rows: ask[9..0] reversed (worst ask top → best ask just above LAST), LAST center,
@@ -212,27 +214,27 @@ public class DepthLadderView : MonoBehaviour
     public void ApplyTheme()
     {
         var th = ThemeService.Current;
-        if (_bg != null) _bg.color = th.colors.background;
-        if (_header != null) _header.color = th.colors.text_muted;
+        if (_bg != null) _bg.color = th.colors.hakoniwa_chart_background;   // findings 0054: Hakoniwa-isolated bg (shared with chart)
+        if (_header != null) _header.color = th.colors.hakoniwa_text_muted;
         for (int i = 0; i < _rows.Count; i++)
         {
             var r = _rows[i];
             switch (r.kind)
             {
                 case RowKind.Ask:
-                    if (r.text != null) r.text.color = th.status.ask;
-                    if (r.bg != null) r.bg.color = WithAlpha(th.status.ask, RowBgAlpha);
+                    if (r.text != null) r.text.color = th.colors.hakoniwa_down;   // findings 0054 P1: cream-legible barn-red (was status.ask)
+                    if (r.bg != null) r.bg.color = WithAlpha(th.colors.hakoniwa_down, RowBgAlpha);
                     break;
                 case RowKind.Bid:
-                    if (r.text != null) r.text.color = th.status.bid;
-                    if (r.bg != null) r.bg.color = WithAlpha(th.status.bid, RowBgAlpha);
+                    if (r.text != null) r.text.color = th.colors.hakoniwa_up;   // findings 0054 P1: cream-legible crop-green (was status.bid)
+                    if (r.bg != null) r.bg.color = WithAlpha(th.colors.hakoniwa_up, RowBgAlpha);
                     break;
                 case RowKind.Last:
-                    if (r.text != null) r.text.color = th.status.warning;
-                    if (r.bg != null) r.bg.color = th.colors.element_background;
+                    if (r.text != null) r.text.color = th.colors.hakoniwa_last;   // findings 0054 P1: cream-legible dark-amber (was status.warning)
+                    if (r.bg != null) r.bg.color = th.colors.hakoniwa_tile_background;   // findings 0054: subtle band, Hakoniwa-isolated
                     break;
                 default: // Placeholder
-                    if (r.text != null) r.text.color = th.colors.text_muted;
+                    if (r.text != null) r.text.color = th.colors.hakoniwa_text_muted;
                     if (r.bg != null) r.bg.color = Color.clear;
                     break;
             }

@@ -38,7 +38,7 @@
 
 ## 自動検証しない範囲
 
-- **GUI secret modal の画素**（マスク表示・入力 UI）。`SecretModalM2Probe` が unit でカバー。Runner は
+- **GUI secret modal の画素**（マスク表示・入力 UI）。`SecretModalE2ERunner`（旧 `SecretModalM2Probe`）が unit でカバー。Runner は
   modal を介さず urgent-secret lane を直接叩く。
 - **チャート/箱庭の描画**（`ReplayToHakoniwaE2ERunner` がカバー）。
 - **建玉の後始末**（flatten しない。demo の建玉積み上がりは許容＝owner 決定）。

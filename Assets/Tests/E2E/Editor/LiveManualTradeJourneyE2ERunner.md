@@ -11,6 +11,11 @@
 > 復号・取消受付・logout 収束）を厳密に切り分ける。venue メニュー単体の挙動は [MenuBarE2ERunner](./MenuBarE2ERunner.md)
 > MENU-11〜14 を参照。
 
+> **実装済み（第二波14本目）**: `LiveManualTradeJourneyE2ERunner.cs` が JOURNEY-LIVE-01..13,15 を自動ゲート（14 は HITL）。
+> 二基層〔SectionA=接続済み MOCK root で 04/05・SectionB-E=secret-mock lanes で 02/03/06-13/15〕・step10 は
+> `get_portfolio_json`（live は engine.last_portfolio gated で空）でなく `force_account_snapshot`→AccountEvent→
+> `FormatPositions` で観測。詳細は [findings 0067](../../../../docs/findings/0067-e2e-live-manual-trade-journey-runner.md)。
+
 ## 対象ストーリー（10 ステップ）
 
 1. アプリ起動（Unity）＋ `InitializePython(<venue>)` で live-configured server を build
@@ -50,21 +55,21 @@
 
 | Action ID | ステップ/行動 | 入口（file:line） | 観測点 | 自動判定 | カバー状態 | 関連Surface台本 |
 |---|---|---|---|---|---|---|
-| JOURNEY-LIVE-01 | 起動＋server build | `BackcastWorkspaceRoot.cs:239` `_host.InitializePython(_venue)` | live-configured server build・`ServerReady` | mock server を build し ServerReady を assert | 自動(Probe有・要昇格) | [MenuBar](./MenuBarE2ERunner.md) MENU-11 |
-| JOURNEY-LIVE-02 | Venue→Connect（接続 ACK） | `BackcastWorkspaceRoot.cs:473` `OnVenueConnect` / `_server.venue_login` | `venue_login` ACK success・`get_state_json.venue_state`==`CONNECTED`・badge CONNECTED | mock venue_login→state poll が CONNECTED を assert | 自動(Probe有・要昇格) | [MenuBar](./MenuBarE2ERunner.md) MENU-11 |
-| JOURNEY-LIVE-03 | footer mode→LiveManual | `BackcastWorkspaceRoot.cs:1512` `_host.SetExecutionMode(req.Target)` | 接続中のみ `LiveManual` 受理（未接続は `EXECUTION_MODE_PRECONDITION` 拒否） | 接続後 set_execution_mode("LiveManual") success を assert・未接続は拒否 | 自動(Probe有・要昇格) | [FooterMode](./FooterModeE2ERunner.md) |
-| JOURNEY-LIVE-04 | Order ticket 表示・操作可 | `BackcastWorkspaceRoot.cs:1139-1142` `_orderTicket.SetInteractable` | LiveManual で ticket 表示・`ServerReady ∧ Conn.IsConnected ∧ !TeardownComplete` で interactable | mode/接続を満たし ticket interactable を assert | 要新規自動化 | [OrderTicket](./OrderTicketE2ERunner.md) |
-| JOURNEY-LIVE-05 | 発注対象 instrument 解決 | `BackcastWorkspaceRoot.cs:1166` `ManualInstrument()` | sidebar focus or universe[0]、空なら refuse（任意銘柄へは送らない） | universe seed 後 ManualInstrument 非空を assert・空で refuse | 要新規自動化 | [UniverseSidebar](./UniverseSidebarE2ERunner.md), [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) steps 2-3 |
-| JOURNEY-LIVE-06 | 発注（Place） | `BackcastWorkspaceRoot.cs:1171` `_host.Lanes.SubmitPlaceOrder` | order-write lane が place_order を受理（ServerReady ∧ Connected ∧ Lanes!=null gate 通過） | mock で SubmitPlaceOrder→callback 到達を assert | 自動(Probe有・要昇格) | [OrderTicket](./OrderTicketE2ERunner.md) |
-| JOURNEY-LIVE-07 | 第二暗証要求ドレイン | `VenueLoginSecretProbe.cs:199`（`SecretRequired` drain） | write が place 内でブロック→`SecretRequired`(second_secret) が main にドレイン・logout 禁止 | mock(SecretMockAdapter) で SecretRequired を assert | 自動(Probe有・要昇格) | [SecretModal](./SecretModalE2ERunner.md) |
-| JOURNEY-LIVE-08 | secret 入力→submit | `SecretModalController.cs:49` `Open`/`Submit` / `_lanes.SubmitSecret` | urgent-secret lane で submit→buffer zeroize・wire に plaintext 漏れ無し | 打鍵→Submit→BufferIsZeroed＋no-leak を assert | 自動(Probe有・要昇格) | [SecretModal](./SecretModalE2ERunner.md) |
-| JOURNEY-LIVE-09 | 約定（fill） | `BackcastWorkspaceRoot.cs:1173`（`res.Success`/`res.Status`） | mock の同期 `OrderResult` が `FILLED`・`_manualOrderId` 確定 | place callback が FILLED を assert（mock fill） | 自動(Probe有・要昇格) | — |
-| JOURNEY-LIVE-10 | Positions タイル更新（建玉） | `BackcastWorkspaceRoot.cs:345` `_positionsView` / `FormatPositions` | fill 後 `_host.Panel` の portfolio→Positions タイルに建玉が出る（ticket ではない） | state poll 後 FormatPositions が建玉行を含むことを assert | 要新規自動化 | — |
-| JOURNEY-LIVE-11 | resting 注文の取消（受付） | `BackcastWorkspaceRoot.cs:1188` `_host.Lanes.SubmitCancelOrder` | cancel_order 受理→受付（mock は即 `CANCELED`、kabu は `PENDING_CANCEL`） | mock で SubmitCancelOrder→callback status を assert | 自動(Probe有・要昇格) | — |
-| JOURNEY-LIVE-12 | 取消確定（poll 後追い） | CONTEXT「取消受付 / 取消確定」 | ack-then-poll venue で `PENDING_CANCEL`→poll→`CANCELED`（mock は受付＝確定） | mock の即 CANCELED を assert（実 kabu の poll 確定は HITL） | 自動(Probe有・要昇格) | — |
-| JOURNEY-LIVE-13 | logout→DISCONNECTED 収束 | `BackcastWorkspaceRoot.cs:1721` `_host.VenueLogout` / `venue_logout` | logout 後 `venue_state`→`DISCONNECTED`・`venue_id` クリア・badge 収束 | venue_logout→state poll が DISCONNECTED を assert | 自動(Probe有・要昇格) | [MenuBar](./MenuBarE2ERunner.md) MENU-14 |
+| JOURNEY-LIVE-01 | 起動＋server build | `BackcastWorkspaceRoot.cs:239` `_host.InitializePython(_venue)` | live-configured server build・`ServerReady` | mock server を build し ServerReady を assert | 自動(E2E済) | [MenuBar](./MenuBarE2ERunner.md) MENU-11 |
+| JOURNEY-LIVE-02 | Venue→Connect（接続 ACK） | `BackcastWorkspaceRoot.cs:473` `OnVenueConnect` / `_server.venue_login` | `venue_login` ACK success・`get_state_json.venue_state`==`CONNECTED`・badge CONNECTED | mock venue_login→state poll が CONNECTED を assert | 自動(E2E済) | [MenuBar](./MenuBarE2ERunner.md) MENU-11 |
+| JOURNEY-LIVE-03 | footer mode→LiveManual | `BackcastWorkspaceRoot.cs:1512` `_host.SetExecutionMode(req.Target)` | 接続中のみ `LiveManual` 受理（未接続は `EXECUTION_MODE_PRECONDITION` 拒否） | 接続後 set_execution_mode("LiveManual") success を assert・未接続は拒否 | 自動(E2E済) | [FooterMode](./FooterModeE2ERunner.md) |
+| JOURNEY-LIVE-04 | Order ticket 表示・操作可 | `BackcastWorkspaceRoot.cs:1139-1142` `_orderTicket.SetInteractable` | LiveManual で ticket 表示・`ServerReady ∧ Conn.IsConnected ∧ !TeardownComplete` で interactable | mode/接続を満たし ticket interactable を assert | 自動(E2E済) | [OrderTicket](./OrderTicketE2ERunner.md) |
+| JOURNEY-LIVE-05 | 発注対象 instrument 解決 | `BackcastWorkspaceRoot.cs:1166` `ManualInstrument()` | sidebar focus or universe[0]、空なら refuse（任意銘柄へは送らない） | universe seed 後 ManualInstrument 非空を assert・空で refuse | 自動(E2E済) | [UniverseSidebar](./UniverseSidebarE2ERunner.md), [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) steps 2-3 |
+| JOURNEY-LIVE-06 | 発注（Place） | `BackcastWorkspaceRoot.cs:1171` `_host.Lanes.SubmitPlaceOrder` | order-write lane が place_order を受理（ServerReady ∧ Connected ∧ Lanes!=null gate 通過） | mock で SubmitPlaceOrder→callback 到達を assert | 自動(E2E済) | [OrderTicket](./OrderTicketE2ERunner.md) |
+| JOURNEY-LIVE-07 | 第二暗証要求ドレイン | `VenueLoginSecretProbe.cs:199`（`SecretRequired` drain） | write が place 内でブロック→`SecretRequired`(second_secret) が main にドレイン・logout 禁止 | mock(SecretMockAdapter) で SecretRequired を assert | 自動(E2E済) | [SecretModal](./SecretModalE2ERunner.md) |
+| JOURNEY-LIVE-08 | secret 入力→submit | `SecretModalController.cs:49` `Open`/`Submit` / `_lanes.SubmitSecret` | urgent-secret lane で submit→buffer zeroize・wire に plaintext 漏れ無し | 打鍵→Submit→BufferIsZeroed＋no-leak を assert | 自動(E2E済) | [SecretModal](./SecretModalE2ERunner.md) |
+| JOURNEY-LIVE-09 | 約定（fill） | `BackcastWorkspaceRoot.cs:1173`（`res.Success`/`res.Status`） | mock の同期 `OrderResult` が `FILLED`・`_manualOrderId` 確定 | place callback が FILLED を assert（mock fill） | 自動(E2E済) | — |
+| JOURNEY-LIVE-10 | Positions タイル更新（建玉） | `BackcastWorkspaceRoot.cs:345` `_positionsView` / `FormatPositions` | fill 後 `_host.Panel` の portfolio→Positions タイルに建玉が出る（ticket ではない） | state poll 後 FormatPositions が建玉行を含むことを assert | 自動(E2E済) | — |
+| JOURNEY-LIVE-11 | resting 注文の取消（受付） | `BackcastWorkspaceRoot.cs:1188` `_host.Lanes.SubmitCancelOrder` | cancel_order 受理→受付（mock は即 `CANCELED`、kabu は `PENDING_CANCEL`） | mock で SubmitCancelOrder→callback status を assert | 自動(E2E済) | — |
+| JOURNEY-LIVE-12 | 取消確定（poll 後追い） | CONTEXT「取消受付 / 取消確定」 | ack-then-poll venue で `PENDING_CANCEL`→poll→`CANCELED`（mock は受付＝確定） | mock の即 CANCELED を assert（実 kabu の poll 確定は HITL） | 自動(E2E済) | — |
+| JOURNEY-LIVE-13 | logout→DISCONNECTED 収束 | `BackcastWorkspaceRoot.cs:1721` `_host.VenueLogout` / `venue_logout` | logout 後 `venue_state`→`DISCONNECTED`・`venue_id` クリア・badge 収束 | venue_logout→state poll が DISCONNECTED を assert | 自動(E2E済) | [MenuBar](./MenuBarE2ERunner.md) MENU-14 |
 | JOURNEY-LIVE-14 | 実 venue で手動取引（実約定） | `BackcastWorkspaceRoot.cs:1171`（実 kabu/立花 経路） | 実 kabu/立花 へログイン・実第二暗証・実 fill・実建玉・実 depth | — | HITL専用（実 venue 接続・外部認証/秘密情報依存・実約定） | [MenuBar](./MenuBarE2ERunner.md) MENU-13 |
-| JOURNEY-LIVE-15 | write 中 logout gate / serialization | `VenueLoginSecretProbe.cs:225,251` | 1 write lane の直列化（#2 は #1 解決まで prompt されない）・in-flight write 中 logout は defer→drain で promote | mock で serialization＋logout-gate を assert | 自動(Probe有・要昇格) | — |
+| JOURNEY-LIVE-15 | write 中 logout gate / serialization | `VenueLoginSecretProbe.cs:225,251` | 1 write lane の直列化（#2 は #1 解決まで prompt されない）・in-flight write 中 logout は defer→drain で promote | mock で serialization＋logout-gate を assert | 自動(E2E済) | — |
 
 ## 自動検証する範囲（この Runner がゲートする・mock venue）
 

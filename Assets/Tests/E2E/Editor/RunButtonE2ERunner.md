@@ -31,14 +31,14 @@ greyed Run が無言にならない）。
 
 | Action ID | ユーザー行動 | 入口（file:line） | 観測点 | 自動判定 | カバー状態 | 既存 Probe |
 |---|---|---|---|---|---|---|
-| RUN-01 | ▶ クリックで run 開始（happy path） | `StrategyEditorRunButton.cs:57`→`_onRun`→`BackcastWorkspaceRoot.cs:833`→`OnRun` | `_scenario.TryStartRun(EditorFileProvider)`→Ready→sidecar commit→`PrimeWritebackFromCurrent`→`RunRequest` 組立→`_host.TryStartRun(req)` | MOCK host で全ゲート pass を仕込み `OnRun` 反射 invoke→`host.TryStartRun` 受領＋`req`（instruments/start/end/gran/StrategyPath）一致を assert | 要新規自動化 | `WorkspaceUiCutoverProbe`(S2) |
-| RUN-02 | ▶ enable/disable（4 ゲート評価） | `BackcastWorkspaceRoot.cs:879`→`Update`→`RunReadinessViewModel.cs:33`→`Evaluate` | gate 順 running→no-strategy→invalid-scenario→not-owner、全 pass のみ `CanRun=true`→`Refresh(vm)` で `_btn.interactable`＋alpha | `RunReadinessViewModel.Reason/Evaluate` の真理値表（純ロジック）を直接 assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
-| RUN-03 | block reason ラベル表示 | `StrategyEditorRunButton.cs:77`→`Refresh`→`_status` | `vm.BlockReason` を `_status.text` に出し `enabled` 切替（Running/NoStrategy/InvalidScenario/NotOwner の単一語彙） | `Refresh(vm)` 後の `_status.text`/`.enabled` を reflection で assert（read-only 観測点） | 要新規自動化 | `WorkspaceUiCutoverProbe`(S1) |
-| RUN-04 | ▶ が running 中はクリックしても起動しない | `BackcastWorkspaceRoot.cs:835`（`_host.IsRunning` early-return）＋`RunReadinessViewModel.cs:42` | running 中は `CanRun=false`＋reason `Running…`、`OnRun` も先頭で return（多重起動防止） | running フラグ立て→`Reason` が `Running` ＆ `OnRun` が `host.TryStartRun` を呼ばないを assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
-| RUN-05 | strategy 未供給で Run ブロック | `BackcastWorkspaceRoot.cs:842`→`TryStartRun`→`ScenarioStartupController.cs:132`（provider false） | supplyable provider 0 → `BlockedNoStrategy`＋`NoStrategy` 文言、`host.TryStartRun` 不呼出（CONTEXT「active strategy 選択」） | unbound/dirty editor で `OnRun`→`ShowMessage(NoStrategy)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupE2ERunner`(S5) `WorkspaceUiCutoverProbe`(S1) |
-| RUN-06 | scenario 不正で Run ブロック | `BackcastWorkspaceRoot.cs:844`→`gate.IsReady` false（`Commit` false） | 供給可能だが scenario 不正 → `BlockedInvalidScenario`＋`InvalidScenario` 文言、sidecar 不変・host 不呼出（AC④） | 空 universe 等で `OnRun`→`ShowMessage(InvalidScenario)`・host 不呼出を assert | 自動(Probe有・要昇格) | `ScenarioStartupE2ERunner`(S5) |
-| RUN-07 | 非 owner で Run ブロック | `BackcastWorkspaceRoot.cs:853`（`!_isOwner`）＋`RunReadinessViewModel.cs:45` | readiness は毎フレーム owner ガード前に評価され、非 owner は Run greyed＋`NotOwner`、click-time も防御 return | `_isOwner=false` で `Reason==NotOwner`＋`OnRun` が host 不呼出を assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S1) |
-| RUN-08 | 単一 Run 入口の構造（タイトルバーに ▶・footer/tile に無し） | `BackcastWorkspaceRoot.cs:408`→`new StrategyEditorRunButton(OnRun)`／`:409` Build | adopted editor タイトルバーに `RunButton` GameObject、footer に transport ボタン無し、startup tile に Run 無し（U1/U4/U5） | 実 scene 合成で `_editorRunButton` 構築＋`RunButton` 子・footer/tile 不在を assert | 自動(Probe有・要昇格) | `WorkspaceUiCutoverProbe`(S2) |
+| RUN-01 | ▶ クリックで run 開始（happy path） | `StrategyEditorRunButton.cs:57`→`_onRun`→`BackcastWorkspaceRoot.cs:833`→`OnRun` | `_scenario.TryStartRun(EditorFileProvider)`→Ready→sidecar commit→`PrimeWritebackFromCurrent`→`RunRequest` 組立→`_host.TryStartRun(req)` | 実 root 反射合成＋`host.InitializePython("MOCK")` で server-ready にし `OnRun` 反射 invoke→host private `_req`（instruments/start/end/gran/StrategyPath）一致を assert（sealed host で spy 不可のため `_req` 観測で受領を確認） | 自動(E2E済) | `RunButtonE2ERunner`(D) |
+| RUN-02 | ▶ enable/disable（4 ゲート評価） | `BackcastWorkspaceRoot.cs:879`→`Update`→`RunReadinessViewModel.cs:33`→`Evaluate` | gate 順 running→no-strategy→invalid-scenario→not-owner、全 pass のみ `CanRun=true`→`Refresh(vm)` で `_btn.interactable`＋alpha | `RunReadinessViewModel.Reason/Evaluate` の真理値表（純ロジック）を直接 assert | 自動(E2E済) | `RunButtonE2ERunner`(A) |
+| RUN-03 | block reason ラベル表示 | `StrategyEditorRunButton.cs:77`→`Refresh`→`_status` | `vm.BlockReason` を `_status.text` に出し `enabled` 切替（Running/NoStrategy/InvalidScenario/NotOwner の単一語彙） | `Refresh(vm)` 後の `_status.text`/`.enabled`/`_btn.interactable` を reflection で assert（read-only 観測点・presence guard 先行） | 自動(E2E済) | `RunButtonE2ERunner`(B) |
+| RUN-04 | ▶ が running 中はクリックしても起動しない | `BackcastWorkspaceRoot.cs:835`（`_host.IsRunning` early-return）＋`RunReadinessViewModel.cs:42` | running 中は `CanRun=false`＋reason `Running…`、`OnRun` も先頭で return（多重起動防止） | running フラグ立て→`Reason` が `Running` を assert（VM 真理値表。OnRun の IsRunning early-return は防御で D の host-not-called litmus が周辺をカバー） | 自動(E2E済) | `RunButtonE2ERunner`(A) |
+| RUN-05 | strategy 未供給で Run ブロック | `BackcastWorkspaceRoot.cs:842`→`TryStartRun`→`ScenarioStartupController.cs:132`（provider false） | supplyable provider 0 → `BlockedNoStrategy`＋`NoStrategy` 文言、`host.TryStartRun` 不呼出（CONTEXT「active strategy 選択」） | server-ready host で unbound notebook の `OnRun`→host private `_req` が既定のまま（host 不呼出）を assert | 自動(E2E済) | `RunButtonE2ERunner`(D) `ScenarioStartupE2ERunner`(S5) |
+| RUN-06 | scenario 不正で Run ブロック | `BackcastWorkspaceRoot.cs:844`→`gate.IsReady` false（`Commit` false） | 供給可能だが scenario 不正 → `BlockedInvalidScenario`＋`InvalidScenario` 文言、sidecar 不変・host 不呼出（AC④） | supplyable notebook で空 universe にして `OnRun`→host private `_req` が既定のまま（host 不呼出）を assert | 自動(E2E済) | `RunButtonE2ERunner`(D) `ScenarioStartupE2ERunner`(S5) |
+| RUN-07 | 非 owner で Run ブロック | `BackcastWorkspaceRoot.cs:853`（`!_isOwner`）＋`RunReadinessViewModel.cs:45` | readiness は毎フレーム owner ガード前に評価され、非 owner は Run greyed＋`NotOwner`、click-time も防御 return | `_isOwner=false` で `Reason==NotOwner` を assert（VM 真理値表。click-time の owner 防御は OnRun 内） | 自動(E2E済) | `RunButtonE2ERunner`(A) |
+| RUN-08 | 単一 Run 入口の構造（タイトルバーに ▶・footer/tile に無し） | `BackcastWorkspaceRoot.cs:408`→`new StrategyEditorRunButton(OnRun)`／`:409` Build | adopted editor タイトルバーに `RunButton` GameObject、footer に transport ボタン無し、startup tile に Run 無し（U1/U4/U5） | 実 scene 合成で `_editorRunButton` 構築＋`RunButton` 子・footer/tile 不在を assert | 自動(E2E済) | `RunButtonE2ERunner`(C) |
 | RUN-09 | commit I/O 例外/race を click-time に surface | `BackcastWorkspaceRoot.cs:843`（try/catch）／`:844` | commit 例外は `ShowMessage("Could not save scenario: …")`、race で readiness が反転しても `gate.IsReady` false で防御 | commit を投げる stub で `OnRun`→notice 表示＋host 不呼出を assert（防御経路） | 要新規自動化 | — |
 | RUN-10 | readiness 変化時のみ uGUI Refresh（per-frame churn 抑制） | `BackcastWorkspaceRoot.cs:881-882`（`readySig` 変化 gate） | `CanRun|BlockReason` の signature が変わったときだけ `_editorRunButton.Refresh`（steady workspace は read のみ） | signature 不変で `Refresh` を呼ばない（変化時のみ呼ぶ）を観測 | 要新規自動化 | — |
 | RUN-11 | ▶ クリックの実 enable/grey・色/alpha の視覚 | `StrategyEditorRunButton.cs:82-84`（interactable/alpha） | greyed 時 alpha 0.35・有効時 1.0、reason ラベルの実 truncate/wrap、タイトルバー drag が下層へ透過 | — | HITL専用（実ピクセルの美観・EventSystem raycast・GPU/実ウィンドウ前提） | — |
@@ -90,11 +90,15 @@ greyed Run が無言にならない）。
 ## 将来の `RunButtonE2ERunner.cs` 実装方針（第二波）
 
 - pure 行（RUN-02/03/04/07）は `RunReadinessViewModel` を直接駆動（`WorkspaceUiCutoverProbe` Section1 を昇格）。
-- host 配線行（RUN-01/05/06/09）は `WorkspaceUiCutoverProbe` の `ComposeRoot` と同型に **実 `BackcastWorkspaceRoot` を
-  反射合成**（`OpenScene`→`SetSynthesizer(FakeMarimoSynthesizer)`→`ResolvePaths`→`BuildWorkspace`）し、`_host` を
-  **MOCK/spy host** に差し替えて `OnRun` を反射 invoke、`TryStartRun(req)` の受領と `req` フィールドを assert。
-  Python kernel が要るなら `host.InitializePython("MOCK")` を直呼び（batchmode 所有権スキップを迂回する正当手・
-  `ReplayToHakoniwaE2ERunner` と同型）だが、本台本は host 呼出までなので原則 Python-FREE。
+- host 配線行（RUN-01/05/06）は `WorkspaceUiCutoverProbe` の `ComposeRoot` と同型に **実 `BackcastWorkspaceRoot` を
+  反射合成**（`OpenScene`→`SetSynthesizer(FakeMarimoSynthesizer)`→`ResolvePaths`→`BuildWorkspace`）する。`WorkspaceEngineHost`
+  は **sealed・`TryStartRun` 非 virtual・`_host` は具象 readonly フィールド**で差し替え不可なので「MOCK/spy host」は組めない。
+  代わりに `host.InitializePython("MOCK")` で server-ready にし（batchmode 所有権スキップを迂回する正当手・
+  `ReplayToHakoniwaE2ERunner` と同型）、`OnRun` を反射 invoke して host private `_req`（`TryStartRun` が launcher 起動前に
+  同期 set）を観測する＝「受領」の確認。**この section のみ Python-FULL**（finally で `host.Stop()`）。非 vacuous 順序:
+  server-ready な同一 host で blocked OnRun（RUN-05 unbound / RUN-06 空 universe）が `_req` 既定のままを先に立証し、
+  ready OnRun（RUN-01）が `_req` を充填することを assert。RUN-09（commit 例外）/RUN-10（refresh churn 抑制）は本スライス
+  対象外（`要新規自動化` 据え置き）。
 - uGUI 行（RUN-03/08）は `StrategyEditorRunButton` の `_btn`/`_status`/`_btnBg` を reflection で観測、`Refresh(vm)` を駆動。
 - セクション構成は操作一覧表の `自動(*)`/`要新規自動化` 行を 1 セクション 1 観測点で並べ、最初の失敗メッセージを返す
   `Execute()`（null=PASS）パターン。teardown は `host?.Stop()`（MOCK を起こした場合のみ）＋spawned の `DestroyImmediate`。

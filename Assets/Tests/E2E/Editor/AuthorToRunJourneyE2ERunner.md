@@ -47,18 +47,18 @@
 
 | Action ID | ステップ/行動 | 入口（file:line） | 観測点 | 自動判定 | カバー状態 | 関連Surface台本 |
 |---|---|---|---|---|---|---|
-| JOURNEY-AUTHOR-01 | 起動＋合成 root | `BackcastWorkspaceRoot.cs:295` `BuildWorkspace` 系 | root が build され notebook/scenario/provider が配線済 | reflection で `_coordinator`/`_scenario`/`EditorFileProvider` 取得 | 要新規自動化 | — |
-| JOURNEY-AUTHOR-02 | File→New（空セル・untitled） | `BackcastWorkspaceRoot.cs:1526` `OnFileNew`→`1542 _coordinator.New()` | notebook 1 空セル・region_002+ despawn・`_scenario.Clear()`・`_currentLayoutPath=""` | New を invoke し空セル＋universe 空＋untitled を assert | 自動(Probe有・要昇格) | [MenuBar](./MenuBarE2ERunner.md) MENU-02 |
-| JOURNEY-AUTHOR-03 | セル本文を編集 | `NotebookCellCoordinator.cs:24`（cell 編集→notebook dirty） | 編集後 notebook が dirty → provider が **false**（未保存は供給不可） | 本文セット後 `EditorFileProvider.TryGetStrategyFile`==false を assert | 要新規自動化 | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
-| JOURNEY-AUTHOR-04 | セル追加／削除 | `NotebookCellCoordinator.cs:92` `DeleteCell` / 追加 | cell window 再構築・cell 順更新（adopt 不変条件：region_001 は破棄せず） | add/delete 後 cell 数と order を assert | 要新規自動化 | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
-| JOURNEY-AUTHOR-05 | universe 銘柄を追加 | `ScenarioStartupController.cs:99` `AddInstrument` | universe SoT（`InstrumentRegistry`）に id 追加 → chart tile spawn（#60 universe→tile） | `AddInstrument("8918.TSE")` 後 `Universe.Ids`＋`_chartViews` を assert | 自動(Probe有・要昇格) | [UniverseSidebar](./UniverseSidebarE2ERunner.md), [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) steps 2-3 |
-| JOURNEY-AUTHOR-06 | scenario 期間/granularity/cash 編集 | `ScenarioStartupController.cs:95-98` `SetStart`/`SetEnd`/`SetGranularity`/`SetInitialCash` | Params が editing buffer に入り `Validate()` が errors 無し | 妥当値セット後 `Validate().Any`==false を assert | 要新規自動化 | [ScenarioStartup](./ScenarioStartupE2ERunner.md) |
-| JOURNEY-AUTHOR-07 | File→Save As（新規パスへ） | `BackcastWorkspaceRoot.cs:1615` `OnFileSaveAs`→`1625 _coordinator.SaveAs` | `<newname>.py` 書込・notebook rebind・dirty クリア・`_currentLayoutPath` 更新 | StubFileDialog で新パス→`.py` 生成＋rebind を assert | 自動(Probe有・要昇格) | [MenuBar](./MenuBarE2ERunner.md) MENU-06 |
-| JOURNEY-AUTHOR-08 | 戦略パスが供給可能 | `IStrategyFileProvider.cs:20` / `RegistryStrategyFileProvider.cs:30` | Save 後 provider が **true**＋canonical 絶対 `.py`（5 条件すべて成立） | save 後 `EditorFileProvider.TryGetStrategyFile(out p)`==true ∧ p==保存先 を assert | 要新規自動化 | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
-| JOURNEY-AUTHOR-09 | ▶ Run gate→scenario commit | `BackcastWorkspaceRoot.cs:842` `_scenario.TryStartRun(EditorFileProvider)`→`ScenarioStartupController.cs:130` | gate Ready・`Commit` が `<strategy>.json` の `scenario` v3 を書く・`StrategyPath` 返却 | TryStartRun→Ready＋sidecar の scenario キー（ReadScenario）を assert | 要新規自動化 | [ScenarioStartup](./ScenarioStartupE2ERunner.md), [RunButton](./RunButtonE2ERunner.md) |
-| JOURNEY-AUTHOR-10 | `host.TryStartRun` 受理（run 開始） | `BackcastWorkspaceRoot.cs:861-869` `RunRequest`→`_host.TryStartRun(req)` | serverReady/running guard を通過し run 受理（true） | `host.InitializePython("MOCK")` 後 OnRun 経由で TryStartRun==true を assert | 要新規自動化 | [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) step 5 |
-| JOURNEY-AUTHOR-11 | 不正 scenario で run 拒否 | `ScenarioStartupController.cs:141` `Commit` 失敗 → `BlockedInvalidScenario` | 空 universe / 不正期間で gate が `BlockedInvalidScenario`・sidecar 不変・host 未起動 | 不正 buffer で TryStartRun→IsReady==false を assert | 要新規自動化 | [ScenarioStartup](./ScenarioStartupE2ERunner.md) |
-| JOURNEY-AUTHOR-12 | dirty editor で run 拒否 | `ScenarioStartupController.cs:132` provider false → `BlockedNoStrategy` | 未保存編集で provider false → gate `BlockedNoStrategy`・run 起動せず | 編集後（save 前）TryStartRun→`BlockedNoStrategy` を assert | 要新規自動化 | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md), [RunButton](./RunButtonE2ERunner.md) |
+| JOURNEY-AUTHOR-01 | 起動＋合成 root | `BackcastWorkspaceRoot.cs:295` `BuildWorkspace` 系 | root が build され notebook/scenario/provider が配線済 | reflection で `_coordinator`/`_scenario`/`EditorFileProvider` 取得 | 自動(E2E済・Section1) | — |
+| JOURNEY-AUTHOR-02 | File→New（空セル・untitled） | `BackcastWorkspaceRoot.cs:1526` `OnFileNew`→`1542 _coordinator.New()` | notebook 1 空セル・region_002+ despawn・`_scenario.Clear()`・`_currentLayoutPath=""` | New を invoke し空セル＋universe 空＋untitled を assert | 自動(E2E済・Section1) | [MenuBar](./MenuBarE2ERunner.md) MENU-02 |
+| JOURNEY-AUTHOR-03 | セル本文を編集 | `NotebookCellCoordinator.cs:24`（cell 編集→notebook dirty） | 編集後 notebook が dirty → provider が **false**（未保存は供給不可） | 本文セット後 `EditorFileProvider.TryGetStrategyFile`==false を assert | 自動(E2E済・Section1) | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
+| JOURNEY-AUTHOR-04 | セル追加／削除 | `NotebookCellCoordinator.cs:92` `DeleteCell` / 追加 | cell window 再構築・cell 順更新（adopt 不変条件：region_001 は破棄せず） | add/delete 後 cell 数と order を assert | 自動(E2E済・Section1) | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
+| JOURNEY-AUTHOR-05 | universe 銘柄を追加 | `ScenarioStartupController.cs:99` `AddInstrument` | universe SoT（`InstrumentRegistry`）に id 追加 → chart tile spawn（#60 universe→tile） | `AddInstrument("8918.TSE")` 後 `Universe.Ids`＋`_chartViews` を assert | 自動(E2E済・Section1) | [UniverseSidebar](./UniverseSidebarE2ERunner.md), [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) steps 2-3 |
+| JOURNEY-AUTHOR-06 | scenario 期間/granularity/cash 編集 | `ScenarioStartupController.cs:95-98` `SetStart`/`SetEnd`/`SetGranularity`/`SetInitialCash` | Params が editing buffer に入り `Validate()` が errors 無し | 妥当値セット後 `Validate().Any`==false を assert | 自動(E2E済・Section1) | [ScenarioStartup](./ScenarioStartupE2ERunner.md) |
+| JOURNEY-AUTHOR-07 | File→Save As（新規パスへ） | `BackcastWorkspaceRoot.cs:1615` `OnFileSaveAs`→`1625 _coordinator.SaveAs` | `<newname>.py` 書込・notebook rebind・dirty クリア・`_currentLayoutPath` 更新 | StubFileDialog で新パス→`.py` 生成＋rebind を assert | 自動(E2E済・Section1) | [MenuBar](./MenuBarE2ERunner.md) MENU-06 |
+| JOURNEY-AUTHOR-08 | 戦略パスが供給可能 | `IStrategyFileProvider.cs:20` / `RegistryStrategyFileProvider.cs:30` | Save 後 provider が **true**＋canonical 絶対 `.py`（5 条件すべて成立） | save 後 `EditorFileProvider.TryGetStrategyFile(out p)`==true ∧ p==保存先 を assert | 自動(E2E済・Section1) | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md) |
+| JOURNEY-AUTHOR-09 | ▶ Run gate→scenario commit | `BackcastWorkspaceRoot.cs:842` `_scenario.TryStartRun(EditorFileProvider)`→`ScenarioStartupController.cs:130` | gate Ready・`Commit` が `<strategy>.json` の `scenario` v3 を書く・`StrategyPath` 返却 | TryStartRun→Ready＋sidecar の scenario キー（ReadScenario）を assert | 自動(E2E済・Section1) | [ScenarioStartup](./ScenarioStartupE2ERunner.md), [RunButton](./RunButtonE2ERunner.md) |
+| JOURNEY-AUTHOR-10 | `host.TryStartRun` 受理（run 開始） | `BackcastWorkspaceRoot.cs:861-869` `RunRequest`→`_host.TryStartRun(req)` | serverReady/running guard を通過し run 受理（true） | `host.InitializePython("MOCK")` 後 OnRun 経由で TryStartRun==true を assert | 自動(E2E済・Section1) | [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) step 5 |
+| JOURNEY-AUTHOR-11 | 不正 scenario で run 拒否 | `ScenarioStartupController.cs:141` `Commit` 失敗 → `BlockedInvalidScenario` | 空 universe / 不正期間で gate が `BlockedInvalidScenario`・sidecar 不変・host 未起動 | 不正 buffer で TryStartRun→IsReady==false を assert | 自動(E2E済・Section2) | [ScenarioStartup](./ScenarioStartupE2ERunner.md) |
+| JOURNEY-AUTHOR-12 | dirty editor で run 拒否 | `ScenarioStartupController.cs:132` provider false → `BlockedNoStrategy` | 未保存編集で provider false → gate `BlockedNoStrategy`・run 起動せず | 編集後（save 前）TryStartRun→`BlockedNoStrategy` を assert | 自動(E2E済・Section2) | [StrategyEditorNotebook](./StrategyEditorNotebookE2ERunner.md), [RunButton](./RunButtonE2ERunner.md) |
 | JOURNEY-AUTHOR-13 | run 中 kernel→箱庭更新 | （参照） | per-bar streaming→chart tile 更新 | — | 自動(E2E済・ReplayToHakoniwa) | [ReplayToHakoniwa](./ReplayToHakoniwaE2ERunner.md) steps 6-7 |
 
 ## 自動検証する範囲（この Runner がゲートする）
@@ -92,7 +92,7 @@
 | step | 観測 | 合否の意味 |
 |---|---|---|
 | 2 | New 後 cell 数==1（空）・`_scenario.Universe.Count==0`・`_currentLayoutPath==""` | 白紙＋untitled 成立 |
-| 3 | cell 本文セット後 `EditorFileProvider.TryGetStrategyFile(out _)`==false | 未保存は供給不可（dirty ガード） |
+| 3 | cell 本文セット後 `EditorFileProvider.TryGetStrategyFile(out _)`==false | 未バインドは供給不可（条件①/③ — この時点の notebook は untitled で `_path==null`。dirty 由来の false は step 12） |
 | 4 | cell add→数+1、delete→数-1、order 整合（region_001 残存） | cell 集合操作が破綻しない |
 | 5 | `Universe.Ids` に追加 id ∧ `_chartViews` に同 id の chart tile | universe→tile 配線（#60） |
 | 6 | `Validate().Any`==false（妥当 scenario） | scenario が validated-for-write 可能 |
@@ -104,7 +104,8 @@
 
 > **delete-the-production-logic litmus**: `OnFileSave`/`SaveAs` の `_coordinator.Save*()`（dirty クリア）を消すと
 > steps 7-8 が落ちる（provider が true へ反転しない）。`TryStartRun` の `Commit` 呼びを消すと step 9 の sidecar
-> 観測が落ちる。provider の dirty ガード（条件②）を消すと step 3/12 が落ちる（dirty でも true を返してしまう）。
+> 観測が落ちる。provider の dirty ガード（条件②）を消すと **step 12** が落ちる（dirty でも true を返してしまう）。
+> （step 3 の false は未バインド由来＝条件①/③ なので条件②削除では落ちない。）
 
 ## 合格条件
 

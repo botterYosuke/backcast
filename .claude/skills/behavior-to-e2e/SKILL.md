@@ -1,636 +1,142 @@
 ---
 name: behavior-to-e2e
 description: >-
-  The-Trader-Was-Replaced（Bevy + Python gRPC）で、ユーザーが「こう動いてほしい / こうなったら困る /
-  この挙動を保証して」と挙動を言葉で説明したとき、それを **リリース前の E2E / release-gate 項目** に変換するスキル。
-  `tests/e2e/FLOWS.md` に flow を追加し、実装可能なものは `tests/e2e_replay.rs` や UI/integration/render harness に
-  自動テストを足す。backend→ECS seam（`BackendStatusUpdate` / `BackendEvent` / replay clock）だけでなく、
-  Bevy UI 入力、layout/file I/O、CLI/backend integration、実ウィンドウ smoke も対象にする。
-  **不具合修正の RED テスト（CLAUDE.md 必須手順）でも必ず起動する**: 「issue #N を修正して」「bug を直して」「不具合を修正する前に RED テストを書く」といった不具合修正フローでは、CLAUDE.md が `behavior-to-e2e` を使って FLOWS.md に flow を追記することを義務付けている（RED 先行 → fix → GREEN の規約）。修正に入る前に本スキルを起動し、テスト ID 採番・FLOWS.md 追記・flow ファイル作成・e2e_replay.rs 登録の 4 点セットを完了させること。実例: #157 で `flush_pending_language_request_system` の despawn レース修正時に invoke 漏れ → Navigator 任せで手動追加（2026-06）。**`/grill-with-docs /plan` と bug issue の実装指示が同時に来たとき（例: 「gh issue #N を実装してください /grill-with-docs /plan」）は、grill-with-docs の設計インタビューに引っ張られて本スキルが invoke 漏れになりやすい。bug issue である限り `/grill-with-docs` との併発は必須**（実例: #255 で `grill-with-docs /plan` に注力し本スキルを invoke せず、_blacksheep 側テストのみで FLOWS.md 未更新 2026-06）。**「レビューを修正してください」「下記のレビュー指摘を直して」「review findings を fix」のような *レビュー指摘の修正依頼* も bug-fix と同じ扱いで起動する**（「issue #N を修正」という明示が無くても挙動が変わる修正は対象）。特に `/nautilus-trader` 併発時（`/grill-with-docs` や `/simplify` と組でも）は domain reference に注力して飛ばしやすい（実例: #25 review round3 で driver.py の on_start 失敗時 intent 破棄＋orchestrator の post-trade 再評価を Python pytest の RED→GREEN で直したが、本スキルを invoke せず findings の manual gate を更新しなかった 2026-06。※backcast に FLOWS.md は無いので正本は `docs/findings/NNNN` の manual-gate＝line 13）。**再発: #25 review round5（`/nautilus-trader /code-review /simplify` 併発）で同じく formal invoke を飛ばし、live-safety 修正（on_start notional bypass・不正数量 venue 送信）の pytest RED→GREEN ＋ findings 0011 round5 の Unity-Mono manual-gate 未確認注記を ad-hoc に揃えた（2026-06）。3 回目の同型 miss＝トリガーワード追加では直らない兆候。`/nautilus-trader` 等の domain skill を invoke した直後に「この依頼は挙動が変わるか？→ behavior-to-e2e を formal invoke」を 1 アクションとして固定化すること。**4 回目: #25 review round（`/nautilus-trader … /simplify` 併発、mark-to-market position cap・fail-closed fill 会計の pytest RED→GREEN ＋ findings 0011 の Unity-Mono gate＝実 batchmode log で GREEN 確認）でも formal invoke を飛ばし成果物だけ揃えた（2026-06）。成果物（RED→GREEN・findings 再走手順）が正しくても formal invoke 自体が抜ける failure mode が固定化している＝nautilus-trader/simplify を呼んだ瞬間に behavior-to-e2e を即同時 invoke すること（後付けでなく）。**✅ 5 回目（#25 review・fill 数量/価格 fail-closed＋EXPIRED event）で初めてこの remedy を実行＝`/nautilus-trader` invoke 直後に behavior-to-e2e を formal invoke し、backcast 規約どおり「pytest RED→GREEN（`test_kernel_live_step3.py`）＋ findings 0011 round 7 に RED→GREEN 記録」を済ませた。remedy（domain skill 直後の即時 formal invoke）は機能する＝以後この順序を固定すること。**⚠️ 6 回目（#25 review・modify 成功時 ACCEPTED 埋め込み約定の取りこぼし + 減額訂正の over-fill 取りこぼし + REJECTED 訂正の数量復帰、`/nautilus-trader /code-review /simplify` 併発）で remedy が退行＝RED 先行 pytest（`test_kernel_live_step3.py` に 3 ケース追加）と code-review→修正は正しく回したが formal invoke を再び飛ばした。新たな誘因: `/nautilus-trader` が打たれていても修正対象が **Nautilus-free な kernel/live 層（`broker.py`）** だと domain skill が「非該当」に見え、その判断に気を取られて gate（本スキル）の formal invoke ごと飛ぶ。教訓: domain skill が非該当でも「挙動が変わる修正か？」の判定と behavior-to-e2e の formal invoke は独立に必須。レビュー指摘修正に着手する前（RED を書く前）に本スキルを invoke することを着手トリガーに固定する。****また、**修正が _blacksheep 等の別リポジトリで完結する場合でも、App 側の挙動（live strategy attach の成否など）が変わるなら FLOWS.md の manual gate 項目を追加・更新すること**。**⚠️ 7 回目（#49 DuckDB→kernel Replay 張替え、`/grill-with-docs /nautilus-trader` 併発・**bug でなく feature**）で同型 miss が再発＝issue の AC が「AFK probe：…populate→edit→persist→restore→run…を headless で assert（nautilus 非ロード）」「HITL を新ソースで実走」と **e2e/release-gate を明示的に要求する feature** だったのに、grill の設計インタビュー＋nautilus domain に注力して formal invoke を飛ばした。成果物（AFK e2e `python/tests/test_replay_duckdb_kernel_afk.py`・findings 0019 の §3 PASS ログ＋§4 再走手順）は backcast 規約どおり揃えたが、本スキルの formal invoke 自体は抜けた。新たな教訓: **bug/review-fix でなくても、issue の AC が AFK probe / headless e2e gate / HITL 再緑化を要求する feature 実装は本スキルの対象**（description の bug-fix 寄りの記述を読んで feature を「非該当」に見なさない）。remedy は不変＝`/nautilus-trader` 等 domain skill を invoke した瞬間に「この依頼は挙動が変わる／AC が e2e gate を要求するか？→ behavior-to-e2e を即 formal invoke」を 1 アクションで固定（後付けで成果物だけ揃えない）。**⚠️ 8 回目（#30 Replay transport footer、`/grill-with-docs` 併発・**feature**・AC が「AFK probe で transition、HITL harness で実挙動」を明示要求）で同型 miss が再発＝grill の設計インタビュー（engine 制御ループ・lifecycle 設計）に注力し、RED 先行 pytest（`test_replay_transport_seam.py` / `test_data_engine_transport.py` / `test_inproc_transport_forwarders.py`）＋ C# AFK probe（`ReplayTransportVerify.cs` 21/21）＋ findings 0023 §6 の検証記録は backcast 規約どおり揃えたが、本スキルの formal invoke 自体は実装後の post-impl 棚卸しまで抜けた（2026-06）。8 回連続で「成果物は正しいが formal invoke が抜ける」＝トリガーワードでは直らない確定。remedy は `/grill-with-docs` を invoke した直後（設計インタビューに入る前）に behavior-to-e2e を即 formal invoke して「flow/test ID 採番・正本（FLOWS.md or backcast は findings §検証）・AFK/HITL gate 整合」の枠組みを先に固定すること。
-  **API 語彙変更・クラス廃止・型統合・型分離を伴うリファクタリング（CLAUDE.md "機能を追加・変更したとき" 必須）でも起動する**: クラスリネーム（例: `GrpcDataEngineServer → DataEngineBackend`）・クラス廃止（例: `_BackendCore` 廃止）・メソッド命名規約変更（PascalCase → snake_case）・**型統合（フィールド同一の 2 型を 1 型に統一、例: `HakoniwaProfile` を廃止して `HakoniwaGridSnapshot` に統合 #197）・型分離（1 wire DTO を内部で複数型に分割、例: `BackendTradingState` を `ChartState` + `SessionMetadata` + transport-private `BackendTradingStateWire` に分離 #229）** など、**呼び出し側の名前が変わる**変更は「新しい不変条件が生まれる」に該当する。FLOWS.md 内の旧クラス名参照の更新と、変更された seam の回帰ガード flow 確認を行うこと（A4 実装 #177 で invoke 漏れ → FLOWS.md に `GrpcDataEngineServer` 参照が3件残留した実例 2026-06）。**issue に「挙動不変リファクタ」と明記されていても、新公開 API（例: `plan_grid` / `gather_hakoniwa_box` / `apply_hakoniwa_restore_resources` / `write_run_state` + `WriteSource` enum）が生まれた場合は必ず起動すること**（#197 / #207 で「挙動不変」タグを信じて invoke 漏れした実例 2026-06。#207 は grill で Q5「pure refactor → FLOWS.md 更新なし」と user 合意済だったため最終結論は変わらなかったが、behavior-to-e2e を formal に invoke して「公開 API が増えたか / FLOWS への影響あるか」を確認するプロセス自体は必須）。
-  **Python in-proc poll seam（`get_state_json` / `BackendService` / `DataEngineBackend` / `InprocLiveServer`）のバグ・挙動保証でも起動する**: 「フッターの Auto/Disconnect を押しても反映されない」「クリックしても UI が変わらない」「venue/mode が UI に出ない」「poll が live 状態を反映しない」「command は成功するのに UI 無反応」のような **command 経路と poll 経路の state-source 不一致**は、RED が Rust e2e_replay ではなく **Python pytest（`python/tests/test_inproc_server.py` 等、kind:python の P 系 flow）** になる。`get_state_json()` が `data_engine` の state_machine/mode_manager から venue_state/execution_mode を導出する seam を直接 assert する（実例 #P38 2026-06: `InprocLiveServer` が venue_sm/mode_manager を `data_engine` に共有せず poll が常に DISCONNECTED/Replay を返した二重無反応バグ。Rust 側 `transport.rs` の poll diff は pure helper `diff_poll_state` 抽出で `cargo test --lib` ガード＝両側に杭を打つ）。Rust seam が正しくても Python 側 poll が嘘をつくケースがあるので、「UI 無反応」系は **両側**の seam を疑う。
-  **描画品質・鮮明化系の機能変更（pixel-snap / 実サイズ raster / gamma blend / visual gate）でも起動する**: text crispness シリーズ（#247 計装 → #248 chart 軸ラベル snap → #249 editor 投影原点 snap → #250/#252）のように、グリフ位置のピクセルスナップ・`font_size` 量子化・ラスタ品質・AA blend を変える挙動変更は「UI 機構を作り替えた」に該当する。`tests/e2e/FLOWS.md` に P 系 flow（例 P43/P44、`kind:unit` ＋必要なら `kind:render` の visual gate）を採番・追記し、`tests/e2e/visual_gates/crisp_*.ron` に対応する zoom step を足す（snap 常時 ON のスクショは before/after ではなく post-change 証跡。回帰の正本は phys_fract→0 を assert する headless seam test）。**pair-relay 等のオーケストレーションで RED / FLOWS を subagent（Navigator/Driver）に書かせる場合も、まず本スキルを invoke して「flow ID 採番・FLOWS 追記・visual gate 整合」の枠組みを確認すること**。**`code-review(simplify)` → pair-relay 修正ループで挙動変更が生まれた場合も必ず formal invoke すること**（FLOWS.md は Navigator 経由で更新されても `docs/wiki` の `[FlowID]` 引用が抜ける。実例: #226 で ExecutionModeChanged/live_orders バグを pair-relay で修正・FLOWS H16 追加まで完了したが formal invoke 漏れで wiki 未更新になった 2026-06）（実例 #249 で pair-relay の Navigator 任せにして本スキルの formal invoke を飛ばし、FLOWS P44 採番と findings/RON の claim 整合を後追いの codex レビューで詰めた 2026-06）。**grill→plan→implement のハンドオフでも飛ばしやすい**: grill で FLOWS 採番・visual gate 設計・findings 構成まで確定すると「もう決まった」と感じ、plan の docs/test Step を formal invoke せず手で済ませがち（実例 #250 で P45 採番・`crisp_chart_labels_zoom.ron`・headless seam test を plan Step として手動実行し成果物は規約どおりだったが、本スキルの formal invoke 自体は漏れた 2026-06）。設計確定済みでも「flow ID 採番・FLOWS 追記・visual gate 整合」の枠組み確認として invoke すること。
-  **⚠️ backcast（Unity(C#) + 埋め込み Python）リポジトリでは射程が異なる**: backcast slice（Replay chart #10 / Replay panels #11 / canvas・floating #5/#7 等）の回帰ガードは **AFK Unity batchmode probe（`-executeMethod <...>Probe.Run`、例 `ReplayChartDecodeProbe` / `ReplayPanelsDecodeProbe`）＋ `docs/findings/NNNN-*.md`** であって、TTWR(Bevy) リポの `tests/e2e/FLOWS.md` / `e2e_replay.rs` ではない（backcast に FLOWS.md は無い）。backcast のバグ修正で挙動が **AFK probe の assert で完全に被覆**されるなら、別途 FLOWS.md 項目は不要 — ただし findings に RED→GREEN（probe が RED で検出 → fix → GREEN）を必ず記録する。実例（#11 2026-06）: `make_position_handler` の `account_for_venue(str)` バグを M2 AFK probe の `Equity>0` 値 assert が RED 検出 → engine fix → GREEN、findings 0003 §10.1 に port-後 divergence として記録。pair-relay の Navigator が「FLOWS.md は Bevy 枠組みで本 backcast spike は不要」と判断するのは正しい。**backcast では「AFK probe を回帰ゲートとして著したか／findings に RED→GREEN を記録したか」が本スキルの実体**であり、FLOWS.md 採番に拘泥しないこと。**Live C# adapter seam tracer（例 #20 `LiveAdapterTracerProbe`：C# が `InprocLiveServer` facade を駆動し production の `publish_backend_event→event_wire→push_json` 経路を GIL-free drain して実値 assert）も同型** — 権威ゲート=AFK probe＋`docs/findings/NNNN` の再走手順。⚠️ grill で「probe＋findings をゲートにする」と設計確定済みでも、本スキルを **formal に invoke**して「AFK probe を回帰ゲートとして著したか／findings に再走手順を記録したか」を checklist 確認する手順自体は省かないこと（#20 で findings 0011 が probe をゲートと既定済みだったため formal invoke を飛ばし ad-hoc に成果物だけ揃えた実例 2026-06。line 12-13 の grill→implement handoff skip と同根）。**Python seam 単体のロジックバグ（例: `gui_bridge_actor` の position/order/portfolio handler、`cache.positions()`→`positions_open()`）は Unity を起動せずとも、pytest 非依存の単体スクリプト（`python/tests/test_*.py`、fake cache/sink で handler を直接駆動し `python tests/...` で実行＝venv に pytest が無くても回る）が最短の決定的 RED→GREEN ゲート**。さらに C# probe（HITL `*Harness.TryLogPass` のハード assert／AFK `*Probe.cs` の新 Section）にも対応 assert を足して **Python seam と C# probe の両側に杭を打つ**こと（実例 #9-12 レビュー Medium-1 2026-06: closed position が positions panel に残るバグを `positions_open()` fix ＋ `test_gui_bridge_positions.py` の RED→GREEN ＋ `ReplayPanelsHarness` の positions=flat assert で固定）。**まだ Unity 未配線の新 pure-Python engine スライス（例: Backcast Execution Kernel #24・ADR-0004 案 C）では、executable gate = 「比較 oracle（standalone Nautilus）から subprocess で採取した committed golden に対する standalone golden pytest」**（`python/tests/test_kernel_golden_cpython.py` 等・`capture`＝明示生成／`verify`＝read-only）。cross-process 契約（C# decoder 無改修・Windows-Mono clean teardown）は Unity 配線までは **`docs/findings/NNNN-*.md` の manual-gate** として記録し、headless 自動分（subprocess exit 0＋Rust core 不在＝`sys.modules` に `nautilus_trader*` 無し＋golden 一致）を pytest 化する。AFK probe が無い＝FLOWS.md 不要なのは line 13 同様で、**正本は golden gate スクリプト＋findings の AC 対応表**（実例 #24: findings 0008 §6–§8）。**#26（S9a orderbook・enhancement）で再発**: issue の AC が「`behavior-to-e2e` の flow として追記」と**スキル名を名指し**していたのに `/grill-with-docs` に引っ張られ formal invoke を飛ばし、`DepthDecodeProbe`（AFK・gen1→gen2 全置換 assert）＋ findings 0012 の FLOW-S9a-1 記録だけ ad-hoc に揃えた（2026-06）。**教訓: bug/refactor でなく feature でも、issue 本文/AC が `behavior-to-e2e` を名指ししている、または「リアルタイム更新／連続 emit で更新／ladder 描画・更新」等の *streaming/realtime な挙動保証* を要求しているなら、それ自体が起動命令。grill/実装に入る前に最初に formal invoke すること**（既存の bug-fix 限定トリガーでは feature-AC 名指しに発火しなかったのが #26 の miss 根因）。**#22（live safety & graceful shutdown・純然たる「検証/クローズ・スライス」）で同型再発**: #24/#25 で配線済みの safety/shutdown 機構を production 経路で「発火させて証明する」だけの issue で、既存 AFK probe（`KernelLiveProbe`）を resting-cancel + orphan 不変条件まで拡張＋ findings 0013 に PASS 文字列/再走手順を記録＋ Gap4 は genuine RED→GREEN（`stop_live_loop` の bool 化）まで揃えたのに、`/grill-with-docs /plan` の設計確定に引っ張られ本スキルの **formal invoke を post-impl まで飛ばした**（2026-06）。**教訓: bug でも feature でもない「検証/クローズ・スライス」（既存挙動を test/probe で証明するだけ・AC が「発火する test」「確認」「再現」の検証文言）も起動対象**。挙動を変えなくても「AFK probe を回帰ゲートに著したか／findings に再走手順を記録したか」の checklist 確認として grill 着手前に formal invoke すること。**#35（立花 `validate_session_on_startup` 実装・enhancement）で同型再発**: `gh issue #35 を実装してください /grill-with-docs` で grill の設計インタビューに引っ張られ、stub（`NotImplementedError`）を実装して失効/transport-error パスの characterization test を RED→GREEN で固定＋ CONTEXT 用語追加＋ findings 0015 に記録したのに、本スキルの **formal invoke を post-impl まで飛ばした**（2026-06）。**教訓: bug/feature/検証スライスのどれにも自明には当てはまらない『stub 実装・`NotImplementedError` 解消』系 enhancement でも、AC が「characterization test で <失効/失敗/エッジ>パスを RED→GREEN で固定（AFK）」を要求していれば、それ自体が behavior-gate 起動命令**（#35 AC #3 がまさにこの文言）。backcast では findings + characterization test が正本（line 13）なので成果物は揃いがちだが、`/grill-with-docs` 併発時こそ grill 着手前に formal invoke して「RED→GREEN を gate として著したか／findings に記録したか」を checklist 確認すること。**#44（theme 配色システム・enhancement・Unity C#）で 5 度目の同型再発**: `gh issue #44 を実装してください /grill-with-docs` で設計インタビュー（配置・導出・切替・色マッピング・検証分担）に注力し、AFK `ThemeProbe`（導出 parity＋NonDefault≠dark＋**非空虚 switch kill**: surface を建て dark トークン一致 assert→SetTheme→同 graphic が新トークンへ移ったか assert）＋ HITL `ThemeHitlHarness`（montage・dark↔NonDefault トグル）＋ 静的 grep ゲート＋ findings 0020 を揃えたのに formal invoke を post-impl まで飛ばした（2026-06）。AC#4 が『AFK probe / HITL harness で検証』と検証手段を**名指し**＝#26 と同じ起動命令。新 learning: 検証成果物が『非空虚 kill』のように高品質に設計できているときほど『もう十分』感で formal invoke を飛ばす — **成果物品質と formal invoke は独立**。HITL が単体 surface ではなく全テーマサーフェスの montage になる feature でも同じ。**#59（本線ワークスペース合体の配線漏れ・Unity C#）で 6 度目の同型再発**: `gh issue #59 の配線漏れを実装してください /grill-with-docs` で、sidebar↔scenario↔OnRun の共有 `InstrumentRegistry` 配線を `BackcastWorkspaceProbe.Section8`（実 root を reflection で headless 合成し `ReferenceEquals(sidebar.Registry, _scenario.Universe)` assert）＋ `ScenarioStartupProbe.Section6/7`（registry `Changed` event の発火条件・tile 欄の再同期＋`Dispose` 漏れなし）の **RED→GREEN**＋ findings 0025 §12 で揃えたのに、本スキルの formal invoke を post-impl まで飛ばした（2026-06）。**新 masking phrase: 「配線漏れを実装してください」＝defect（未接続の配線）なのに『実装』と言われると feature に見え、bug-fix トリガーに発火しない**。教訓は不変＝『この依頼は挙動が変わるか？』の判定と formal invoke は語（実装/修正/配線/未接続）に依存しない。`/grill-with-docs` 併発時は設計インタビュー着手前に即 formal invoke して「AFK probe を回帰ゲートに著したか／findings に RED→GREEN・再走手順を記録したか」を checklist 確認すること。**#60（Hakoniwa 動的 N チャート・Unity C#・feature）で 7 度目の同型再発**: `gh issue #60-63 を実装してください /grill-with-docs` で、`HakoniwaChartTileProbe`（box-grow 算術／per-id ohlc decode／動的 add-remove round-trip）＋ `BackcastWorkspaceProbe.Section10`（Universe.Changed→chart:<id> spawn/despawn・box-grow）の **RED→GREEN**＋ findings 0027 §11 を規約どおり著したのに formal invoke を post-impl まで飛ばした（2026-06）。**新 learning: 正本 findings（0027）が既に詳細に存在し grill round2 まで済んでいるほど「ゲートはもう設計済み」感が強まり formal invoke が冗長に見えて飛ぶ — #44 の『成果物品質と formal invoke は独立』の同型で、"設計済み度" と formal invoke も独立**。AC が「AFK probe ＋ owner HITL GREEN」を名指しする feature（#60 AC 末尾がまさにこれ）は起動命令。多段チェーン（#60→#63）では各 stage が独自ゲートを持つので、各 stage 着手前（grill 直後）に formal invoke すること。**#41（instruments universe prune・Unity C#・enhancement）で 8 度目の同型再発**: `gh issue #5 に着手してください /grill-with-docs` で grill の設計インタビュー（prune gate の R2 asymmetry・LiveVenue-only fork・Reconnecting 除外・editable-bypass・都度再解決）に注力し、`UniversePruneProbe`（Live/Replay gate matrix＋PruneRetain 契約＋change-gate＋integration の 40 check・#253 stale-snapshot wipe を fail-closed で固定）＋ findings 0041 §4/§9 の RED→GREEN を規約どおり著したのに、本スキルの formal invoke を post-impl まで飛ばした（2026-06）。**新 masking phrase: 「issue #5 に着手」＝#5 は close-gate *エピック*で実作業は sub-issue #41。エピック番号で指示されると『どの sub-issue か』のスコープ判定に気を取られ、確定した sub-issue の AC（『characterization test で … RED→GREEN で固定（AFK）』＝起動命令）を見落として formal invoke が飛ぶ**。教訓は不変＝AskUserQuestion で実作業 sub-issue を確定した直後（grill 着手前）に、その sub-issue の AC が AFK probe / characterization gate を要求していないか確認し、要求していれば即 formal invoke すること。**#66（inline SCENARIO populate fallback・Unity C#＋Python・bug）で 9 度目の同型再発**: `gh issue #66 を実装してください … /grill-with-docs` で grill の設計インタビュー（C#純パーサ vs pythonnet・失敗時挙動・golden 機構）に注力し、RED-first 成果物（C# `ScenarioStartupProbe.Section10`＝golden cross-language pin・`BackcastWorkspaceProbe.Section11`＝配線 RED gate・Python `test_scenario_inline_golden.py` の 2-leg・findings 0043 §2）を backcast 規約どおり揃えたのに formal invoke を post-impl まで飛ばした（2026-06）。**新 learning: 今回ゲートが #24 golden doctrine を「parser の cross-language pin」に応用した *新種の成果物* だったが、それでも formal invoke は飛んだ＝成果物の新規性・設計の巧緻と formal invoke は独立**（#44「成果物品質」・#60「設計済み度」と同根）。remedy は不変＝`/grill-with-docs` invoke 直後（設計インタビュー着手前）に behavior-to-e2e を即 formal invoke。**⚠️ #76 S6b-α step2（marimo-v19 移植＋deterministic parity gate・pure-Python feature）で 10 度目の同型再発**: `/grill-with-docs` で 9 決定（T1–T9）を固め続けて 6 step を `/tdd` RED-first で実装、正本=`test_v19_marimo_parity.py`（marimo↔本物 V19MorningStrategy の byte-parity gate）＋ findings 0046「AC→恒久 gate」表を backcast 規約どおり揃えたのに formal invoke を post-impl まで飛ばした（2026-06）。**新 masking phrase: 純 Python スライスで behavior gate 自体が `/tdd` ループの自然な成果物（parity pytest）になると「ただの tdd unit test」に見えて『behavior-to-e2e の deliverable』と認識されず formal invoke が飛ぶ**（AFK probe のような専用ゲートだと逆に気づく）。grill が 9 決定＋6 step と長大なほどその流れに没入して埋もれる。remedy 不変＝gate が AFK probe でも parity pytest でも `/grill-with-docs` 着手前に即 formal invoke して「test ID・正本（findings §AC 表）・RED→GREEN を gate として著したか」を checklist 確認。**✅ 直後の v19 production scorer resolver（#76 T6 follow-up・pure-Python feature）で remedy を実行＝`/grill-with-docs` 着手前に behavior-to-e2e を formal invoke し AC1 mount-free / AC2 real-data skip / AC3 lazy 不変の枠組みを先に固定**（2026-06）。payoff も確認: 枠を先に置いたことで grill の下位決定（R3 fail-loud・AC2 を「real model を skip せず実走」に設計）と RED-first 実装が gate へ自然に anchor され、成果物を後付けで揃える failure mode を回避できた。10 連続 miss の後の 2 例目の成功（#25 r5 に続く）＝remedy（記録直後の次セッションで grill 前 formal invoke）は機能する。以後この順序を既定とする。**⚠️ #81 出荷後 owner 修正（[+] を右下へ・#80 Strategy メニュー退役・Unity C# UI・`/grill-with-docs` 併発の bug/review-fix）で 11 度目の同型再発**: grill で #80 が出荷済み機能である矛盾を surface し findings 0050 に決定を記録、compile gate＋`MenuBarCutoverProbe`（既存 AFK）で配線健全性を裏取りしたが、本スキルの formal invoke を飛ばした（2026-06-19）。**新 learning: 修正対象が「ボタン位置・メニュー項目の有無」のような *純 UI-geometry/presence* で、既存 AFK probe が presence/geometry を assert していない（＝正当に HITL-only）ときこそ、『新ゲートを著すか HITL-only と findings に記録するか』の判定を behavior-to-e2e の formal invoke の中で下すべき**。ゲート決定が「新規 test 無し」でも、その決定を *下す場所* が本スキル。remedy 不変＝`/grill-with-docs` 着手前に即 formal invoke。**⚠️ 「ユーザーができる行動すべてを E2E 台本に」（全サーフェス網羅 E2E 台帳・Unity C#・`/grill-with-docs /parallel-agent-dev` 併発）で 12 度目の同型再発（2026-06-19）**: ユーザーが明示タイプした 2 スキル（grill＋parallel-agent-dev）に全注意が向き、line 14 が**まさにこの依頼を名指し**（「ユーザーストーリ（台本）をテスト/ゲートに」「台本を書いてから」「E2E で通したい」、正本例＝`Assets/Tests/E2E/Editor/ReplayToHakoniwaE2ERunner.md`）しているのに behavior-to-e2e を invoke せず、Surface 12＋Journey 3 台本＋`E2E-CONVENTIONS.md`/`E2E-INDEX.md`（操作網羅台帳・約205行・カバー状態5値）を grill→parallel-agent-dev だけで著した。**新 masking phrase: ユーザーが他スラッシュコマンドを *明示タイプ* したとき、タイプされた skill が「やるべきこと全部」に見え、タイプされていない gate-skill（behavior-to-e2e）が候補から落ちる**（過去の miss は domain skill が *自動* 併発だったが、今回は user 明示タイプという別誘因）。さらに **第一波が「台本(.md spec)のみ・runner(.cs) は第二波」だと『まだ実装してないから gate skill は早い』に見える**が、line 14 の射程は *台本 authoring そのもの*（spec の正本化）であって RED→GREEN 実装に限らない。remedy 不変＝**台本/E2E/網羅という語が出た時点で、他にどんなスキルがタイプされていても behavior-to-e2e を最初に formal invoke**して「台本の正本配置・ID 採番・カバー状態語彙・findings 連携」の枠組みを先に固定する。**⚠️ #85（立花 demo live E2E `TachibanaLiveE2ERunner.cs` を AC とする 4 件修正・bug-fix・Unity C# + Python in-proc・`/grill-with-docs` 併発）で 13 度目の同型再発**: 設計の正本 findings 0053「§ issue#85 改訂」に TLS=certifi (α)+(δ) / step 2.5 EC WS gate / W1-W3 後始末ポリシー matrix / Q3 verdict matrix を grill で 4 回ラウンドかけて全部固めた。RED Python unit tests 6 件（`test_tachibana_ws_uses_certifi_ssl_for_wss.py` / `..._no_ssl_for_ws.py` / `..._ssl_ctx_injection.py` / `test_tachibana_ec_ws_signal.py` / `test_orchestrator_exposes_ec_ws_subscribed_in_state.py` / `..._default_for_non_tachibana.py`）→ GREEN 382 passed・findings に `[x]` AC 表を記録・既存 E2E runner (`TachibanaLiveE2ERunner.cs`) を step 2.5 / cancel pump で拡張＝統合 gate を著したのに、本スキルの formal invoke を post-impl-skill-update まで飛ばした（2026-06-19）。**新 masking phrase: AC が「`Assets/Tests/E2E/Editor/<X>E2ERunner.cs` が通る」のように *既存 E2E runner ファイル* を名指しているとき、『既存 gate の拡張だけ＝新規 flow 採番なし』に見えて formal invoke が冗長に感じる**。しかし AC が「既存 gate 拡張」でも、その拡張が新不変条件（本件: EC WS handshake gate / state model に `ec_ws_subscribed` + `last_event_ws_recv_ts_ms` の 2 field 追加 / late-fill race re-check + cancel pump フォールバック / TLS trust = certifi の invariant）を生むなら起動命令。教訓: backcast では既存 E2E runner 拡張型 bug-fix も対象（line 13 が既に「backcast の AFK probe + findings RED→GREEN が正本」と書いているが、『既存 runner 名指し AC』の masking はまだ列挙されていなかった）。remedy 不変＝`/grill-with-docs` invoke 直後（設計インタビュー入る前）に即 formal invoke して「拡張後の gate が AC を完全被覆するか／findings に RED→GREEN・再走手順を記録したか」を checklist 確認。
-  必ず起動する場面: 「この挙動をテストにして」「〜したら〜になることを保証したい」「〜が壊れてないか自動で確認したい」「目視以外で確認したい」「目視の代替」「人手で見ずに確認」「ユーザーストーリ（台本）をテスト/ゲートに」「台本を書いてから」「N ステップを通しで確認」「E2E で通したい」「どういうテストで確認できるか」（実装フローの一連を headless で通す・目視を自動ゲートに置き換える依頼はすべて対象。実例 ✅ #76→hakoniwa 通し 2026-06-19: 「ユーザーストーリ（台本）をどこかに書いてから A を実行」で設計前に formal invoke＝過去の miss に対する remedy が機能、正本=台本 `Assets/Tests/E2E/Editor/ReplayToHakoniwaE2ERunner.md` ＋ E2E runner `ReplayToHakoniwaE2ERunner`、調査経緯は `docs/findings/0052`）。
-  「リプレイが完走することをテスト」「Run が失敗したら error が出るのを担保」「ポートフォリオが反映されるか」
-  「venue ログインの状態遷移をテスト」「銘柄リストの取得失敗をテスト」「回帰テストを追加」「E2E を1本足して」
-  「FLOWS.md の flow を実装」「backend からこのイベントが来たら UI がこうなる、をテスト」
-  「FLOWS.md に N15 のような新 flow を追加」「FlowID を採番」「N/M/A/K/P シリーズの末尾に行を足す」
-  「kind:python の回帰テスト（`python/tests/test_p*.py` 等）を FLOWS.md に登録」
-  「新しい meta test / 回帰ガードを `tests/e2e/flows/` または `python/tests/` に追加」（N/M/A/K/P/B 系列が
-  混在で並んでおり、単純な「末尾」が一意でないため、追加前に既存 ID の最大値・周辺の anchor 一意性・既存
-  エントリの体裁（1行圧縮 vs マルチ行）を本スキルで確認すること。**P 系列は ID 重複の前科あり**（P13 が
-  「実 Python 解決」と「replay timestamp リセット」の 2 エントリに既に二重採番されている）ので、`rg -o "P\d+"`
-  で最大値を採ること。2026-06 の #143 で「N14 直後」指示が anchor 不一致で Driver 返球になった実例）。
-  **I シリーズの採番（unit テスト・integration テスト）**: `grep -oE "\bI[0-9]+" tests/e2e/FLOWS.md | sort -t I -k2 -n | tail -1` で現在の最大値を取り、**最大値 + 1 を新 ID とする**（最大値そのままを使うと既存エントリと衝突）。テスト関数名も `fn i<N>_...` の形で ID と一致させること。2026-06 #175 で I31 が既存だったのに `i31_` と名付けてしまい、 `i32_` へリネームした実例）。
-  「メニュー/エディタ/チャート/モーダル/レイアウトの操作をリリース前に保証したい」と言われたとき。
-  また「クリックしたら別のアプリが起動した」「ダイアログが出なかった」「subprocess が間違った exe を起動した」
-  「PyO3 in-proc で sys.executable がホスト exe を返す」「TTWR_PYTHON_BIN」系の不具合が報告されたときも起動する。
-  **wiki の FlowID 参照を一括リンク化する作業も本スキルの担当**: 「`docs/wiki` の `[L1]` などを漏れなく link に変えて」
-  「FlowID をリンクにして」「`[A1]` を flows ファイルにリンク」「wiki と FLOWS.md の対応を取り直す」と言われたら起動し、
-  リンク化の前に flows ディレクトリの ID 衝突・孤児ファイル・FLOWS.md の陳腐化パスを監査する（§wiki への引用元記載）。
-  **新しい UI 機構（Hakoniwa / split-grid サーフェス / 新種パネル / 可視性ルール変更など）を実装した直後も必ず起動する**: `docs/wiki/` の該当ページ（`windows-and-panels.md` 等）が旧実装を記述したまま実装と食い違っていないか確認し、現行化する。E2E テストを追加したときは FLOWS.md に `[x]` で登録し、wiki に `[FlowID]` 参照を追記すること（#149 で behavior-to-e2e を呼ばず wiki が旧 floating window 記述のまま残った実例）。
-  **「カプセル化」「〜Store 導入」「schema gate の移動」「〜フラグ追加（windows_skipped_legacy 等）」といったリファクタでも、判定ロジックが呼び出し側から封入先へ移った結果として呼び出し元の挙動が変わる場合は必ず起動する**: 例「LayoutStore::restore() で schema gate と scenario-owned 除外を一元化 → apply_layout_system の scenario-only 検出に `!windows_skipped_legacy` が加わった」→ 新しい不変条件が生まれたため FLOWS.md 更新が必要。「リファクタなので挙動変化なし」という思い込みが invoke 漏れの原因になる（実例: #165 LayoutStore 導入で behavior-to-e2e を発動せず）。**「sink seam 統合」「adapter 抽出」「runner 統合」「Protocol 新設」「共通モジュール抽出」といった Python-side の seam 導入 refactoring でも、新しい不変条件（sink.on_equity が必ず per-bar 呼ばれる、instruments_override が scenario を上書きする 等）が生まれる場合は必ず起動する**（実例: #190 `replay_runner.py` 新設＋2 runner 統合で `/behavior-to-e2e` がコマンドに明示されていたが invoke せず FLOWS.md/wiki 未更新のまま push した）。コマンドに `/behavior-to-e2e` が含まれている場合は実装完了直後、`post-impl-skill-update` と同時に必ず invoke すること。
-  **「既存 Protocol へのメソッド追加」「mock に no-op 実装を追加」でも、`hasattr` / `isinstance` による dispatch の挙動が変わる場合は必ず起動する**: 例「`MockVenueAdapter` に `set_execution_hooks` を追加 → `_backend_impl.py` の `hasattr(adapter, 'set_execution_hooks')` チェックが mock でも通るようになった」→ mock を使う integration test が新しいコードパスに入る新不変条件が生まれる。「Protocol 新設」だけでなく「Protocol へのメソッド追加・契約明文化リファクタ」も同様に扱うこと（実例: #189 で `OrderingVenueAdapter` に `set_execution_hooks` を追加したが invoke 漏れ）。
-  **E2E / wiki の網羅性そのものを問われたとき（カバレッジ監査）も必ず本スキルを起動する**:
-  「全機能が `docs/wiki` に網羅されているか」「e2e で全パターン漏れなくテストされているか」「網羅されてる？」
-  「テストの抜け漏れを洗い出して」「flow が全部 runner に登録されているか」「登録漏れ / 孤児 flow がないか」
-  「`tests/e2e_replay.rs` の `#[path]` 登録ドリフトを確認」「doc stub なのに登録されている flow」
-  「wiki ↔ FLOWS.md ↔ flow ファイルの三者照合」と言われたら起動する。
-  **ゲート自動化トレーサビリティ（ADR 0008 / `tests/e2e/gate_coverage.yaml` / `scripts/gate_coverage_report.py`）を
-  触ったときも本スキルを起動する**: 「gate_coverage.yaml を更新」「ゲート目視項目を manifest に転記」「rollup を出す」
-  「`--libtest-json` で実 pass 判定」「`run_replay_json.ps1`」「S1/S2/S3/S4/S5/S6/S8/S9 ゲート自動化」「#85/#86/#87 を manifest に
-  マッピング」「`visual_gate` / `visual_residue` / `backend_test` フィールドを足す」「視覚ゲート」「bevy_ci_testing で自己スクショ」
-  「オンデマンド視覚ゲート」「`tests/e2e/visual_gates/*.ron`」「golden を撮る/コミット」、さらに「automation-gap を埋める」
-  「missing-registration を 0 に」「backend-judgment-gap を 0 に」「ゲートに flow を紐付ける」「`backend_test` を gate に紐付ける」
-  「残 gap の flow/pytest 紐付け」「rollup から gap を消す」「issue #115 のような残ゲートの自動化」と言われたら、manifest の
-  `flows[]` が参照する FlowID と `tests/e2e/flows/` の実体・`e2e_replay.rs` の
-  登録を突き合わせ（dangling 0）、FLOWS.md 末尾の「代替方式」テーブルに対応 row を追加/現行化する。
-  この監査では `scripts/check_e2e_flow_consistency.py`（real `#[test]` あり未登録＝FAIL / 登録済み test なし＝FAIL /
-  wiki dangling・undocumented＝WARN+allowlist）を使い、FAIL は必ず潰す。`#[test]` の検出は `^\s*#[test]` 行のみ数え、
-  `//!` / `//` doc コメント内の `#[test]` 例を実テストと誤検出しないこと（2026-06 の手動監査で 152 と誤計上した実例）。
-  **E2E テスト / 手動検証セッション中にバグが再現・確認されたとき（issue が発生した / チカチカする /
-  クラッシュした / 動かない 等）も必ず本スキルを起動する**: CLAUDE.md の「不具合を修正するときは先に RED を書く」
-  ルールを担保するため。RED→verify RED→fix→GREEN→全体テスト の順序を守らせる責務が本スキルにある。
-  `/e2e-testing` セッション中にバグが発見された場合は即座に本スキルを併発し、修正に入る前に
-  `tests/e2e/flows/<id>.rs` に RED テストを書いて `cargo test` で assert fail を確認すること
-  （2026-05-30 の issue #69 followup で、/e2e-testing 中にバグを発見したのに behavior-to-e2e を発動せず、
-  修正後に GREEN テストを追加してしまい「本当に RED になるか」未確認になった実例）。
-  **着手した issue / 計画書の本文が「behavior-to-e2e」を名指ししている、または新しい flow ID（例 M12 /
-  N1）の追加＋ `tests/e2e/FLOWS.md` 追記＋ wiki `[FlowID]` 引用をひとまとめに指示しているときは、ユーザーが
-  他スキル（`bevy-engine` / `pair-relay` / `plan` 等）を明示していても本スキルを併発する**
-  （`feat(ui):` で M/N 群の release-gate flow を新設するタスクが典型。テスト＋FLOWS.md＋wiki が
-  「実装の付録」ではなく本スキルの本体なので、実装スキルに気を取られて取りこぼさない）。
-  **issue タイトルに「headless stub」「doc stub を実装」「スタブを #[test] にして」「既存挙動の stub 実装」
-  が含まれる場合も必ず発動する**（issue #81 で `/plan /bevy-engine` だけが明示され behavior-to-e2e が
-  無指定だったが、実質 flow を実装するタスクだった実例）。
-  **`gh issue #N に着手してください` のような issue 着手指示で `gh issue view` を fetch したとき、
-  issue 本文に `m13` / `M13` / `N1` のような flow ID パターン（英字 1〜2 文字 + 数字）や
-  「FLOWS.md 追記」「wiki 現行化」「[FlowID] を引く」という文言が含まれれば、
-  他スキルと同時に本スキルも並発する**（issue #41 の S5 が m13/m14/m15 を明記していたにもかかわらず
-  `/bevy-engine /pair-relay /plan` を優先して見落とされた実例）。
-  **issue タイトルが `feat(e2e):` / `feat(gate):` / `chore(gate):` で始まる issue を実装するときも
-  必ず本スキルを発動する**（#125-#131 を「gh issue #123-131 を実装して /plan /bevy-engine /grill-with-docs」で
-  着手したとき、タイトルに `feat(e2e): Venue メニュー状態 flow を追加する` 等が含まれていたにもかかわらず
-  behavior-to-e2e が完全に見落とされた実例。/plan や /bevy-engine が明示されていても e2e flow 追加が
-  本体なら behavior-to-e2e は必須）。`gh issue list` / `gh issue view` でタイトルを取得した瞬間に
-  `feat(e2e):` `feat(gate):` `chore(gate):` を含む issue が 1 件でもあれば即発動する。
-  **プランに FLOWS.md 更新・wiki 更新・E2E テスト作成が既に計画されていても本スキルは必須**:
-  プラン通りに実装した後でも「FLOWS.md エントリの品質確認（doc stub になっていないか、FlowID が wiki と合っているか）」
-  と「wiki ↔ E2E 同期確認」は本スキルの担当。実装スキル（pair-relay / plan）が FLOWS.md を書いたとしても、
-  実装完了後に本スキルで品質チェックを回す（issue #45 で pair-relay 実装・m24 テスト作成・FLOWS.md 追記まで
-  プランで網羅されていたが、behavior-to-e2e が一度も発動されず wiki 確認がスキップされた実例）。
-  **`docs/wiki` 等のドキュメント/wiki レビューで「実装済みなのに『未実装』『開発中』『将来』扱い」の機能が
-  見つかった**ときも本スキルを開く（「wiki を修正」「ドキュメントを実装に追従」と言われたら併発）: その機能は
-  E2E 未カバーのことが多い（実装が先行し doc も flow も置き去り）。wiki を現行化しつつ、対応 flow が
-  `tests/e2e/flows/` に無ければ追加し、wiki 本文に `[FlowID]` を引く。
-  **バグ修正で挙動が変わった（fix + behavior change）とき**も必ず発動する: `fix(xxx):` コミットで
-  transport/ECS の振る舞いを変えた場合、対応する flow（例: j17 `FetchAvailableInstruments flush`）を
-  FLOWS.md に追記し、unit/integration テストを回帰ガードとして記録する。issue ベースで RED テストを
-  書いた場合は flow を `- [ ] RED＝回帰ガード` → GREEN 後に `- [x]` に更新する
-  （CLAUDE.md「不具合修正前の E2E メンテナンス」に対応するが、**その flow を FLOWS.md に記録する作業が
-  本スキルの仕事**。実装スキルに気を取られて FLOWS.md 記載が省略されがちなため明示）。
-  **issue の「対処案」セクションに「RED E2E を追加」「FLOWS.md も更新」「wiki: flow ID を反映」が含まれるとき**も
-  他スキル（`/pair-relay` / `/tdd` / `bevy-engine` など）と同時に本スキルを併発する。ユーザーが明示しなくても
-  `gh issue view` の本文を読んで自律的に発動する（issue #67: /plan /pair-relay /tdd が明示されたが、
-  対処案に「RED E2E + FLOWS.md + wiki」が揃っており behavior-to-e2e が見落とされた実例）。
-  **issue の「Slice N」形式のタスク（e.g. Slice 3 — Orders パネル）で新しい UI 可観測挙動が生まれるとき**も
-  必ず本スキルを発動する。Slice 完了後に b3 / b4 などの新 flow が生まれるが、pair-relay ループが FLOWS.md
-  追記と wiki 更新を置き去りにしやすい（issue #68 Slice 3/4/7 で b3 プレースホルダー作成にとどまり
-  FLOWS.md 追記・wiki 更新が未実施だった実例）。`RustBacktestSink.push_order` / `push_portfolio` など
-  新しい sink メソッドを実装した直後も同様（BackendStatusUpdate が新しく UI に届く = 新 flow が生まれる）。
-  **「RED のつもりで書いたテストが最初から GREEN」＝fix 既適用パターン**: コードを直す前に書いた
-  テストが即 GREEN になる場合は「バグが既に修正済み（別 PR / 別コミットで先に入った）」か
-  「テストの assert が誤っていて実は bug を捕捉できていない」のどちらか。前者（例: issue #57 で
-  `ChartSet::DataTick.after(backend_update_system)` が既に配置済みだった）は、コードを変えずに
-  そのまま FLOWS.md へ `[x]` 回帰ガードとして記録し、commit message と FLOWS.md エントリに
-  「fix は既適用・これは回帰ガード」と明記する。後者（テストが bug を捕捉できていない）は assert の
-  設計を見直し、実際に壊れた状態で RED になる assert を書き直してから進む。
-  **「未実装扱い」だけでなく、UI 機構のリファクタで wiki が *旧機構* を記述したまま食い違っている**
-  ケースも同様に本スキルの対象（例: 「サイドバーの Startup パネル」→ floating window 化、`Node.display`→`Visibility`、
-  Bevy-UI → sprite 化、`×` ボタンの有無変更）。「サイドバーパネルを floating window に作り替える」「UI を
-  別ホストに移植する」「wiki が実装と食い違う / 旧 UI を記述している」作業に着手したら、コードと同時に
-  `docs/wiki/*.md` の該当機構記述（"サイドバー" / "パネル" 等）を grep して現行化する。例: Phase 10 Live Auto
-  （LiveStrategyEvent / SafetyRailViolation / StrategyLogMessage / LiveStrategyTelemetry /
-  LiveStrategyPromoteResult）は wiki が「未実装」と書く一方で flow 皆無 → N 群（`kind:state`）を新設。
-  **「この挙動をテストするテストはあるか」「既にテストされているか」「テストでカバーされているか確認したい」
-  「FLOWS.md に該当 flow があるか」「カバレッジを確認」のような”テスト作成”でなく”カバレッジ照会”の問いでも必ず起動する**
-  （既存 flow / e2e_replay / Python テストを棚卸しし、足りない分だけ flow 化する。穴が headless 不可なら fake せず
-  doc gap として FLOWS.md に明記する）。
-  **issue の AC / 仕様に enum バリアント（VenueState / ExecutionMode など）が列挙されているとき、そのバリアントを
-  全て網羅するテストを作ること**: 「Connected → 表示、Disconnected → 非表示」と書いてあっても、「Reconnecting」
-  「Authenticating」「Error」は明記されていないと実装時に漏れやすい。AC に「〜等」や「〜の場合も」がある場合は
-  enum の全バリアントを grep して網羅を確認し、足りないテストを flow に追加する
-  （issue #55 で `Reconnecting` テストが漏れ、code-review で事後検出された実例）。
-  **既存 flow が root/枠だけを assert していて子・中身・深い不変条件を取りこぼしている『カバレッジギャップ』を
-  埋める**ときも本スキルを開く（issue の [MEDIUM]/follow-up で「m12 は root の `Visibility` しか見ていない」
-  「子（editor/gutter/scrollbar）まで隠れることを検証していない」「m11 のように Parent 連鎖で
-  `InheritedVisibility` を辿る assert を足す」と指摘されたら、その flow を実 entity spawn 版に強化し
-  FLOWS.md の該当行も追従させる。m8→m11、#33→m12 が実例。新規 flow ID の採番ではなく既存 flow の強化なので
-  「新しい flow を足す」トリガーから漏れやすいが本スキルの本体）。
-  さらに **`e2e_replay` が全本落ちる / ハーネスが panic する / `could not access system parameter` が出た /
-  マージ後に E2E が壊れた / `BackendEvent`・`BackendStatusUpdate` などの列挙子にフィールドが増えて
-  `e2e_replay` が `missing field` でコンパイルできない（テストドリフト）**ときの**ハーネス修復**も本スキルの対象
-  （必要 resource の insert 漏れ・列挙子フィールド追従漏れが定番原因）。
-  **Phase ブランチ（`sasa/N-...`）や E2E ブランチ（`docs/e2e`）を main にマージする / マージの健全性を
-  確認する**ときも、壊れてから直すのではなく着手時に本スキルを開く: まずマージが Rust
-  （`src/**`/`.proto`/`tests/*.rs`）を触るかを確認し、触るなら各 system の `Res`/`ResMut` 引数を grep して
-  新規 resource が `tests/e2e/support/mod.rs` の `Harness` に insert 漏れしていないか先に確認する
-  （例: Phase 10 で `LiveRuns` / `PromoteFeedback` 追加 → 入れ忘れて全本 panic）。
-  既存方式で不可能な場合も「対象外」にせず、代替方式（`kind:ui` / `kind:render` / `kind:integration` /
-  `kind:manual-gate`）を FLOWS.md に明記する。
-  **バグ修正（issue 実装）で CLAUDE.md の「先に RED テスト → コード修正 → GREEN」フローが求められる場合も必ず本スキルを
-  発動する**: Python 側のバグでも Rust 契約テスト（`BackendStatusUpdate` seam での contract flow）が Acceptance Criteria
-  に含まれていれば D9 のような flow + FLOWS.md 追記 + wiki [FlowID] 引用が必要。`pair-relay` の Navigator が内部で
-  カバーしても、本スキルを明示的に invoke しないと flow/wiki 追加が「実装の付録」として埋もれやすい（実例: #39 Slice 1
-  で D9 flow + venues.md + modes.md 更新が必要だったが behavior-to-e2e を invoke せず、pair-relay Navigator 任せになった）。
-  **さらに重要: 初期プロンプトが「レビューして修正して」「Medium をつぶして」のような /pair-relay・code-review ループで、
-  flow/wiki の必要性が *レビュー途中で判明する*（codex/Navigator が新しい不変条件・取りこぼしを指摘 → 新 flow ID 追加や
-  FLOWS.md/wiki の現行化が要る）パターンでも、その時点で本スキルを invoke する**。初期プロンプトに flow/wiki 意図が無く
-  ても、レビュー駆動で挙動を変えた / 新 flow を足すと決まった瞬間が発動点（実例: #39 Slice 2 のレビューで AccountEvent
-  ゲートを新設し D22/D23 + modes.md を更新したが、また behavior-to-e2e を invoke せず Navigator 任せになった＝Slice 1 と
-  同じ取りこぼしの再発）。レビュー中に設計が変わったら、先に書いた FLOWS.md の Mechanism 列 / wiki が *旧機構を記述したまま*
-  食い違う事故が起きやすい（Slice 2 では D23 の Mechanism 列が撤去済みの `_publish_account_snapshot` gate を指したまま残り
-  最終レビューで Medium 指摘になった）ので、設計変更のたびに FLOWS.md/wiki の該当記述も同時に追従させる。
-  **さらに、headless 不可で `#[ignore]`/doc-stub のまま諦めていた flow を「実テスト化」する**ときも本スキルを開く
-  （「i8/i14 を headless テスト可能にする」「`#[test] #[ignore]` を外したい」「rfd / ファイルダイアログ /
-  `AsyncComputeTaskPool` / async task を seam でバイパスしてテスト」「ダイアログ要求と書き込みを分離してテスト可能に」
-  「Save As の書き込み結果を assert したい」と言われたとき）: production に最小の test seam を足して
-  （None 分岐を event 委譲に変える・`inject_resolved` 等の注入口を Resource に足す・private system を `pub` 化する）
-  `AsyncComputeTaskPool`/rfd を一切踏まずに書き込み側だけを駆動し、FLOWS.md の当該 flow を `#[ignore]`→✅ /
-  代替方式テーブルを更新する。production 経路は無変更に保つ（注入口は本番では誰も呼ばない）。`tdd`（RED→GREEN の
-  vertical slice）と `pair-relay`（Navigator/Driver 分業）を併用すると seam 設計と回帰防止が安定する。
-  Rust の一般的なユニットテスト作法は `rust-testing` を併用する。
-  **「Slice N から実装して」「Slice N を実装してください」のような issue スライス実装指示でも必ず本スキルを発動する**:
-  ユーザーが `gh issue view` を経由せず直接「Slice N から」と指示した場合も、新機能実装 = 新しい不変条件が生まれる
-  ため FLOWS.md への flow 追加が必須（実例: issue #68 Slice 1 で「Slice 1 から実装して」と言われ behavior-to-e2e を
-  invoke せず、FLOWS.md B1 エントリは追加したが本スキルの wiki 品質チェックがスキップされた）。
-  **Python gRPC backend の挙動を保証したい**ときも本スキルを開く（「EC stream イベントで account が更新されることをテスト」
-  「account_sync の dedup をテスト」「server_grpc の挙動をテスト」「Python の backend 挙動を E2E で保証したい」
-  「Slice N の Python 側テストを書く」）: Rust ECS seam だけでなく `kind:integration`（Python pytest）の flow として
-  FLOWS.md に追加し `python/tests/` に自動テストを足す。EC stream → force_resync トリガー、mode 遷移 →
-  account_sync 存続、dedup 保証など「Python サービス内の状態機械」は pytest でカバーできる（Rust seam は不要）。
-  **この場合も FLOWS.md への flow 追加・wiki の [FlowID] 引用は必須**（Rust E2E に限らない）。
-  **「verify first」パターン（issue に「まず混入するか確認してから修正」「RED が立つか先に検証」「本当に再現するか確かめてから直す」と書かれているとき）でも本スキルを発動する**: verify-first はテストを先に書いて問題を実証するアプローチであり、RED テスト + FLOWS.md 追記 + wiki [FlowID] が必要。issue の Acceptance Criteria に「verify first」が含まれていれば、実装の説明が詳細でもスキルを invoke する（#39 Slice 2 の「verify first: live 接続状態で Replay に切替えたとき混入するか確認（RED が立つか）」が典型）。
-  **`spike` / `PoC` / `throwaway prototype` / `Go-No-Go gate` の実装でも必ず本スキルを invoke する**:
-  ADR / plan が「spike は throwaway なので E2E 自動化は次フェーズに送る」と明記していても、その**skip 判断を
-  本スキル内で取る**こと（plan の段階で skip を即決すると flow ID 採番・FLOWS.md への `kind:manual-gate` 記載・
-  Phase B 完了時の積み残し追跡が落ちる）。例: issue #50 Step 0 spike（bevscode CodeEditor の Projected Node
-  動作確認）は throwaway PoC で screenshot 自動化を Phase B 送りにする判断は妥当だが、`kind:manual-gate` flow
-  として 5 デモ目視（描画 / drag / pan / zoom / click→typing）を FLOWS.md に明記しないと「いつ Go と判定したか」
-  「次 Step に何を引き継ぐか」が記録から落ちる。**spike / PoC を実装した瞬間に invoke して、manual-gate flow を
-  起こすか / Phase B 送りで延期するか / 単体 unit test だけで十分かを本スキルで判定する**（実例: issue #50
-  Step 0 で本スキルを invoke せず、unit test 1 本だけ書いて完了扱いにしたが、5 デモ目視結果が FLOWS.md に
-  残らず Phase B 引き継ぎ時に「どの demo が PASS だったか」を会話履歴から発掘する羽目になった）。
-  **E2E テスト調査中に「この AC にテストが無い」「この挙動が自動テストでカバーされていない」というカバレッジ gap を自分で発見したとき**も本スキルを発動する（ユーザーが明示的に「テストを追加して」と言わなくても同様）: gap を発見→即テスト追加という流れでも FLOWS.md エントリの品質確認（doc stub になっていないか、FlowID が wiki と合っているか）と wiki の現行化は本スキルの担当。実例: issue #54 の E2E テスト調査で AC #3 のエラー表示に自動テストが無いことを発見 → テスト追加したが behavior-to-e2e を invoke せず wiki 確認がスキップされた。
-  **`src/ui/component/` に新しい UI コンポーネント（Toast / Tooltip / ContextMenu / Popover 等）を追加したとき**も必ず本スキルを発動する: 「コンポーネント layer はリファクタ」「既存 E2E に影響なし」と思い込みがちだが、新コンポーネントは TOAST_MAX=5 の eviction・Esc dismiss の priority・dismiss_priority=100 の ModalLayer push など **新しい不変条件** を生む。これを FLOWS.md に（unit test が既に書かれていても）doc 形式で記録し、docs/ui-theme.md などの wiki に [FlowID] を引くことが本スキルの仕事（実例: #46 Slice F で Toast/Tooltip/ContextMenu/Popover を追加したが behavior-to-e2e を invoke せず FLOWS.md/wiki 更新が漏れた）。
-  **`gate_coverage.yaml` への大規模ポリシー変更（`visual_residue` を pixel diff で ✅ に昇格・`🔴 manual-only` を mock venue で代替・プロセス要件をスコープ外として除去・ADR 0008 amendment）を完了したとき**も本スキルを発動する: `feat(gate):` コミットで FLOWS.md に新 flow（D12/D13/D14 等）を追加した場合、FLOWS.md エントリの品質確認（stale な FlowID 記述が残っていないか・doc stub と実 #[test] の乖離はないか）と `docs/wiki` の [FlowID] 引用更新が本スキルの担当。実例: issue #84 2026-06-04 方針変更実装セッションで `feat(gate):` コミットを作成し、D12/D13/D14 を追加し FLOWS.md を更新したが、behavior-to-e2e を一度も invoke せず wiki 確認がスキップされた（ユーザーが `/plan /grill-with-docs /rust-testing` を明示していたためスキルの自動発動が遮断された）。「`visual_residue を ✅ に昇格`」「`pixel diff 自動化`」「`mock venue で manual gate を自動化`」「`プロセス要件をスコープ外として除去`」「`ADR を amendment`」「`🔴 manual-only を削減`」「`gate ポリシーを変更`」「`compare_visual_gates.py` を実装」「`test_mock_venue_order_lifecycle.py` を追加」のいずれかが会話に出たら本スキルを発動する。
-  **⚠️ backcast(Unity) リポの throwaway spike（S0 #2 / S2-spike #7 / viz-spike #8 のような、auto-bootstrap を検証後に `AutoBootstrapEnabled=false` へ戻し ship しない探索 spike）は本スキル非適用**: backcast の release gate は **Bevy の `tests/e2e/FLOWS.md` / `tests/e2e_replay.rs` ではなく、`docs/spike/<name>-result.md` findings 文書 ＋ owner の playmode 目視ゲート**であり、FLOWS 採番・flow ファイル・e2e_replay.rs 登録は map しない。`gh issue #N を実施してください /grill-with-docs` のように grill と併発しても、対象が **bug 修正ではなく enhancement spike**（ship しない・near-term 消費者ゼロ・非 blocker）なら formal invoke は不要で、findings doc が E2E gate を兼ねる（実例 #8 viz-spike 2026-06-13: 司令塔＋3 Navigator が繰り返し「TTWR/Bevy 向け・非適用」と再判定した。判定基準は「ship する App 挙動が変わるか」＝ backcast の Replay/Live parity 等の **shippable** slice なら FLOWS manual-gate を検討、throwaway spike なら非適用）。
-  **⚠️ backcast の shippable Unity slice（Replay/Live parity・UI シェル等。例 #9-#13。#13 infinite canvas は durable で ship する）では、release-gate の正本は Bevy の `tests/e2e/FLOWS.md` ではなく `docs/findings/NNNN-*.md` に記録する「AFK `*Probe.cs`（`-executeMethod`）のセクション一覧 ＋ owner 向け HITL チェックリスト」**（spike の `docs/spike/` とも別物）。backcast には FLOWS.md が無いので、上の「shippable なら FLOWS manual-gate を検討」は **findings の AFK probe セクション設計 ＋ HITL checklist 設計**に読み替える。これは通常 `grill-with-docs` が設計段階で駆動し（probe の非空転セクション・HITL 手順を findings へ確定）、本スキルを別途 formal invoke する必要は無い（実例 #13 infinite canvas 2026-06-13: grill-with-docs で 6 セクション AFK probe ＋ HITL チェックリストを findings 0006 §5 に確定。FLOWS.md は存在しないため非適用。pan/zoom 追従の AC2 は probe で「Unity transform engine == CanvasViewMath」の非トートロジー cross-check として固定）。
-  **engine スライス（Backcast Execution Kernel）でも同じ**: #24（kernel tracer・findings 0008 / `KernelTeardownProbe.cs` ＋ `KernelSinkDecodeProbe.cs`）・#25（Kernel Live Foundation・findings 0011 / `KernelLiveProbe.cs`）のように、release-gate は ① `uv run pytest`（決定的 CPython ゲート: FSM・golden 一致・full LiveAuto **import-purity** を fresh subprocess で）＋ ② `docs/findings/NNNN-*.md` に記録する AFK `*Probe.cs`（`-executeMethod` で Unity-Mono full lifecycle・Rust core 非ロード・clean teardown・exit 0）＋ owner HITL。これも `grill-with-docs` が設計段階で findings に確定するので（D1–D8 を findings 0011 §に記録）、本スキルの別途 formal invoke は不要（実例 #25 2026-06-13: `/grill-with-docs /nautilus-trader` ＋ enhancement engine slice。grill が findings 0011・probe・3 層 purity gate を確定し、behavior-to-e2e の formal invoke は省略＝line 189 規約どおり正）。**✅ #23（Live demo roundtrip done-gate・`/grill-with-docs` 単独で実施）でこの carve-out が bug-class fix 混在スライスでも成立することを確認**: #23 は engine 層の cancel-ACK **bug-class fix**（kabu `cancel_order`→PENDING_CANCEL・poll→broker async 確定配線・manual facade/legacy consumer の honor＝line 13 の bug-fix トリガーに該当）と production Live shell の feature を 1 done-gate に束ねる混在スライス。grill-with-docs が findings 0014・AFK probe（`ProductionLiveShellProbe`）・HITL checklist（`LiveDemoRoundtripMenu`）を設計確定し、**cancel-ACK の RED→GREEN（`test_kabu_cancel_ack` / `test_order_facade_cancel_ack` / `test_nautilus_exec_client_cancel_ack` / `test_kernel_live_cancel_ack_async`）を findings 0014 §実装結果に記録**した。判定: 混在スライスでも line 189-190 の carve-out が勝つ条件は「**bug-class fix の RED→GREEN を findings に記録した**こと」＝line 13 の実体（FLOWS.md 採番ではなく RED→GREEN の記録）を満たしていれば別途 formal invoke は不要。line 13 と 189-190 の境界＝backcast では「formal invoke の有無」ではなく「findings に RED→GREEN を記録したか」が判定軸（2026-06-14）。
+  backcast（Unity C# + 埋め込み Python の取引アプリ・このリポジトリ）で、ユーザーが挙動を言葉で語ったとき
+  ——「こう動いてほしい / こうなったら困る / この挙動を保証して / 目視せず自動で確認したい / 台本にしたい /
+  リリース前に壊れてないか担保したい」——それを **E2E 回帰ゲート**に変換するスキル。backcast の E2E 正本は
+  **AFK Unity batchmode probe（`-executeMethod <…>Probe.Run` / `<Surface>E2ERunner.cs`）＋ `docs/findings/NNNN-*.md`
+  の RED→GREEN・再走手順**、純 Python は **pytest / golden gate**。**Bevy の `tests/e2e/FLOWS.md` /
+  `tests/e2e_replay.rs` は backcast に無い**（あれは移植元 TTWR 専用＝`references/ttwr-bevy-legacy.md`）。
+  必ず起動する場面: 「この挙動をテスト/ゲートにして」「ユーザーストーリ（台本）をテストに」「台本を書いて」
+  「E2E で通したい」「N ステップを通しで確認」「目視の代替」「全行動を網羅したい / 網羅台帳」「テストでカバー
+  されているか確認（カバレッジ照会）」「リプレイ/発注/ポートフォリオ/venue ログインの挙動を保証」。
+  **不具合修正（「issue #N を修正」「bug を直す」「配線漏れを実装」）・レビュー指摘修正（「review findings を
+  fix」「Medium をつぶして」）・stub 実装（「NotImplementedError を解消」）・検証/クローズスライス（「発火する
+  test で証明」）・spike の gate 判定**も、挙動が変わる/AC が AFK probe・characterization・HITL gate を要求するなら
+  起動命令。**enum バリアント（VenueState / ExecutionMode 等）が AC に列挙されていたら全バリアント網羅**。
+  ⚠️ **最重要の不変条件**: ユーザーが他スラッシュコマンド（`/grill-with-docs` `/parallel-agent-dev`
+  `/nautilus-trader` `/tdd` `/simplify` `/plan` 等）を**明示タイプ**していても、台本・E2E・網羅・挙動保証・
+  RED の語が出たら **設計インタビュー/実装に入る前に最初に本スキルを formal invoke** する。過去 12+ 回、
+  タイプ済み他スキルや grill の設計に注意が奪われて invoke を飛ばし、成果物だけ後付けで揃える miss を繰り返した
+  ——**成果物の品質・設計済み度・新規性と formal invoke は独立**（詳細と masking phrase の一覧は本体「過去の
+  invoke 漏れ」節）。TTWR(Bevy) リポで E2E を触るときだけ `references/ttwr-bevy-legacy.md` を読む。
 ---
 
-# behavior-to-e2e — 挙動の言葉を E2E テストに変える
+# behavior-to-e2e — 挙動の言葉を backcast の E2E ゲートに変える
 
-ユーザーが日本語で語った「こうあってほしい挙動」を、`tests/e2e/FLOWS.md` の flow と、対応する自動テストまたは
-release-gate 項目に落とす。既存の `tests/e2e_replay.rs` は backend→ECS seam を検証する state harness だが、
-リリース前の最後の砦としてはそれだけでは足りない。ユーザーが取りうる操作は原則すべてカタログ化し、
-可能な限り自動テストにする。採用中の方式で忠実に検証できない場合も除外せず、代替方式を明記する。
+ユーザーが日本語で語った「こうあってほしい挙動」を、backcast の回帰ゲートに落とす。**取りうる操作は原則すべて
+カタログ化し、可能な限り自動テストにする**。自動化できないもの（実ピクセル・実 venue・OS ダイアログ）も除外
+せず、HITL として理由付きで台帳に載せる。
 
-> **このリポジトリ（backcast）では FLOWS.md / `tests/e2e_replay.rs` は無い**。以下の本文は移植元 TTWR(Bevy)
-> 向け。backcast slice では正本が異なる（詳細は description の line 13）。最短の対応表:
-> | 挙動の出所 | gate（backcast 正本）|
-> |---|---|
-> | Python seam ロジック（engine/*・handler・poll）| `python/tests/test_*.py`（pytest。fake/stub で seam を直接駆動・RED→GREEN を findings に記録）|
-> | C# / Unity 挙動 | AFK batchmode probe（`-executeMethod <…>Probe.Run`）＋ HITL harness の hard assert |
-> | 純 Python engine（Unity 未配線・oracle あり）| golden gate スクリプト（capture/verify）＋ `docs/findings/NNNN` の AC 対応表 |
-> | **spike probe の卒業**（#76 等 throwaway→本実装）| spike probe を production pytest gate に卒業し、AC→gate 表を `docs/findings/NNNN` に記録。spike-only dep（marimo 等）は `pytest.importorskip` で gate（実例 #76 S1: `test_strategy_runtime_thin_drain.py`＝perf/contract/precompute/parity、`test_strategy_runtime_offline.py`＝runtime seam が dep を引かない不変条件を clean subprocess で固定）|
->
-> backcast では「**probe/pytest を回帰ゲートとして著したか／findings に RED→GREEN・再走手順を記録したか**」が
-> 本スキルの実体。FLOWS.md 採番に拘泥しない。`/grill-with-docs` 併発時は設計インタビュー着手前に **最初に formal
-> invoke**（成果物の品質・設計済み度・新規性と formal invoke は独立＝飛ばさない。#76 S1 はこれを実践＝miss せず）。
+> **backcast ≠ TTWR。** 本体は backcast（Unity C# + 埋め込み Python）専用。Bevy の `tests/e2e/FLOWS.md` /
+> `tests/e2e_replay.rs` / Rust `Harness` / `BackendStatusUpdate`→resource seam は backcast に**存在しない**ので、
+> それらの機構が要るとき（＝TTWR リポでの作業）だけ [`references/ttwr-bevy-legacy.md`](./references/ttwr-bevy-legacy.md) を読む。
 
-## なぜこの形なのか（先に理解する）
+## backcast の E2E 正本（gate 早見表）
 
-本アプリには複数の検証面がある。backend（Python gRPC、replay/live runner）が push する状態は
-`BackendStatusUpdate` / `BackendEvent` / replay clock を注入すれば deterministic に検証できる。一方で、
-メニュー、モード切替 gating、Strategy Editor、Startup パネル、銘柄ピッカー、チャート操作、注文フォーム、
-モーダル、レイアウト保存は、ユーザー入力・Bevy UI entity・ファイル I/O・描画 state が本体であり、
-backend→ECS seam だけでは十分条件にならない。
+| 挙動の出所 | gate（backcast 正本） |
+|---|---|
+| C# / Unity 挙動 | **AFK batchmode probe**（`-executeMethod <…>.Run`）＝回帰ゲート。探索用 `*Probe.cs` を `<Surface>E2ERunner.cs` へ昇格（ADR-0015）。実ピクセル・実ウィンドウは **owner HITL** |
+| Python seam ロジック（engine/*・handler・poll） | `python/tests/test_*.py`（pytest。fake/stub で seam を直接駆動）。RED→GREEN を findings に記録 |
+| 純 Python engine（Unity 未配線・oracle あり） | golden gate スクリプト（capture/verify）＋ `docs/findings/NNNN` の AC 対応表 |
+| spike probe の卒業（throwaway→本実装） | spike probe を production pytest gate へ卒業。spike-only dep は `pytest.importorskip` で gate |
+| ユーザーストーリ（台本） | `Assets/Tests/E2E/Editor/<Name>E2ERunner.md`（台本＝合否の正本）＋ `<Name>E2ERunner.cs`（自動判定） |
 
-したがって flow には必ず `kind` を割り当てる:
+**backcast での本スキルの実体＝「probe/pytest を回帰ゲートとして著したか／findings に RED→GREEN・再走手順を
+記録したか」**。FLOWS.md 採番に拘泥しない。
 
-| kind | 使う場面 | 主な観測 |
-|---|---|---|
-| `state` | backend→ECS seam で十分に検証できる挙動 | resource 状態 |
-| `ui` | Bevy UI 操作、キーボード、focus、modal、gating | `Interaction` / `ButtonInput<KeyCode>` / text input 注入、entity `Text` / `Display` / command channel |
-| `render` | headless resource では画面崩れを検出しづらい挙動 | 実ウィンドウ smoke、スクリーンショット、構造化 UI dump |
-| `integration` | CLI、backend、file I/O、env guard、実プロセス | temp fixture、出力ファイル、gRPC 応答、exit status |
-| `manual-gate` | 実口座など自動化が危険または不可能なもの | 手順、期待結果、実施記録。必ず自動 smoke と組み合わせる |
+## 二層 E2E と台本規約（ADR-0015）
 
-## ワークフロー
+E2E は `Assets/Tests/E2E/Editor/*E2ERunner.{md,cs}` に置く。`.md`＝台本（仕様・観測点・合格条件の正本）、`.cs`＝
+自動判定。共通規約は [`Assets/Tests/E2E/Editor/E2E-CONVENTIONS.md`](../../../Assets/Tests/E2E/Editor/E2E-CONVENTIONS.md)、
+全台本のロールアップ網羅台帳は `E2E-INDEX.md`。
 
-1. **挙動を 1 文の不変条件に言い換える**。「Run したら完了する」→「`RunStarted` の後 `RunComplete` を受けると
-   `RunState` が `Running`→`Completed` になり `parsed_summary` が埋まる」。UI 操作なら
-   「クリック/入力後、どの entity/resource/file/command が変わればユーザー行動が保証されたと言えるか」まで落とす。
-   曖昧なら何を観測すれば「動いた」と言えるかをユーザーに確認する。
-2. **FLOWS.md に該当 flow があるか見る**。あれば ID（A1/B2/D3…）と seam・観測がそのまま設計。
-   なければ新規 flow として、近いセクション（A〜L）に `- [ ]` 行を追記してよい。
-   ⚠️ **「この挙動は既にテストされているか」を判定するときは `tests/e2e/` だけ見て『未カバー』と結論しない**。
-   spawn/dedup/視認性のような **UI system は `src/ui/**` の `#[cfg(test)] mod tests` に unit テストが
-   ある**ことが多い（dispatcher の spawn/重複は `tests/e2e/flows/m1,m5` ではなく `floating_window.rs` の
-   `order_dispatcher_tests` にある等、system 本体の隣に置かれる）。`grep -rn '<system名>\|<Marker>' src/ tests/`
-   で **src と tests の両方**を当たってから gap を申告する（#25 の確認で、dispatcher Order arm を
-   m1/m5 だけ見て「欠落」と誤判定し、実際は floating_window.rs unit テストで既出だった）。
-   ⚠️ **新規 ID を採番する前に衝突を必ず確認する**: FLOWS.md の「保留中の `A5`/`C5`/`D8` など」リストと
-   `docs/wiki/**` の `[<ID>]` 参照を両方 grep する。**保留中（planned）の ID が wiki では既に別挙動に
-   bind 済み**ということがある（例: #32 Slice 2 で C5 を採ろうとしたら、FLOWS.md は C5 を planned 扱いの一方
-   wiki venues.md が `[C5]`=`SelectedSymbol` 更新の planned flow に既に割当済みだった → C6 に採番し直した）。
-   `grep -rn '\[C5\]' docs/wiki tests/e2e/FLOWS.md` で空でない ID は避ける。
-3. **kind を決める**。backend→ECS の resource 変化だけで十分なら `kind:state`。UI 操作・入力・未送信 gating は
-   `kind:ui`。ファイル/CLI/backend/env は `kind:integration`。見た目崩れや overlap は `kind:render`。
-   実口座など自動化が危険なら `kind:manual-gate` だが、必ず自動 smoke と組み合わせる。
-4. **state flow は seam を特定する**（下表）。`src/backend_sync.rs` の `apply_status_update` と
-   `backend_event_drain_system` が「どの `BackendStatusUpdate` / `BackendEvent` がどの resource をどう変えるか」の
-   正解。推測せずここを読む。
-5. **ui flow はユーザー入力 seam を特定する**。`Interaction::Pressed`、`ButtonInput<KeyCode>`、`MouseWheel`、
-   text input、focused entity、time advance、command channel のどれを注入し、どの entity/resource/file を assert するかを決める。
-   「command を送らない」ことが仕様なら、transport channel を監視して未送信を assert する。
-6. **integration/render/manual-gate flow は代替方式を書く**。OS file dialog は選択済み path event/resource を注入する。
-   実ウィンドウ smoke は `BACKCAST_E2E=1` の固定 fixture、スクリーンショットまたは構造化 UI dump で確認する。
-   実 venue は env isolated backend integration と手順付き manual gate に分ける。
-7. **実装する**。`kind:state` は `tests/e2e_replay.rs` に `#[test]` を足す。`Harness::new()` → seam を send →
-   観測を assert。`kind:ui` / `kind:integration` / `kind:render` は既存 harness が無ければ `tests/e2e/support/`
-   に薄い helper を足し、flow ごとに最小実装する。
-8. **観測アクセサが無ければ Harness に足す**（`tests/e2e/support/mod.rs`）。既存の `portfolio()` と同形:
-   `self.app.world().resource::<T>().clone()`。`BackendStatus` は `Clone` 非実装なのでフラグを直接返す
-   （`backend_connected()` 等の前例あり）。
-9. **走らせる**。state harness は `cargo test --test e2e_replay`。**初回コンパイルは Bevy 全体をリンクするため ~11 分**
-   かかる（バックグラウンド実行推奨）。integration/render は flow に書いた release gate command を実行する。green を確認。
-10. **FLOWS.md を更新**: 実装した flow を `- [x]` にし、末尾「実装状況」に 1 行追記。
-11. 完了したら `CLAUDE.md` 規約に従い `simplify` と `post-impl-skill-update` を発動。
+- **Surface E2E** … 1 画面部品でユーザーができる操作を網羅（入力・状態遷移・host 呼び出しまで）。
+- **Journey E2E** … 複数サーフェスをまたぐ実ユーザーストーリー（横断データ伝播）。例 `ReplayToHakoniwaE2ERunner`。
+- 各台本は**操作一覧表**（`Action ID(<Surface>-<NN>) / 行動 / 入口(file:line) / 観測点 / 自動判定 / カバー状態 / 既存Probe`）を持つ。
+- **カバー状態 5値**: `自動(E2E済)` / `自動(E2E済・<別Runner>)` / `自動(Probe有・要昇格)` / `要新規自動化` / `HITL専用`（理由併記） / `対象外`（理由併記）。
+- `Probe`（`Assets/Editor/*Probe.cs`）＝探索・使い捨て。回帰ゲート化したら `E2ERunner` へ昇格。
 
-## state seam → resource 早見表
+## ワークフロー（backcast）
 
-| 検証したい挙動 | 送る seam | 観測する resource |
-|---|---|---|
-| run のライフサイクル | `RunStarted` / `RunComplete{startup_id,run_id,summary_json}` / `RunFailed{startup_id,error}` | `LastRunResult.state`(`RunState`) / `.parsed_summary` |
-| replay clock（pause/resume/step） | `h.push_state(ts)`（`BackendChannel`、backend→ECS clock） | `TradingSession.timestamp_ms` |
-| 起動進捗・相関 ID | `ReplayStartup{startup_id,stage}`（要 `h.begin_startup(id)` 先行） | `ReplayStartupProgress.phase` / `.visible` / `.start_engine_accepted` |
-| ポートフォリオ | `PortfolioLoaded{...}` | `PortfolioState`(`loaded`/`equity`/`positions`/`orders`) |
-| 銘柄ユニバース | `InstrumentsListStarted/Listed/Failed{source,...}` | `Tickers`(`status`/`list`/`source`) |
-| 上場銘柄 fetch | `AvailableInstrumentsLoaded/FetchFailed{end_date,...}` | `AvailableInstruments`(`by_end_date`/`in_flight`/`last_error`) |
-| venue ライフサイクル | `VenueChanged{state,venue_id,instruments_loaded}` | `VenueStatusRes`(`state`/`instruments_loaded`) |
-| 実行モード | `ExecutionModeChanged{mode}` | `ExecutionModeRes.mode` |
-| ライブ価格 | `LastPricesUpdated{prices}` | `LastPrices.map` |
-| 接続状態 | `Connected(bool)` / `Running(bool)` / `Error(e)` | `BackendStatus`(`connected`/`running`/`last_error`) |
+1. **挙動を 1 文の不変条件に言い換える**。「何を観測すれば『動いた』と言えるか」を resource/フィールド/ファイル/
+   ログ行まで落とす。曖昧なら owner に確認。
+2. **既存カバレッジを棚卸し**。`Assets/Tests/E2E/Editor/*.md` の操作一覧表と `Assets/Editor/*Probe.cs`・
+   `python/tests/` を当たり、未カバーだけを新規にする。「未カバー」と断ずる前に既存 Probe の section を読む。
+3. **台本（.md）に Action 行を足す/更新**。カバー状態を 5値で付け、HITL/対象外 は理由併記。
+4. **gate を著す**: C#/Unity は AFK probe（`<Surface>E2ERunner.cs`、`Probe`→`E2ERunner` 昇格）、Python seam は
+   pytest、純 engine は golden。**RED→GREEN**（壊れた状態で RED を確認 → fix → GREEN）を `docs/findings/NNNN` に記録。
+5. **AFK で実走確認**（下記の罠に注意）。GREEN・exit 0・`error CS\d+` 0 件を確かめる。
+6. 完了したら CLAUDE.md 規約に従い `simplify` と `post-impl-skill-update` を併発。
 
-## UI / integration flow 早見表
+## AFK probe の実走確認（罠 3 点・memory `unity-afk-probe-run` が正本）
 
-| 検証したい挙動 | 入力 seam | 観測 |
-|---|---|---|
-| メニュー開閉 | `Alt+F/E/V`、menu button `Interaction::Pressed`、`Escape` | `OpenMenu`、menu entity の `Display` / `Visibility` |
-| モード切替 gating | Replay/Manual/Auto segment click | `TransportCommandSender` の受信有無、error/disabled 表示 |
-| File Open | OS dialog をバイパスし selected path event/resource を注入 | sidecar/strategy load、Strategy Editor spawn、scenario metadata |
-| レイアウト保存/復元 | window move/close/resize、Save/Load、time advance | temp sidecar JSON、復元後 `WindowRoot` / viewport |
-| Strategy Editor 入力 | focused editor + key/text input | `StrategyFragment`、cache file、history、find panel state |
-| Startup パネル検証 | field edit + Run button | error label、Run command 未送信/送信、sidecar writeback |
-| 銘柄ピッカー | `+ Add`、search text、candidate click、remove | candidate rows、placeholder text、scenario instruments、readonly |
-| Chart 操作 | wheel、Ctrl+wheel、drag、double click | `ChartViewState`、camera pan/zoom、autoscale |
-| 注文 UI / modal | form input、submit、confirm、context menu、Escape | command channel、modal visibility、feedback resource |
-| CLI/backend | process command、gRPC request、env guard | exit status、stdout、files、gRPC response |
-| render smoke | `BACKCAST_E2E=1` fixed fixture | screenshot or structured UI dump baseline |
+- **recompile-skip**: `.cs` 編集直後の初回 `-executeMethod` はコンパイルで終わり実行されない → **2 回目**で走る。
+- **flush race**: 通知直後の grep は 0 件に見える → shutdown sentinel（`Found no leaked weakptrs` 等）を待ってから再 grep。
+- **lock-abort**: 次の Unity 起動前に `Get-Process Unity` が空か確認（`Aborting batchmode: another Unity instance`）。
+  通常 Play 中（`Temp/UnityLockfile` 有）は batchmode と衝突する。
+- 実走確認は **Bash `grep -a "<TAG>"`**（ripgrep の Grep ツールも `Select-String` も `→` 入り PASS 行を取りこぼす）。
+- compile-only ゲート: `-batchmode -quit -projectPath . -logFile <log>`（`-executeMethod` 無し）で `error CS\d+` 0 件。
+- 実行: `<Unity> -batchmode -nographics -quit -projectPath . -executeMethod <Name>.Run -logFile <log>`。
+  Unity は `C:\Program Files\Unity\Hub\Editor\6000.4.11f1\Editor\Unity.exe`。
 
-## kind:integration レシピ — File Open → パネル spawn を headless で駆動
+## 直列制約（memory `e2e-wave2-runner-promotion` が正本）
 
-`tests/e2e/flows/i5_file_open_spawns_editor_and_chart.rs` が手本。state `Harness` は使わず、bare `App` に**必要な system だけ**を載せる（`UiPlugin` / `LayoutPersistencePlugin` 全体を足すと save/shortcut 系が `ButtonInput`/`Time` 等を要求し resource whack-a-mole になる）。要点:
+**runner 昇格は authoring も検証も「直列」**。`parallel-agent-dev` での並行は壊れる:
+- 全 runner が `Assets/Tests/E2E/Editor/` の同一 compile 単位＝同時 .cs Write でレース。
+- AFK は **Unity プロジェクトロックで同時 1 本のみ**（並走＝batchmode abort）。
+- owner の並行 git 操作とも干渉。
 
-- **seam**: temp `.json`（`windows:[{kind:"StrategyEditor", region_key:"region_001", ...}]`・`strategy_path:null`）を書き、`LayoutLoadRequested{ path, mode: LayoutLoadMode::UserJsonOpen }` を `send_event`。`apply_layout_system` は **`strategy_path` 付きだと `.py` ロード待ちに defer** するが、`strategy_path:null` + `windows` だと同フレームで `PanelSpawnRequested` を直接送る（headless で素直なのはこちら）。
-- **載せる system（すべて pub）**: `apply_layout_system` → `panel_spawn_dispatcher_system`（Strategy Editor spawn）→ `instrument_chart_sync_system`（Chart spawn）を `.chain()` で順序固定。`instrument_chart_sync_system` は `registry.is_changed()` で early-return するので `InstrumentRegistry` を **insert してから**初回 `update()` で spawn される。`scenario` JSON → `InstrumentRegistry` の parse は `scenario_parser` 単体テスト持ちなので registry は直接 insert してよい。
-- **resource**: apply_layout=`WindowManager`/`PendingLayoutApply`/`PendingStrategyFragments`/`ScenarioReadTarget` + `Camera2d` entity（`get_single_mut`）。dispatcher=`CosmicFontSystem`/`RegionKeyAllocator`/`AppHistory`/`PendingStrategyFragments`/`StrategyBuffer`。chart sync=`InstrumentRegistry`/`InstrumentTradingDataMap`。event=`LayoutLoadRequested`/`PanelSpawnRequested`/`StrategyFileLoadRequested` を `add_event`。
-- **観測**: `query_filtered::<(), (With<StrategyEditorId>, With<WindowRoot>)>()` 件数 ≥ 1、`query_filtered::<&ChartInstrument, With<WindowRoot>>()` に対象 `instrument_id`。
-- **cosmic / 依存の罠は `bevy-engine` スキル参照**（`CosmicFontSystem(FontSystem::new())` の手構築、`cosmic-text` を dev-dep 追加、外部 tests/ は normal deps は引けるが transitive は引けない）。
+→ `.md` 台本の authoring は並行可（前回 wave-1 で実証）。**`.cs` runner 昇格と AFK 検証は 1 本ずつ直列**。
+primary probe のみ移送し secondary probe は据え置く。新規 section の負 assert は presence/liveness guard を先に置く（vacuous 回避）。
 
-## ハーネス API（`tests/e2e/support/mod.rs`）
+## carve-out — 「formal invoke の有無」ではなく「findings に RED→GREEN を記録したか」が判定軸
 
-- 構築: `let mut h = Harness::new();`（`backend_enabled: true` で明示構築済み。env 非依存）
-- 注入: `h.send_status(update)` / `h.send_event(event)` / `h.push_state(ts)` — いずれも送信後 `tick()` まで実行
-- フレーム送り: `h.tick()`（= `app.update()` を 1 回。同期実行・即 return）
-- 起動窓を開く: `h.begin_startup(startup_id)` — `ReplayStartup`/`RunComplete` の相関ロジックは
-  `visible==true` かつ id 一致でないと no-op になるため、起動進捗系テストの前に必須
-- 観測: `run_state()` / `last_run()` / `portfolio()` / `timestamp_ms()` / `venue()` / `exec_mode()` /
-  `tickers()` / `available()` / `last_prices()` / `startup_progress()` / `backend_connected()` / `backend_running()` /
-  `live_orders()` / `order_feedback()` / `secret_prompt()`
+backcast の shippable slice / engine slice では、release-gate の正本は **AFK `*Probe.cs` の section 一覧 ＋ HITL
+checklist ＋ findings の RED→GREEN**。これらは通常 `grill-with-docs` が設計段階で findings に確定するので、
+**grill が findings に AFK probe section ＋ RED→GREEN を確定済みなら、別途 formal invoke は不要**（実例 #13 infinite
+canvas・#24/#25 kernel・#23 Live demo の混在スライス＝bug-class fix の RED→GREEN を findings 0014 に記録）。
+判定軸は「findings に RED→GREEN を記録したか」＝line 上の「本スキルの実体」を満たしているか。
 
-## 落とし穴（事前に知らないと必ずハマる）
+ship しない throwaway spike（auto-bootstrap を検証後に戻す探索 spike）は**非適用**＝findings doc / owner playmode
+目視が gate（実例 #8 viz-spike）。判定基準＝「ship する App 挙動が変わるか」。
 
-- **Bevy system 順序 race（`.after()` 制約が無い）の RED→GREEN は schedule introspection で
-  ヘッドレスに固定できる**（「`.before()` で強制逆順 RED」は不可: fix 後もテスト側が逆順を張り続け
-  GREEN にならないため）。症状: `is_changed()` ガード付き（または毎フレーム read の）visibility system が
-  `status_update_system` の後に `.after()` 無しで登録されていると、同フレームで前に走ったとき古い mode で
-  判断し 1 フレーム遅延する。これには **2 種類のテストを併用** する:
-  - **contract test（system logic の回帰ガード。M16/M18/M19。`kind:state`）**: テスト harness 側で
-    `visibility_system.after(status_update_system)` を明示し、`h.send_status(ExecutionModeChanged)` で
-    同一 tick に mode+visibility が変わることを assert。常に GREEN（順序をテスト側で確保）。これは
-    「順序が正しければ logic が正しい」ことだけを保証し、**production の `.after` 付け忘れは検出できない**
-    （テストが自前で `.after` を張るため、production の mod.rs 配線そのものは観測しない）。
-  - **wiring guard（production 配線そのものの RED→GREEN。M20。`kind:wiring`）**: production の registration を
-    `pub fn add_xxx_systems(app: &mut App)` に切り出し、テストは **それ＋`status_update_system` を bare
-    `App` に登録** → `app.world_mut().resource_mut::<Schedules>().remove(Update)` で Update を取り出し
-    `schedule.initialize(app.world_mut())` で build（system は実行しない＝resource セットアップ不要。
-    `initialize` は param のアクセス登録だけで、resource 存在は run 時にしか要求されない）→
-    `ScheduleGraph::conflicting_systems()` を読む。`status_update_system` (ResMut) と visibility system (Res) は
-    同一 resource アクセスなので、`.after` が無いと衝突対に現れる。**3 段 assert**: (0) 対象 system が全て
-    登録されている（登録漏れ検出。`if let Some` 直前に存在チェック）、(1) `status_update_system` が
-    visibility system と衝突対に**現れない**（`.after` 欠落＝順序無しを検出）、(2) `Schedule::systems()`
-    （build 後の executable は topsort＝実行順）で `status_update_system` が各 visibility system より**前**に
-    居る（`.before` 逆付けを検出。(1) だけだと逆向きも「順序付け済み」で素通りする）。
-    **これは fix 前 RED → fix 後 GREEN がヘッドレスで決定的に取れる**（`conflicting_systems()` は schedule
-    build で ambiguity 設定に関係なく常に算出され、scheduler の実行時発火順序の非決定性に依存しない）。
-    罠: `ScheduleGraph::systems()` は build 後 inner が executable へ移動して空になるので名前は
-    `Schedule::systems()` から引く / `Schedule::initialize` は内部で `Schedules` resource に触るので
-    `resource_scope` 内では呼べない（Update だけ remove して world に対し初期化する）。
-  実例: `tests/e2e/flows/m20_mode_visibility_systems_run_after_status_update.rs`（issue #41）。
-  fix 後は FLOWS.md の「⚠️ production コードに `.after()` を追加することで fix」注釈を「fix 適用済み」に更新する。
-- **ハーネスは wire した system が要求する resource を全部 insert していないと全テストが即死する**。
-  `Harness::with_backend_enabled`（`mod.rs`）は `status_update_system` / `backend_update_system` /
-  `backend_event_drain_system` / `replay_startup_timeout_system` が取る `ResMut<T>` を**手で全部
-  `insert_resource(T::default())` している**。これらの system に新しい resource param が増えたら
-  （例: Phase 9 hardening が `status_update_system` に `ResMut<ReconcilePrompt>` を追加）、
-  **ハーネスにも同じ 1 行を足さないと**全 e2e_replay が
-  `... could not access system parameter ResMut<'_, T>` で 0.05 秒のうちに 35 本まとめてパニックする
-  （bevy_ecs の system-param validation）。パニックは `bevy_ecs/.../function_system.rs` を指すので
-  ハーネス漏れだと気づきにくい。**正解セットは `src/main.rs` の `insert_resource(...)` 群**＝ハーネスは
-  これをミラーする。**ブランチをマージした直後は特に要注意**（片方が system に resource を足し、
-  もう片方がハーネスを持つと、テキスト無衝突でも合体時に必ずこれで壊れる）。
-- **別ブランチ由来の 2 つの system が同じ ECS state を書く場合、両方を *同居* させた integration テストが要る**。
-  各 system を単体で検証するユニットテストは、マージで初めて生まれる**相互作用バグ**を取りこぼす。実例（#161）:
-  `retile_hakoniwa_system`(#151) は chart 無しで（P17/P18）、`hakoniwa_chart_tile_sync_system`(#150) は retile 無しで
-  （P25/P26）テストされ、両者を別ブランチで開発・マージした結果、retile の集合比較が `PanelKind::Chart` を mode 変更と
-  誤判定して chart tile を毎フレーム巻き戻すバグが**どちらのテストにも映らなかった**。同じ ECS リソース/コンポーネントを
-  複数 system が読み書きする箇所をマージしたら、`App::new()` に**両 system を `.chain()` で登録**し、片方が生成した
-  state がもう片方を通しても生存することを assert する flow を 1 本足す（#161 の P27 = lib unit `hakoniwa_retile_preserves_chart_tiles_in_replay`）。
-- **フェーズマージの健全性確認は「そもそも Rust を触っているか」から始める**。上記のハーネス／テスト
-  ダブル破壊は全て Rust 側 (`src/**`/`.proto`/`tests/*.rs`) が変わって初めて起きる。マージ後
-  `git diff --cached --name-only HEAD | grep -E '\.rs$|\.proto$|Cargo'` が**空なら**ハーネスは壊れようが
-  なく、検証面は Python+docs だけ（`uv run python -m pytest -m "not slow and not kabu_live"`）。空でなければ
-  上のチェックを実施し、最後に `cargo test --test e2e_replay`（全 flow green が正＝現状 87 passed /
-  2 ignored）で締める。例: Phase 10 Step 8（`7125ff35`）のマージは Python+docs のみ＝Rust e2e は不変、
-  Phase 10 Step 9 は `backend_event_drain_system` に `SafetyToast`/`StrategyLogs` を足したので
-  ハーネスに 2 行 insert が要った。
-- **`git diff --stat main <branch>` の「削除」表示に騙されない（diff 方向の罠）**。これは対称差なので
-  「main にあって branch に無い」ファイル（例: e2e_replay.rs / docs/wiki/*）が大量に `---` 削除と出るが、
-  マージはそれらを**消さない**（merge-base にも branch にも無ければ touch されない）。マージが実際に何を
-  するかは `git show --stat <commit>`（そのコミット自身の diff）で見、マージ後は
-  `git diff --cached --diff-filter=D HEAD`（空＝削除なし）で確認する。
-- **マージ後に e2e が 1〜数本だけ落ちたら、まず単体で再実行して flake と回帰を切り分ける**。
-  `cargo test --test e2e_replay <name>` が単体で green なら、それはマージが**起こした**回帰ではなく、
-  プロセスグローバル状態（`std::env::set_var` の env var 等）を複数テストが並列で奪い合う既存の隔離バグを、
-  マージのスレッドタイミング変化が**露出させた**だけ。`#[serial]`（`serial_test`、前例 `l3_prod_guard`）で
-  該当テストを直列化する。例: Phase 10 Step 9 マージで `BACKCAST_CACHE_DIR` を使う i12/i5/i7/j16/j1 が
-  並列衝突し i12 が散発失敗 → 5 本に `#[serial]` 付与で解消。
-- **`BackendEvent` / `BackendStatusUpdate` の variant にフィールドが増えると e2e の構築が壊れる**。
-  Phase ブランチをマージすると `OrderEvent` / `OrderSeeded` 等にフィールドが足される（例: Phase 10 で
-  `OrderEvent.strategy_id` と `BackendStatusUpdate::OrderSeeded.strategy_id`）。テストが
-  `tests/e2e/flows/*.rs` に分割された後はドリフトが多数の flow に散るので、`cargo test --test e2e_replay
-  --no-run` で `missing field`(E0063) を列挙し、`grep -rn 'OrderSeeded\|BackendEvent::OrderEvent'
-  tests/e2e/flows/` で構築箇所を特定して新フィールドを足す（未使用値は `String::new()` 等の中立値で OK＝
-  assert 対象でなければ挙動は変わらない）。`OrderSeeded {` / `OrderEvent {` 行でアンカーして該当箇所だけ
-  直す（一括置換は誤爆する）。なお e2e ブランチが Phase より前に分岐していると、gutted な
-  `tests/e2e_replay.rs`（flow を `#[path]` で束ねるだけのファイル）は `git checkout --theirs` で branch 版を
-  採り、登録 flow が main の test 関数の superset であることを確認してから採用する（coverage を落とさない）。
-  なお backend 側の gRPC 拡張（新 RPC）は `tests/backend_integration.rs` のモック `impl DataEngine` が
-  trait 未実装(E0046)になる別件 — マージ後チェックリストは memory `phase-merge-breaks-test-doubles` 参照。
-- **event seam は一部だけ resource を変える（Phase 9 マージ以降）**。`backend_event_drain_system` は
-  `OrderEvent` → `LiveOrders.apply_event`、`AccountEvent` → `apply_account_event`（`PortfolioState`）、
-  `SecretRequired` → `SecretPrompt.active`、`VenueLogoutDetected` → `ReloginPrompt.active` を反映する
-  （= F3/F4/F5/D5 は実装済み・観測可能）。**重要: この欄も含め要約はドリフトしうるので、
-  着手時は必ず `src/backend_sync.rs` の `backend_event_drain_system` / `apply_status_update` を実際に
-  読んで「どの seam がどの resource を変えるか」を現物確認する**こと。
-- **注文 RPC（status seam, Phase 9）**: `OrderSeeded`/`OrderStatusUpdated`/`OrderModified`/`OrderRejected`
-  は `apply_status_update` が `LiveOrders`（`upsert_full`/`apply_event`/`apply_modify`）と `OrderFeedback`
-  を更新する（FLOWS.md の H セクション=H1〜H5）。`ExecutionModeChanged` は実モード変更時に
-  `PortfolioState` を default リセット（Live/Replay 口座データ混線防止）する点が回帰の肝。観測には
-  ハーネスの `live_orders()` / `order_feedback()` / `secret_prompt()` アクセサを使う。
-- **`TransportCommand` 側（UI → gRPC）は state harness だけでは駆動しない**。`SetSpeed`/`SelectedSymbol`
-  のような「UI が backend に投げるコマンド」は backend→ECS seam の手前。これを対象外にせず、
-  `kind:ui` で command channel への送信/未送信を assert する。backend ack の variant が無い挙動
-  （例: speed ack）は state flow だけで完結させず、UI command 発行テストと transport/integration テストに分ける。
-  完全な単一プロセスループ（コマンド注入→mock gRPC→resource 観測）は transport task
-  （`main.rs setup_backend_connection`）の lib 抽出 = 別タスク「Phase A-full」。
-- **反対側 seam（`TransportCommand`→gRPC→`BackendStatusUpdate`）は `tests/backend_integration.rs` が
-  mock tonic サーバで既にカバーしている部分がある**。重複を避けつつ、ユーザー操作として未保証なら
-  `kind:ui` または `kind:integration` の flow を追加する。
-- **`BackendTradingState` は `Default` を持たない**。clock 以外で必要なら `h.push_state` と同様に
-  `serde_json::from_value(json!({"price":0.0,"history":[],"timestamp":0.0, ...}))` で最小構築する
-  （必須は `price`/`history`/`timestamp` のみ、他は `#[serde(default)]`）。
-- **文字列フィールドは wire フォーマットのまま**。`PortfolioOrder.side`/`.status` は `String`
-  （`"BUY"`/`"FILLED"`）。enum 化されていないので文字列リテラルで正しい。
-- **bare `App`（UI flow）には input プラグインが無く `ButtonInput<KeyCode>` はフレーム境界で自動 clear されない**。
-  `just_pressed` が前フレームから sticky に残り、既に pressed のキーへの再 `press()` は no-op（just_pressed を作らない）。
-  各キー操作の前に `keys.reset_all()` してから `press(...)` し直すこと。Escape の連続押下・トグル系（メニュー Alt+F、
-  注文/モーダルの Escape 優先テスト）で「2 回目が効かない」のは大抵これ。同様に **`Time::<()>` の delta は最後の
-  `advance_by` 値で固定**（`update()` で 0 に戻らない）。cooldown 等を「時間未経過」で検証したいときは
-  `advance_by(Duration::ZERO)` で delta=0 にし、cooldown 解除には `advance_by(1s)` する。
-- **`tests/e2e/support/mod.rs` の `Harness` は UI 駆動メソッド（`run_via_ui`/`click<M>`/`drain_commands`/`set_replay_state`）
-  を持つ拡張版で、A/B/C 群の flow がこれらに依存する**。failing な 1 本を直すために `git checkout HEAD -- mod.rs`
-  したり mod.rs / 他 flow を安易に上書きしないこと（未コミットの拡張を消すと 10+ 本が `no method named run_via_ui`
-  で全落ちし、working-tree のみの内容は復元不能になりうる）。共有ファイル（mod.rs / runner / 別 flow）を触る前に
-  「その working-tree 版に依存する未コミット flow が無いか」を必ず確認する。詳細は memory `e2e-harness-extended-ui-driven`。
-- **`click<M>(marker)` の仕組み = `(marker, Button, Interaction::Pressed)` を spawn して `tick()` 1 回**。新規追加した
-  `Interaction` は `Changed<Interaction>` に必ずヒットするので、本番ハンドラ（`*_button_system`）が**ちょうど 1 回**発火する
-  （実マウス押下と同じ経路）。毎回新 entity なので同じボタンを連続クリックしても再発火する。producer→consumer
-  （例 `footer_pause_resume_system`→`handle_strategy_run_system`、remove→`unsubscribe_removed_instruments_system`）は
-  harness 側で `.chain()` 済みなので 1 tick で「クリック→`StrategyRunRequested`→`RunStrategy` コマンド」まで通る。
-  発射コマンドは `drain_commands()` で受ける。**「実 UI 操作で `TransportCommand` を assert → その後 backend 応答を
-  seam から注入」**が A–H の基本パターン。
-- **command-level テスト（resource 直 seed ＋ 合成 entity spawn）は実機 wiring を素通りする＝false-green の温床**。
-  `Harness` で `set_xxx()` により resource を直接埋め、`click<M>` で `(marker, Button, Interaction)` を**手で spawn**して
-  system を回すテストは、「branch logic が完璧入力で正しく動く」ことしか保証しない。**本番 plugin の system 登録漏れ・
-  本番 `spawn_xxx` が作る実 entity のマーカー/可視性・`Node.display` gating・pre-flight guard の充足経路**は一切踏まない。
-  実例（issue #40 フォローアップ）: footer ▶ の LiveAuto 起動を `N5`（command-level）が「`StartLiveAuto` の送出有無」だけ
-  assert して green だったが、実機では ▶ が無反応だった。原因は pre-flight guard が `warn!`+`continue` の **silent block**
-  （venue 未接続等）で、N5 はそれを「送らないのが正」として暗黙に許容していた（＝抜け漏れ）。
-  **gap を疑ったら、`i5`/`N6`/`N7` の bare-App パターンで本番経路を踏むテストを足す**: `App::new()`＋`MinimalPlugins`＋
-  `AssetPlugin`＋`init_asset::<Font>()` に **本番 `spawn_footer`（等の構築 system）を Startup で 1 回回し**、本番の
-  visibility/handler system を `add_systems` して、`query_filtered::<Entity, With<RealMarker>>()` で引いた**実 entity**を
-  `entity_mut(e).insert(Interaction::Pressed)` で押す。これで「登録・実 entity・可視性・guard」まで丸ごと検証できる
-  （resource は `make_app` で本番 `main.rs` と同じ insert セットを揃える＝1 つ漏れると system-param panic）。
-- **carry-over / no-bleed / 「○○前は出ない」系の assert は「存在しない不変条件」を突いた vacuous false-green になりやすい。
-  必ず *delete-the-production-logic litmus* を通す**: 「その assert を緑にしている production ロジックを消したら、テストは
-  *本当に* 落ちるか？」を 1 件ずつ自問する。落ちないなら vacuous。典型的な 3 つの罠（#108 の uj1–uj7 で codex/レビューが
-  6 件検出）:
-  ① **書かれていない値を「空だ」と assert**（例 uj6「Subscribed 前は価格が空」だが、production の `LastPricesUpdated` は
-     venue gate 無しの無条件 `map = prices`＝そんな gate は存在しない。何も書いてないから空、というだけ）。
-  ② **触れない system が状態を消さないことを assert**（例 uj7「bar push が Failed を消さない」だが、`backend_update_system` は
-     そもそも `CurrentRun` を param に持たず触れない＝守るべきガードが無い）。
-  ③ **seam を test 自身が注入して「carry-over した」と主張**（例 uj1 が相関なしの `PortfolioLoaded` を「同一 run」と主張、
-     uj3 が `StrategyRunRequested.cache_path` を直注入して editor→cache 導管を素通り、uj4 が flush 直後の cache file を
-     ディスク直読みで「再起動復元」と主張）。
-  **正しい型**: 実 production 導管を駆動して観測する。例: editor 編集→Run は **実フッター Run**（`footer_pause_resume_system`
-  が editor `StrategyFragment` を `merge_fragments`→`flush_strategy_cache` で `cache_path` へ書き出し RunStrategy に載せる）を
-  click し、fragment を書き換えて再 Run→cache 内容が変わることを assert（uj3）。再起動復元は **session2 で本番 restore→parse→sync**
-  を回して `InstrumentRegistry` 等の live state に値が入ることを assert（uj4。ディスク直読みでなく）。「相関」は startup_id 等の
-  **不一致を入れたら no-op になる**ことを対で assert（uj1 の正/誤 startup_id、uj7 の error 貼付）。「no-bleed」は merge でなく
-  **replace に依存する**ことを示す（uj6 の連続スナップショットで前銘柄が滞留しない）。
-- **構造クラス回帰（同じ欠落が別 entity で再発するバグ）は「マーカー名指しの点ガード」を増やさず ECS relationship で面ガードにする**。
-  同型バグが再発するたびに「特定マーカーの存在を数える」点ガードを増設すると、次の新 entity は全てすり抜ける
-  （もぐら叩き）。実例: Bevy 0.18 `sprite_picking` の **`Pickable` 必須**取りこぼし（#52 floating window→m21、#93 startup field→j18、
-  #100 OrderButton→k23 と 3 つの点ガードが増殖し、4 件目＝chart sprite `window.rs::spawn_chart_panel` を全部が見逃していた）。
-  **解法: Bevy が observer 付与時に対象 entity へ自動付与する `ObservedBy`（`bevy::ecs::observer::ObservedBy`、prelude 外）を使い、
-  「observer を貼った world-space Sprite は必ず `Pickable` を持つ」をマーカー非依存で 1 本にする**:
-  `query_filtered::<Entity, (With<Sprite>, With<ObservedBy>, Without<Pickable>)>()` が空であることを assert（実例 m30）。
-  本番 spawn 関数（chart/orders/order form/startup fields）を 1 App に同居させ、chart のように observer を **install system**
-  （`Added<ChartViewState>` 駆動）で貼る経路は production の installer を `add_systems` して実際に貼らせる → `app.update()` を数回
-  回すと `ObservedBy` が populate される。⚠️ **assertion はマーカー非依存だが fixture（spawn する関数リスト）は手動**なので、
-  新規パネルは fixture に 1 行足す必要がある（doc に「自動カバーは *列挙済み spawn 関数内の新 Sprite* に限る」と明記して
-  over-claim を避ける）。**併せて fix も altitude を上げる**: 透明 hit-target sprite の inline spawn は `Pickable` 同梱の共有
-  ヘルパ（`src/ui/component/hit_target.rs::spawn_transparent_hit_sprite`）に集約し、契約を 1 箇所に寄せる（#100 issue 本文の
-  「per-site もぐら叩きを断つ altitude 修正」案）。同じ構図は M16/M18/M19 の contract-test vs M20 の wiring-guard とも通底する。
-- **バグを 1 件直したら「同じ穴を共有する sibling 経路」と「入力マトリクス全セル」を必ず掃く（点 fix で満足しない）**。
-  単一の症状（report された 1 ケース）だけ RED→GREEN すると、同じ primitive を共有する別経路に同型バグが残る。
-  実例（#25 review max round 2026-06）: `broker.modify()` が「ACCEPTED に埋め込まれた約定を `is_filled` gate で
-  取りこぼす」バグを直した後、**同じ `is_filled` gate を使う sibling 入口 `apply_venue_update()` にも同型の取りこぼし**
-  （ACCEPTED+fill、さらに REJECTED/DENIED+fill）が残っていた。ユーザーの「初歩的な不具合を見逃すな・カバレッジ見直せ」で
-  発覚。教訓 2 点: ①**bug-class sweep**＝fix した behavior を表現する primitive（ここでは `is_filled` で会計を gate する設計）を
-  `grep` し、それを呼ぶ**全経路**（modify / apply_venue_update / cancel …）に同じテストを当てる。②**full-matrix coverage**＝
-  回帰ガードは report された 1 セルでなく `status`×`fill 状態(0/部分/全/超過/malformed)`×`数量方向(増/減/同)` の**直積**を列挙し、
-  未カバーのセルにテストを足す（このバグは「ACCEPTED×部分約定」セルが未テストだったから生まれた）。max effort の
-  `/code-review` を併用すると sibling 経路・境界セルを機械的に洗い出せる（このラウンドで HIGH 2件+Medium 複数を検出）。
-  ⚠️ **sweep は 2〜3 経路で満足せず entry point を全列挙して尽くす**: modify/apply を「掃いた」後の次ラウンドで
-  `cancel()` が 4 つ目の sibling だった（REJECTED を apply_venue_update の手前で early-return し embedded fill を捨てていた）。
-  ⚠️ **同じ primitive でも取りこぼしパターンは複数**: 「embedded fill を捨てる」だけでなく「fill status の 0・負の累積数量を
-  `cumulative<=0` で一律 duplicate 扱いして素通り（FILLED/-1 が OrderAccepted で通る）」も同じ `_fill_violation` の穴だった。
-  1 つの primitive に対し「捨てる／重複扱い／over-fill／非正/非有限／status-event 不整合」を網羅的に想定する。
-  ⚠️ **sweep は「同一クラス内の sibling 経路」だけでなく「変更した *共有 contract* の全 consumer」まで広げる（別 subsystem を含む）**:
-  fix が venue adapter の返り値 (`OrderResult.status` 等) や seam の契約を変えるなら、その method を `grep -rn '\.<method>(' engine/` して
-  **すべての呼び出し元**を列挙し、各 consumer が新しい値を正しく扱うか確認する。in-scope の 1 経路（例: kernel `LiveBroker`）だけ直して
-  満足すると、同じ adapter を食う別 subsystem（`ManualOrderFacade` / `NautilusVenueExecClient` 等）が旧契約のまま残り **half-applied contract = landmine** になる。
-  実例（#25 review・2026-06）: kabu `cancel_order` を `CANCELED→PENDING_CANCEL` に変えたが、その契約は LiveBroker 以外に `order_facade.py:320` と
-  `nautilus_exec_client.py:241` も消費していた（どちらも cancel ACK を terminal 扱い）。grill 設計時に consumer を grep し切れず code-review で発覚 →
-  **「mock で証明できる broker honoring だけ #25 に残し、実 adapter flip + 全 consumer 更新 + async 確定配線は実 venue slice (#23) へ一括」**にスコープ分割して解決。
-  教訓: contract を変える fix は **grill / 設計段階で consumer を全 grep し**、テスト可能な範囲（mock で踏める層）と実 venue 配線が要る範囲を**先に分離**する。
-- **pure-helper proxy（PyO3/runtime 経路を unit 化する純粋関数）は、本番コードが実際にその helper を呼んで
-  いなければ false-green の test-only ガードになる**。実 backend を起動できない経路（PyO3 worker の startup
-  status 列・instrument fetch 判断など）を「現状挙動を写した純粋関数 + desired を assert する RED」で
-  ガードするのは有効だが、**fix で本番 worker が helper を経由するよう配線しないと、helper はテスト専用の
-  独立した仕様記述になり、本番がインラインで重複実装したまま drift する**（helper のエラー文言・分岐が
-  本番と乖離してもテストは通り続け、回帰が再発しても検知できない）。実例（issue #64 レビュー 2 周目）:
-  `inproc_startup_status_sequence` を #2 fix で導入したが worker は status 送出をインラインのままにし、
-  helper は test からしか呼ばれず DataEngine 失敗文言が `: {e}` 有無で乖離 → Medium 指摘。fix は worker の
-  両分岐を `for u in helper(...) { send(u) }` で helper 経由にして「単一の真実」化（#7 の
-  `inproc_startup_instrument_fetch` / #3 の `inproc_poll_state_outcome` は最初から worker が呼ぶ形にしたので OK）。
-  **チェック: `grep -rn '<helper名>' src/` で「定義 + テスト」以外に本番呼出があるか必ず確認する**。
-  M16/M18/M19 の contract-test（テスト側で順序を確保＝production 配線は観測しない）と M20 の wiring-guard
-  （production 配線そのものを RED→GREEN）の対比と同じ構図。
-- **「クリックしても何も起きない」系のバグは silent guard（`warn!`+`continue` だけで UI に何も出さない）を最優先で疑う**。
-  挙動を「保証」するテストは「コマンドが出る/出ない」だけでなく **「ブロック時にユーザーへ理由が surfacing される」**まで
-  assert する（例 N7: pre-flight 失敗時に `LastRunResult.state=RunState::Failed{error}` を書き Run Result パネルへ赤字表示）。
-  silent block を「送らないのが正」とだけ固定すると、無言の無反応を仕様として温存してしまう。
-- **`push_state(ts)` は `TradingSession.replay_state` を `None` に上書きする**（fixture に replay_state が無いため）。
-  footer の Pause/Resume は `replay_state` で分岐するので、**`set_replay_state(Some("RUNNING"))` は必ず `push_state` の
-  「後」に呼ぶ**。順序を逆にすると clock push が RUNNING を消し、Pause クリックが Run 扱いになって command assert が落ちる
-  （A2 で踏んだ）。`unsubscribe_removed_instruments_system` は mode 切替 frame を skip するので、削除クリックの前に
-  `set_instruments` + 安定 tick を 1 回挟んで Local の prev 集合を整えてから × ボタンを押す（F2）。
-- **`is_changed()` は resource が insert されたフレームの最初の `tick()` で true になる**。`Harness::new()` は
-  resource を全部 insert してから返すため、最初の `h.tick()` 前に resource を書き換えても `is_changed()` ガード付き
-  system が**「変更あり」として発火してしまう**（insert tick > system 初回実行 tick のため）。実例: D11 テストで
-  `h.tick()` 前に `exec_mode.mode = LiveManual` を設定 → `auto_replay_on_venue_disconnect_system` が初回 tick で
-  `VenueStatusRes.is_changed() == true`（insert 起因）と判断し Disconnect 状態で LiveManual → Replay に誤切替 →
-  assert が `LiveManual` を期待するところ `Replay` が返って fail。
-  **パターン**: シナリオを「途中状態」から始めたいテストは、まず `h.tick()` を 1 回走らせて initial change を
-  消費してから resource を書き換え、次の seam 注入を行う。
-  ```rust
-  // ✗ 間違い: tick 前に状態設定 → is_changed が初回フレームで誤発火
-  h.app.world_mut().resource_mut::<ExecModeRes>().mode = LiveManual;
-  h.tick();
-  // ✓ 正解: 先に tick して initial change を吸収、その後シナリオを設定
-  h.tick();                    // initial change を消費
-  h.send_status(Connected);    // live 遷移
-  h.app.world_mut().resource_mut::<ExecModeRes>().mode = LiveManual; // ← ここで設定
-  h.send_status(Subscribed);   // live→live = 変化なし を assert
-  ```
-- **共有 runner（`tests/e2e_replay.rs`）の登録は orchestrator が一括で行う**。並行 subagent に書かせると重複登録・
-  順序衝突・cargo の target ロック競合が起きる。subagent には「flow ファイルだけ書く / cargo も runner も触らない」と
-  明示し、登録・コンパイル・修正は中央で回す。
-- **headless 不可 / 未実装の flow は fake せず doc stub（`//!` のみ・`#[test]` 無し）にして runner 未登録のまま残す**。
-  `kind:render`（ShapePainter+Text2d=GPU 必要）、Windows 専用 PowerShell、実ウィンドウ smoke、production 未実装機能が該当。
-  外部データ依存（catalog / J-Quants）や OS dialog（rfd 直呼び）は `#[test] #[ignore]` + 理由 doc にする。
-- **`MessageWriter` を使う system のテストは `app.update()` を 2 回呼ぶ**。`Messages<T>` はダブルバッファ方式で、system 内の `MessageWriter::write` は `messages_b` に書き込む。1 回目の `app.update()` では `message_update_system`（First schedule）が swap を行い書き込みが完了するが、その後すぐ `update_drain()` を呼んでも旧 `messages_a`（空）側をドレインしてしまう。2 回目の `app.update()` で再 swap されて初めて `update_drain()` が書き込まれた内容を読める。同パターンは既存テスト（`test_user_json_open_reloads_strategy_path_even_if_already_loaded` 等）でも `app.update()` 2 回呼びを使っている。`write_message` 経由の直接書き込みも同様。実例: I21 テスト（#69）で 1 回だけ呼んだところ spawn 数 0 が返り、2 回に変更して GREEN になった。
-- **既存 warning は触らない**（`main.rs:33 UnsubscribeRequest` 等、本作業と無関係）。新規 warning は増やさない。
-- **コメントは「なぜ」だけ**。何をしているかの説明やタスク言及は書かない（プロジェクト規約）。
-- **モジュール/シンボルを撤去した後の現行化 grep は `docs/wiki/` だけでなく `docs/` ツリー全体を当たる**。
-  ADR・refactor/plan ドキュメント（`docs/adr/*`, `docs/ui-theme.md`, `docs/ui-refactor-plan.md` 等）は
-  「#N で実装予定」「#N で消える」のような**先送りリストに削除予定ファイル名を直書き**していることがあり、
-  対象が実際に消えると dangling 参照・偽の将来宣言になる。`grep -rn "<削除したファイル名/シンボル>" docs/`
-  を必ず回して 0 件（または「撤去済み」へ現行化）を確認する。実例: #50 Slice 7 で `strategy_editor_spike.rs`
-  を削除したが `docs/ui-theme.md` の #48 先送りリストが同ファイルを参照したまま残り、codex セカンドオピニオンが
-  Medium 指摘（`src/ tests/ docs/wiki/` だけ grep して `docs/ui-theme.md` を取りこぼした）。
+## 過去の invoke 漏れ — 同型 miss と教訓（12+ 回の蓄積を圧縮）
 
-## テストの型（コピーして埋める）
+**症状**: 成果物（RED→GREEN・findings・台本）は規約どおり揃うのに、**本スキルの formal invoke 自体を飛ばす**。
+タイプ済み他スキルや grill の設計インタビューに注意が奪われるのが共通の根。**成果物の品質・設計済み度・新規性と
+formal invoke は独立**。
 
-```rust
-/// <FlowID> <name>: <1 行で不変条件>。
-#[test]
-fn <flow_id>_<snake_name>() {
-    let mut h = Harness::new();
-    // 1. 前提を整える（必要なら h.begin_startup(id) など）
-    // 2. seam を注入
-    h.send_status(BackendStatusUpdate::RunStarted);
-    assert_eq!(h.run_state(), RunState::Running);
-    // 3. 続きの seam を注入し、最終状態を assert
-    h.send_status(BackendStatusUpdate::RunComplete {
-        startup_id: None,
-        run_id: "run-x".to_string(),
-        summary_json: r#"{"status":"ok"}"#.to_string(),
-    });
-    assert_eq!(h.run_state(), RunState::Completed);
-}
-```
+**注意を奪う誘因（masking phrase）の実例**:
+- `/grill-with-docs` 併発 → 設計インタビューに没入（#22/#35/#41/#59/#60/#66/#76/#81）。
+- `/nautilus-trader` 等 domain skill 併発 → domain reference に注力（#25 round3/5/6）。修正対象が Nautilus-free でも独立に必須。
+- `/parallel-agent-dev` 等を**明示タイプ** → タイプ済み skill が「やること全部」に見え、未タイプの gate-skill が落ちる（#「全行動を E2E 台本に」2026-06-19）。
+- 「配線漏れを実装」＝defect なのに『実装』で feature に見える（#59）。
+- 「issue #5(エピック) に着手」＝実作業は sub-issue、スコープ判定に気を取られる（#41）。
+- 「stub 実装 / NotImplementedError 解消」系 enhancement（#35）。
+- 純 UI-geometry/presence 修正で既存 probe が presence を assert していない（正当に HITL-only）とき（#81）。
+- 純 Python parity pytest が `/tdd` の自然な成果物で「ただの unit test」に見える（#76 S6b-α）。
+- feature でも AC が `behavior-to-e2e` 名指し / AFK probe / characterization / HITL を要求していれば起動命令（#26/#44/#60）。
+- spec-only の波（台本 `.md` だけ・runner は次波）で「まだ実装前だから早い」に見える（射程は台本 authoring そのもの）。
 
-import は `tests/e2e_replay.rs` 冒頭の `use backcast::trading::{...}` / `use backcast::replay::{...}` に
-必要な型（`BackendStatusUpdate` の variant が使う enum 等）を足す。
+**remedy（不変）**: 台本・E2E・網羅・挙動保証・RED の語が出たら、**他に何がタイプされていても設計/実装に入る前に
+最初に formal invoke** し、「gate を著したか／findings に RED→GREEN・再走手順を記録したか／台本のカバー状態・
+ID 採番」を checklist 確認する。✅ 実証済み成功例: #25 r5・#76 S1・#76 T6 follow-up・#76→hakoniwa 台本
+（記録直後の次セッションで grill 前 formal invoke）＝remedy は機能する。以後この順序を既定とする。
 
-## wiki への引用元記載（必須）
+## 完了基準（backcast）
 
-テストを追加・更新したら、対応する `docs/wiki/` のページに `[FlowID]` を書く。
+- C#/Unity: 対応 AFK probe / `<Name>E2ERunner` が GREEN・exit 0・`error CS\d+` 0 件。台本の操作一覧表とカバー状態を更新。
+- Python: `uv run pytest`（または fake/stub 単体スクリプト）が GREEN。RED→GREEN を `docs/findings/NNNN` に記録。
+- 観測が「ユーザーが語った挙動」の十分条件になっている（delete-the-production-logic litmus を通る＝production
+  ロジックを消すと必ず落ちる。vacuous な負 assert を避ける）。
+- 回帰の肝（既存不変条件）を新規テストで壊していない。
+- HITL/対象外 は理由付きで台帳に残っている。
 
-1. flow が説明する挙動が wiki のどのページに書かれているかを確認する。
-2. そのページの冒頭に引用元注記がなければ追加する（既存ページの書き方に倣う）:
-   ```
-   > 文中の `[A1]` などは、その挙動を保証する E2E flow の ID。一覧は [`tests/e2e/FLOWS.md`](../../tests/e2e/FLOWS.md) を参照。
-   ```
-3. 挙動の記述箇所（手順・表・説明文）に `[FlowID]` をインラインで付ける（例: `Run を開始 [A1]`）。
-4. 対応する wiki ページが存在しない場合は記載不要（FLOWS.md の flow 行にその旨をコメントする）。
+## 関連 memory / reference
 
-現時点で引用済みのページ: `docs/wiki/**` の全ページ（2026-06 に `[FlowID]` をリンク化済み）。
-
-### `[FlowID]` のリンク化と健全性監査（wiki 全体メンテ時）
-
-ユーザーが「`docs/wiki` の `[L1]` などを漏れなく link に変えて」のように **wiki の FlowID 参照を一括リンク化**したいと言ったとき（このスキルはその担当）は、機械的置換の前に必ず flows ディレクトリの健全性を監査する。今回（2026-06）これで 3 種の隠れた不整合が露見した:
-
-- **リンク形式**: `[L1]` → `[[L1]](../../tests/e2e/flows/<id>_<name>.rs)`。冒頭注記のバッククォート例（`` `[L1]` ``）は置換しない（negative lookbehind ``(?<!`)`` で除外）。
-- **flows/*.rs が無い ID** は FLOWS.md フォールバックで濁さず**実テストへ直リンク**する: `kind:ui`/`kind:unit` は `src/ui/*.rs` / `src/camera.rs` 等の `#[cfg(test)] mod tests`、`kind:python` は `python/tests/**`、`kind:state` の table 形式は近い実ファイル。どうしても特定不能な planned/未実装 ID だけ `tests/e2e/FLOWS.md` に張る。
-- **ID 衝突の監査**: `ls tests/e2e/flows | grep -oE '^[a-z]+[0-9]+' | sort | uniq -d` で**同一 ID 接頭辞の 2 ファイル**を検出する。両方が生きて `e2e_replay.rs` に登録され FLOWS.md にも 2 エントリあるなら**衝突**＝片方を空き番号へ採番し直す（ファイル名・doc コメント・fn 名・`e2e_replay.rs` の `#[path]`/`mod`・FLOWS.md・wiki 参照を一括更新）。どちらが ID を保持するかは **他 flow / wiki の `[ID]` 参照がどちらの挙動を指すか**で決める。
-- **孤児ファイルの監査**: flows/*.rs があるのに `e2e_replay.rs` に未登録なら**デッドコード孤児**（後継ファイルにリネーム済みの取り残し等）。`grep '<basename>' tests/e2e_replay.rs` が空なら `git rm` する。
-- **runner 登録ドリフトの監査（双方向・FAIL）**: ① real `#[test]`（`^\s*#[test]` 行）を持つ flow が `e2e_replay.rs` に**未登録**＝回帰ガードが一度も走らない（2026-06 に `j17` がこれで、#62 ガードが死んでいた実例）。② 逆に `//!` だけの **doc stub なのに登録**されている flow は runner 方針に違反（同 `m17_issue41_realapp_smoke` が manual-gate stub なのに登録されていた実例）。両方向を `scripts/check_e2e_flow_consistency.py` の FAIL tier で検出する。`#[test]` カウントは doc コメント内の例（`//! ... #[test]`）を除外すること（手動 grep で 152 と誤計上 → 実 149 だった）。
-- **FLOWS.md の陳腐化パス**: 表セルや本文が指す `python/tests/...` / `src/...` のパスは moved/renamed していることがある。リンク前に **実在を検証**（`os.path.exists` 一括チェック）し、移動先を `grep -rln '<test fn 名>'` で突き止めてから張る。
-- **未実装挙動を見つけたら**: wiki が実在しない UI（例: footer の `<` StepBack ボタン。`src/ui/footer.rs` に「No StepBack button」コメントあり）を記述していたら、no-op を不変条件化するか実装 issue を起こすかをユーザーに確認する。実装方針なら issue を起票し、FLOWS.md に planned `- [ ]` 行（issue 番号付き）を足して wiki の `[ID]` をそこへ張る。
-
-## 完了基準
-
-- 追加・変更した flow の `kind` に対応する release gate が green。
-  `kind:state` は `cargo test --test e2e_replay`、`kind:ui` / `kind:integration` / `kind:render` は
-  flow に記載した command または harness、`kind:manual-gate` は手順・期待結果・実施条件が明記されている。
-- **例外: 既知バグの回帰ガードは「RED で確定」が完了**。ユーザーが「このバグをテストにして」と
-  挙動の **崩れ** を語り、fix を別 issue に委ねるとき（`/to-issues` 併発が典型）、テストは
-  わざと **RED**（バグを再現して fail）させて登録する。このとき完了基準は ①RED が**正しい理由で
-  落ちる**こと（wiring/compile エラーではなく assert で fail。`cargo test --test e2e_replay <id>` の
-  panic メッセージで確認）②他 flow を巻き込まない（`N passed; 1 failed`）③FLOWS.md に「RED＝回帰ガード・
-  fix は #issue 後に green」と明記し ✅ にしない、の 3 点。fix 実装時に green へ反転し FLOWS.md を ✅ に更新する。
-- 観測が「ユーザーが語った挙動」と対応している。resource 遷移、UI entity、command channel、file output、
-  screenshot/structured dump のいずれかが、その挙動の十分条件になっている。
-- A8（stale startup_id の相関）/ D7（Live universe が Replay fallback を上書き・prune しない不変条件）の
-  ような**回帰の肝**を新規テストで壊していない。
-- FLOWS.md のチェックボックスと「実装状況」を更新済み。
-- 対応する wiki ページに `[FlowID]` の引用元を記載済み。
+- memory `unity-afk-probe-run` — AFK 実走の罠（recompile-skip / flush-race / lock-abort / grep -a）と実 Unity パス。
+- memory `e2e-wave2-runner-promotion` — Probe→E2ERunner 昇格の型・直列制約・findings 記録・rename 規律。
+- `Assets/Tests/E2E/Editor/E2E-CONVENTIONS.md` / `E2E-INDEX.md` — 台本規約と網羅台帳。
+- [`references/ttwr-bevy-legacy.md`](./references/ttwr-bevy-legacy.md) — **TTWR(Bevy) 専用**メカニクス（FLOWS.md /
+  `e2e_replay.rs` / Rust Harness / state seam → resource 早見表）。backcast では使わない。

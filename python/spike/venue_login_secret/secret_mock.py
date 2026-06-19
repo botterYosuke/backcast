@@ -121,3 +121,36 @@ def submit_order_call_count(server) -> int:
     """How many times the order actually reached the venue (orphan-free assertion)."""
     a = _adapter(server)
     return a.submit_order_call_count if a is not None else -1
+
+
+def arm_account_position(
+    server,
+    symbol: str,
+    qty: float,
+    avg_price: float,
+    unrealized_pnl: float,
+    cash: float,
+    buying_power: float,
+) -> None:
+    """Arm fetch_account's snapshot with ONE position (positional wrapper for C#; throwaway).
+
+    The MockVenueAdapter does NOT derive positions from fills (submit_order only returns an
+    OrderResult); fetch_account returns whatever set_account_snapshot armed. The Journey E2E
+    arms a position here, then force_account_snapshot() pushes it as an AccountEvent so the
+    Positions-tile decode seam (AccountEvent -> LivePanelViewModel -> FormatPositions) is
+    exercised non-vacuously. The causal fill->position bookkeeping is the venue's job (HITL).
+    """
+    from engine.live.order_types import AccountPositionData
+
+    _adapter(server).set_account_snapshot(
+        cash=cash,
+        buying_power=buying_power,
+        positions=[
+            AccountPositionData(
+                symbol=symbol,
+                qty=int(qty),
+                avg_price=avg_price,
+                unrealized_pnl=unrealized_pnl,
+            )
+        ],
+    )

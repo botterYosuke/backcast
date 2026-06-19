@@ -25,6 +25,7 @@ using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 
 public static class MenuBarCutoverProbe
 {
@@ -38,7 +39,7 @@ public static class MenuBarCutoverProbe
     public static void Run()
     {
         string fail;
-        try { fail = Section1_FileNewFullReset(); }
+        try { fail = Section1_FileNewFullReset() ?? Section2_FileMenuLabelsPlain(); }
         catch (Exception e) { fail = "driver: " + e; }
         finally { try { if (Directory.Exists(TempDir)) Directory.Delete(TempDir, true); } catch { } }
 
@@ -102,6 +103,42 @@ public static class MenuBarCutoverProbe
 
         // ---- assert: scenario universe cleared ----
         if (scenario.Universe.Count != 0) return "File→New did not clear the scenario universe";
+
+        return null;
+    }
+
+    // ── 2. File menu reads as a plain editor menu (#88): no term-soup parentheticals ──
+    // BuildFileMenu rendered "Save  (layout)" while OnFileSave writes BOTH the notebook `.py` AND the
+    // layout sidecar — the "(layout)" tag made users think only the layout was saved. #88 drops every
+    // File-menu annotation so Save means "save the current document", matching a conventional editor.
+    // This asserts the REAL rendered Text the menu drew (not a const), so any regression that
+    // reintroduces a parenthetical term fails right here.
+    static string Section2_FileMenuLabelsPlain()
+    {
+        var root = ComposeRoot(out var ty);
+        if (root == null) return "BackcastWorkspaceRoot missing in scene";
+        var menuView = ty.GetField("_menuBarView", BF).GetValue(root) as MenuBarView;
+        if (menuView == null) return "menu bar view not bound in scene (#88 probe needs the rendered File menu)";
+
+        // the File dropdown GO is named "dd:File" (NewDropdown); its item labels are Text children.
+        Transform fileDd = null;
+        foreach (var t in menuView.GetComponentsInChildren<Transform>(true))
+            if (t.name == "dd:File") { fileDd = t; break; }
+        if (fileDd == null) return "File dropdown (dd:File) not found under the menu bar";
+
+        var labels = new List<string>();
+        foreach (var txt in fileDd.GetComponentsInChildren<Text>(true))
+            labels.Add(txt.text);
+        string shown = string.Join(" | ", labels);
+
+        // no parenthetical term may leak into the File menu (the #88 confusion: layout/document/notebook).
+        foreach (var l in labels)
+            if (l.Contains("(layout)") || l.Contains("(document)"))
+                return "File menu label still carries a term-soup parenthetical: '" + l + "' (labels: " + shown + ")";
+
+        // Save reads as a plain editor Save (exact "Save", not "Save  (layout)").
+        if (!labels.Contains("Save"))
+            return "File menu has no plain 'Save' item (labels: " + shown + ")";
 
         return null;
     }

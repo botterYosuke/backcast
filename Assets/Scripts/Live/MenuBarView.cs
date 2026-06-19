@@ -180,10 +180,10 @@ public sealed class MenuBarView : MonoBehaviour
     {
         var dd = NewDropdown(OpenMenu.File, 0f, 150f, 4);
         MakeItem(dd, "New", () => { _open = OpenMenu.None; _onNew?.Invoke(); Refresh(); }, 0);
-        MakeItem(dd, "Open…  (document)", () => { _open = OpenMenu.None; _onOpen?.Invoke(); Refresh(); }, 1);
-        MakeItem(dd, "Save  (layout)", () => { _open = OpenMenu.None; _onSave?.Invoke(); Refresh(); }, 2);
+        MakeItem(dd, "Open…", () => { _open = OpenMenu.None; _onOpen?.Invoke(); Refresh(); }, 1);
+        MakeItem(dd, "Save", () => { _open = OpenMenu.None; _onSave?.Invoke(); Refresh(); }, 2);
         // #69: native file picker + multi-document (Save As forks the <strategy>.py/.json pair).
-        MakeItem(dd, "Save As…  (document)", () => { _open = OpenMenu.None; _onSaveAs?.Invoke(); Refresh(); }, 3);
+        MakeItem(dd, "Save As…", () => { _open = OpenMenu.None; _onSaveAs?.Invoke(); Refresh(); }, 3);
     }
 
     void BuildEditMenu()

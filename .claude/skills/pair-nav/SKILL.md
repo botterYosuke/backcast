@@ -149,6 +149,14 @@ diff ブロック + 各「なぜ」なら、「ここを消した」「ここに
 
 それでも見落としが発生したら、自分の不注意を認める一言を添えて即時報告する（「私のレビューが不完全でした。あと 1 箇所あります」）。
 
+## 不具合修正を pair-nav で回すときは RED gate を先に書かせる
+
+pair-nav のタスクが**不具合修正**（「issue #N を修正します」「bug を直したい」等）なら、`fix` のコードを出す前に、まず **RED gate（失敗を証明する回帰テスト）をユーザーに書かせて、実際に RED で落ちることを一緒に確認**してから実装に入る。これは CLAUDE.md の「RED 先行 → fix → GREEN」規約と、`behavior-to-e2e` / `tdd` の「手書き RED は飛ばさない」要求を、pair-nav の 1ターン1作業フローに乗せた形。pair-nav の RED→GREEN サイクル自体がその規約を満たすので、別途 `behavior-to-e2e` / `tdd` を formal invoke しなくても RED gate さえ先に書けば規約は満たされる（逆に gate を後回しにすると規約違反）。
+
+- **backcast（Unity/C#）には `FLOWS.md` が無い**。回帰ガードの正本は AFK probe（例: `Assets/Editor/*Probe.cs` を `-batchmode -executeMethod <Probe>.Run` で回す）。UI 文言・メニュー・ラベル系のバグなら、production が実際に描いた値を reflection で読み戻して assert する probe を書く（const 比較はタウトロジーなので避ける）。
+- Rust/Python のリポジトリなら failing unit/integration test を先に書く。
+- 「表示文言だけ変える」「1行の定数変更」のような軽微な修正でも、挙動が変わる以上 RED gate を先に書く（CLAUDE.md 必須手順）。実例: #88（File メニュー `Save (layout)` → `Save` の用語統一）で、ラベルを読み戻す probe Section を RED→GREEN で先に固めてからラベルを直した。
+
 ## 標準ワークフロー
 
 ```

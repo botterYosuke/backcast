@@ -1665,7 +1665,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         bool layoutOk = TryWriteLayout(_currentLayoutPath);
         if (!pyOk || !layoutOk) { _menuBarView?.ShowMessage("Save failed (see log)."); return; }
         ReseedFromEditor();
-        _menuBarView?.ShowMessage("Save: notebook + layout written.");
+        _menuBarView?.ShowMessage("Saved " + Path.GetFileName(_currentLayoutPath));
     }
 
     // #69: Save As forks the whole document to a new pair (findings 0048 D6): write <newname>.py

@@ -11,7 +11,10 @@
 // Encoding: a marker line + a JSON array of {body,name,config}. The "py" it writes is NOT real Python
 // (it never runs through marimo here) — it is a reversible blob. Decompose of ARBITRARY text (no
 // marker — e.g. a real strategy `.py` a seeding probe opens) leniently wraps the whole text as ONE
-// anonymous cell, so the notebook binds. FailDecompose forces the fail-soft null (the broken-`.py` leg).
+// anonymous cell, so the notebook binds. FailDecompose forces the seam's null return (the non-marimo
+// leg the production PythonnetMarimoSynthesizer also produces). Per #86 the aggregate's Open now
+// WRAPS that null into a 1-cell raw-content notebook (instead of failing fail-soft), so this fake
+// leg exercises the same wrap policy — production and fake stay aligned.
 
 using System.Collections.Generic;
 using Newtonsoft.Json;

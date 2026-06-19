@@ -25,7 +25,7 @@ public class HakoniwaController
     // NormalizeOrder to append known-but-unordered tiles in a sensible sequence. This is only a
     // FALLBACK ordering for tiles handed to the constructor; the #61 workspace orchestrator drives
     // the live base order explicitly via the constructor ids + Reorder (it does NOT read this), and
-    // the #14 HakoniwaProbe builds its generic 5-tile grid (chart/status/…) from this set.
+    // the #14 HakoniwaE2ERunner (§1/§3) builds its generic 5-tile grid (chart/status/…) from this set.
     public static readonly string[] DEFAULT_ORDER =
         { "chart", "status", "positions", "orders", "run_result" };
 

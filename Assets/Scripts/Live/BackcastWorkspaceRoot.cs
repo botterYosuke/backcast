@@ -1632,18 +1632,25 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         SendModeSideEffect(_menuBar?.FileOpenModeSideEffect());
 
         // #81: the picked .py IS the notebook document — decompose it into N cell windows (saved
-        // cellPositions when we have a layout, else auto-cascade). The NOTEBOOK itself failing to open
-        // (non-marimo / unreadable .py) is the ONLY abort — keep the workspace, change nothing.
+        // cellPositions when we have a layout, else auto-cascade). #86 widened Open so a non-marimo
+        // `.py` BOOTSTRAPS as one anonymous cell (raw file text as body) — the only Open failures
+        // now are path/IO errors (missing file / unreadable / wrong extension). On any failure the
+        // workspace is untouched and we surface LastError.
         if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null))
         {
-            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "is not a notebook"));
+            _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "could not be opened"));
             return;
         }
         if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present
         _currentLayoutPath = py;
         PersistResumePointer(py);
         ReseedFromEditor();
-        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + (layoutOk ? "" : " (no saved layout)"));
+        // F3 (#86, findings 0054 §D2a): a non-marimo `.py` wrap-Open looks identical to a clean
+        // marimo Open in the menu toast; users then Ctrl+S into the destructive marimo conversion
+        // (§D2) blind. Surface the wrap state on the same toast line so the conversion is informed.
+        string wrapHint = _notebook.WrapMode ? " (wrap mode — Save will convert to marimo)" : "";
+        string layoutHint = layoutOk ? "" : " (no saved layout)";
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + wrapHint + layoutHint);
     }
 
     // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op

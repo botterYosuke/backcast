@@ -1645,7 +1645,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _currentLayoutPath = py;
         PersistResumePointer(py);
         ReseedFromEditor();
-        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + (layoutOk ? "" : " (no saved layout)"));
+        // F3 (#86, findings 0054 §D2a): a non-marimo `.py` wrap-Open looks identical to a clean
+        // marimo Open in the menu toast; users then Ctrl+S into the destructive marimo conversion
+        // (§D2) blind. Surface the wrap state on the same toast line so the conversion is informed.
+        string wrapHint = _notebook.WrapMode ? " (wrap mode — Save will convert to marimo)" : "";
+        string layoutHint = layoutOk ? "" : " (no saved layout)";
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + wrapHint + layoutHint);
     }
 
     // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op

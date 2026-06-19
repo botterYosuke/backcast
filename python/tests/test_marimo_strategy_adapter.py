@@ -386,3 +386,36 @@ def test_dispatch_routes_imperative_file_to_loader(tmp_path):
     assert label == "ImpStrat"
     strat = factory(IID)
     assert isinstance(strat, Strategy) and not isinstance(strat, MarimoStrategy)
+
+
+def test_dispatch_surfaces_syntax_error_to_strategy_load_error(tmp_path):
+    """Broken-syntax .py is wrap-Open-able (D3 / owner 2026-06-19: 案 A) but Run must
+    surface the SyntaxError via the imperative loader's STRATEGY_LOAD_ERROR envelope —
+    the C# launcher prints it as 'Run failed: start_engine: STRATEGY_LOAD_ERROR ...'
+    on the menu bar (BackcastWorkspaceRoot.Update:947). Locks the contract that
+    _select_replay_strategy() raises (does not swallow) so _start_engine_duckdb's
+    except-Exception leg fires and the user sees the traceback.
+
+    F2 (b) per findings 0054 §テスト方針 層3: this test should GREEN immediately on
+    add — there is no code change in F2 (b). It locks the already-correct broken-syntax
+    surface path against future regression (e.g. someone making strategy_loader.py:90-93
+    swallow the exception). To verify the gate has teeth, locally turn the `except
+    Exception: raise StrategyLoadError(...)` into `except Exception: pass` and confirm
+    this test goes RED.
+    """
+    py = tmp_path / "broken.py"
+    # imperative-looking (no `app = marimo.App()`, no module-level `import marimo` →
+    # is_marimo_app_file returns False at the "marimo" not in src early-out, so this
+    # routes to strategy_loader.load, not the marimo branch. Truly broken syntax
+    # (unterminated def) → exec_module raises SyntaxError → wrapped in StrategyLoadError.
+    py.write_text("def broken(\n", encoding="utf-8")
+    _write_sidecar(py)
+
+    from engine.strategy_runtime.strategy_loader import StrategyLoadError
+    with pytest.raises(StrategyLoadError) as excinfo:
+        _select_replay_strategy(str(py))
+    # traceback wrap contract: the user-visible message must include "failed to import"
+    # and the original SyntaxError text (line/caret) so the menu bar surface is diagnosable.
+    msg = str(excinfo.value)
+    assert "failed to import" in msg
+    assert "SyntaxError" in msg

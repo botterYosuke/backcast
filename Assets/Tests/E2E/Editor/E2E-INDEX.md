@@ -52,6 +52,16 @@
   DEPTH-09 Replay decode-skip / DEPTH-10 signature early-out] 追加・AFK RED(S6)→GREEN 確定 2026-06-19・findings 0059）。
   DEPTH-04（per-side 色）は `ThemeProbe` が正本のまま据え置き（findings 0054 で `hakoniwa_up/down/last` へ移行済）、DEPTH-11 は HITL。
   残り未昇格: MenuBar / Hakoniwa / StrategyEditorNotebook / RunButton / OrderTicket / SecretModal ＋ Journey 3 本。順次昇格。
+
+## Issue release-gate slice runners
+
+Surface/Journey の網羅台帳とは別に、特定 issue の release-gate を細く正本化する slice runner。Surface 台本（特に
+[StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) の STRATEGY-16 が generic Open 経路を担う）と
+重複させず、その issue の wrap policy / decision の 1 不変条件をピンポイントで gate する。
+
+| 台本 | Action ID | 行数 | 自動(E2E済) | 関連 issue / findings |
+|---|---|---:|---:|---|
+| [FileOpenNonMarimoE2ERunner](./FileOpenNonMarimoE2ERunner.md) ✅ | `OPEN-NM-01..04` | 4 | 4 | #86 / [findings 0054](../../../../docs/findings/0054-file-open-non-marimo-py-wraps-as-1-cell.md) |
 - 第二波の昇格優先度の目安: `自動(Probe有・要昇格)`（既存 assert 流用で安い）→ `要新規自動化`（新規）。
   `OrderTicket` は view 側フォーム＋検証ゲートの Probe が無く全 15 行が `要新規自動化` なので、第二波で最も手が要る。
 

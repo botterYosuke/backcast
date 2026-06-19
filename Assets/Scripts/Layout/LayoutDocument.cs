@@ -129,8 +129,10 @@ public class PanelLayout
 // PanelLayout/Hakoniwa tile (a 0..1 normalized display rect inside a bounded parent), a
 // floating window lives on the UNBOUNDED infinite canvas, so it persists ABSOLUTE CANVAS-
 // LOGICAL coordinates (findings 0008 §3, owner-locked):
-//   x,y  = the window's TOP-LEFT-pivot anchoredPosition in Content canvas-logical space
-//          (x right-positive, y up-positive; FloatingWindowLayer is identity under Content).
+//   x,y  = the window's TOP-LEFT-pivot anchoredPosition in FloatingWindowLayer-LOCAL space
+//          (x right-positive, y up-positive). Equals Content canvas-logical space while the layer
+//          is centred; under pan the layer parallax-shifts off Content (the foreground depth cue),
+//          so x,y stay layer-local and SpawnAnchorTopLeft compensates by the live layer offset.
 //   w,h  = size in canvas-logical px (w,h > 0; LayoutStore drops an entry with non-finite/<=0).
 //   zOrder = front/back order, 0 = BACKMOST. Persisted VERBATIM (never normalized at load, so a
 //          hand-authored non-contiguous z survives the round-trip); the restore controller

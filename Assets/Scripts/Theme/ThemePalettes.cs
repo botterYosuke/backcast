@@ -17,6 +17,12 @@ public enum Appearance { Dark, Light }
 public sealed class ThemeColors
 {
     public Color background, surface_background, elevated_surface_background, panel_background;
+    // workspace_background — the infinite-canvas FIELD behind every Hakoniwa tile / floating window
+    // (BackcastWorkspaceRoot._viewport). NOT a Radix scale step: a deliberate owner override (2026-06-19,
+    // same流儀 as the AddCellButton bottom-right divergence) so the empty space reads light-blue while
+    // the content surfaces keep `background` (dark). Kept distinct from `background` precisely so changing
+    // the field hue does NOT lighten chart / ladder / editor backgrounds.
+    public Color workspace_background;
     public Color panel_focused_border, status_bar_background, title_bar_background;
     public Color toolbar_background, tab_bar_background, tab_active_background, tab_inactive_background;
     public Color border, border_variant, border_focused, border_selected, border_disabled, border_transparent;
@@ -37,6 +43,7 @@ public sealed class ThemeColors
         return new ThemeColors
         {
             background = n.Step1,
+            workspace_background = new Color(0.4980f, 0.6431f, 0.7451f), // #7fa4be — owner-chosen field hue (raw sRGB, findings 0020)
             surface_background = n.Step2,
             elevated_surface_background = n.Step3,
             panel_background = n.Step2,

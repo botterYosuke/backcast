@@ -8,7 +8,10 @@
 // coordinates (the input boundary hands it a canvas-LOGICAL delta).
 //
 // LAYER MODEL (findings 0008 §1/§3, owner-locked): every window is a child of a single
-// FloatingWindowLayer (itself a child of the infinite-canvas Content, identity transform). So:
+// FloatingWindowLayer (itself a child of the infinite-canvas Content). The layer sits at the
+// origin when centred, but the InfiniteCanvasController parallax-shifts its anchoredPosition off
+// Content as you pan (the depth cue that floats windows IN FRONT of HakoniwaRoot); this controller
+// still owns ONLY each window's position WITHIN the layer, in layer-local coords. So:
 //   * pan/zoom follow is FREE — the layer rides Content (proven by #13's child-follow), and the
 //     controller only owns each window's position WITHIN the layer.
 //   * z-order is the window's SIBLING INDEX within the layer (uGUI draws child 0 = backmost),

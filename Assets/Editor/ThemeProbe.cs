@@ -73,6 +73,10 @@ public static class ThemeProbe
         var blue = ColorScale.BlueDark();
 
         Eq(t.colors.background, n.Step1, "colors.background == neutral.1");
+        // workspace_background is an owner literal (#7fa4be), NOT a scale step — assert the value AND that
+        // it is DISTINCT from background, so the viewport field can't silently collapse back onto dark.
+        Eq(t.colors.workspace_background, new Color(0.4980f, 0.6431f, 0.7451f), "colors.workspace_background == #7fa4be (owner literal)");
+        Ne(t.colors.workspace_background, t.colors.background, "workspace_background != background (field stays distinct from content bg)");
         Eq(t.colors.surface_background, n.Step2, "colors.surface_background == neutral.2");
         Eq(t.colors.text, n.Step12, "colors.text == neutral.12");
         Eq(t.colors.text_muted, n.Step11, "colors.text_muted == neutral.11");
@@ -106,6 +110,7 @@ public static class ThemeProbe
         // Every role the Section4 switch-kill samples must be proven dark != NonDefault here, or
         // that kill could pass vacuously (stale == target) if the two ever coincided for that role.
         Ne(nd.colors.background, dark.colors.background, "NonDefault.background != dark");
+        Ne(nd.colors.workspace_background, dark.colors.workspace_background, "NonDefault.workspace_background != dark");
         Ne(nd.colors.surface_background, dark.colors.surface_background, "NonDefault.surface_background != dark");
         Ne(nd.colors.panel_background, dark.colors.panel_background, "NonDefault.panel_background != dark");
         Ne(nd.colors.text, dark.colors.text, "NonDefault.text != dark");

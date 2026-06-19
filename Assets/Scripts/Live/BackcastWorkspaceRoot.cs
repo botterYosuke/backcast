@@ -64,6 +64,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _startupTile;
     [SerializeField] RectTransform _chartTile;
     [SerializeField] RectTransform _floatingLayer;
+    // Parallax depth cue: the floating layer (Strategy Editor + cells) travels this multiple of the
+    // Hakoniwa plane's pan, so it reads as sitting IN FRONT of Hakoniwa. 1 = coplanar; >1 = foreground.
+    [SerializeField] float _floatingParallaxFactor = 1.2f;
 
     [Header("Strategy Editor floating window (scene-authored, adopted)")]
     [SerializeField] RectTransform _strategyEditorWindow;
@@ -309,8 +312,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void BuildWorkspace()
     {
         // center workspace: infinite canvas (Content) hosts HakoniwaRoot + FloatingWindowLayer (P-all).
-        _canvas = new InfiniteCanvasController(_content);
+        _canvas = new InfiniteCanvasController(_content, _floatingLayer, _floatingParallaxFactor);
         if (_inputSurface != null) _inputSurface.Initialize(_canvas, _viewport);
+
+        // theme the infinite-canvas FIELD (the viewport bg) from workspace_background and follow theme
+        // switches (parity with ChartView/DepthLadderView self-subscription, #44 AC②). Applied at runtime
+        // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
+        ThemeService.Changed += ApplyViewportTheme;
+        ApplyViewportTheme();
 
         _catalog = FloatingWindowCatalog.Default();
         _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildEditorWindowFrame);
@@ -495,6 +504,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, EditorFileProvider, _font);   // #78: editor's .py sidecar; #77: uGUI font
     }
 
+    // Re-paint the infinite-canvas field (the viewport bg) from the active theme's workspace_background.
+    // Subscribed to ThemeService.Changed in BuildWorkspace; null-safe so a probe that never authored the
+    // viewport Image is a no-op.
+    void ApplyViewportTheme()
+    {
+        if (_viewport == null) return;
+        var img = _viewport.GetComponent<Image>();
+        if (img != null) img.color = ThemeService.Current.colors.workspace_background;
+    }
+
     // window factory for ADDITIONAL saved editor windows (the scene-authored one is adopted). Uses
     // the SAME frame builder as the scene-authoring tool so adopted/spawned editors can't diverge.
     RectTransform BuildEditorWindowFrame(FloatingWindowSpec spec, string id)
@@ -532,7 +551,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     Vector2 SpawnAnchorTopLeft()
     {
         var v = _canvas != null ? _canvas.CaptureView() : null;
-        return v != null ? new Vector2(v.panX, v.panY) : Vector2.zero;
+        Vector2 anchor = v != null ? new Vector2(v.panX, v.panY) : Vector2.zero;
+        // The floating layer is parallax-shifted off Content (anchoredPosition != 0 when panned), so a
+        // window's layer-LOCAL top-left differs from the Content-logical viewport-centre by that offset.
+        // Subtract it so a new cell still lands at the viewport centre regardless of the depth cue.
+        if (_floatingLayer != null) anchor -= _floatingLayer.anchoredPosition;
+        return anchor;
     }
 
     // Find-or-create the title-bar X on a cell window and wire it to delete that cell. Idempotent, so
@@ -1821,6 +1845,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
+        ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

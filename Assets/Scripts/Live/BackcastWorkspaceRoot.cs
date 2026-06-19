@@ -180,6 +180,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     OrderTicketView _orderTicket;
     SecretModalOverlay _secretOverlay;
     bool _secretModalOpenPrev;
+    // #89: quit-confirm (findings 0068). The pure controller decides; this root wires the real
+    // Save/SaveAs/Quit + a _quitConfirmed latch so the 2nd wantsToQuit (fired by our own Quit() after
+    // a confirmed save/discard) is allowed through.
+    QuitConfirmOverlay _quitOverlay;
+    QuitConfirmController _quitController;
+    bool _quitConfirmed;
     // Manual ticket status crosses worker→main: LiveRpcLanes invokes the result callback on a lane
     // thread, but the OrderTicketView (uGUI) is main-only. Stash to volatiles; DriveOrderTicket applies.
     volatile string _manualStatusLine = "-";   // pre-formatted on the worker; applied to the view on main
@@ -457,6 +463,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _secretOverlay.BackspacePressed += OnSecretBackspace;
         _secretOverlay.SubmitClicked += SubmitSecret;
         _secretOverlay.CancelClicked += CancelSecret;
+
+        // #89: quit-confirm overlay + pure controller (findings 0068). On OS close with a dirty
+        // document, wantsToQuit blocks and this modal asks Save / Don't Save / Cancel. NOT wired in
+        // batchmode so AFK -quit is never held by a modal (QUIT-08). Build() already SetVisible(false).
+        var quitGo = new GameObject("QuitConfirmOverlay");
+        quitGo.transform.SetParent(transform, false);
+        _quitOverlay = quitGo.AddComponent<QuitConfirmOverlay>();
+        _quitOverlay.Build(_font);
+        _quitOverlay.SaveClicked += OnQuitSave;
+        _quitOverlay.DiscardClicked += OnQuitDiscard;
+        _quitOverlay.CancelClicked += OnQuitCancel;
+        _quitController = new QuitConfirmController();
+        if (!Application.isBatchMode) Application.wantsToQuit += OnWantsToQuit;
 
         // #76 S6b-β-clean U4: workspace footer = mode segments (Replay/Manual/Auto) + status ONLY.
         // The replay transport controls (▶/⏸/step/stop/speed) are retired (ADR-0012 reactive model —
@@ -1705,6 +1724,60 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _menuBarView?.ShowMessage("Saved as " + Path.GetFileName(newPy));
     }
 
+    // ── #89 quit-confirm wiring (findings 0068). The pure QuitConfirmController decides; here we run
+    // the real Save/SaveAs + Application.Quit and hold the _quitConfirmed latch so the 2nd wantsToQuit
+    // (fired by our own Quit() after a confirmed save/discard) is allowed through. Data-protection
+    // guard: a Save that leaves the notebook still dirty (write failed / picker cancelled) ABORTS the
+    // quit — edits are never lost silently (this replaces the old silent autosave-on-quit behaviour).
+    bool OnWantsToQuit()
+    {
+        if (_quitConfirmed) return true;                       // our own confirmed Quit() — let it through
+        if (_quitController == null) return true;              // not wired (defensive) — don't block shutdown
+        if (_quitController.RequestQuit(_notebook != null && _notebook.IsDirty) == QuitDecision.QuitNow)
+            return true;                                       // clean (or no notebook) → quit immediately
+        _quitOverlay?.SetVisible(true);                        // dirty → show modal, block this quit
+        return false;
+    }
+
+    void OnQuitSave()
+    {
+        bool isBound = !string.IsNullOrEmpty(_currentLayoutPath);
+        var outcome = _quitController.ChooseSave(isBound);     // closes the modal (IsOpen=false)
+        _quitOverlay?.SetVisible(false);
+        if (outcome == QuitOutcome.SaveThenQuit)
+        {
+            OnFileSave();
+            if (_notebook != null && !_notebook.IsDirty) ConfirmAndQuit();   // .py persisted → quit
+            // still dirty → Save failed: abort quit, keep the document (data-protection guard)
+        }
+        else // SaveAsThenQuit (untitled): native picker, then resolve via the controller (案A)
+        {
+            OnFileSaveAs();
+            bool committed = _notebook != null && !_notebook.IsDirty;
+            if (_quitController.ResolveSaveAs(committed) == QuitOutcome.SaveAsThenQuit) ConfirmAndQuit();
+            // picker cancelled / write failed → AbortQuit: stay in the app, document preserved
+        }
+    }
+
+    void OnQuitDiscard()
+    {
+        _quitController.ChooseDiscard();                       // QuitWithoutSave
+        _quitOverlay?.SetVisible(false);
+        ConfirmAndQuit();                                      // quit without saving (dirty edits discarded)
+    }
+
+    void OnQuitCancel()
+    {
+        _quitController.ChooseCancel();                        // AbortQuit
+        _quitOverlay?.SetVisible(false);                       // stay in the app
+    }
+
+    void ConfirmAndQuit()
+    {
+        _quitConfirmed = true;
+        Application.Quit();
+    }
+
     // #69: the picker's initial dir/filename follow the open document, else persistentDataPath.
     string InitialDir() =>
         string.IsNullOrEmpty(_currentLayoutPath) ? Application.persistentDataPath : Path.GetDirectoryName(_currentLayoutPath);
@@ -1888,6 +1961,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         ThemeService.Changed -= ApplyHakoniwaChromeTheme;   // Hakoniwa chrome theme unsubscribe (findings 0054)
+        if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

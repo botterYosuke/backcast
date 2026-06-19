@@ -7,10 +7,13 @@
 
 ## 背景 — 何を変えるか
 
-従来の終了は **autosave**（`BackcastWorkspaceRoot.OnApplicationQuit` → `StopAndDispose` → `AutosaveCurrentDocument`、
-ヘッダ comment「quit autosaves into the open document」）で、開いているドキュメントを**無言で .py に上書き保存**していた。
-issue #89 はこれを **確認ダイアログ方式**に置き換える（owner 判断①）——終了時に未保存（dirty）なら、保存する / 保存しない /
-キャンセル をユーザーに問う。autosave はしない。
+従来の終了は dirty な編集ドキュメント（`.py`）を**無言で破棄**していた（明示 `Save` しない限り in-memory 編集は失われる）。
+`BackcastWorkspaceRoot.OnApplicationQuit`/`OnDestroy` → `StopAndDispose` → `AutosaveCurrentDocument` は走るが、これは
+**layout sidecar `.json`（`TryWriteLayout` → `LayoutSidecarStore.WriteLayout`）だけを書く**――`.py` は一切書かない
+（ヘッダ comment「quit autosaves into the open document」は誤解を招く表現で、実際に autosave されるのは layout のみ）。
+issue #89 はこの**「dirty `.py` の無言破棄」を確認ダイアログ方式に置き換える**（owner 判断①）――終了時に dirty なら、
+保存する / 保存しない / キャンセル をユーザーに問う。layout sidecar の autosave（`AutosaveCurrentDocument`）はドキュメント
+保存とは別物なので確認フローに巻き込まない。
 
 ## owner 判断（確定）
 
@@ -64,9 +67,10 @@ QuitOutcome ResolveSaveAs(bool pickerReturnedPath)
   - `SaveAsThenQuit` → native picker → `ResolveSaveAs(path!=null)`：commit なら 実 `SaveAs()`＋latch＋`Quit()` / abort なら overlay 閉じて据え置き（終了しない）
   - `QuitWithoutSave` → latch → `Quit()`（保存しない・dirty 据え置きだが終了する）
   - `AbortQuit` → overlay 閉じて据え置き（終了しない）
-- **autosave 撤去**: 現行の quit 経路の**ドキュメント .py autosave を撤去**し確認フローに置換する。`OnDestroy`/`OnApplicationQuit`
-  の layout 永続（PlayerPrefs の resume ポインタ等・ドキュメント保存とは別）を巻き込まないこと——step 5 着手時にこの境界を
-  Navigator が再確認する（要確認: `AutosaveCurrentDocument` がドキュメント .py を書くのか layout.json だけか）。
+- **「autosave 撤去」は no-op**（step 5 着手時に確認済み 2026-06-20）: 現行 quit 経路に**撤去すべきドキュメント `.py` autosave は存在しない**。
+  `AutosaveCurrentDocument` は `TryWriteLayout`（layout sidecar `.json`）だけを書き、`.py` は `OnFileSave`/`OnFileSaveAs` の
+  `_coordinator.Save()`/`SaveAs()` でしか書かれない。よって step 5 は「.py autosave の撤去」ではなく**確認ダイアログ経路の追加**であり、
+  `AutosaveCurrentDocument`（layout sidecar）は KEEP し確認フローに巻き込まない（layout 永続はドキュメント保存とは別物）。
 
 ## E2E マトリクス（owner 承認済みの挙動 → QUIT-01..09）
 
@@ -111,3 +115,4 @@ QuitOutcome ResolveSaveAs(bool pickerReturnedPath)
 
 - QUIT-08（batchmode 抑制・latch）= 要新規自動化（実 `BackcastWorkspaceRoot` 反射 harness を要する）。
 - QUIT-09（実 OS ウィンドウ close・実 native picker）= HITL専用（実 OS ウィンドウ・OS ネイティブダイアログ依存）。
+- QUIT-10（save-failure → quit abort）= **配線側不変条件 ＋ HITL確認項目**（pure controller では検証不能）。配線 `OnQuitSave` は実 `Save()`/`SaveAs()` 後に `_notebook.IsDirty` を再チェックし、**まだ dirty なら（書込失敗 / Save As picker cancel）`ConfirmAndQuit()` を呼ばず終了を中断**してドキュメントを保全する（旧「quit 時の無言 autosave」を置換するデータ保護ガード）。AFK の pure-logic gate は実 `Save()` を持たないため観測できず、HITL（書込失敗を擬似注入、または read-only パスへ Save As）で確認する。

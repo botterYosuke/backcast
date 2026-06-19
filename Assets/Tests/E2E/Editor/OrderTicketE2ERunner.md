@@ -30,21 +30,21 @@ instrument 表示（sidebar `SelectedSymbol` 同期）・status 表示・interac
 
 | Action ID | ユーザー行動 | 入口（file:line） | 観測点 | 自動判定 | カバー状態 | 既存 Probe |
 |---|---|---|---|---|---|---|
-| ORDER-01 | BUY/SELL トグル | `OrderTicketView.cs:44` | `_sideBuy` が反転、ボタン文字が `BUY`⇄`SELL`、`SideBuy` prop が追従 | view を Build → `_sideBtn.onClick` 駆動 → `SideBuy` を反射 assert | 要新規自動化 | — |
-| ORDER-02 | MARKET/LIMIT トグル（price 行 表示/非表示） | `OrderTicketView.cs:49,53` | `_limit` が反転、`_priceRow.SetActive(_limit)`、`Limit` prop 追従、文字 `MARKET`⇄`LIMIT` | `_typeBtn.onClick` 駆動 → `Limit` ＋ price 行 activeSelf を assert | 要新規自動化 | — |
-| ORDER-03 | Qty 編集 | `OrderTicketView.cs:57` | `Qty` prop が field text を返す（read-only 公開） | field.text を設定 → `Qty` を assert | 要新規自動化 | — |
-| ORDER-04 | Limit price 編集 | `OrderTicketView.cs:61` | `Price` prop が field text を返す | LIMIT 時に price field.text 設定 → `Price` を assert | 要新規自動化 | — |
-| ORDER-05 | Place（妥当 → 発注） | `BackcastWorkspaceRoot.cs:1150,1171` | `OnManualPlace` が side/qty/price/type を組み `SubmitPlaceOrder(venue,iid,…,"DAY")`、status="placing …"、result 後 `_manualOrderId`／status 更新 | MOCK lane（`InitializePython("MOCK")`）で `PlaceRequested` 発火 → ACK/status を assert | 要新規自動化 | `WorkspaceLiveSeamProbe`（lane place→fill のみ） |
-| ORDER-06 | Place 拒否（qty 不正） | `BackcastWorkspaceRoot.cs:1155` | `double.TryParse(InvariantCulture)` 失敗 or `qty<=0` → status="invalid qty"、**RPC 発火せず** | qty="0"/"abc" で place → status＝"invalid qty" ＋ lane 未呼び出しを assert | 要新規自動化 | — |
-| ORDER-07 | Place 拒否（LIMIT 価格不正） | `BackcastWorkspaceRoot.cs:1160` | LIMIT かつ price parse 失敗 or `p<=0` → status="invalid limit price"、RPC なし | LIMIT＋price="" で place → status を assert | 要新規自動化 | — |
-| ORDER-08 | Place 拒否（未接続） | `BackcastWorkspaceRoot.cs:1164` | `!ServerReady‖!Conn.IsConnected‖Lanes==null` → status="connect a venue first" | 未接続 root で place → status を assert | 要新規自動化 | — |
-| ORDER-09 | Place 拒否（instrument 未解決） | `BackcastWorkspaceRoot.cs:1167,1200` | `ManualInstrument()` が空 → status="select an instrument …"、任意銘柄へ流さない（live-order safety） | universe 空＋未選択で place → status を assert | 要新規自動化 | — |
-| ORDER-10 | Cancel last（取消） | `BackcastWorkspaceRoot.cs:1180,1188` | oid = `_manualOrderId` ∨ `Panel.LatestOrder.OrderId`、`SubmitCancelOrder(venue,oid)`、status="cancel …"、結果は `PENDING_CANCEL`＝取消受付（終端 `CANCELED` は poll 後追い） | MOCK lane で place→cancel → oid 解決＋ACK を assert | 要新規自動化 | `VenueLoginSecretProbe`（lane serialization のみ） |
-| ORDER-11 | Cancel 拒否（対象なし／未接続） | `BackcastWorkspaceRoot.cs:1182,1185` | `Lanes==null`→"not connected"、oid 解決不能→"no order to cancel"、RPC なし | order 無しで cancel → status を assert | 要新規自動化 | — |
-| ORDER-12 | instrument 表示（sidebar 同期） | `BackcastWorkspaceRoot.cs:1141,1200` | `ManualInstrument()` = `_footerSelected`（共有 SelectedSymbol）∨ `Universe.Ids[0]`、`SetInstrument` が "instrument: {iid}" を表示・unchanged はスキップ | sidebar 選択を変えて `DriveOrderTicket` → 表示文字列を assert | 要新規自動化 | — |
-| ORDER-13 | interactable ゲート | `OrderTicketView.cs:82`／`BackcastWorkspaceRoot.cs:1142` | `SetInteractable(ServerReady && Conn.IsConnected && !TeardownComplete)` で Place/Cancel ボタンの `interactable` が追従 | 接続フラグを切替えて `DriveOrderTicket` → ボタン enabled を assert | 要新規自動化 | — |
-| ORDER-14 | チケット可視性（LiveManual のみ） | `BackcastWorkspaceRoot.cs:1139` | `_orderWindow.activeSelf` が `footerMode==LiveManual` に一致（Replay/LiveAuto では非表示） | footer mode を切替えて `DriveOrderTicket` → window activeSelf を assert | 要新規自動化 | — |
-| ORDER-15 | status 表示（worker→main 反映） | `OrderTicketView.cs:88`／`BackcastWorkspaceRoot.cs:1143` | result callback が `_manualStatusLine`＋`_manualStatusDirty` に積み、`DriveOrderTicket` が main で `SetStatus` → "last order: …" | dirty フラグ経由の status marshal を assert | 要新規自動化 | — |
+| ORDER-01 | BUY/SELL トグル | `OrderTicketView.cs:44` | `_sideBuy` が反転、ボタン文字が `BUY`⇄`SELL`、`SideBuy` prop が追従 | view を Build → `_sideBtn.onClick` 駆動 → `SideBuy` を反射 assert | 自動(E2E済) | — |
+| ORDER-02 | MARKET/LIMIT トグル（price 行 表示/非表示） | `OrderTicketView.cs:49,53` | `_limit` が反転、`_priceRow.SetActive(_limit)`、`Limit` prop 追従、文字 `MARKET`⇄`LIMIT` | `_typeBtn.onClick` 駆動 → `Limit` ＋ price 行 activeSelf を assert | 自動(E2E済) | — |
+| ORDER-03 | Qty 編集 | `OrderTicketView.cs:57` | `Qty` prop が field text を返す（read-only 公開） | field.text を設定 → `Qty` を assert | 自動(E2E済) | — |
+| ORDER-04 | Limit price 編集 | `OrderTicketView.cs:61` | `Price` prop が field text を返す | LIMIT 時に price field.text 設定 → `Price` を assert | 自動(E2E済) | — |
+| ORDER-05 | Place（妥当 → 発注） | `BackcastWorkspaceRoot.cs:1150,1171` | `OnManualPlace` が side/qty/price/type を組み `SubmitPlaceOrder(venue,iid,…,"DAY")`、status="placing …"、result 後 `_manualOrderId`／status 更新 | MOCK lane（`InitializePython("MOCK")`）で `PlaceRequested` 発火 → ACK/status を assert | 自動(E2E済) | `WorkspaceLiveSeamProbe`（lane place→fill のみ） |
+| ORDER-06 | Place 拒否（qty 不正） | `BackcastWorkspaceRoot.cs:1155` | `double.TryParse(InvariantCulture)` 失敗 or `qty<=0` → status="invalid qty"、**RPC 発火せず** | qty="0"/"abc" で place → status＝"invalid qty" ＋ lane 未呼び出しを assert | 自動(E2E済) | — |
+| ORDER-07 | Place 拒否（LIMIT 価格不正） | `BackcastWorkspaceRoot.cs:1160` | LIMIT かつ price parse 失敗 or `p<=0` → status="invalid limit price"、RPC なし | LIMIT＋price="" で place → status を assert | 自動(E2E済) | — |
+| ORDER-08 | Place 拒否（未接続） | `BackcastWorkspaceRoot.cs:1164` | `!ServerReady‖!Conn.IsConnected‖Lanes==null` → status="connect a venue first" | 未接続 root で place → status を assert | 自動(E2E済) | — |
+| ORDER-09 | Place 拒否（instrument 未解決） | `BackcastWorkspaceRoot.cs:1167,1200` | `ManualInstrument()` が空 → status="select an instrument …"、任意銘柄へ流さない（live-order safety） | universe 空＋未選択で place → status を assert | 自動(E2E済) | — |
+| ORDER-10 | Cancel last（取消） | `BackcastWorkspaceRoot.cs:1180,1188` | oid = `_manualOrderId` ∨ `Panel.LatestOrder.OrderId`、`SubmitCancelOrder(venue,oid)`、status="cancel …"、結果は `PENDING_CANCEL`＝取消受付（終端 `CANCELED` は poll 後追い） | MOCK lane で place→cancel → oid 解決＋ACK を assert | 自動(E2E済) | `VenueLoginSecretProbe`（lane serialization のみ） |
+| ORDER-11 | Cancel 拒否（対象なし／未接続） | `BackcastWorkspaceRoot.cs:1182,1185` | `Lanes==null`→"not connected"、oid 解決不能→"no order to cancel"、RPC なし | order 無しで cancel → status を assert | 自動(E2E済) | — |
+| ORDER-12 | instrument 表示（sidebar 同期） | `BackcastWorkspaceRoot.cs:1141,1200` | `ManualInstrument()` = `_footerSelected`（共有 SelectedSymbol）∨ `Universe.Ids[0]`、`SetInstrument` が "instrument: {iid}" を表示・unchanged はスキップ | sidebar 選択を変えて `DriveOrderTicket` → 表示文字列を assert | 自動(E2E済) | — |
+| ORDER-13 | interactable ゲート | `OrderTicketView.cs:82`／`BackcastWorkspaceRoot.cs:1142` | `SetInteractable(ServerReady && Conn.IsConnected && !TeardownComplete)` で Place/Cancel ボタンの `interactable` が追従 | 接続フラグを切替えて `DriveOrderTicket` → ボタン enabled を assert | 自動(E2E済) | — |
+| ORDER-14 | チケット可視性（LiveManual のみ） | `BackcastWorkspaceRoot.cs:1139` | `_orderWindow.activeSelf` が `footerMode==LiveManual` に一致（Replay/LiveAuto では非表示） | footer mode を切替えて `DriveOrderTicket` → window activeSelf を assert | 自動(E2E済) | — |
+| ORDER-15 | status 表示（worker→main 反映） | `OrderTicketView.cs:88`／`BackcastWorkspaceRoot.cs:1143` | result callback が `_manualStatusLine`＋`_manualStatusDirty` に積み、`DriveOrderTicket` が main で `SetStatus` → "last order: …" | dirty フラグ経由の status marshal を assert | 自動(E2E済) | — |
 | ORDER-16 | Place（実 venue 約定） | `BackcastWorkspaceRoot.cs:1171` | 実 kabu/立花へ `place_order`、約定が FILLED、status に実 OrderId | — | HITL専用（実 venue 接続・外部認証/秘密情報依存・実資金） | `VenueLoginSecretHitlMenu` |
 
 > instrument/status/可視性/interactable（ORDER-12〜15）は入力の無い**表示/状態**だが、フォーム行動が正しい
@@ -90,6 +90,10 @@ instrument 表示（sidebar `SelectedSymbol` 同期）・status 表示・interac
 
 ## 将来の `OrderTicketE2ERunner.cs` 実装方針（第二波）
 
+> 実装済み（第二波11本目・`OrderTicketE2ERunner.cs`・findings 0064）。下記方針どおり反射駆動で著した（production の
+> `OrderTicketValidation` 抽出は不要と判断＝検証ゲートが `SetStatus` を同期で出すので `_status` 反射で観測）。
+> section↔Action ID 対応は本ファイル末尾を参照。
+
 - `MenuBarCutoverProbe`/`WorkspaceDepthLadderProbe` と同型に **実 `BackcastWorkspaceRoot` を反射合成**
   （`OpenScene` → `SetSynthesizer(FakeMarimoSynthesizer)` → `ResolvePaths` → `BuildWorkspace`）。Python-FREE を
   既定とし、フォーム操作・検証ゲート（ORDER-01〜04・06〜09・11〜15）は `_orderTicket` / private seam の反射で
@@ -105,3 +109,14 @@ instrument 表示（sidebar `SelectedSymbol` 同期）・status 表示・interac
 - 実行コマンド: `<Unity> -batchmode -nographics -quit -projectPath . -executeMethod OrderTicketE2ERunner.Run -logFile <log>`。
   compile-only ゲートは `-executeMethod` を外した同コマンド（`error CS\d+` 0 件）。Unity ログは UTF-8 なので
   **ripgrep で grep**。
+
+## section ↔ Action ID（第二波昇格・`OrderTicketE2ERunner.cs`）
+
+- **SectionA_FormView**（`OrderTicketView` を bare RectTransform 下に Build・Python-FREE）= **ORDER-01/02/03/04**。
+- **SectionB_ValidationGates**（未接続の実 root・Python-FREE）= **ORDER-06/07/08/11a**（`_status` テキストで拒否理由を観測）。
+- **SectionC_DisplayState**（未接続の実 root・Python-FREE）= **ORDER-12/13(disabled)/14/15**（`FooterModeViewModel.ApplyPoll`＋`DriveOrderTicket` 反射）。
+- **SectionD_MockLaneWiring**（接続済み MOCK lane）= **ORDER-05/09/10/11b/13(enabled)**。
+
+> gate 順は connect→instrument なので **ORDER-09（instrument 未解決）は接続済み host でしか非 vacuous に検査できない**
+> （未接続だと connect ゲートで先に弾かれ ORDER-08 を検査してしまう）→ SectionD に配置。ORDER-05 happy place が同一
+> host で lane 到達を実証することで ORDER-09 の「lane 未呼出」が意味を持つ。ORDER-16 のみ HITL専用（実 venue 約定）。

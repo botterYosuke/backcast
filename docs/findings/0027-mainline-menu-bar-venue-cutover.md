@@ -149,3 +149,43 @@ retire ProductionLiveShell」・現 HEAD `872739d`）。正本は **findings 001
 → cutover「4 スライス」の旧 framing は #23 が slices 3+4 を吸収して**追い越した**。slice-3 近傍で残る
 OPEN は **#57（`DepthLadderView` の本線 chart tile mount・Live で板表示／Replay で隠す）** と owner
 実機 demo roundtrip HITL（#4 close・market-hours-gated）。本 findings（slice 2 = menu bar）の成果自体は不変。
+
+## 追記（2026-06-19・#88 File メニュー文言を素のエディタ用語に統一）
+
+**症状**: File メニューが `Open…  (document)` / `Save  (layout)` / `Save As…  (document)` と括弧注釈を
+出していたが、`Save` だけ **`(layout)`** で、実処理（`OnFileSave` = `_coordinator.Save()` で notebook `.py`
+合成保存 ＋ `TryWriteLayout` で layout sidecar 保存の**両方**）と食い違い、「ソースは保存されない／layout
+だけ保存」とユーザーを誤認させた。owner 決定で **3 項目の括弧注釈を全部外す**（一般的エディタの File
+メニューに揃える）。
+
+**不変条件（behavior-to-e2e）**: *File メニューには term-soup 括弧注釈（`(layout)`/`(document)`/notebook）を
+出さず、`Save` が完全一致のラベルとして存在する。*
+
+**AC → gate 対応表（#88）**:
+
+| AC | gate（backcast 正本＝AFK probe）|
+|---|---|
+| ① Save 表示だけで現在の `.py`（document）保存と分かる | `MenuBarCutoverProbe.Section2_FileMenuLabelsPlain`：`dd:File` 配下の**実描画 Text** を読み戻し `Save` 完全一致を assert（const 比較でなく `Bind→Build→BuildFileMenu→MakeItem→AddLabel` が描いた値＝非タウトロジー） |
+| ② Open/Save/Save As の用語一貫 | 同 probe：いずれのラベルにも `(layout)`/`(document)` が残らないことを assert（残れば FAIL） |
+| ③ 成功・失敗メッセージの用語統一 | `OnFileSave` 成功を `"Saved " + Path.GetFileName(_currentLayoutPath)` に統一（Save As の `"Saved as " + filename` と対）。失敗 `"Save failed (see log)."` は既に注釈なしで整合（変更不要） |
+
+**RED→GREEN（実機 batchmode・Unity 6000.4.11f1・2026-06-19）**:
+- RED: ラベル修正前に probe 実行 → `[MENU BAR CUTOVER FAIL] File menu label still carries a term-soup
+  parenthetical: 'Open…  (document)' (labels: New | Open…  (document) | Save  (layout) | Save As…  (document))` / exit=1。
+- GREEN: 修正後 → `[MENU BAR CUTOVER PASS] all sections green.` / `UNITY_EXIT=0` / `error CS = 0`。
+
+**再走コマンド**:
+```
+<Unity 6000.4.11f1> -batchmode -nographics -projectPath <repo> \
+        -executeMethod MenuBarCutoverProbe.Run -logFile <log>
+# 期待: ログに [MENU BAR CUTOVER PASS] all sections green. / exit=0（Section1 ∧ Section2 双方 GREEN）
+```
+
+**差分（3 ファイル）**: `Assets/Scripts/Live/MenuBarView.cs`（File メニュー 3 ラベル）/
+`Assets/Scripts/Live/BackcastWorkspaceRoot.cs`（`OnFileSave` 成功メッセージ）/
+`Assets/Editor/MenuBarCutoverProbe.cs`（Section2 回帰ガード追加・`using UnityEngine.UI;`・`Run()` を
+`Section1 ?? Section2` に）。
+
+**スコープ外（owner 判断待ち・別 issue 候補）**: `OnFileOpen` の `" (no saved layout)"` 状態注記、
+`MarimoNotebookDocument`/`NotebookCellCoordinator` 由来の `"notebook"` ドメイン語は **正当な語彙**（#88 の
+バグ＝誤認させる注釈 とは別）。「app 全体から layout/notebook 語を一掃」したいなら別 issue。

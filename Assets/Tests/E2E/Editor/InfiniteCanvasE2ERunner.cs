@@ -1,45 +1,39 @@
-// InfiniteCanvasProbe.cs — issue #13 "infinite canvas" (THROWAWAY AFK regression gate)
+// InfiniteCanvasE2ERunner.cs — infinite-canvas（pan/zoom）サーフェスの E2E 回帰ゲート（台本: 同ディレクトリの
+// InfiniteCanvasE2ERunner.md）。第二波。`InfiniteCanvasProbe`（throwaway AFK gate, Assets/Editor）から昇格・改名
+// （ADR-0015 の回帰ゲート命名規約。先例 ScenarioStartup=findings 0054 / FooterMode=findings 0055）。実証済み
+// Probe の Section1〜7 を assert 1 行も削らず移送し各 section に `Covers:` を付与、台本で唯一 `要新規自動化` だった
+// CANVAS-05（input 境界の per-event scroll-tick clamp）を Section8 として追加した。Python-FREE・render-FREE。
 //
-// The headless, Python-FREE, render-FREE regression gate for the infinite-canvas pan/zoom
-// seam. Run:
+//   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
+//           -executeMethod InfiniteCanvasE2ERunner.Run -logFile <log>
+//   # expect: [E2E INFINITE CANVAS PASS] ... / exit=0
+//   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。ログは UTF-8 = ripgrep で grep。
 //
-//   <Unity> -batchmode -nographics -projectPath /Users/sasac/backcast \
-//           -executeMethod InfiniteCanvasProbe.Run -logFile <log>
-//   # expect: [INFINITE CANVAS PASS] ... / exit=0
-//
-// #13's AFK gate is AUTHORITATIVE for the arithmetic (findings 0006 §5); the actual
-// drag/wheel feel is the owner-launched HITL harness (Tools > Backcast > Infinite Canvas
-// HITL). Like #12 this probe spawns NO auto-bootstrap, so it never re-triggers the single-
-// Play-owner collision (findings 0003 §8).
+// section ↔ Action ID は各 Section の `Covers:` コメント参照（台本の操作一覧表と双方向に追える）。共有 pure 算術
+// （CanvasViewMath）は Action ID ごとに人工分割せず一つの自然な検証単位で assert する（E2E-CONVENTIONS.md
+// 「runner section ↔ Action ID 対応方針」）。gate 形は probe の `Execute()`-形（各 section が null=PASS、最初の
+// 失敗文字列を返す）をそのまま温存。`EditorApplication.Exit` は self-failing gate として無条件化。
 //
 // THREE-WAY INDEPENDENCE — the whole point (findings 0006 §5): the gate cross-checks PURE
 // MATH (CanvasViewMath) against the UNITY TRANSFORM ENGINE (RectTransform.TransformPoint)
 // against SERIALIZATION (LayoutStore round-trip). The child-follow section is deliberately
 // NON-TAUTOLOGICAL: it asserts Unity's own transform composition equals the math's
 // prediction, not the math against itself.
-//
-// SIX SECTIONS (findings 0006 §5), each returns null on pass or a reason string:
-//   1. pan arithmetic (logical move = -dScreen/zoom, resolution-independent)
-//   2. zoom clamp [0.2, 5.0] (saturates, no overshoot)
-//   3. cursor-centred invariant — normal step + clamped step, both non-no-op
-//   4. real RectTransform child-follow (engine == math) + controller Apply/Capture
-//   5. non-identity CanvasView disk round-trip (vacuous-green kill, on-disk TEXT proof)
-//   6. back-compat (old v1, no canvasView) + sanitize (zoom 0->1, 99->5, non-finite) +
-//      malformed-document fallback
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.EventSystems;
 
-public static class InfiniteCanvasProbe
+public static class InfiniteCanvasE2ERunner
 {
     const float EPS = 1e-3f;
 
     // A deterministic, writable temp path — NOT the production sidecar, so the gate never
     // clobbers a real layout (mirrors ReplayLayoutProbe).
-    static string TempDir => Path.Combine(Application.temporaryCachePath, "infinite_canvas_probe");
+    static string TempDir => Path.Combine(Application.temporaryCachePath, "infinite_canvas_e2e");
     static string TempPath => Path.Combine(TempDir, "layout.json");
 
     public static void Run()
@@ -56,7 +50,8 @@ public static class InfiniteCanvasProbe
                 ?? Section4_ChildFollowAndController(spawned)
                 ?? Section5_DiskRoundTripNonVacuous()
                 ?? Section6_BackCompatAndSanitize()
-                ?? Section7_ParallaxForegroundLayer(spawned);
+                ?? Section7_ParallaxForegroundLayer(spawned)
+                ?? Section8_ScrollTickClamp(spawned);
         }
         catch (Exception e)
         {
@@ -70,21 +65,23 @@ public static class InfiniteCanvasProbe
 
         if (fail == null)
         {
-            Debug.Log("[INFINITE CANVAS PASS] pan arithmetic + zoom clamp[0.2,5.0] + cursor-centred invariant " +
+            Debug.Log("[E2E INFINITE CANVAS PASS] pan arithmetic + zoom clamp[0.2,5.0] + cursor-centred invariant " +
                       "(normal+clamped, non-no-op) + real-RectTransform child-follow (engine==math) + " +
                       "Apply/Capture boundary + non-vacuous CanvasView disk round-trip + back-compat/sanitize " +
                       "+ parallax foreground layer (offset=(1-F)*pan, zoom-independent, engine travel == F*base, strictly-more) " +
+                      "+ input-boundary scroll-tick clamp (raw wheel ~120 capped to 4 notches, no zoom saturation) " +
                       "(Unity-owned versioned schema, additive capability surface, ADR-0003 capability parity, under Unity Mono)");
             EditorApplication.Exit(0);
         }
         else
         {
-            Debug.LogError("[INFINITE CANVAS FAIL] " + fail);
+            Debug.LogError("[E2E INFINITE CANVAS FAIL] " + fail);
             EditorApplication.Exit(1);
         }
     }
 
     // ---- 1. pan arithmetic: logical move = -dScreen/zoom, resolution-independent ----
+    // Covers: CANVAS-01
     static string Section1_PanArithmetic()
     {
         var v = new CanvasView(10f, 20f, 2f);
@@ -107,6 +104,7 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 2. zoom clamp: saturates at MIN/MAX, no overshoot ----
+    // Covers: CANVAS-03
     static string Section2_ZoomClamp()
     {
         Vector2 c = new Vector2(17f, -9f);
@@ -126,6 +124,7 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 3. cursor-centred invariant: normal + clamped step, both non-no-op ----
+    // Covers: CANVAS-02, CANVAS-04
     static string Section3_CursorInvariant()
     {
         Vector2 c = new Vector2(30f, -15f);
@@ -152,6 +151,7 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 4. real RectTransform child-follow (engine == math) + controller boundary ----
+    // Covers: CANVAS-01, CANVAS-02, CANVAS-06
     static string Section4_ChildFollowAndController(List<GameObject> spawned)
     {
         // Viewport: a root RectTransform at identity transform (pos 0, scale 1, no rot),
@@ -213,6 +213,7 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 5. non-identity CanvasView disk round-trip (vacuous-green kill) ----
+    // Covers: CANVAS-07
     static string Section5_DiskRoundTripNonVacuous()
     {
         LayoutDocument def = LayoutDocument.Default();
@@ -246,6 +247,7 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 6. back-compat + sanitize + malformed-document fallback ----
+    // Covers: CANVAS-08
     static string Section6_BackCompatAndSanitize()
     {
         // (a) old v1 sidecar with NO canvasView -> panels kept, view normalized to identity.
@@ -288,6 +290,8 @@ public static class InfiniteCanvasProbe
     }
 
     // ---- 7. parallax foreground layer: travels F× the base plane per unit pan (depth cue) ----
+    // Covers: (depth-cue 拡張 — 操作一覧表に対応 Action 行は無いが、実証済み assert なので回帰網保全のため温存。
+    //          canvas 追従 CANVAS-06 の延長で「foreground は base より MORE 移動」を engine==math で固定する)
     static string Section7_ParallaxForegroundLayer(List<GameObject> spawned)
     {
         const float F = 1.2f;
@@ -370,6 +374,70 @@ public static class InfiniteCanvasProbe
         return null;
     }
 
+    // ---- 8. per-event scroll-tick clamp at the INPUT boundary (NEW; S1-S7 bypass the surface) ----
+    // Covers: CANVAS-05
+    // The controller-direct sections above never exercise InfiniteCanvasInputSurface.OnScroll, where
+    // the per-event magnitude cap lives (Mathf.Clamp(scrollDelta.y, ±MAX_SCROLL_TICKS=4)). This section
+    // drives the REAL MonoBehaviour surface with an injected PointerEventData so a raw platform wheel
+    // notch (~120) can't jump straight to a zoom bound.
+    static string Section8_ScrollTickClamp(List<GameObject> spawned)
+    {
+        // The input surface is a MonoBehaviour attached to the VIEWPORT (production wiring),
+        // driving a real Viewport->Content tree through the controller.
+        var viewportGo = new GameObject("S8Viewport", typeof(RectTransform), typeof(InfiniteCanvasInputSurface));
+        spawned.Add(viewportGo);
+        var viewport = viewportGo.GetComponent<RectTransform>();
+        viewport.anchorMin = viewport.anchorMax = viewport.pivot = new Vector2(0.5f, 0.5f);
+        viewport.sizeDelta = new Vector2(1000f, 800f);
+
+        var contentGo = new GameObject("S8Content", typeof(RectTransform));
+        var content = contentGo.GetComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = content.anchorMax = content.pivot = new Vector2(0.5f, 0.5f);
+        content.sizeDelta = Vector2.zero;
+
+        var controller = new InfiniteCanvasController(content);
+        var surface = viewportGo.GetComponent<InfiniteCanvasInputSurface>();
+        surface.Initialize(controller, viewport);
+
+        // PRESENCE / vacuous-green kill: an IN-RANGE scroll must actually reach the controller
+        // through the surface. From identity, 2 notches -> factor 1.1^2 -> zoom 1.21 (in range).
+        // If the surface were unwired (Initialize a no-op, or OnScroll early-returning) the zoom
+        // would stay 1 and this FAILs — so the clamp assert below can't false-green on a dead path.
+        controller.ApplyView(new CanvasView(0f, 0f, 1f));
+        surface.OnScroll(Scroll(new Vector2(0f, 2f)));
+        float inRange = controller.CaptureView().zoom;
+        if (!Approx(inRange, Mathf.Pow(1.1f, 2f)))
+            return $"S8: in-range scroll did not reach controller via surface (zoom {inRange}, expected {Mathf.Pow(1.1f, 2f)})";
+
+        // THE CLAMP (up): a raw wheel notch (~120) is capped to MAX_SCROLL_TICKS=4 -> factor 1.1^4,
+        // and must NOT saturate the zoom to MAX_ZOOM. delete-the-logic litmus: drop the Mathf.Clamp
+        // in OnScroll and ticks=120 -> 1.1^120 -> zoom clamps to 5.0 -> both asserts below FAIL.
+        controller.ApplyView(new CanvasView(0f, 0f, 1f));
+        surface.OnScroll(Scroll(new Vector2(0f, 120f)));
+        float zUp = controller.CaptureView().zoom;
+        if (!Approx(zUp, Mathf.Pow(1.1f, 4f)))
+            return $"S8: large up-scroll not capped to 4 notches (got {zUp}, expected {Mathf.Pow(1.1f, 4f)})";
+        if (zUp >= CanvasView.MAX_ZOOM - EPS)
+            return $"S8: large up-scroll saturated zoom to MAX (tick clamp removed? got {zUp})";
+
+        // THE CLAMP (down): symmetric — a large NEGATIVE wheel caps to -4 notches -> 1.1^-4, not MIN.
+        controller.ApplyView(new CanvasView(0f, 0f, 1f));
+        surface.OnScroll(Scroll(new Vector2(0f, -120f)));
+        float zDn = controller.CaptureView().zoom;
+        if (!Approx(zDn, Mathf.Pow(1.1f, -4f)))
+            return $"S8: large down-scroll not capped to -4 notches (got {zDn}, expected {Mathf.Pow(1.1f, -4f)})";
+        if (zDn <= CanvasView.MIN_ZOOM + EPS)
+            return $"S8: large down-scroll saturated zoom to MIN (got {zDn})";
+        return null;
+    }
+
     // ---- helpers ----
     static bool Approx(float a, float b) => Mathf.Abs(a - b) <= EPS;
+
+    // A PointerEventData carrying a wheel scrollDelta at the viewport centre. The cursor POSITION
+    // only steers the cursor-centred pan; the zoom MAGNITUDE asserted in S8 is position-independent.
+    // EventSystem.current may be null in batchmode — the ctor merely stores it (we never raycast).
+    static PointerEventData Scroll(Vector2 scrollDelta) =>
+        new PointerEventData(EventSystem.current) { position = Vector2.zero, scrollDelta = scrollDelta };
 }

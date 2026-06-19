@@ -105,6 +105,8 @@ committed golden は frozen fixture／2-leg（staleness guard + reproduce leg）
   （同 golden ↔ `ScenarioInlineReader.Read` の 5 キー一致 + Absent/Unparseable/truncated/docstring/missing 境界）。
   `-executeMethod ScenarioStartupProbe.Run` → **`[SCENARIO STARTUP PASS]`・`UNITY_EXIT=0`・`error CS` 0**
   （probe は `EditorApplication.Exit(0)` で抜けるため `Exiting batchmode` ログ行は出ない＝UNITY_EXIT=0+PASS で判定）。
+  > #54 改名（findings 0054）: 現行の再走は `-executeMethod ScenarioStartupE2ERunner.Run` → `[E2E SCENARIO STARTUP PASS]`
+  > （Section10 は移送済み・Leg B 契約は不変）。上記は当時の実走ログ。
 - **配線回帰ゲート（実機 batchmode・GREEN）**: `BackcastWorkspaceProbe.Section11_InlineScenarioSeedsUniverse`
   （hermetic・`BACKCAST_HITL_STRATEGY` env override で temp .py を指す）= ResolvePaths が inline から universe を seed・
   sidecar が inline に勝つ、を value-assert（#66 の本丸＝配線ゲート）。`-executeMethod BackcastWorkspaceProbe.Run` →

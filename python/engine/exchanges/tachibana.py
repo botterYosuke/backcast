@@ -163,6 +163,16 @@ class TachibanaAdapter:
         self._ec_ws: TachibanaEventWs | None = None
         self._ec_task: asyncio.Task | None = None
         self._ec_stop: asyncio.Event | None = None
+        # #85 Q1 (A'): EC WS handshake 成立シグナル — venue_login 後の発注前 gate
+        # として Runner / VenueConnectionViewModel が読む。`_dispatch_event_frame` の
+        # 冒頭 (frame_type 分岐より前) で 2 つを set し、KP/SS/EC どの種別でも前進する
+        # (市場閉局時は SS-only 経路でも signal が立つ)。reset は `_stop_ec_stream` のみ
+        # — 単発の WS reconnect (run() ループの backoff) は session-level teardown ではない
+        # ため sticky に保ち、一度確立したシグナルが reconnect フラップで消えないようにする。
+        # cross-module で `_backend_impl.get_state_json` が getattr で読む契約 (#85 code-review B#3)
+        # — public name (no leading underscore) にして rename refactor の silent regression を防ぐ。
+        self.ec_ws_first_recv_ts_ms: int | None = None
+        self.ec_ws_last_recv_ts_ms: int | None = None
         # Issue #32: master download (CLMEventDownload) の singleflight。並走する
         # fetch_instruments() を 1 本に集約し二重 DL を防ぐ。
         self._instruments_inflight: asyncio.Future | None = None
@@ -781,6 +791,10 @@ class TachibanaAdapter:
         self._ec_task = None
         self._ec_ws = None
         self._ec_stop = None
+        # #85 Q1 (A'): session-level teardown — 次セッションで stale ts が漏れて
+        # gate / staleness 判定を狂わせないため、両方とも None に戻す。
+        self.ec_ws_first_recv_ts_ms = None
+        self.ec_ws_last_recv_ts_ms = None
 
     def _handle_system_status(self, fields: dict[str, str]) -> None:
         """SS=システムステータス (CLMSystemStatus) を読み本体ログアウト/閉局を検知する (§3.5)。
@@ -842,6 +856,13 @@ class TachibanaAdapter:
         self, frame_type: str, fields: dict[str, str], recv_ts_ms: int
     ) -> None:
         """EC を OrderEvent に、SS=システムステータスを閉局検知に回す (KP/ST/US は無視)。"""
+        # #85 Q1 (A'): frame_type 分岐より前に EC WS signal を前進させる。1 度立てた
+        # first_recv は sticky (None でないことが SSL ハンドシェイク済の意味)、
+        # last_recv は dispatch 毎に更新 (staleness 検出用)。frame_type に依らないので
+        # 市場閉局時の SS-only push でも signal が立つ (KP / EC は閉局時に来ない)。
+        if self.ec_ws_first_recv_ts_ms is None:
+            self.ec_ws_first_recv_ts_ms = recv_ts_ms
+        self.ec_ws_last_recv_ts_ms = recv_ts_ms
         if frame_type == "SS":
             self._handle_system_status(fields)
             return

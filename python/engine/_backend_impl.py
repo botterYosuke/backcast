@@ -770,6 +770,21 @@ class DataEngineBackend:
         # venue_state と同じ snapshot（get_current_state, lock 下）から導出し、live loop
         # スレッドの遷移と TOCTOU で食い違わないようにする。
         connected = state.venue_state in ("CONNECTED", "SUBSCRIBED", "RECONNECTING")
+        # #85 Q1 (A'): adapter から EC WS handshake シグナルを venue-agnostic に読み出す。
+        # `_sess` は line 731 で同じ `self._live_mgr._session` snapshot を取っているのでそれを流用
+        # （TOCTOU 回避 / Replay 経路では `_sess` 未定義なので両分岐共通の局所 sess を作り直す）。
+        # `getattr(..., None)` を 2 段重ねるのは「runner が adapter 属性を持たない (kabu/mock runner)」
+        # と「adapter が ec_ws_* 属性を持たない (非 Tachibana)」の両方を venue-agnostic に防ぐため。
+        # 名前は under-score なしで読む — 単一 underscore は Python 慣習で「module-private」を意味し、
+        # cross-module 文字列読みすると rename refactor で silent regression する (#85 code-review B#3)。
+        # ec フィールド 0 sentinel: Pydantic の Optional[int]=None だと JSON で `null` を emit するが、
+        # Unity JsonUtility の long フィールドは null 入力で例外を投げ得るため、Python 側で常に int
+        # を emit する (#85 code-review G#3)。0 = まだ受信していない、を C# 側と統一の sentinel に。
+        sess = self._live_mgr._session
+        runner = sess.runner if sess is not None else None
+        adapter = getattr(runner, "adapter", None) if runner is not None else None
+        first_recv_ts = getattr(adapter, "ec_ws_first_recv_ts_ms", None)
+        last_recv_ts = getattr(adapter, "ec_ws_last_recv_ts_ms", None)
         state = state.model_copy(
             update={
                 "live_last_error": live_last_error,
@@ -777,6 +792,8 @@ class DataEngineBackend:
                 "configured_venue": self._live_mgr._live_venue_id,
                 "venue_id": self._live_mgr._live_venue_id if connected else None,
                 "per_instrument": merged_pi,
+                "ec_ws_subscribed": first_recv_ts is not None,
+                "last_event_ws_recv_ts_ms": last_recv_ts if last_recv_ts is not None else 0,
             }
         )
         return state.model_dump_json()

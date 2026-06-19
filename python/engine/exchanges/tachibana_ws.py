@@ -13,12 +13,22 @@ for backward compatibility.
 from __future__ import annotations
 
 import logging
+import ssl
 from datetime import datetime, timezone
 from typing import Any
+
+import certifi
 
 from .tachibana_ws_codec import FdFrameProcessor, JST, is_market_open
 
 log = logging.getLogger(__name__)
+
+# 外部 venue WS の TLS trust は certifi で固定する (CONTEXT.md / findings 0053 §issue#85)。
+# Windows-Unity-embedded Python は OS system trust store を引かないため、
+# `websockets.connect` の自動 fallback (= ssl.create_default_context() 経由) では
+# CERTIFICATE_VERIFY_FAILED で握手失敗する (issue #85)。httpx と意味論を揃え、
+# REQUEST / EVENT で trust store が分裂しないことを invariant にする。
+_TLS_CTX: ssl.SSLContext = ssl.create_default_context(cafile=certifi.where())
 
 # ---------------------------------------------------------------------------
 # TachibanaEventWs — async WebSocket connection manager (Phase 8 §3.2 A3.2a)
@@ -73,6 +83,7 @@ class TachibanaEventWs:
         ticker: str,
         venue: str = "tachibana",
         proxy: str | None = None,
+        ssl_ctx: ssl.SSLContext | None = None,
     ) -> None:
         from .tachibana_codec import decode_response_body, parse_event_frame
 
@@ -81,6 +92,11 @@ class TachibanaEventWs:
         self._ticker = ticker
         self._venue = venue
         self._proxy = proxy
+        # ssl_ctx=None は遅延解決 (_connect_once で module-level _TLS_CTX に fallback)。
+        # eager bind しないことで `monkeypatch.setattr(tachibana_ws, "_TLS_CTX", ...)` が
+        # TickerEventWsHub 経由で new された WS にも伝播する (テスト容易性)。ctor 注入は
+        # 将来の社内 CA / proxy 用 escape hatch (#85 Q2 (δ))。
+        self._ssl_ctx = ssl_ctx
         self._decode = decode_response_body
         self._parse = parse_event_frame
         self._conn_count = 0
@@ -133,6 +149,10 @@ class TachibanaEventWs:
             "ping_interval": None,
             "proxy": self._proxy,
         }
+        # wss:// のみ ssl context を渡す (ws:// + ssl は websockets が ValueError)。
+        # ctor 注入 (self._ssl_ctx) > module-level default (_TLS_CTX=certifi) の優先順。
+        if self._url.startswith("wss://"):
+            connect_kwargs["ssl"] = self._ssl_ctx if self._ssl_ctx is not None else _TLS_CTX
         async with websockets.connect(self._url, **connect_kwargs) as ws:
             log.info(
                 "tachibana ws: connected ticker=%s conn=#%d",

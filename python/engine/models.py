@@ -81,6 +81,16 @@ class TradingState(_BoundaryModel):
 
     last_prices: dict[str, float] = Field(default_factory=dict, description="Live モードの最新価格 snapshot (quote_mid 優先 / last_trade fallback)。Replay モードでは常に空 dict。")
     per_instrument: dict[str, PerInstrumentState] = Field(default_factory=dict, description="銘柄シンボル → その銘柄ごとの状態 (price/ohlc/depth)")
+    # #85 Q1 (A'): EC WS (注文約定通知 push) handshake 成立シグナル。SUBSCRIBED badge は
+    # market-data 購読成立 (live_orchestrator.subscribe_market_data) でしか立たないので、
+    # market-data 非購読で発注する経路 (TachibanaLiveE2ERunner / 将来の自動発注) では SUBSCRIBED
+    # を gate にできない。EC WS の生フレーム受信を独立シグナルとして露出し、SSL 失敗時の
+    # 発注前 fail-fast を可能にする (findings 0053 §issue#85 改訂)。
+    # last_event_ws_recv_ts_ms は Optional[int] ではなく int + 0 sentinel: Unity JsonUtility の
+    # long は null 入力で例外を投げ得るため、Python 側で常に int を emit する (#85 code-review G#3)。
+    # 0 = まだ受信していない (UTC 0 = 1970-01-01 は立花が送り得る ts と衝突しない sentinel)。
+    ec_ws_subscribed: bool = Field(False, description="EC WS で 1 フレーム以上受信した (SSL ハンドシェイク成立) か。False のうちは発注 gate を通さない。")
+    last_event_ws_recv_ts_ms: int = Field(0, description="EC WS 直近受信時刻 (UTC ms)。0 = まだ受信していない (sentinel)。staleness 検出 / verdict diagnostic 用。")
     # §9.14 ADR: live_last_error は必ず TradingState の最後の field に置く
     # (UI / Rust 側 deserializer が末尾追加を許容する optional field として扱うため)。
     live_last_error: Optional[str] = Field(None, description="Live runner/bridge の最終エラー (type名: message)")

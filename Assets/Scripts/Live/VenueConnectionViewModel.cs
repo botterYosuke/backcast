@@ -12,7 +12,9 @@
 // is the single source of truth, so ApplyStatePoll always wins over the notice.
 //
 // JsonUtility ignores the (many) other fields in get_state_json and binds only the
-// two top-level scalars declared on StateDto.
+// declared scalars on StateDto (currently four: venue_state / venue_id /
+// ec_ws_subscribed / last_event_ws_recv_ts_ms — the latter two added in issue #85
+// to gate place_order on EC WS handshake success, see findings 0053 §issue#85).
 using UnityEngine;
 
 public class VenueConnectionViewModel
@@ -30,6 +32,21 @@ public class VenueConnectionViewModel
     public bool IsAuthenticating => VenueState == "AUTHENTICATING";
     public bool IsError => VenueState == "ERROR";
 
+    // #85 Q1 (A'): EC WS (注文約定通知 push) handshake 成立シグナル。SUBSCRIBED badge は
+    // market-data 購読成立でしか立たないので、market-data 非購読で発注する経路
+    // (TachibanaLiveE2ERunner / 将来の自動発注) では SUBSCRIBED を gate にできない。
+    // 発注前 fail-fast は IsConnected (CONNECTED) + EcWsSubscribed の AND で判定する。
+    public bool EcWsSubscribed { get; private set; }
+
+    // EC WS 直近受信時刻 (UTC ms)。0 = まだ受信していない (sentinel)。Unity JsonUtility は
+    // Nullable<long> を扱えないため long + 0 sentinel で表現する (UTC 0 = 1970-01-01、立花が
+    // 送り得る最小 ts と衝突しない)。
+    public long LastEventWsRecvTsMs { get; private set; }
+
+    /// EC WS で 1 度でもフレームを受信したか。`LastEventWsRecvTsMs > 0` の derived。
+    /// staleness 比較 (cancel race re-check 等) で magic-number を散らさないための糖衣。
+    public bool HasEventWsRecvTs => LastEventWsRecvTsMs > 0;
+
     public long PollCount { get; private set; }
 
     // login ACK observability (immediate result; superseded by the next poll).
@@ -45,6 +62,10 @@ public class VenueConnectionViewModel
     {
         public string venue_state;
         public string venue_id;
+        // #85: EC WS handshake signal — null in JSON ⇒ JsonUtility yields default
+        // (false / 0). 0 sentinel for last_event_ws_recv_ts_ms means "not yet received".
+        public bool ec_ws_subscribed;
+        public long last_event_ws_recv_ts_ms;
     }
 
     string _lastStateJson;
@@ -66,6 +87,9 @@ public class VenueConnectionViewModel
         // venue_id is null/absent unless connected — mirror it verbatim (the engine
         // already gates it on the connection band).
         VenueId = string.IsNullOrEmpty(d.venue_id) ? null : d.venue_id;
+        // #85 Q1 (A'): EC WS signal — adapter property の None ⇒ JSON null ⇒ 0/false。
+        EcWsSubscribed = d.ec_ws_subscribed;
+        LastEventWsRecvTsMs = d.last_event_ws_recv_ts_ms;
     }
 
     /// venue_login RPC ACK — the immediate login result. The badge still defers to

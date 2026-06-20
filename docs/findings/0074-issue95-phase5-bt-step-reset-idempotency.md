@@ -74,6 +74,15 @@ elif bt is not None and is_step_bt and bt.result is not None:
 
 これは "**replay() は呼ぶたび 0 reset**（Q3 Y2）" を `bt.replay` press = 毎 fresh bt（Phase 4）として履行しつつ、`bt.step` の "**完走後の bt.step() は None**" を terminal-press-finalize で履行する Phase 4/5 分担。owner Q3 = Y2 の意図（ADR D3 文言を実装）と整合（実装は Backtester に factory を持たせるのではなく、DataEngineBackend に cache を持たせる Phase 4 アーキを延長）。
 
+#### owner blessing（2026-06-21）— ADR-0016 D3 の「2 契約」分解で固定
+
+実装レビューで「ADR D3『完走後の `bt.step()` は `None`』の literal 解釈 vs 実装の『次 press で 0 から再走』」を owner に surface し、**後者を blessing**。新 ADR は不要（D3 が許す余地＝「config 単位 bt」「step は stateful」「Phase 5 で reset/idempotency を pin」の中に収まる）。本 §P5-2 の下位決定として固定する。owner が明示した契約分解:
+
+- **object-local / terminal press の契約**: 同一 `bt` インスタンス内では D3 文言どおり terminal 後の `bt.step()` は **`None` 固定**（forward-only）。
+- **host lifecycle / cache teardown 後の契約**: notebook の **次 press** は host が terminal finalize 後に cache を破棄済みなので、同じ scenario でも **新しい `bt` を構築し pointer 0 から再走**する。
+
+→ 実装者向け正本（one-liner）: **`terminal press returns None, finalizes, tears down; next press rebuilds (pointer 0)`**。ADR-0016 は無改変（自己保護条項）— 本 finding が「方針: ADR-0016」を参照する下位決定として保持する。
+
 ### P5-3 — NoScenarioBacktester（pre-commit fail-closed・Q5）
 
 ADR-0016 D1 の fail-closed 規律を pre-commit に拡張。`engine/strategy_runtime/backtester.py` に新規 class:

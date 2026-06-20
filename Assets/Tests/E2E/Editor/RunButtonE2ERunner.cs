@@ -161,10 +161,13 @@ public static class RunButtonE2ERunner
         foreach (var transport in new[] { "btn:▶", "btn:⏸", "btn:⏭", "btn:⏹", "btn:1x", "btn:2x", "btn:5x", "btn:10x", "btn:50x" })
             if (footerBtnNames.Contains(transport)) return "U4: footer still has a retired transport button " + transport;
 
-        // U5: the startup tile has NO Run button.
-        var startupTile = ty.GetField("_startupTile", BF).GetValue(root) as RectTransform;
-        if (startupTile == null) return "U5: startup tile missing in scene";
-        if (ButtonNames(startupTile).Contains("btn:Run Replay")) return "U5: startup tile still has its Run button";
+        // U5: the startup window has NO Run button. #99 (ADR-0017): the startup tile became a floating
+        // window — its RectTransform is owned by the FloatingWindowController, so look it up by id.
+        var windows = ty.GetField("_windows", BF).GetValue(root) as FloatingWindowController;
+        if (windows == null) return "U5: _windows controller missing on root";
+        var startupRt = windows.RectOf("startup");
+        if (startupRt == null) return "U5: startup window missing from _windows (SpawnBaseDockWindows did not run?)";
+        if (ButtonNames(startupRt).Contains("btn:Run Replay")) return "U5: startup window still has its Run button";
 
         return null;
     }

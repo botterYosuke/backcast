@@ -23,7 +23,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 
 public class FloatingWindowTitleInput : MonoBehaviour,
-    IPointerDownHandler, IBeginDragHandler, IDragHandler
+    IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
     FloatingWindowController _windows;
     InfiniteCanvasController _canvas;   // live zoom source (render-free controller stays clean)
@@ -58,6 +58,17 @@ public class FloatingWindowTitleInput : MonoBehaviour,
         Vector2 viewportDelta = ScreenDeltaToViewportLocal(eventData);
         float zoom = _canvas.CaptureView().zoom;
         _windows.MoveByLogical(_windowId, FloatingWindowMath.ViewportDeltaToLogical(viewportDelta, zoom));
+    }
+
+    // #99 Slice 1 (ADR-0017 / findings 0075 §1, owner-locked): magnet snap on release. The drag
+    // streamed through OnDrag.MoveByLogical at the cursor verbatim — we only align WHEN THE
+    // USER LETS GO. The controller reads every OTHER live window, asks FloatingWindowMath for
+    // the snap Δ, and applies it via the same anchoredPosition write path. Group concept does
+    // NOT exist (each window stays independent — findings 0075 §0/§1), so the released window
+    // is the ONLY one moved by this call. No re-render / re-layout / re-z-order side effects.
+    public void OnEndDrag(PointerEventData eventData)
+    {
+        _windows?.SnapOnRelease(_windowId);
     }
 
     // Screen-pixel drag delta -> viewport-local delta (same mechanism #13's pan uses, so a

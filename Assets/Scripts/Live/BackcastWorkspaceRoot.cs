@@ -47,6 +47,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
 
+    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids — the 5 former
+    // Hakoniwa base tiles, now independent floating windows that snap on release. `startup` is
+    // shown in Replay and hidden in Live (visibility toggle, NEVER destroyed — findings §3).
+    // Singletons (one window each); ids = the catalog kind verbatim (no instance suffix).
+    const string WINDOW_ID_STARTUP = "startup";
+    const string WINDOW_ID_BUYING_POWER = "buying_power";
+    const string WINDOW_ID_ORDERS = "orders";
+    const string WINDOW_ID_POSITIONS = "positions";
+    const string WINDOW_ID_RUN_RESULT = "run_result";
+
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
 
@@ -61,23 +71,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _viewport;
     [SerializeField] RectTransform _content;
     [SerializeField] InfiniteCanvasInputSurface _inputSurface;
-    [SerializeField] RectTransform _hakoniwaRoot;
-    [SerializeField] RectTransform _startupTile;
-    [SerializeField] RectTransform _chartTile;
     [SerializeField] RectTransform _floatingLayer;
-    // Parallax depth cue: the floating layer (Strategy Editor + cells) travels this multiple of the
-    // Hakoniwa plane's pan, so it reads as sitting IN FRONT of Hakoniwa. 1 = coplanar; >1 = foreground.
+    // Parallax depth cue retained for forward compat (the workspace previously rode the floating
+    // layer above HakoniwaRoot at this factor); under #99 every window is on the floating layer
+    // so the value is just the layer-vs-Content parallax. 1 = coplanar; >1 = foreground.
     [SerializeField] float _floatingParallaxFactor = 1.2f;
 
     [Header("Strategy Editor floating window (scene-authored, adopted)")]
     [SerializeField] RectTransform _strategyEditorWindow;
     [SerializeField] RectTransform _strategyEditorBody;
     [SerializeField] FloatingWindowTitleInput _strategyEditorTitleInput;
-
-    [Header("Live data Hakoniwa tiles (scene-authored, #23 re-home)")]
-    [SerializeField] RectTransform _ordersTile;
-    [SerializeField] RectTransform _positionsTile;
-    [SerializeField] RectTransform _runResultTile;
 
     [Header("Order ticket floating window (scene-authored, adopted, #23 re-home)")]
     [SerializeField] RectTransform _orderWindow;
@@ -114,38 +117,26 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ── built widgets ──
     InfiniteCanvasController _canvas;
     FloatingWindowController _windows;
-    HakoniwaController _hako;
-    // #60 chart tile family: one chart tile + ChartView per universe instrument (id "chart:<id>"),
-    // membership-synced from _scenario.Universe via InstrumentRegistry.Changed. _chartRendered dedups
-    // the per-id render by series length.
-    readonly Dictionary<string, RectTransform> _chartTiles = new Dictionary<string, RectTransform>();
+    // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating window + ChartView per universe
+    // instrument (id "chart:<id>"), membership-synced from _scenario.Universe via InstrumentRegistry.Changed.
+    // Replaces the #60 Hakoniwa chart tile family — `_windows.Spawn(KIND_CHART, "chart:<id>", …)` is the
+    // ONLY chart spawn path. _chartRendered dedups the per-id render by series length.
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
-    // #61 mode-conditional base tiles: id → tile RectTransform for the always-present base panels
-    // (buying_power/orders/positions/run_result) + the Replay-only `startup`. _baseTiles is the handle
-    // the base retile (SyncBaseTilesToMode) and restore (ApplyProfileOrder) use to
-    // reorder/show the base region. orders/positions/run_result are the #23 scene tiles (rendered by the
-    // LivePanelTileView fields below); buying_power is spawned dynamically (SpawnBuyingPowerTile, also a
-    // LivePanelTileView). _baseLive caches the current base shape (false=Replay, true=Live) so DriveFooter
-    // retiles only when the shape actually flips (TTWR set-comparison).
-    readonly Dictionary<string, RectTransform> _baseTiles = new Dictionary<string, RectTransform>();
-    bool _baseLive;
-    // #57 depth ladder: each chart tile's body is split into a mode-resized chartArea (left) + a
+    // #57 → #99: each chart WINDOW's body is split into a mode-resized chartArea (left) + a
     // LADDER_WIDTH right strip holding a per-instrument DepthLadderView. Live shows the ladder (chart
-    // shrinks left); Replay hides it (chart reclaims full width) — depth is Live-only (findings 0028
-    // D1/D2). _depthRendered dedups the per-id 21-row rebuild by a depth+last signature.
+    // shrinks left); Replay hides it (chart reclaims full width). _depthRendered dedups the per-id
+    // 21-row rebuild by a depth+last signature.
     const float LADDER_WIDTH = 120f;                 // TTWR viewstate::LADDER_WIDTH
     readonly Dictionary<string, RectTransform> _chartAreas = new Dictionary<string, RectTransform>();
     readonly Dictionary<string, DepthLadderView> _depthLadders = new Dictionary<string, DepthLadderView>();
     readonly Dictionary<string, long> _depthRendered = new Dictionary<string, long>();
     bool _lastLadderLive;                             // last applied Live/Replay geometry (dedup the rect flip)
     string _lastDepthPayload;                         // last poll payload rendered into the ladders
-    // #62 per-mode layout profile (findings 0029): Replay and Live each remember their own Hakoniwa tile
-    // order. Stashed on every flip (the OLD mode, before switching) and on save (the active mode) — TTWR
-    // reconcile_hakoniwa_tiles / build_hakoniwa_snapshot parity; replaced on restore by
-    // HakoniwaLayoutProfiles.FromDocument (per-mode, or seeded from the legacy single `panels`). _baseLive
-    // is the current-shape SoT (TTWR profiles.current is owned HERE, not duplicated into the profiles).
-    HakoniwaLayoutProfiles _profiles = new HakoniwaLayoutProfiles();
+    // #99 dock cluster current Live-shape cache (replaces #61 _baseLive). True when the footer reports a
+    // Live mode (LiveManual/LiveAuto share one shape — DockShape.IsLiveShape parity); transitions
+    // toggle the `startup` window's visibility (show in Replay, hide in Live) WITHOUT destroying it.
+    bool _lastLiveShape;
     ScenarioStartupTile _tile;
     WorkspaceFooterView _footer;
     StrategyEditorRunButton _editorRunButton;   // #76 S6b-β-clean U1: Run on the adopted editor title bar
@@ -333,82 +324,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
         ThemeService.Changed += ApplyViewportTheme;
         ApplyViewportTheme();
-        // findings 0054: the Hakoniwa tile chrome (root box / tile cards / headers / labels) reads
-        // dedicated hakoniwa_* roles and follows theme switches too (it used to be painted once from
-        // hard literals). Re-applied to the retained chrome graphics on every Changed.
-        ThemeService.Changed += ApplyHakoniwaChromeTheme;
 
         _catalog = FloatingWindowCatalog.Default();
-        _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildEditorWindowFrame);
+        _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildWindowFrame);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
 
-        // Hakoniwa [startup slot0, chart slot1] on Content (CONTEXT: Startup = PanelKind::Startup slot 0).
-        // Each tile gets a panel bg + a header bar so it reads as a DISTINCT box against the infinite-
-        // space field (else tile bg ≈ field and the grid is invisible), and HakoniwaTileHeaderInput
-        // makes header-drag SWAP while body-drag falls through to pan. Mirrors HakoniwaHitlHarness's
-        // durable construction (HakoniwaController only lays cells; the caller owns tile chrome).
-        EnsureRootImage(_hakoniwaRoot);
+        // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
+        // floating windows on the same layer as the strategy editor + order ticket; the magnet-snap
+        // seam (Slice 1) is the only "Hakoniwa-ness" they have. Default placement is a grid-style
+        // initial cascade (DockDefaultPlacement); a saved layout will reposition them in RestoreFloating.
+        SpawnBaseDockWindows();
 
-        RectTransform startupBody = BuildTileChrome(_startupTile, "startup", out HakoniwaTileHeaderInput startupHeader);
-        _tile = new ScenarioStartupTile(_scenario, _font);   // #76 S6b-β-clean U5: scenario-editing-only (Run moved to the editor title bar)
-        _tile.Build(startupBody);
-        _tile.SyncFieldsFromController();
-
-        // #60 chart tile family: base = [startup] only; chart tiles are dynamic (chart:<id> per
-        // universe instrument). The scene-authored single "chart" tile is retired (deactivated) — the
-        // dynamic family replaces it. Membership is owned by _scenario.Universe (the shared SoT, #59
-        // §12); InstrumentRegistry.Changed drives spawn/despawn, and THIS root (the membership
-        // orchestrator) owns box-grow (findings 0027 §6 — Rebuild stays box-size-free).
-        if (_chartTile != null) _chartTile.gameObject.SetActive(false);
-
-        // #23 re-home: three live data tiles (Orders / Positions / Run Result), fed by _host.Panel
-        // (LivePanelViewModel — the SoT, findings 0011 D2 / 0014 RH2). Empty until live events arrive.
-        RectTransform ordersBody = BuildTileChrome(_ordersTile, "orders", out HakoniwaTileHeaderInput ordersHeader);
-        _ordersView = new LivePanelTileView(FormatOrders);
-        _ordersView.Build(ordersBody, _font);
-
-        RectTransform positionsBody = BuildTileChrome(_positionsTile, "positions", out HakoniwaTileHeaderInput positionsHeader);
-        _positionsView = new LivePanelTileView(FormatPositions);
-        _positionsView.Build(positionsBody, _font);
-
-        RectTransform runResultBody = BuildTileChrome(_runResultTile, "run_result", out HakoniwaTileHeaderInput runResultHeader);
-        _runResultView = new LivePanelTileView(FormatRunResult);
-        _runResultView.Build(runResultBody, _font);
-
-        // Merge of #60 (dynamic chart tile family) + #23 (re-homed live tiles) + #61 (mode-conditional
-        // base): the scene-authored base tiles are [startup, orders, positions, run_result] — the single
-        // "chart" tile is retired (deactivated above) and replaced by the dynamic chart:<id> family driven
-        // from the universe (#60). The 3 live data tiles are fed by _host.Panel (#23 RH2). #61 (below)
-        // adds the BuyingPower tile and reorders to the canonical mode-conditional base set.
-        _hako = new HakoniwaController(_hakoniwaRoot,
-            new Dictionary<string, RectTransform>
-            {
-                { "startup", _startupTile },
-                { "orders", _ordersTile }, { "positions", _positionsTile }, { "run_result", _runResultTile },
-            },
-            new[] { "startup", "orders", "positions", "run_result" });
-        startupHeader.Initialize(_hako, _hakoniwaRoot, "startup");
-        ordersHeader.Initialize(_hako, _hakoniwaRoot, "orders");
-        positionsHeader.Initialize(_hako, _hakoniwaRoot, "positions");
-        runResultHeader.Initialize(_hako, _hakoniwaRoot, "run_result");
-
-        // #61 mode-conditional base: the base SET (the non-chart, mode-owned tiles) is [startup?,
-        // buying_power, orders, positions, run_result]. Orders/Positions/RunResult are the #23-built
-        // scene tiles (LivePanelTileView, already controller-registered above) — track them in _baseTiles
-        // so the base retile / restore re-assert can manage them. BuyingPower has NO scene tile, so spawn
-        // it dynamically with the SAME #23 LivePanelTileView wiring. `startup` is the only mode-conditional
-        // base tile (ADR 0013) — SyncBaseTilesToMode toggles it. Build defaults to the Replay shape
-        // (DisplayMode seeds to Replay), so startup is present and _baseLive = false.
-        _baseTiles[HakoniwaBaseTiles.Startup]   = _startupTile;
-        _baseTiles[HakoniwaBaseTiles.Orders]    = _ordersTile;
-        _baseTiles[HakoniwaBaseTiles.Positions] = _positionsTile;
-        _baseTiles[HakoniwaBaseTiles.RunResult] = _runResultTile;
-        SpawnBuyingPowerTile();
-        _hako.Reorder(HakoniwaBaseTiles.Kinds(false));   // canonical [startup, buying_power, orders, positions, run_result]
-        _baseLive = false;
-
-        SyncChartTilesToUniverse();                          // spawn chart:<id> for the current universe + box-grow (#60)
-        _scenario.Universe.Changed += SyncChartTilesToUniverse;   // keep chart tiles == universe (Dispose unsubs)
+        // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating chart window per universe
+        // instrument (id "chart:<iid>"). Membership is owned by _scenario.Universe (the shared SoT);
+        // InstrumentRegistry.Changed drives spawn/close. Replaces the #60 Hakoniwa chart tile family.
+        SyncChartWindowsToUniverse();
+        _scenario.Universe.Changed += SyncChartWindowsToUniverse;   // keep chart windows == universe
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
         // #81 cell-as-floating-window (ADR-0013): the notebook aggregate is the single `.py` owner and
@@ -557,9 +488,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (img != null) img.color = ThemeService.Current.colors.workspace_background;
     }
 
-    // window factory for ADDITIONAL saved editor windows (the scene-authored one is adopted). Uses
-    // the SAME frame builder as the scene-authoring tool so adopted/spawned editors can't diverge.
-    RectTransform BuildEditorWindowFrame(FloatingWindowSpec spec, string id)
+    // The SINGLE factory the FloatingWindowController calls to spawn a window. Dispatches on
+    // spec.kind so adopted / scene-authored windows and runtime-spawned windows of the same kind
+    // can't diverge (the shared frame builders enforce identity of chrome). Also handles content
+    // injection for the kinds whose content the root owns (cell editor / chart / dock panels);
+    // adopted windows (region_001 / Order ticket) get their content from the scene + the root's
+    // BuildWorkspace, NOT this path. Unknown kinds fall through to the cell-window frame (a
+    // forward-evolution courtesy; the controller's Spawn pre-filter via TryGet already rejects
+    // unknown kinds before this factory runs).
+    RectTransform BuildWindowFrame(FloatingWindowSpec spec, string id)
     {
         // #23 re-home: an Order window restored from a saved doc uses the Order frame (the singleton
         // ticket is adopted, not spawned, so this only fires for a stray/legacy id — frame only).
@@ -569,6 +506,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             orderTitle.Initialize(_windows, _canvas, _viewport, id);
             return orderRoot;
         }
+
+        // #99 dock kinds (ADR-0017 / findings 0075 §7): chart / startup / buying_power / orders /
+        // positions / run_result. Frame chrome comes from DockWindowFrame (spec accent → title bar);
+        // content (ChartView+DepthLadderView for chart, ScenarioStartupTile for startup,
+        // LivePanelTileView for the 4 base panels) is injected here so the spawn flow is ONE call.
+        if (IsDockKind(spec.kind))
+        {
+            var dockRoot = DockWindowFrame.Build(id, spec.title, spec.accent, _font, out var dockTitle, out var dockBody);
+            dockTitle.Initialize(_windows, _canvas, _viewport, id);
+            BuildDockContent(spec.kind, id, dockBody);
+            return dockRoot;
+        }
+
         var root = StrategyEditorWindowFrame.Build(id, out var titleInput, out var body);
         titleInput.Initialize(_windows, _canvas, _viewport, id);
         if (spec.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR)
@@ -581,6 +531,104 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             WireCellRunButton(root, id);   // #95 Phase 2 土台: spawned cell windows get a ▶ RUN too
         }
         return root;
+    }
+
+    // Whether a catalog kind belongs to the #99 dock cluster (chart family + 5 base singletons).
+    static bool IsDockKind(string kind) =>
+        kind == FloatingWindowCatalog.KIND_CHART ||
+        kind == FloatingWindowCatalog.KIND_STARTUP ||
+        kind == FloatingWindowCatalog.KIND_BUYING_POWER ||
+        kind == FloatingWindowCatalog.KIND_ORDERS ||
+        kind == FloatingWindowCatalog.KIND_POSITIONS ||
+        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
+
+    // Build the per-kind content INSIDE a dock window's body. The dock kinds are SINGLETONS
+    // except `chart`, which is multi-instance with id = "chart:<instrument>" — the instrument
+    // id is recovered from the id via DockShape so the ChartView / DepthLadderView lookup
+    // dictionaries can key on it. Idempotent (re-entry on the same id leaves the existing view
+    // in place; the spawn path's first-wins guard means the factory normally fires once per id).
+    void BuildDockContent(string kind, string id, RectTransform body)
+    {
+        if (body == null) return;
+
+        if (kind == FloatingWindowCatalog.KIND_STARTUP)
+        {
+            if (_tile == null) _tile = new ScenarioStartupTile(_scenario, _font);
+            _tile.Build(body);
+            _tile.SyncFieldsFromController();
+            return;
+        }
+
+        if (kind == FloatingWindowCatalog.KIND_BUYING_POWER)
+        { _buyingPowerView = new LivePanelTileView(FormatBuyingPower); _buyingPowerView.Build(body, _font); return; }
+        if (kind == FloatingWindowCatalog.KIND_ORDERS)
+        { _ordersView = new LivePanelTileView(FormatOrders); _ordersView.Build(body, _font); return; }
+        if (kind == FloatingWindowCatalog.KIND_POSITIONS)
+        { _positionsView = new LivePanelTileView(FormatPositions); _positionsView.Build(body, _font); return; }
+        if (kind == FloatingWindowCatalog.KIND_RUN_RESULT)
+        { _runResultView = new LivePanelTileView(FormatRunResult); _runResultView.Build(body, _font); return; }
+
+        if (kind == FloatingWindowCatalog.KIND_CHART)
+        {
+            string iid = DockShape.InstrumentOfChartId(id);
+            if (string.IsNullOrEmpty(iid)) return;        // defensive: a malformed id never lands a chart view
+            BuildChartContent(iid, body);
+            return;
+        }
+    }
+
+    // Construct a chart window body: a left chartArea (ChartView) + a LADDER_WIDTH right strip
+    // hosting the per-instrument DepthLadderView. The Live/Replay show/hide mirrors the old
+    // Hakoniwa chart tile (TTWR overlays_ladder.rs right pane, findings 0028 D1) — depth is
+    // Live-only, so a tile spawned mid-Replay starts with the ladder hidden and the chart
+    // claiming the full body width.
+    void BuildChartContent(string instrumentId, RectTransform body)
+    {
+        var chartAreaGo = new GameObject("ChartArea", typeof(RectTransform));
+        var chartArea = (RectTransform)chartAreaGo.transform;
+        chartArea.SetParent(body, false);
+        chartArea.anchorMin = Vector2.zero; chartArea.anchorMax = Vector2.one;
+        chartArea.offsetMin = Vector2.zero;
+        chartArea.offsetMax = new Vector2(_lastLadderLive ? -LADDER_WIDTH : 0f, 0f);
+
+        var ladderAreaGo = new GameObject("LadderArea", typeof(RectTransform));
+        var ladderArea = (RectTransform)ladderAreaGo.transform;
+        ladderArea.SetParent(body, false);
+        ladderArea.anchorMin = new Vector2(1f, 0f); ladderArea.anchorMax = new Vector2(1f, 1f);
+        ladderArea.pivot = new Vector2(1f, 0.5f);
+        ladderArea.sizeDelta = new Vector2(LADDER_WIDTH, 0f);
+        ladderArea.anchoredPosition = Vector2.zero;
+        var ladder = ladderAreaGo.AddComponent<DepthLadderView>();
+        ladder.Build(ladderArea);
+        ladder.Render(DepthSnapshotView.Empty);
+        ladderAreaGo.SetActive(_lastLadderLive);
+
+        var cv = chartAreaGo.AddComponent<ChartView>();
+        cv.Build(chartArea, showTitleBar: false);
+
+        _chartViews[instrumentId] = cv;
+        _chartAreas[instrumentId] = chartArea;
+        _depthLadders[instrumentId] = ladder;
+        _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll
+    }
+
+    // Spawn the 5 base dock windows (singletons) at the DockDefaultPlacement positions. Order
+    // matches findings 0075 §4: startup / buying_power / orders / positions / run_result.
+    // First-launch positions can be overridden by a saved layout via RestoreFloating's
+    // ApplyGeometry on the matching id (the window is already registered by the time the
+    // restore runs, so it gets repositioned in place — never destroyed+respawned).
+    void SpawnBaseDockWindows()
+    {
+        string[] ids = {
+            WINDOW_ID_STARTUP, WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS,
+            WINDOW_ID_POSITIONS, WINDOW_ID_RUN_RESULT,
+        };
+        var rects = DockDefaultPlacement.ComputeRects(ids.Length);
+        for (int i = 0; i < ids.Length; i++)
+        {
+            var r = rects[i];
+            _windows.Spawn(ids[i], ids[i], r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
+        }
     }
 
     // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----
@@ -729,256 +777,71 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return list;
     }
 
-    // ---- #60 chart tile family: keep Hakoniwa chart tiles == the universe SoT ----
-    // box-grow constants (TTWR HAKONIWA_BOX_GROW_MIN_TILE_SIZE / HAKONIWA_DEFAULT_SIZE). #60 has no
-    // box drag handle, so dragHeight = 0 (#63 supplies the real height with the box drag strip).
-    static readonly Vector2 HAKO_MIN_TILE = new Vector2(280f, 180f);
-    static readonly Vector2 HAKO_DEFAULT_BOX = new Vector2(700f, 450f);
+    // ---- #99 chart family: keep chart windows == the universe SoT ----
 
-    // Reconcile the live chart tiles to _scenario.Universe (the membership SoT): despawn tiles whose
-    // instrument left the universe, spawn one for each newly-present instrument, then box-grow. Bound
-    // to InstrumentRegistry.Changed so a sidebar/tile/picker edit reflects immediately (no Run wait).
-    void SyncChartTilesToUniverse()
+    // Reconcile the live chart windows to _scenario.Universe (the membership SoT): close windows
+    // whose instrument left the universe, spawn one for each newly-present instrument. Bound to
+    // InstrumentRegistry.Changed so a sidebar/picker/tile edit reflects immediately (no Run wait).
+    // Replaces #60 SyncChartTilesToUniverse — `_windows.Spawn/Close(KIND_CHART, "chart:<iid>", …)`
+    // is the only chart spawn/close path. No box-grow (the dock cluster is not bounded by any box).
+    void SyncChartWindowsToUniverse()
     {
         var ids = _scenario.Universe.Ids;
         var desired = new HashSet<string>(ids);
 
+        // Close any chart window whose instrument left the universe (the snapshot below is taken
+        // BEFORE iteration to avoid mutating the controller's dictionary during enumeration).
         var stale = new List<string>();
-        foreach (var id in _chartTiles.Keys) if (!desired.Contains(id)) stale.Add(id);
-        foreach (var id in stale) DespawnChartTile(id);
+        foreach (var iid in _chartViews.Keys) if (!desired.Contains(iid)) stale.Add(iid);
+        foreach (var iid in stale) DespawnChartWindow(iid);
 
-        foreach (var id in ids) if (!_chartViews.ContainsKey(id)) SpawnChartTile(id);
-
-        ApplyBoxGrow();
+        // Spawn the missing ones. Each new chart gets the next DockDefaultPlacement slot — n is
+        // recomputed each call so removing+adding stays deterministic (the helper is pure).
+        var rects = DockDefaultPlacement.ComputeRects(ids.Count);
+        for (int i = 0; i < ids.Count; i++)
+        {
+            string iid = ids[i];
+            if (_chartViews.ContainsKey(iid)) continue;
+            SpawnChartWindow(iid, rects[i]);
+        }
     }
 
-    // Build a Hakoniwa tile shell (GameObject under the root + panel chrome + header-drag swap +
-    // controller registration) shared by chart and base tiles. Returns the tile root; `body` is the
-    // content inset the caller fills with its view (ChartView / LivePanelTileView). box-size-free.
-    RectTransform BuildTileShell(string id, out RectTransform body)
-    {
-        var go = new GameObject(id, typeof(RectTransform), typeof(Image));
-        var rt = (RectTransform)go.transform;
-        rt.SetParent(_hakoniwaRoot, false);
-        body = BuildTileChrome(rt, id, out HakoniwaTileHeaderInput header);
-        _hako.AddTile(id, rt);                     // box-size-free Rebuild lays the new cell
-        header.Initialize(_hako, _hakoniwaRoot, id);
-        return rt;
-    }
-
-    // Build one chart tile (chart:<id>) with its own ChartView, appended as the new last slot.
-    void SpawnChartTile(string instrumentId)
+    // Spawn one chart window (id = "chart:<iid>") at the given canvas-logical rect. Content
+    // (ChartView + DepthLadderView) is injected by the factory's BuildDockContent path during
+    // `_windows.Spawn` — by the time Spawn returns, `_chartViews[iid]` is populated.
+    void SpawnChartWindow(string instrumentId, FloatingWindowMath.DockRect rect)
     {
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
-        string tileId = "chart:" + instrumentId;
-        var rt = BuildTileShell(tileId, out RectTransform body);
-
-        // #57: split the body into a chartArea (left, right-inset in Live so candles aren't covered) +
-        // a LADDER_WIDTH right strip hosting this instrument's DepthLadderView (TTWR overlays_ladder.rs
-        // right pane, findings 0028 D1). Apply the CURRENT mode immediately so a tile spawned while Live
-        // shows its ladder (TTWR Added<ChartInstrument>, D3).
-        var chartAreaGo = new GameObject("ChartArea", typeof(RectTransform));
-        var chartArea = (RectTransform)chartAreaGo.transform;
-        chartArea.SetParent(body, false);
-        chartArea.anchorMin = Vector2.zero; chartArea.anchorMax = Vector2.one;
-        chartArea.offsetMin = Vector2.zero;
-        chartArea.offsetMax = new Vector2(_lastLadderLive ? -LADDER_WIDTH : 0f, 0f);
-
-        var ladderAreaGo = new GameObject("LadderArea", typeof(RectTransform));
-        var ladderArea = (RectTransform)ladderAreaGo.transform;
-        ladderArea.SetParent(body, false);
-        ladderArea.anchorMin = new Vector2(1f, 0f); ladderArea.anchorMax = new Vector2(1f, 1f);
-        ladderArea.pivot = new Vector2(1f, 0.5f);
-        ladderArea.sizeDelta = new Vector2(LADDER_WIDTH, 0f);
-        ladderArea.anchoredPosition = Vector2.zero;
-        var ladder = ladderAreaGo.AddComponent<DepthLadderView>();
-        ladder.Build(ladderArea);
-        ladder.Render(DepthSnapshotView.Empty);    // show the "(no board)" placeholder until depth streams (no blank pane)
-        ladderAreaGo.SetActive(_lastLadderLive);   // depth is Live-only (hidden in Replay)
-
-        var cv = chartAreaGo.AddComponent<ChartView>();
-        cv.Build(chartArea, showTitleBar: false);
-
-        _chartTiles[instrumentId] = rt;
-        _chartViews[instrumentId] = cv;
-        _chartAreas[instrumentId] = chartArea;
-        _depthLadders[instrumentId] = ladder;
-        _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll, not the one after
+        string windowId = DockShape.ChartId(instrumentId);
+        _windows.Spawn(FloatingWindowCatalog.KIND_CHART, windowId,
+                       rect.topLeft.x, rect.topLeft.y, rect.size.x, rect.size.y, true);
     }
 
-    void DespawnChartTile(string instrumentId)
+    // Despawn one chart window and clear its render bookkeeping. The GameObject is destroyed by
+    // FloatingWindowController.Close (the ChartArea / LadderArea / ChartView / DepthLadderView are
+    // children and go with it — no separate destroy needed).
+    void DespawnChartWindow(string instrumentId)
     {
-        _hako.RemoveTile("chart:" + instrumentId);
-        if (_chartTiles.TryGetValue(instrumentId, out var rt) && rt != null) DestroyTileGo(rt.gameObject);
-        _hakoChrome.RemoveAll(c => c.card == null);   // findings 0054: prune this tile's chrome eagerly (destroyed → Unity-null), so the retention list can't leak across spawn/despawn churn when the theme never switches
-        _chartTiles.Remove(instrumentId);
+        if (string.IsNullOrEmpty(instrumentId)) return;
+        _windows.Close(DockShape.ChartId(instrumentId));
         _chartViews.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
-        // #57: the ladder + chartArea are children of the destroyed tile (no separate destroy needed).
         _chartAreas.Remove(instrumentId);
         _depthLadders.Remove(instrumentId);
         _depthRendered.Remove(instrumentId);
     }
 
-    // ---- #61 mode-conditional base tiles: the base SET is owned by the mode (TTWR ExecutionMode) ----
-    // BuyingPower base tile. Unlike Orders/Positions/RunResult (scene-authored, #23) there is no scene
-    // tile for BuyingPower, so build it dynamically (BuildTileShell = chrome + controller add + header
-    // swap, mirrors SpawnChartTile) and render it with the SAME #23 LivePanelTileView wiring the other
-    // base panels use (FormatBuyingPower), fed from _host.Panel via RefreshLiveTiles.
-    void SpawnBuyingPowerTile()
+    // #99 (ADR-0017 / findings 0075 §3): the only mode-conditional dock surface left is the
+    // `startup` window — shown in Replay, hidden in Live (NEVER destroyed, visibility toggle —
+    // dormant temp via _windows.Hide(id) / Show(id), so a Replay→Live→Replay round-trip keeps the
+    // user's startup position). Replaces the #61 SyncBaseTilesToMode (which retiled the whole base
+    // set on every flip); under the dock model nothing else is mode-conditional.
+    void SyncStartupVisibilityToMode(bool live)
     {
-        if (_buyingPowerView != null) return;
-        var rt = BuildTileShell(HakoniwaBaseTiles.BuyingPower, out RectTransform body);
-        _buyingPowerView = new LivePanelTileView(FormatBuyingPower);
-        _buyingPowerView.Build(body, _font);
-        _baseTiles[HakoniwaBaseTiles.BuyingPower] = rt;
-    }
-
-    // Base retile (TTWR reconcile_hakoniwa_tiles, base-only). The ONLY mode-conditional base tile is
-    // `startup` (Replay-only, ADR 0013), so this toggles startup presence then restores the
-    // [base…, chart…] order via Reorder (chart tiles keep identity — universe-owned, #169 split).
-    // The scene-authored startup tile is DEACTIVATED (never destroyed) when leaving Replay.
-    void SyncBaseTilesToMode(bool live)
-    {
-        // #62 reconcile parity (TTWR reconcile_hakoniwa_tiles): stash the CURRENT layout into the OLD
-        // mode's profile BEFORE changing anything, switch the base membership, then load the NEW mode's
-        // profile (validated honor / canonical) via ApplyProfileOrder.
-        StashActiveProfile();
-
-        bool wantStartup = !live;
-        bool hasStartup = _hako.SlotOf(HakoniwaBaseTiles.Startup) >= 0;
-        if (wantStartup && !hasStartup)
-        {
-            if (_startupTile != null) _startupTile.gameObject.SetActive(true);
-            _hako.AddTile(HakoniwaBaseTiles.Startup, _startupTile);
-        }
-        else if (!wantStartup && hasStartup)
-        {
-            _hako.RemoveTile(HakoniwaBaseTiles.Startup);
-            if (_startupTile != null) _startupTile.gameObject.SetActive(false);
-        }
-
-        ApplyProfileOrder(live);                        // load new mode: chart order + [base…, chart…] honored/canonical
-        ApplyBoxGrow();                                 // grid = n_base + n_chart (derived box-grow, #60)
-        _baseLive = live;
-        ForceRefreshLiveTiles();                        // shape flip: repaint the base panels now (#23 wiring)
-    }
-
-    // Apply a mode's per-mode profile to the live controller (#62, findings 0029 §2/§3). The unified
-    // path for BOTH a mode flip (SyncBaseTilesToMode) and a disk restore (ApplyLayout) — TTWR
-    // reconcile/apply_hakoniwa_restore_resources parity:
-    //   1. if the mode has a stored profile, Apply it (restores the per-mode CHART order; Apply's
-    //      tolerance reconciles universe membership — stale ids skipped, new charts appended);
-    //   2. Reorder by BaseOrderForMode(live): a VALID profile's base order is honored (user header-drag
-    //      swaps remembered per mode), an invalid/legacy/seeded one falls to canonical Kinds(live) —
-    //      the [base…, chart…] invariant and the #61 collision-safe behavior (LayoutDocument.Default() /
-    //      #60-era sidecars have a mismatched base set → canonical), generalized to validated honor;
-    //   3. base tiles are not closeable → force them visible (a stale visible=false must not hide one).
-    // This REPLACES #61's ReassertBaseAfterRestore (always-canonical) — empty profiles → canonical, so
-    // the #61 collision regression (HakoniwaBaseModeProbe Section4) still holds.
-    void ApplyProfileOrder(bool live)
-    {
-        var stored = _profiles.Get(live);
-        if (stored != null)
-            _hako.Apply(new LayoutDocument { version = LayoutDocument.CURRENT_VERSION, panels = stored });
-        _hako.Reorder(_profiles.BaseOrderForMode(live));
-        foreach (var id in HakoniwaBaseTiles.Kinds(live))
-            if (_baseTiles.TryGetValue(id, out var rt) && rt != null) rt.gameObject.SetActive(true);
-    }
-
-    // Destroy at runtime, DestroyImmediate in edit mode (the AFK probe drives spawn/despawn headlessly
-    // — Object.Destroy is a no-op-with-error outside play).
-    static void DestroyTileGo(GameObject go)
-    {
-        if (go == null) return;
-        if (Application.isPlaying) Destroy(go); else DestroyImmediate(go);
-    }
-
-    // box-grow: the box SIZE is derived from the tile count every membership change (NOT persisted);
-    // the box POSITION is fixed. Owned HERE (the membership orchestrator), not in the controller's
-    // box-size-free Rebuild (findings 0027 §0/§6 — TTWR sync-system-owns-box vs relayout-box-free).
-    void ApplyBoxGrow()
-    {
-        if (_hakoniwaRoot != null)
-            _hakoniwaRoot.sizeDelta = HakoniwaGridMath.ComputeBoxSize(_hako.Count, HAKO_MIN_TILE, 0f, HAKO_DEFAULT_BOX);
-    }
-
-    // ---- Hakoniwa tile chrome (panel bg + header swap handle), so tiles read against the field ----
-    // findings 0054: chrome reads dedicated hakoniwa_* roles (was hard literals), so Hakoniwa can be
-    // brightened in isolation from the editor/footer/sidebar. Retained refs let ApplyHakoniwaChromeTheme
-    // re-paint on a theme switch (the literals were painted once and never followed Changed).
-    const float HAKO_HEADER_H = 26f;
-    Image _hakoRootImg;
-    struct TileChrome { public Image card; public Image header; public Text label; }
-    readonly List<TileChrome> _hakoChrome = new List<TileChrome>();
-
-    // Single source of truth for chrome graphic → theme role, shared by build-time painting, the
-    // Changed re-apply, and ThemeProbe's wiring-kill so the three can't drift (findings 0054).
-    public static void PaintHakoniwaRoot(Theme t, Image root)
-    {
-        if (root != null) root.color = t.colors.hakoniwa_root_background;
-    }
-    public static void PaintTileChrome(Theme t, Image card, Image header, Text label)
-    {
-        if (card != null) card.color = t.colors.hakoniwa_tile_background;
-        if (header != null) header.color = t.colors.hakoniwa_tile_header;
-        if (label != null) label.color = t.colors.hakoniwa_tile_header_text;
-    }
-
-    void EnsureRootImage(RectTransform root)
-    {
-        var img = root.GetComponent<Image>();
-        if (img == null) img = root.gameObject.AddComponent<Image>();
-        _hakoRootImg = img;
-        PaintHakoniwaRoot(ThemeService.Current, img);
-        img.raycastTarget = false;   // gaps between tiles fall through to canvas pan
-    }
-
-    // Re-paint the retained Hakoniwa chrome from the active theme. Subscribed to ThemeService.Changed
-    // in BuildWorkspace; null-safe so a probe that never authored the chrome is a no-op (findings 0054).
-    void ApplyHakoniwaChromeTheme()
-    {
-        var t = ThemeService.Current;
-        PaintHakoniwaRoot(t, _hakoRootImg);
-        _hakoChrome.RemoveAll(c => c.card == null);   // drop chrome whose tile was despawned (findings 0054)
-        foreach (var c in _hakoChrome) PaintTileChrome(t, c.card, c.header, c.label);
-    }
-
-    // tile = body Image (NOT a raycast target, so body-drag pans) + a header bar (raycast target +
-    // HakoniwaTileHeaderInput, so header-drag SWAPS) + a content Body inset below the header.
-    RectTransform BuildTileChrome(RectTransform tile, string id, out HakoniwaTileHeaderInput header)
-    {
-        var tileImg = tile.GetComponent<Image>();
-        if (tileImg == null) tileImg = tile.gameObject.AddComponent<Image>();
-        tileImg.raycastTarget = false;
-
-        var headerGo = new GameObject("Header", typeof(RectTransform), typeof(Image), typeof(HakoniwaTileHeaderInput));
-        var hRt = (RectTransform)headerGo.transform;
-        hRt.SetParent(tile, false);
-        hRt.anchorMin = new Vector2(0f, 1f); hRt.anchorMax = new Vector2(1f, 1f); hRt.pivot = new Vector2(0.5f, 1f);
-        hRt.offsetMin = new Vector2(2f, -HAKO_HEADER_H); hRt.offsetMax = new Vector2(-2f, -2f);
-        var headerImg = headerGo.GetComponent<Image>();   // opaque -> raycast target for the drag
-        header = headerGo.GetComponent<HakoniwaTileHeaderInput>();
-
-        var labelGo = new GameObject("Label", typeof(RectTransform), typeof(Text));
-        var lRt = (RectTransform)labelGo.transform;
-        lRt.SetParent(hRt, false);
-        lRt.anchorMin = Vector2.zero; lRt.anchorMax = Vector2.one;
-        lRt.offsetMin = new Vector2(8f, 0f); lRt.offsetMax = new Vector2(-8f, 0f);
-        var t = labelGo.GetComponent<Text>();
-        t.font = _font; t.fontSize = 12; t.alignment = TextAnchor.MiddleLeft;
-        t.text = id; t.raycastTarget = false;
-
-        // retain + paint from the active theme (findings 0054).
-        _hakoChrome.Add(new TileChrome { card = tileImg, header = headerImg, label = t });
-        PaintTileChrome(ThemeService.Current, tileImg, headerImg, t);
-
-        var bodyGo = new GameObject("Body", typeof(RectTransform));
-        var body = (RectTransform)bodyGo.transform;
-        body.SetParent(tile, false);
-        body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
-        body.offsetMin = new Vector2(2f, 2f); body.offsetMax = new Vector2(-2f, -HAKO_HEADER_H - 2f);
-        return body;
+        if (live) _windows.Hide(WINDOW_ID_STARTUP);
+        else _windows.Show(WINDOW_ID_STARTUP);
+        _lastLiveShape = live;
+        ForceRefreshLiveTiles();   // shape flip: repaint the base panels now (#23 wiring)
     }
 
     // ---- run path (footer ▶ / Startup tile Run): controller validates + writes the sidecar, then
@@ -1102,7 +965,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         var inputs = new UniversePruneInputs
         {
-            Mode = HakoniwaBaseTiles.IsLiveShape(_footerMode.DisplayMode)
+            Mode = DockShape.IsLiveShape(_footerMode.DisplayMode)
                 ? UniverseSourceMode.Live : UniverseSourceMode.Replay,
             LiveSource = source,
             LiveStatus = status,
@@ -1126,7 +989,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // panels stuck while the run streams. Bypass the gate in Replay and drive every frame;
         // PushReplayTiles dedups on the poll payload (one string compare) and ShowText dedups the
         // text write, so a steady snapshot is cheap. Live keeps the AppliedCount gate.
-        if (!_baseLive) { PushReplayTiles(); return; }
+        if (!_lastLiveShape) { PushReplayTiles(); return; }
         long applied = _host.Panel.AppliedCount;
         if (applied == _lastPanelApplied) return;
         _lastPanelApplied = applied;
@@ -1151,7 +1014,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #65: in Replay the base panels render the real run's portfolio (get_portfolio_json poll),
         // not the monotonic live VM. Before the first poll / outside a run last_portfolio is null →
         // DecodePortfolio yields an empty snapshot, so we keep the #61 honest-empty "(no data)".
-        if (!_baseLive)
+        if (!_lastLiveShape)
         {
             PushReplayTiles();
             return;
@@ -1615,15 +1478,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _host.Conn.ApplyStatePoll(st);
         }
 
-        // #61 base retile: the poll is the mode SoT (DisplayMode). When the base SHAPE flips
-        // (Replay⇄Live — LiveManual⇄LiveAuto is the same Live shape, so no-op), retile base only;
-        // chart tiles keep identity. Cheap bool compare each frame; SyncBaseTilesToMode only on flip.
-        bool live = HakoniwaBaseTiles.IsLiveShape(_footerMode.DisplayMode);
-        if (live != _baseLive) SyncBaseTilesToMode(live);   // base retile; SyncBaseTilesToMode repaints on the flip
+        // #99 dock shape flip: the poll is the mode SoT (DisplayMode). LiveManual⇄LiveAuto share one
+        // Live shape (no-op); a Replay⇄Live transition flips the `startup` window visibility (Replay
+        // shows it, Live hides it — findings 0075 §3, ADR-0017 §4) and force-repaints the base panels.
+        bool live = DockShape.IsLiveShape(_footerMode.DisplayMode);
+        if (live != _lastLiveShape) SyncStartupVisibilityToMode(live);
 
         // base panel content is refreshed by RefreshLiveTiles (Update, before DriveFooter) — gated on the
         // VM AppliedCount so idle frames cost one long compare. A shape flip force-repaints inside
-        // SyncBaseTilesToMode (above).
+        // SyncStartupVisibilityToMode (above).
 
         _footerAuto.ObserveLifecycle();
 
@@ -1993,23 +1856,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _menuBarView?.ShowMessage("disconnecting…");
     }
 
-    // ---- layout persistence (4 dimensions) ----
-    // Stash the ACTIVE mode's current controller layout into its profile (TTWR build_hakoniwa_snapshot /
-    // reconcile_hakoniwa_tiles parity). Shared by the mode flip (stash OLD before switching) and save
-    // (stash active). Set stores the list BY REFERENCE — callers that persist Clone() first.
-    void StashActiveProfile() => _profiles.Set(_baseLive, _hako.Capture().panels);
-
+    // ---- layout persistence (3 active dimensions: canvasView / floatingWindows / cellPositions) ----
+    // #99 (ADR-0017 §6 / findings 0075 §6): the dock cluster lives entirely in `floatingWindows`
+    // (base + chart + Order ticket + adopted editor shells), so the Hakoniwa-era per-mode profiles
+    // and the single `panels` list are RETIRED — `hakoniwaProfiles` is left null on capture and
+    // `panels` is the empty list. The schema keeps the fields (forward-evolution tolerance,
+    // findings 0008 §3) so an older build that knows them does not crash on a doc written by a
+    // newer build that omits them; they just carry no Hakoniwa intent any more.
     LayoutDocument CaptureLayout()
     {
-        // #62 (findings 0029 §4): stash the ACTIVE mode (the other mode keeps its stored profile), then
-        // take ONE deep clone for the doc. hakoniwaProfiles is the SoT; `panels` mirrors the active mode
-        // FROM THE CLONE (back-compat for a pre-#62 reader) — never aliasing live _profiles state.
-        StashActiveProfile();
-        var profiles = _profiles.Clone();
-        // #81: cell windows are EXCLUDED from floatingWindows (single source of truth — their position
-        // is the cell-order-parallel cellPositions, regenerated FROM LIVE by the coordinator, findings
-        // 0050 trap 1). floatingWindows now carries only NON-cell windows (the Order ticket). The old
-        // per-window strategyEditors content list is retired (the notebook has ONE path = the document).
+        // #81: cell windows are EXCLUDED from floatingWindows (single source of truth — their
+        // position is the cell-order-parallel cellPositions, regenerated FROM LIVE by the
+        // coordinator, findings 0050 trap 1). #99: ALL OTHER live windows (base + chart + Order
+        // + adopted editor shell) DO ride floatingWindows verbatim — that is the dock cluster's
+        // single source of truth (ADR-0017 §6).
         var nonCell = new List<FloatingWindowLayout>();
         foreach (var w in _windows.Capture().floatingWindows)
             if (w != null && w.kind != FloatingWindowCatalog.KIND_STRATEGY_EDITOR) nonCell.Add(w);
@@ -2017,8 +1877,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var doc = new LayoutDocument
         {
             version = LayoutDocument.CURRENT_VERSION,
-            panels = profiles.Get(_baseLive),
-            hakoniwaProfiles = profiles,
+            panels = new List<PanelLayout>(),            // dead schema (forward-tolerance only)
+            hakoniwaProfiles = null,                      // dead schema (forward-tolerance only)
             canvasView = _canvas.CaptureView(),
             floatingWindows = nonCell,
             strategyEditors = new List<StrategyEditorState>(),
@@ -2043,22 +1903,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout write failed: " + e.Message); return false; }
     }
 
-    // restore order canvas → Hakoniwa → floating → Strategy Editor (findings 0025 §8).
+    // restore order canvas → floating(non-cell) → Strategy Editor (findings 0025 §8 — Hakoniwa step
+    // is retired under ADR-0017; the dock windows live in floatingWindows now). Per ADR-0017 §6 and
+    // findings 0075 §0 #5, any legacy `panels` / `hakoniwaProfiles` on disk are IGNORED — pre-#99
+    // saved layouts reset to the dock default placement (the 5 base windows keep the positions
+    // BuildWorkspace spawned them at, and any chart windows land at DockDefaultPlacement slots).
     void ApplyLayout(LayoutDocument doc)
     {
         if (doc == null) return;
         if (doc.canvasView != null) _canvas.ApplyView(doc.canvasView);
-        // #62 (findings 0029 §4): adopt the per-mode profiles from disk, or SEED both from the legacy
-        // single `panels` when the doc predates #62 (forward-compat). Then apply the CURRENT mode's
-        // profile (build seeds _baseLive=Replay). ApplyProfileOrder subsumes #61's ReassertBaseAfterRestore
-        // (validated honor / canonical) — a legacy/colliding seed has a mismatched base set → canonical.
-        _profiles = HakoniwaLayoutProfiles.FromDocument(doc);
-        ApplyProfileOrder(_baseLive);
         RestoreFloating(doc);
         // #81: cell windows are restored by the coordinator (Open/New/Sync) from the notebook + the
-        // cellPositions list — NOT here. Each caller (OnFileOpen / OpenFileNewDefault / Resume) runs the
-        // coordinator open + the ReseedFromEditor tail around this geometry restore (restore order
-        // canvas -> Hakoniwa -> floating(non-cell) -> cells -> reseed, findings 0025 §8).
+        // cellPositions list — NOT here. Each caller (OnFileOpen / OpenFileNewDefault / Resume) runs
+        // the coordinator open + the ReseedFromEditor tail around this geometry restore (restore
+        // order canvas -> floating(non-cell) -> cells -> reseed, findings 0025 §8).
     }
 
     // floating: adopted/existing windows repositioned IN PLACE (never destroyed); only additional
@@ -2091,9 +1949,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // it never reaches here, but a built-yet-non-Python-owner root must still persist its layout.
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
-        _scenario.Universe.Changed -= SyncChartTilesToUniverse;   // #60 chart-tile sync unsubscribe (no orphan handler)
+        _scenario.Universe.Changed -= SyncChartWindowsToUniverse;   // #99 chart-window sync unsubscribe (no orphan handler)
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
-        ThemeService.Changed -= ApplyHakoniwaChromeTheme;   // Hakoniwa chrome theme unsubscribe (findings 0054)
         if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe
         _notebookRunLane?.Dispose();              // #95 Phase 2 土台: stop the per-cell RUN worker thread
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown

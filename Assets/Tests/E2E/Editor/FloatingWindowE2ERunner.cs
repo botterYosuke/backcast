@@ -63,7 +63,11 @@ public static class FloatingWindowE2ERunner
                 ?? Section6_BackCompatSanitizeFallback(spawned)
                 ?? Section7_SpawnAutoCascade(spawned)
                 ?? Section8_SingleClose(spawned)
-                ?? Section9_DormantHideReveal(spawned);
+                ?? Section9_DormantHideReveal(spawned)
+                ?? Section10_SnapPureArithmetic()
+                ?? Section11_SnapOnReleaseControllerWiring(spawned)
+                ?? Section12_DockCatalogKinds()
+                ?? Section13_DockDefaultPlacementArithmetic();
         }
         catch (Exception e)
         {
@@ -86,8 +90,13 @@ public static class FloatingWindowE2ERunner
                       "sanitize (dup-id first-wins, non-finite/<=0 size drop, x/y->0, unknown-kind preserved+spawn-skipped, " +
                       "spec-min clamp) + malformed -> default + auto-placement cascade (SpawnAuto diagonal off ALL live " +
                       "tops incl. non-cell) + single Close (target despawned, sibling untouched, unknown->false) + dormant " +
-                      "Hide/reveal Show (SetActive + BringToFront) (Unity-owned versioned schema, additive capability " +
-                      "surface, ADR-0003 capability parity, under Unity Mono) [WINDOW-01..10]");
+                      "Hide/reveal Show (SetActive + BringToFront) + #99 magnet snap (pure flush/edge-align x-y INDEPENDENT, " +
+                      "beyond-threshold->0, threshold<=0 guard) + controller SnapOnRelease (excludes self, ignores hidden, " +
+                      "applies via anchoredPosition, dragged-only — no group propagation) + #99 dock catalog kinds (chart " +
+                      "multi-instance + 5 base singletons, accents from PlayerColors, unknown-kind tolerance preserved) + " +
+                      "DockDefaultPlacement (ceil(√n) grid in absolute canvas-logical coords, row-major slot 0=top-left, " +
+                      "y up-positive rows, no overlap, n=0 empty) (Unity-owned versioned schema, additive capability " +
+                      "surface, ADR-0003 capability parity, under Unity Mono) [WINDOW-01..10,SNAP-01,02,DOCK-01,02]");
             EditorApplication.Exit(0);
         }
         else
@@ -446,6 +455,215 @@ public static class FloatingWindowE2ERunner
         if (!shell.gameObject.activeSelf) return "S9: Show did not re-activate the window";
         if (shell.GetSiblingIndex() != shell.parent.childCount - 1) return "S9: Show did not raise to last sibling (front)";
         if (shell.GetSiblingIndex() <= other.GetSiblingIndex()) return "S9: Show did not bring shell in front of other";
+        return null;
+    }
+
+    // ---- 10. magnet snap pure arithmetic (FloatingWindowMath.SnapOffset) ----
+    // Covers: SNAP-01 — #99 Slice 1 / findings 0075 §1 (flush + edge-align, x/y INDEPENDENT, beyond-threshold→0,
+    // threshold≤0/NaN guard, deterministic tie-break, no group / no resize).
+    static string Section10_SnapPureArithmetic()
+    {
+        const float TH = 12f;
+
+        // (a) empty `others` → zero on both axes (no neighbour to snap to).
+        var solo = new FloatingWindowMath.DockRect(0, 0, 200, 100);
+        var noneOffset = FloatingWindowMath.SnapOffset(solo, new List<FloatingWindowMath.DockRect>(), TH);
+        if (noneOffset != Vector2.zero) return $"S10a: empty others should yield zero (got {noneOffset})";
+
+        // (b) FLUSH RIGHT: dragged at (x=100,y=0,w=200,h=100) — right edge at x=300; neighbour at
+        // x=305 — flush right candidate Δx=+5. Same y → 0. Closest x candidate is the flush one (5px),
+        // not the 200-wide same-edge or 405 flush-left (both far beyond threshold).
+        var dragA = new FloatingWindowMath.DockRect(100, 0, 200, 100);
+        var nbrR = new FloatingWindowMath.DockRect(305, 0, 200, 100);
+        Vector2 oFlush = FloatingWindowMath.SnapOffset(dragA, new[] { nbrR }, TH);
+        if (!Approx(oFlush.x, 5f)) return $"S10b: flush-right Δx expected 5, got {oFlush.x}";
+        if (!Approx(oFlush.y, 0f)) return $"S10b: y unexpectedly nudged (got {oFlush.y})";
+
+        // (c) SAME-EDGE LEFT align: dragged at x=100; neighbour at x=104 (same w/h). All flush
+        // candidates are 200+ away; same-edge left↔left Δx = 104-100 = +4 wins.
+        var nbrSame = new FloatingWindowMath.DockRect(104, 0, 200, 100);
+        Vector2 oAlign = FloatingWindowMath.SnapOffset(dragA, new[] { nbrSame }, TH);
+        if (!Approx(oAlign.x, 4f)) return $"S10c: edge-align Δx expected 4, got {oAlign.x}";
+        if (!Approx(oAlign.y, 0f)) return $"S10c: y unexpectedly nudged (got {oAlign.y})";
+
+        // (d) BEYOND THRESHOLD on x → 0 on x. Neighbour 50px away — no candidate ≤ 12px.
+        var nbrFar = new FloatingWindowMath.DockRect(350, 0, 200, 100);
+        Vector2 oFar = FloatingWindowMath.SnapOffset(dragA, new[] { nbrFar }, TH);
+        if (oFar != Vector2.zero) return $"S10d: beyond-threshold should yield zero (got {oFar})";
+
+        // (e) X-Y INDEPENDENT: dragged at (100,0,200,100); neighbour-A nudges x by flush-right Δ=+5
+        // (offset by 5 on x, far on y). Neighbour-B nudges y by edge-align top↔top Δ=+3 (close on y,
+        // far on x). The pure math must take x from A and y from B SIMULTANEOUSLY.
+        var nbrXOnly = new FloatingWindowMath.DockRect(305, 999f, 200, 100);   // x=+5; y far away
+        var nbrYOnly = new FloatingWindowMath.DockRect(999f, 3f,   200, 100);   // y=+3 (top↔top); x far
+        Vector2 oXY = FloatingWindowMath.SnapOffset(dragA, new[] { nbrXOnly, nbrYOnly }, TH);
+        if (!Approx(oXY.x, 5f)) return $"S10e: x INDEPENDENTLY snapped expected 5, got {oXY.x}";
+        if (!Approx(oXY.y, 3f)) return $"S10e: y INDEPENDENTLY snapped expected 3, got {oXY.y}";
+
+        // (f) FLUSH-BOTTOM on Y (dragged's bottom ↔ neighbour's top). Top-left-pivot, y up-positive:
+        // dragged at y_top=0,h=100 → bottom=-100. Neighbour at y_top=-105 (just below). Δy that brings
+        // dragged.bottom to nbr.top = -105 - (-100) = -5. Pure number; no x interaction.
+        var dragB = new FloatingWindowMath.DockRect(0, 0, 200, 100);
+        var nbrBelow = new FloatingWindowMath.DockRect(0, -105, 200, 100);
+        Vector2 oFlushB = FloatingWindowMath.SnapOffset(dragB, new[] { nbrBelow }, TH);
+        if (!Approx(oFlushB.x, 0f)) return $"S10f: x unexpectedly nudged on a y-flush case (got {oFlushB.x})";
+        if (!Approx(oFlushB.y, -5f)) return $"S10f: flush-bottom Δy expected -5, got {oFlushB.y}";
+
+        // (g) threshold guards: 0 / negative / NaN → Vector2.zero (degenerate; controller no-op release).
+        if (FloatingWindowMath.SnapOffset(dragA, new[] { nbrSame }, 0f) != Vector2.zero) return "S10g: threshold=0 not guarded";
+        if (FloatingWindowMath.SnapOffset(dragA, new[] { nbrSame }, -3f) != Vector2.zero) return "S10g: threshold<0 not guarded";
+        if (FloatingWindowMath.SnapOffset(dragA, new[] { nbrSame }, float.NaN) != Vector2.zero) return "S10g: threshold=NaN not guarded";
+
+        // (h) NEAREST WINS within threshold: two neighbours, one at +8 and one at +3 (same-edge align).
+        // The +3 candidate has smaller |Δ| and must win. Deterministic regardless of input list order.
+        var nbrFurther = new FloatingWindowMath.DockRect(108, 0, 200, 100);   // +8
+        var nbrCloser  = new FloatingWindowMath.DockRect(103, 0, 200, 100);   // +3
+        Vector2 oNear1 = FloatingWindowMath.SnapOffset(dragA, new[] { nbrFurther, nbrCloser }, TH);
+        Vector2 oNear2 = FloatingWindowMath.SnapOffset(dragA, new[] { nbrCloser, nbrFurther }, TH);
+        if (!Approx(oNear1.x, 3f) || !Approx(oNear2.x, 3f))
+            return $"S10h: closer candidate must win regardless of input order (got {oNear1.x}, {oNear2.x})";
+
+        return null;
+    }
+
+    // ---- 11. controller wiring: SnapOnRelease applies the math to the live rectTransform ----
+    // Covers: SNAP-02 — #99 Slice 1 (controller side: excludes self, ignores hidden neighbours, applies
+    // the offset to ONLY the dragged window via anchoredPosition, returns the applied Δ. No group
+    // propagation — the neighbour does NOT move).
+    static string Section11_SnapOnReleaseControllerWiring(List<GameObject> spawned)
+    {
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var controller = MakeController(spawned, layer);
+
+        // Two equal windows; dragged 5px shy of flush-right against an anchored neighbour.
+        RectTransform dragged = controller.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR,
+                                                 "drag", 100, 0, 200, 100, true);
+        RectTransform nbr = controller.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR,
+                                              "nbr", 305, 0, 200, 100, true);
+        if (dragged == null || nbr == null) return "S11: precondition spawn returned null";
+
+        Vector2 draggedBefore = dragged.anchoredPosition;
+        Vector2 nbrBefore = nbr.anchoredPosition;
+
+        // Default-threshold convenience overload: should snap the 5px gap closed.
+        Vector2 applied = controller.SnapOnRelease("drag");
+        if (!Approx(applied.x, 5f) || !Approx(applied.y, 0f)) return $"S11: applied offset {applied} expected (5,0)";
+        if (!Approx2(dragged.anchoredPosition, draggedBefore + new Vector2(5f, 0f)))
+            return $"S11: dragged anchoredPosition {dragged.anchoredPosition} != before+(5,0)";
+        if (!Approx2(nbr.anchoredPosition, nbrBefore)) return "S11: NEIGHBOUR moved — group propagation must NOT exist";
+
+        // unknown id → Vector2.zero, no side effects.
+        Vector2 ghost = controller.SnapOnRelease("ghost");
+        if (ghost != Vector2.zero) return "S11: SnapOnRelease(unknown) did not return zero";
+
+        // Hide the neighbour → no more pull (hidden windows are excluded from `others`).
+        // Re-position dragged within threshold of the hidden neighbour and call snap; nothing should happen.
+        controller.Hide("nbr");
+        dragged.anchoredPosition = new Vector2(100, 0);   // back to 5px shy
+        Vector2 hiddenPull = controller.SnapOnRelease("drag");
+        if (hiddenPull != Vector2.zero) return $"S11: hidden neighbour exerted pull {hiddenPull}";
+        if (!Approx2(dragged.anchoredPosition, new Vector2(100, 0))) return "S11: dragged moved despite hidden neighbour";
+
+        // Custom-threshold overload: a tighter threshold (3px) must REJECT a 5px gap snap.
+        controller.Show("nbr");
+        dragged.anchoredPosition = new Vector2(100, 0);   // back to 5px shy
+        Vector2 tight = controller.SnapOnRelease("drag", 3f);
+        if (tight != Vector2.zero) return $"S11: tight threshold should reject (got {tight})";
+        if (!Approx2(dragged.anchoredPosition, new Vector2(100, 0))) return "S11: dragged moved under tight threshold";
+
+        return null;
+    }
+
+    // ---- 12. dock catalog kinds ----
+    // Covers: DOCK-01 — #99 Slice 2 / findings 0075 §2 (chart multi-instance + 5 base singleton kinds
+    // present in Default(), each with a distinct accent and a usable spec; unknown-kind tolerance
+    // unchanged so a forward-evolved doc still survives).
+    static string Section12_DockCatalogKinds()
+    {
+        var catalog = FloatingWindowCatalog.Default();
+
+        // (a) every #99 kind resolves.
+        string[] kinds = {
+            FloatingWindowCatalog.KIND_CHART,
+            FloatingWindowCatalog.KIND_BUYING_POWER,
+            FloatingWindowCatalog.KIND_ORDERS,
+            FloatingWindowCatalog.KIND_POSITIONS,
+            FloatingWindowCatalog.KIND_RUN_RESULT,
+            FloatingWindowCatalog.KIND_STARTUP,
+        };
+        foreach (var k in kinds)
+        {
+            if (!catalog.TryGet(k, out var spec)) return $"S12a: catalog missing dock kind '{k}'";
+            if (spec == null || spec.kind != k) return $"S12a: spec kind mismatch for '{k}'";
+            if (spec.defaultSize.x <= 0f || spec.defaultSize.y <= 0f) return $"S12a: defaultSize non-positive for '{k}'";
+            if (spec.minSize.x <= 0f || spec.minSize.y <= 0f) return $"S12a: minSize non-positive for '{k}'";
+            if (spec.defaultSize.x < spec.minSize.x || spec.defaultSize.y < spec.minSize.y)
+                return $"S12a: defaultSize < minSize for '{k}'";
+        }
+
+        // (b) the pre-existing editor/order kinds STILL resolve (additive, never regressed).
+        if (!catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out _)) return "S12b: strategy_editor regressed";
+        if (!catalog.TryGet(FloatingWindowCatalog.KIND_ORDER, out _)) return "S12b: order regressed";
+
+        // (c) unknown-kind tolerance is unchanged (forward-evolution discipline, findings 0008 §3).
+        if (catalog.TryGet("future_unknown", out _)) return "S12c: unknown-kind tolerance broke";
+        if (catalog.Contains("future_unknown")) return "S12c: unknown-kind tolerance broke (Contains)";
+        return null;
+    }
+
+    // ---- 13. DockDefaultPlacement pure arithmetic ----
+    // Covers: DOCK-02 — #99 Slice 2 / findings 0075 §4 (ceil(√n) grid in absolute canvas-logical coords,
+    // row-major slot 0=top-left, y up-positive rows, no overlap, n=0 empty).
+    static string Section13_DockDefaultPlacementArithmetic()
+    {
+        // (a) n=0 / negative -> empty list, no allocations beyond the list itself.
+        var none = DockDefaultPlacement.ComputeRects(0);
+        if (none.Count != 0) return $"S13a: n=0 yielded {none.Count} rects";
+        var neg = DockDefaultPlacement.ComputeRects(-3);
+        if (neg.Count != 0) return $"S13a: negative n yielded {neg.Count} rects";
+
+        // (b) n=5 in a 1200×640 box (cols=3, rows=2) with 12px gap: cell = ((1200-24)/3, (640-12)/2) =
+        // (392, 314). slot 0 at top-left of the centred box: (-600, +320). row 0 = top.
+        Vector2 box = DockDefaultPlacement.DefaultBoxSize;
+        Vector2 anchor = DockDefaultPlacement.CentredAnchorTopLeft(box);
+        Vector2 gap = DockDefaultPlacement.DefaultGap;
+        if (!Approx2(anchor, new Vector2(-600f, 320f))) return $"S13b: anchor {anchor} != (-600, 320)";
+        var five = DockDefaultPlacement.ComputeRects(5, anchor, box, gap);
+        if (five.Count != 5) return $"S13b: expected 5 rects, got {five.Count}";
+
+        // slot 0 = top-left = the anchor verbatim.
+        if (!Approx2(five[0].topLeft, anchor)) return $"S13b: slot 0 topLeft {five[0].topLeft} != anchor {anchor}";
+        // all rects share the same cell size.
+        float cellW = (box.x - 2 * gap.x) / 3f;
+        float cellH = (box.y - 1 * gap.y) / 2f;
+        foreach (var r in five)
+        {
+            if (!Approx2(r.size, new Vector2(cellW, cellH))) return $"S13b: cell size {r.size} != ({cellW},{cellH})";
+        }
+        // slot 2 = top-right; slot 3 = bottom-left (col 0, row 1); slot 4 below slot 1.
+        if (!Approx(five[2].topLeft.x, anchor.x + 2 * (cellW + gap.x))) return $"S13b: slot 2 x wrong (got {five[2].topLeft.x})";
+        if (!Approx(five[2].topLeft.y, anchor.y)) return $"S13b: slot 2 y not on row 0 (got {five[2].topLeft.y})";
+        if (!Approx(five[3].topLeft.x, anchor.x)) return $"S13b: slot 3 not in column 0 (got {five[3].topLeft.x})";
+        if (!Approx(five[3].topLeft.y, anchor.y - (cellH + gap.y))) return $"S13b: slot 3 y not below row 0 (got {five[3].topLeft.y})";
+        if (!Approx(five[4].topLeft.x, five[1].topLeft.x)) return "S13b: slot 4 not under slot 1 (row-major broke)";
+
+        // (c) no overlap between any pair of rects (gaps strictly separate the columns and rows).
+        for (int i = 0; i < five.Count; i++)
+            for (int j = i + 1; j < five.Count; j++)
+            {
+                var a = five[i]; var b = five[j];
+                bool xOverlap = a.Left < b.Right && b.Left < a.Right;
+                bool yOverlap = a.Bottom < b.Top && b.Bottom < a.Top;
+                if (xOverlap && yOverlap) return $"S13c: rects {i} and {j} overlap";
+            }
+
+        // (d) n=4 deals 2×2; n=1 deals 1×1 (the whole box).
+        var four = DockDefaultPlacement.ComputeRects(4, anchor, box, gap);
+        if (four.Count != 4) return $"S13d: n=4 yielded {four.Count}";
+        if (!Approx(four[3].topLeft.x, anchor.x + (four[0].size.x + gap.x))) return "S13d: n=4 slot 3 not bottom-right column";
+        var one = DockDefaultPlacement.ComputeRects(1, anchor, box, gap);
+        if (one.Count != 1) return $"S13d: n=1 yielded {one.Count}";
+        if (!Approx2(one[0].size, box)) return $"S13d: n=1 cell did not span the whole box (got {one[0].size})";
         return null;
     }
 

@@ -5,8 +5,15 @@
 // (2026-06-15): authoring the scene-authored hierarchy + serialized references in code (then a
 // one-time menu run + visual check) rather than hand-placing every GameObject. The runtime
 // BackcastWorkspaceRoot fills inner widgets via the existing builders at Play (findings 0025 §1/§6),
-// so this tool authors the FRAME (canvas, containers, viewport/content, Hakoniwa tiles,
-// FloatingWindowLayer + the adopted Strategy Editor window frame, footer) and wires the references.
+// so this tool authors the FRAME (canvas, containers, viewport/content, FloatingWindowLayer + the
+// two adopted floating window shells — Strategy Editor + Order ticket — and footer) and wires the
+// references.
+//
+// #99 (ADR-0017 / findings 0075): the Hakoniwa split-grid surface and its 5 tile GameObjects
+// (startup / chart / orders / positions / run_result) are RETIRED — the dock cluster is built
+// entirely at runtime by `SpawnBaseDockWindows` / `SyncChartWindowsToUniverse`, so the scene no
+// longer authors them. Two scene-authored floating windows remain: the adopted Strategy Editor
+// (region_001 shell) and the Order ticket (the #23 re-home).
 //
 // Run: Tools > Backcast > Build Workspace Scene  → expect "[BackcastWorkspaceSceneBuilder] built ...".
 
@@ -58,7 +65,7 @@ public static class BackcastWorkspaceSceneBuilder
         Stretch(center);
         center.SetAsFirstSibling();
 
-        // ── center workspace: Viewport → Content → {HakoniwaRoot[startup,chart], FloatingWindowLayer} ──
+        // ── center workspace: Viewport → Content → FloatingWindowLayer (#99: no HakoniwaRoot) ──
         var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(RectMask2D), typeof(InfiniteCanvasInputSurface));
         var viewport = (RectTransform)viewportGo.transform;
         viewport.SetParent(center, false);
@@ -71,16 +78,6 @@ public static class BackcastWorkspaceSceneBuilder
 
         var content = NewRect("Content", viewport);
         Identity(content);
-
-        var hakoniwaRoot = NewRect("HakoniwaRoot", content);
-        Identity(hakoniwaRoot);
-        hakoniwaRoot.sizeDelta = new Vector2(1000f, 640f);   // a bounded box on the canvas for the grid
-        var startupTile = NewRect("startup", hakoniwaRoot);
-        var chartTile = NewRect("chart", hakoniwaRoot);
-        // #23 re-home: three live data tiles (authored placeholders; runtime fills chrome + view).
-        var ordersTile = NewRect("orders", hakoniwaRoot);
-        var positionsTile = NewRect("positions", hakoniwaRoot);
-        var runResultTile = NewRect("run_result", hakoniwaRoot);
 
         var floatingLayer = NewRect("FloatingWindowLayer", content);
         Identity(floatingLayer);
@@ -114,16 +111,10 @@ public static class BackcastWorkspaceSceneBuilder
         SetRef(so, "_viewport", viewport);
         SetRef(so, "_content", content);
         SetRef(so, "_inputSurface", inputSurface);
-        SetRef(so, "_hakoniwaRoot", hakoniwaRoot);
-        SetRef(so, "_startupTile", startupTile);
-        SetRef(so, "_chartTile", chartTile);
         SetRef(so, "_floatingLayer", floatingLayer);
         SetRef(so, "_strategyEditorWindow", window);
         SetRef(so, "_strategyEditorBody", body);
         SetRef(so, "_strategyEditorTitleInput", titleInput);
-        SetRef(so, "_ordersTile", ordersTile);
-        SetRef(so, "_positionsTile", positionsTile);
-        SetRef(so, "_runResultTile", runResultTile);
         SetRef(so, "_orderWindow", orderWindow);
         SetRef(so, "_orderWindowBody", orderBody);
         SetRef(so, "_orderWindowTitleInput", orderTitleInput);

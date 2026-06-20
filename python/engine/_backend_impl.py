@@ -445,8 +445,6 @@ def _select_replay_strategy(strategy_file):
         from engine.strategy_runtime.scenario import load_scenario
         from engine.strategy_runtime.strategy_loader import StrategyLoadError
 
-        from engine.strategy_runtime.scorer_bindings import load_scorer_bindings
-
         scenario = load_scenario(spath)
         # Load (parse) the notebook HERE so a malformed marimo file maps to STRATEGY_LOAD_ERROR
         # at the dispatch site — symmetric with the imperative loader. The cold COMPILE (the
@@ -455,16 +453,12 @@ def _select_replay_strategy(strategy_file):
         if app is None:
             raise StrategyLoadError(f"{spath} is empty or not a valid marimo notebook")
         strategy_id = spath.stem
-        # Resolve the sidecar scorer spec (if any) into the cell-facing service + constants
-        # (R4). A file with no scorer key gets ({}, {}). The model load stays lazy (AC3).
-        services, constants = load_scorer_bindings(spath, scenario)
 
         def factory(primary_id):
             from engine.strategy_runtime.marimo_strategy import MarimoStrategy
 
             return MarimoStrategy(
                 app=app, strategy_id=strategy_id, instrument_id=primary_id,
-                services=services, constants=constants,
             )
 
         return scenario, factory, f"marimo:{strategy_id}"

@@ -1,39 +1,67 @@
-"""v19 morning ranker — marimo cell-DAG port (#76 S6b-α step2 / findings 0046 T7/T8).
-
-A faithful reactive re-expression of ``V19MorningStrategy`` (the imperative kernel-native
-v19). The imperative ``on_bar`` if/return chain — daily reset → exit → entry → snapshot —
-maps to a single self-cycle ``_strategy`` cell using if/elif (the branches are mutually
-exclusive per bar), so the entry bar is never accumulated and the decision reads only the
-pre-entry morning (no look-ahead), exactly as the imperative path does.
-
-Seams (all already host-provided — this file authors NO model I/O, sklearn, or lazy load):
-  - ``get_bar()`` / ``get_portfolio()``        host-seeded per-bar drivers (bar + portfolio)
-  - ``submit_market(qty, instrument_id=)``     S4 signed-qty injected action
-  - ``score_v19_rows(rows)``                   host-injected SERVICE (= score_universe bound
-                                               to the model; sklearn stays host-side, T1)
-  - ``V19_UNIVERSE`` / ``V19_RS_REF``          host-injected CONSTANTS (ordered universe + rs-ref)
-  - ``V19_ADV_BASELINE`` / ``V19_PREV_CLOSE``  host-injected CONSTANTS (rel_turnover / gap inputs;
-                                               the production resolver loads them from artifacts, R2)
-
-The pure numeric logic (jst timing, features, build_rows, sizing) is imported from v19_core
-— the SAME functions the imperative strategy calls — so the two paths share byte-identical
-float math (the deterministic parity gate, test_v19_marimo_parity).
-
-α scope: this is the parity-proven reference cell strategy. It is NOT yet the picker/canonical
-production artifact and ships with no sidecar — the production scorer resolver (sidecar
-scorer-spec → lazy joblib scorer + universe source) is a documented follow-up (T6/T9).
-"""
 import marimo
 
+__generated_with = "0.20.4"
 app = marimo.App()
+
+
+@app.cell
+def _artifacts():
+    # v19's scorer + universe artifacts, self-loaded from the cell-adjacent ``artifacts`` dir
+    # (so the shipped cell + shipped artifacts run with NO sidecar scorer key — the cell owns
+    # its own scoring inputs). ``V19_ARTIFACTS_DIR`` overrides the directory (the parity gate
+    # points it at a tmp dir with a stub model + synthetic universe).
+    # All imports are private to this cell (leading-_ for marimo temporaries, or scoped inside
+    # the closure) so the cell exposes ONLY the scoring constants and the score_v19_rows
+    # service — v19_core is also imported by _strategy and a top-level import here would be a
+    # multi-define.
+    import json as _json
+    import os as _os
+    from pathlib import Path as _Path
+    from types import MappingProxyType as _MappingProxyType
+
+    _base = _Path(
+        _os.environ.get("V19_ARTIFACTS_DIR")
+        or _Path(__file__).resolve().parent / "artifacts"
+    )
+
+    _universe_doc = _json.loads(
+        (_base / "v19_live_universe.json").read_text(encoding="utf-8")
+    )
+    V19_UNIVERSE = tuple(_universe_doc["instruments"])
+    V19_RS_REF = _universe_doc.get("rs_ref", "1306.TSE")
+    V19_ADV_BASELINE = _MappingProxyType(
+        _json.loads((_base / "v19_live_adv_baseline.json").read_text(encoding="utf-8"))
+    )
+    V19_PREV_CLOSE = _MappingProxyType(
+        _json.loads((_base / "v19_live_prev_close.json").read_text(encoding="utf-8"))
+    )
+
+    _model_path = _base / "v19_live_model_o3histgb_10h00.joblib"
+    _cache: dict = {}
+
+    def score_v19_rows(rows: dict) -> dict:
+        # Lazy joblib + sklearn unpickle on the FIRST score call (the entry bar) — keeps cold
+        # compile and module load free of joblib/sklearn (mirrors the imperative v19's deferred
+        # load). Cached so subsequent days reuse the same model. v19_core is imported inside
+        # the closure to avoid a multi-define with _strategy's top-of-cell import.
+        model = _cache.get("model")
+        if model is None:
+            import joblib  # noqa: PLC0415
+
+            model = joblib.load(_model_path)
+            _cache["model"] = model
+        from strategies.v19 import v19_core  # noqa: PLC0415
+
+        return v19_core.score_universe(rows, model)
+
+    return V19_ADV_BASELINE, V19_PREV_CLOSE, V19_RS_REF, V19_UNIVERSE, score_v19_rows
 
 
 @app.cell
 def _config():
     # Author-owned strategy knobs (T3): these are v19's ctor params written as cell
-    # constants. The host-injected V19_UNIVERSE / V19_RS_REF / V19_ADV_BASELINE /
-    # V19_PREV_CLOSE and the score_v19_rows service are free refs (the parity gate /
-    # production resolver pin these).
+    # constants. V19_UNIVERSE / V19_RS_REF / V19_ADV_BASELINE / V19_PREV_CLOSE and
+    # score_v19_rows come from the _artifacts cell (read as free refs by _strategy).
     TOP_K = 5
     ENTRY_MINUTE = 10 * 60        # 10:00 JST
     EXIT_MINUTE = 14 * 60 + 55    # 14:55 JST
@@ -43,8 +71,14 @@ def _config():
     ALLOC_POLICY = None
     LOT_SIZE = 1
     return (
-        ALLOC_POLICY, CASH_GATE, ENTRY_MINUTE, EXIT_MINUTE,
-        LOT_SIZE, ORDER_QTY, SAFETY_MARGIN, TOP_K,
+        ALLOC_POLICY,
+        CASH_GATE,
+        ENTRY_MINUTE,
+        EXIT_MINUTE,
+        LOT_SIZE,
+        ORDER_QTY,
+        SAFETY_MARGIN,
+        TOP_K,
     )
 
 
@@ -62,16 +96,43 @@ def _feedback():
     get_placed, set_placed = mo.state(False)
     get_exited, set_exited = mo.state(False)
     return (
-        get_day, get_exited, get_placed, get_snaps,
-        set_day, set_exited, set_placed, set_snaps,
+        get_day,
+        get_exited,
+        get_placed,
+        get_snaps,
+        set_day,
+        set_exited,
+        set_placed,
+        set_snaps,
     )
 
 
 @app.cell
 def _strategy(
-    ALLOC_POLICY, CASH_GATE, ENTRY_MINUTE, EXIT_MINUTE, LOT_SIZE, ORDER_QTY,
-    SAFETY_MARGIN, TOP_K, get_day, get_exited, get_placed, get_snaps,
-    set_day, set_exited, set_placed, set_snaps,
+    ALLOC_POLICY,
+    CASH_GATE,
+    ENTRY_MINUTE,
+    EXIT_MINUTE,
+    LOT_SIZE,
+    ORDER_QTY,
+    SAFETY_MARGIN,
+    TOP_K,
+    V19_ADV_BASELINE,
+    V19_PREV_CLOSE,
+    V19_RS_REF,
+    V19_UNIVERSE,
+    get_bar,
+    get_day,
+    get_exited,
+    get_placed,
+    get_portfolio,
+    get_snaps,
+    score_v19_rows,
+    set_day,
+    set_exited,
+    set_placed,
+    set_snaps,
+    submit_market,
 ):
     from strategies.v19 import v19_core
 
@@ -136,3 +197,12 @@ def _strategy(
         }]
         set_snaps(nxt)
     return
+
+
+@app.cell
+def _():
+    return
+
+
+if __name__ == "__main__":
+    app.run()

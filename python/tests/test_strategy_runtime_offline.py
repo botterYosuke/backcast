@@ -36,11 +36,10 @@ import engine._backend_impl                            # noqa: F401  InProc entr
 import engine.strategy_runtime.replay_kernel_observer  # noqa: F401  strategy_runtime package sibling
 import engine.strategy_runtime.cell_api                # noqa: F401  S4 cell-facing adapter (S6 imports it; must be marimo-free)
 import engine.strategy_runtime.strategy_kind          # noqa: F401  S6a AST detector (dispatch reads it; must be marimo-free)
-import engine.strategy_runtime.scorer_bindings        # noqa: F401  R4 generic resolver (dispatch lazy-imports it; must be marimo/joblib-free)
-import strategies.v19.v19_scorer                       # noqa: F401  R4 v19 factory (joblib/sklearn load lazily in the scorer closure)
 
-# marimo (ADR-0012 lazy) AND the v19 ML deps (R4 / AC3: joblib + sklearn load only on the first
-# score call, never at module import) must all be absent after importing the seam.
+# marimo (ADR-0012 lazy) AND the v19 ML deps (joblib + sklearn load only on the first score call
+# inside the cell's score_v19_rows closure, never at module import) must all be absent after
+# importing the seam.
 _HEAVY = ("marimo", "joblib", "sklearn")
 leaked = sorted(m for m in sys.modules if any(m == h or m.startswith(h + ".") for h in _HEAVY))
 if leaked:

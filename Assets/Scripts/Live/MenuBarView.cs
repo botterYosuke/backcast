@@ -41,12 +41,14 @@ public sealed class MenuBarView : MonoBehaviour
     Action<string, string> _onConnect;     // (venue, env)
     Func<bool> _connectReady;              // server ready && !teardown
     Func<string> _modeText;                // current execution-mode display for the bar badge
+    Func<string> _documentBadgeText;       // #95 P6 S6 (#90): notebook document-identity string (Untitled/basename/* dirty)
     bool _showMockConnect;                 // dev-only MOCK connect item (editor only); derived at Bind
     OpenMenu _open;
     string _message;
     Font _font;
     bool _built;
     string _lastBadgeText, _lastMode, _lastMessage;   // badge source cache: rebuild the string only on change
+    string _lastDocBadge;                             // #95 P6 S6: document-badge cache (set Text.text only on change)
 
     // top-level button widths (fixed so the submenu drop x-offsets line up under each button).
     const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
@@ -54,6 +56,7 @@ public sealed class MenuBarView : MonoBehaviour
     // retained uGUI graphics reflected by Refresh (no per-frame rebuild of the static tree).
     Canvas _canvas;
     Text _badge;
+    Text _docBadge;            // #95 P6 S6 (#90): document-identity badge (left lane; separate from the venue/mode/message badge)
     GameObject _backdrop;
     readonly Dictionary<OpenMenu, GameObject> _dropdowns = new Dictionary<OpenMenu, GameObject>();
     // venue items whose interactable state depends on live connection — refreshed each frame.
@@ -65,7 +68,8 @@ public sealed class MenuBarView : MonoBehaviour
     public void Bind(MenuBarViewModel vm,
                      Action onNew, Action onOpen, Action onSave, Action onSaveAs,
                      Action<string, string> onConnect, Action onDisconnect,
-                     Func<bool> connectReady, Func<string> modeText, string devVenue, Font font)
+                     Func<bool> connectReady, Func<string> modeText, Func<string> documentBadgeText,
+                     string devVenue, Font font)
     {
         _vm = vm;
         _onNew = onNew;
@@ -76,6 +80,7 @@ public sealed class MenuBarView : MonoBehaviour
         _onDisconnect = onDisconnect;
         _connectReady = connectReady;
         _modeText = modeText;
+        _documentBadgeText = documentBadgeText;
         _showMockConnect = devVenue == "MOCK";   // MOCK is the only credential-less dev venue (findings 0027 D2)
         _container = GetComponent<RectTransform>();
         _font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
@@ -111,7 +116,11 @@ public sealed class MenuBarView : MonoBehaviour
         MakeBarButton("Venue", W_VENUE, x, () => Toggle(OpenMenu.Venue)); x += W_VENUE;
         MakeBarButton("Help", W_HELP, x, () => Toggle(OpenMenu.Help)); x += W_HELP;
 
-        _badge = MakeBadge(x + 8f);
+        _badge = MakeBadge(x + 8f, TextAnchor.MiddleRight);
+        // #95 P6 S6 (#90): the document-identity badge shares the same strip but LEFT-aligned, so the
+        // notebook name sits just right of Help while the venue/mode/message badge stays right-aligned.
+        _docBadge = MakeBadge(x + 8f, TextAnchor.MiddleLeft);
+        _docBadge.raycastTarget = false;
 
         // dropdowns hang BELOW the bar (no mask, so they spill past the 1-row container) at the owning
         // button's x. Built once; shown/hidden by Refresh from _open.
@@ -156,6 +165,14 @@ public sealed class MenuBarView : MonoBehaviour
                 if (!string.IsNullOrEmpty(_message)) badge += "    <color=orange>" + _message + "</color>";
                 _badge.text = badge;
             }
+        }
+
+        // #95 P6 S6 (#90): the document-identity badge. The provider reads the live notebook each frame
+        // but caches on its source, so this only touches Text.text when the name/dirty actually changes.
+        if (_docBadge != null)
+        {
+            string doc = _documentBadgeText != null ? _documentBadgeText() : string.Empty;
+            if (doc != _lastDocBadge) { _lastDocBadge = doc; _docBadge.text = doc; }
         }
 
         foreach (var kv in _dropdowns)
@@ -281,16 +298,16 @@ public sealed class MenuBarView : MonoBehaviour
         AddLabel(rt, text, TextAnchor.MiddleCenter, ThemeService.Current.colors.text);
     }
 
-    Text MakeBadge(float xLeft)
+    Text MakeBadge(float xLeft, TextAnchor align)
     {
-        var go = new GameObject("badge", typeof(RectTransform), typeof(Text));
+        var go = new GameObject(align == TextAnchor.MiddleLeft ? "docBadge" : "badge", typeof(RectTransform), typeof(Text));
         var rt = (RectTransform)go.transform;
         rt.SetParent(_container, false);
         rt.anchorMin = new Vector2(0f, 0f); rt.anchorMax = new Vector2(1f, 1f);
         rt.offsetMin = new Vector2(xLeft, 0f); rt.offsetMax = new Vector2(-6f, 0f);
         var t = go.GetComponent<Text>();
         t.font = _font; t.fontSize = 12; t.color = ThemeService.Current.colors.text_muted;
-        t.alignment = TextAnchor.MiddleRight; t.supportRichText = true;   // <color=orange> message highlight
+        t.alignment = align; t.supportRichText = true;   // <color=orange> message highlight (right badge)
         t.horizontalOverflow = HorizontalWrapMode.Overflow; t.verticalOverflow = VerticalWrapMode.Overflow;
         return t;
     }

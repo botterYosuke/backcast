@@ -88,6 +88,18 @@ public static class StrategyEditorContentBuilder
         output.raycastTarget = false;
         outGo.SetActive(false);   // hidden until a run produces output
 
+        // #95 Phase 6 Slice 5 (findings 0075 P6-2): a sibling RawImage over the SAME output-pane rect,
+        // shown by StrategyEditorView when a run emits image/png|jpeg (matplotlib / mo.image) and the
+        // Text is hidden; hidden again for text/markdown/html/plain output. Raycast-transparent.
+        var imgGo = new GameObject("CellOutputImage", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
+        var imgRt = (RectTransform)imgGo.transform;
+        imgRt.SetParent(body, false);
+        imgRt.anchorMin = Vector2.zero; imgRt.anchorMax = new Vector2(1f, OutputFrac);
+        imgRt.offsetMin = new Vector2(2f, 2f); imgRt.offsetMax = new Vector2(-2f, -2f);
+        var image = imgGo.GetComponent<RawImage>();
+        image.raycastTarget = false;
+        imgGo.SetActive(false);   // hidden until a run produces an image
+
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
         var input = inputGo.GetComponent<StrategyInputField>();
@@ -101,7 +113,7 @@ public static class StrategyEditorContentBuilder
         effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
 
         var view = inputGo.AddComponent<StrategyEditorView>();
-        view.Initialize(input, effect, history, cell, placeholder, output);
+        view.Initialize(input, effect, history, cell, placeholder, output, image);
         return view;
     }
 

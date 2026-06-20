@@ -20,6 +20,7 @@
 // (highlight, history) is AFK-authoritative; THIS boundary (InputField sync, keys, IME) is HITL.
 
 using System;
+using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -33,6 +34,12 @@ public class StrategyEditorView : MonoBehaviour
     // production path is SetOutput). Null when there is no output pane.
     public string CurrentOutput => _output != null ? _output.text : null;
 
+    // #95 Phase 6 Slice 5 (findings 0075 P6-2): true when the last SetOutput rendered an IMAGE
+    // (image/png|jpeg) into the sibling RawImage rather than the Text pane. The AFK rich-output gate
+    // (S19) asserts this to prove image routing (a regression that collapses every mimetype to Text
+    // leaves the RawImage inactive). False for text/markdown/html/plain output and when cleared.
+    public bool OutputIsImage => _image != null && _image.gameObject.activeSelf;
+
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): fired when an edit is COMMITTED (the field loses focus
     // after a change — onEndEdit, which for a MultiLineNewline field is blur, NOT Enter). The root wires
     // this to NotebookRunController.Restage so an edit/blur re-projects the per-cell stale badges. Null
@@ -44,6 +51,8 @@ public class StrategyEditorView : MonoBehaviour
     EditHistory _history;
     Text _placeholder;          // host-API hint shown when this is the only cell and it is empty
     Text _output;               // #95 Phase 2 土台: per-cell RUN output text (below the editor)
+    RawImage _image;            // #95 Phase 6 Slice 5: sibling pane for image/png|jpeg rich output (hidden until an image arrives)
+    Texture2D _tex;             // #95 Phase 6 Slice 5: the decoded image texture we own (freed on replace/clear/destroy)
 
     // Snapshot of the InputField state BEFORE the change currently being recorded.
     string _prevText = string.Empty;
@@ -54,13 +63,15 @@ public class StrategyEditorView : MonoBehaviour
     // (an unbound shell — e.g. the adopted region_001 before the notebook binds cell 0); Bind() points
     // it at a real cell later. `placeholder` is optional (the single-cell host-API hint).
     public void Initialize(InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
-                           Cell cell = null, Text placeholder = null, Text output = null)
+                           Cell cell = null, Text placeholder = null, Text output = null,
+                           RawImage image = null)
     {
         _input = input;
         _effect = effect;
         _history = history;
         _placeholder = placeholder;
         _output = output;
+        _image = image;
         BoundCell = cell;
 
         _input.onValueChanged.AddListener(OnValueChanged);
@@ -79,6 +90,7 @@ public class StrategyEditorView : MonoBehaviour
             _input.onEndEdit.RemoveListener(OnEditCommitted);
         }
         ThemeService.Changed -= ApplyTheme;
+        FreeTexture();   // #95 P6 S5: release the decoded image texture we own
     }
 
     // (Re)bind this view to a Cell: swap the bound cell, drop history (a different cell's edits are
@@ -92,13 +104,84 @@ public class StrategyEditorView : MonoBehaviour
         SyncFromCell();
     }
 
-    // #95 Phase 2 土台: show this cell's per-cell RUN output (text repr; rich output is Phase 6).
-    // Null/empty hides the pane so an un-run cell shows no stale/empty box. Cheap, idempotent.
-    public void SetOutput(string text)
+    // #95 Phase 6 Slice 5 (findings 0075 P6-2): render this cell's per-cell RUN output by mimetype.
+    //   * image/png | image/jpeg → decode `data` (a `data:` URL or raw base64) into the sibling
+    //     RawImage (Texture2D.LoadImage); the Text pane hides.
+    //   * text/markdown | text/html → the legacy Text with supportRichText, converting the HTML/
+    //     markdown subset (headings/bold/italic/bullets, <table>→pipe rows) to Unity rich-text tags.
+    //   * text/plain | unsupported | no mimetype → the plain `text` projection (tag-stripped by the
+    //     backend), with an unsupported mimetype labelled for debug visibility.
+    // `text` is the backend's plain-text projection (the fallback); `data` carries the rich payload.
+    // Null/empty content hides BOTH panes (an un-run cell shows no stale box). Cheap, idempotent.
+    // Back-compat: SetOutput(null) clears (the old single-arg call site on Bind still compiles).
+    public void SetOutput(string text, string mimetype = null, string data = null)
     {
-        if (_output == null) return;
-        _output.text = text ?? string.Empty;
-        _output.gameObject.SetActive(!string.IsNullOrEmpty(text));
+        string mt = mimetype ?? string.Empty;
+        bool empty = string.IsNullOrEmpty(text) && string.IsNullOrEmpty(data);
+        if (empty) { ShowText(false); ShowImage(false); FreeTexture(); return; }
+
+        if ((mt == "image/png" || mt == "image/jpeg") && TryDecodeImage(data))
+        {
+            ShowImage(true);
+            ShowText(false);
+            return;
+        }
+
+        if (mt == "text/markdown" || mt == "text/html")
+        {
+            FreeTexture();
+            ShowImage(false);
+            if (_output != null)
+            {
+                _output.supportRichText = true;
+                _output.text = RichToUnity(mt, string.IsNullOrEmpty(data) ? text : data);
+                _output.gameObject.SetActive(true);
+            }
+            return;
+        }
+
+        // text/plain, no mimetype, or an unsupported type → plain fallback (debug-label the unknown).
+        FreeTexture();
+        ShowImage(false);
+        if (_output != null)
+        {
+            _output.supportRichText = false;
+            bool unknown = !string.IsNullOrEmpty(mt) && mt != "text/plain";
+            string body = text ?? string.Empty;
+            _output.text = unknown ? "[" + mt + "]\n" + body : body;
+            _output.gameObject.SetActive(true);
+        }
+    }
+
+    void ShowText(bool on) { if (_output != null) _output.gameObject.SetActive(on); }
+    void ShowImage(bool on) { if (_image != null) _image.gameObject.SetActive(on); }
+    void FreeTexture()
+    {
+        if (_tex == null) return;
+        if (_image != null) _image.texture = null;
+        if (Application.isPlaying) Destroy(_tex); else DestroyImmediate(_tex);
+        _tex = null;
+    }
+
+    // Decode a base64 PNG/JPEG (a `data:<mime>;base64,XXXX` URL — matplotlib/mo.image — or raw
+    // base64) into the owned Texture2D and bind it to the RawImage. Returns false on a malformed
+    // payload or a missing RawImage so SetOutput falls back to the text pane (never throws).
+    bool TryDecodeImage(string data)
+    {
+        if (_image == null || string.IsNullOrEmpty(data)) return false;
+        string b64 = data;
+        int comma = b64.IndexOf("base64,", StringComparison.Ordinal);
+        if (comma >= 0) b64 = b64.Substring(comma + "base64,".Length);
+        else if (b64.StartsWith("data:", StringComparison.Ordinal)) return false;   // a non-base64 data URL
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(b64.Trim()); }
+        catch (FormatException) { return false; }
+        FreeTexture();
+        var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        if (!tex.LoadImage(bytes)) { Destroy(tex); return false; }
+        _tex = tex;
+        _image.texture = _tex;
+        return true;
     }
 
     // Show/hide the single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell).
@@ -223,4 +306,53 @@ public class StrategyEditorView : MonoBehaviour
         _prevFocus = 0;
         Retokenize(text);
     }
+
+    // ---- rich-text projection (findings 0075 P6-2) ----
+
+    // Convert a text/markdown or text/html payload into the legacy Text rich-text SUBSET (<b>/<i>).
+    // P6-2 keeps this deliberately small: headings/bold/italic/bullets for markdown, and for HTML a
+    // <table>→pipe-row projection with the rest tag-stripped (general HTML is NOT reproduced — owner:
+    // that is a separate project). marimo emits text/markdown as rendered HTML, so a payload with
+    // tags always takes the HTML leg; a raw-markdown payload takes the markdown leg.
+    static string RichToUnity(string mimetype, string data)
+    {
+        if (string.IsNullOrEmpty(data)) return string.Empty;
+        bool looksHtml = data.IndexOf('<') >= 0 && data.IndexOf('>') >= 0;
+        return (mimetype == "text/html" || looksHtml) ? HtmlToUnity(data) : MarkdownToUnity(data);
+    }
+
+    static readonly Regex _tagRe = new Regex("<[^>]+>");
+
+    static string HtmlToUnity(string html)
+    {
+        string s = html;
+        // table structure → pipe rows BEFORE the generic tag strip (so cell boundaries survive).
+        s = Regex.Replace(s, @"</tr\s*>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</t[dh]\s*>", " | ", RegexOptions.IgnoreCase);
+        // block breaks → newlines, list items → bullets.
+        s = Regex.Replace(s, @"<br\s*/?>|</p>|</div>|</h[1-6]>", "\n", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<li[^>]*>", "• ", RegexOptions.IgnoreCase);
+        // inline emphasis → Unity tags.
+        s = Regex.Replace(s, @"<(b|strong)>", "<b>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</(b|strong)>", "</b>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"<(i|em)>", "<i>", RegexOptions.IgnoreCase);
+        s = Regex.Replace(s, @"</(i|em)>", "</i>", RegexOptions.IgnoreCase);
+        s = _tagRe.Replace(s, string.Empty);   // drop every remaining tag (general HTML not reproduced)
+        return Unescape(s).Trim();
+    }
+
+    static string MarkdownToUnity(string md)
+    {
+        string s = md;
+        s = Regex.Replace(s, @"^\s{0,3}#{1,6}\s+(.*)$", "<b>$1</b>", RegexOptions.Multiline);
+        s = Regex.Replace(s, @"(\*\*|__)(.+?)\1", "<b>$2</b>");
+        s = Regex.Replace(s, @"(?<!\*)\*(?!\*)(.+?)\*|_(.+?)_", "<i>$1$2</i>");
+        s = Regex.Replace(s, @"^\s*[-*]\s+", "• ", RegexOptions.Multiline);
+        s = s.Replace("`", string.Empty);   // inline code: the pane is already monospace
+        return s.Trim();
+    }
+
+    static string Unescape(string s) =>
+        s.Replace("&lt;", "<").Replace("&gt;", ">").Replace("&quot;", "\"")
+         .Replace("&#39;", "'").Replace("&nbsp;", " ").Replace("&amp;", "&");
 }

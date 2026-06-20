@@ -458,6 +458,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 OnVenueConnect, OnVenueDisconnect,
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
+                DocumentBadgeText,                                    // #95 P6 S6 (#90): document-identity badge
                 _venue,                                               // "MOCK" → dev connect item (editor only)
                 _font);                                               // uGUI font (#77)
 
@@ -1517,6 +1518,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             case FooterModeRequestKind.Ignore:
                 break;
         }
+    }
+
+    // #95 Phase 6 Slice 6 (#90 / findings 0075 P6-5): the menu-bar document-identity badge string, read
+    // live each frame by MenuBarView.Refresh. "Untitled" while unbound (File→New / a fresh notebook),
+    // the .py basename once bound (File→Open / Save As), with a "* " prefix while the notebook is dirty
+    // (an unsaved edit). A SEPARATE lane from the venue/mode/message badge — document identity vs
+    // execution state (P6-5 responsibility split). Cached on its source (path/dirty/bound) so the
+    // per-frame read stays GC-clean (it rebuilds the string only when the identity actually changes).
+    string _docBadgeCache = string.Empty;
+    string _docBadgePath;
+    bool _docBadgeDirty, _docBadgeBound, _docBadgeInit;
+    string DocumentBadgeText()
+    {
+        if (_notebook == null) return string.Empty;
+        if (!_docBadgeInit || _notebook.IsDirty != _docBadgeDirty
+            || _notebook.IsBound != _docBadgeBound || _notebook.CurrentPath != _docBadgePath)
+        {
+            _docBadgeInit = true;
+            _docBadgeDirty = _notebook.IsDirty;
+            _docBadgeBound = _notebook.IsBound;
+            _docBadgePath = _notebook.CurrentPath;
+            string name = _docBadgeBound ? Path.GetFileName(_docBadgePath) : "Untitled";
+            _docBadgeCache = (_docBadgeDirty ? "* " : "") + name;
+        }
+        return _docBadgeCache;
     }
 
     // ---- File = Layout (findings 0025 §9) ----

@@ -195,7 +195,7 @@ public sealed class NotebookRunController
             if (co.Index < 0 || co.Index >= cells.Count) continue;   // stale index (cell deleted) — skip
             string region = _coordinator.RegionOf(cells[co.Index]);
             if (region == null) continue;
-            _viewFor(region)?.SetOutput(co.Output);
+            _viewFor(region)?.SetOutput(co.Output, co.Mimetype, co.Data);
         }
     }
 }

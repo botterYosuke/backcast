@@ -822,14 +822,18 @@ class DataEngineBackend:
             )
         return self._start_engine_duckdb(strategy_file, duckdb_root)
 
-    def run_cell(self, source, pressed_index):
-        """#95 Phase 2 土台: run the pressed cell + reactive downstream as PURE computation.
+    def run_cell(self, source, pressed_index, scenario_json=None):
+        """#95 Phase 2/4: run the pressed cell + reactive downstream over the LIVE source.
 
-        The engine is NOT connected (no bt, no order submission, no per-bar drain — that is
-        Phase 3+). ``source`` is the LIVE editor content (synthesised marimo ``.py`` text, not a
-        disk path — owner HITL: run the unsaved buffer); ``pressed_index`` is the cell-order index
-        of the pressed cell. Returns a JSON string ``{"ok", "ran":[{"index","output","ok"}...],
-        "error"}`` (a JSON string keeps the nested list trivial to marshal across pythonnet).
+        ``source`` is the LIVE editor content (synthesised marimo ``.py`` text, not a disk path —
+        owner HITL: run the unsaved buffer); ``pressed_index`` is the cell-order index of the
+        pressed cell. Returns a JSON string ``{"ok", "ran":[...], "error", "run_summary"?}``.
+
+        Phase 4 (ADR-0016 D1/D7 / findings 0073 §P4-1): a 土台 cell stays PURE computation (no
+        engine), but when the notebook DRIVES a backtest (``bt.replay`` / ``bt.step``) AND a
+        scenario is committed (``scenario_json``), a ``bt`` handle is built — wired to the
+        production Replay observer (#65 running snapshot → Hakoniwa) and the stop event — injected
+        into the cell globals, and the run is finalized (RunBuffer summary + engine back to IDLE).
 
         Lazy-imports the marimo notebook seam so ``_backend_impl`` stays marimo-free at module
         load (ADR-0012 §4 / test_strategy_runtime_offline). Called only on the host's single
@@ -841,12 +845,105 @@ class DataEngineBackend:
 
         if self._notebook_session is None:
             self._notebook_session = NotebookSession()
+
+        source = str(source)
+        bt = None
+        run_buffer = None
+        scenario = None
+        inject = None
+        # Build a bt handle only when the notebook actually drives one AND a scenario is committed
+        # — a pure-compute 土台 notebook keeps the Phase 2 path (no DuckDB load, no engine state).
+        if scenario_json and ("bt.replay" in source or "bt.step" in source):
+            try:
+                bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
+                inject = {"bt": bt}
+            except Exception as exc:
+                logging.exception("run_cell: bt build failed")
+                return _json.dumps(
+                    {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+                )
+
         try:
-            result = self._notebook_session.run_pressed(str(source), int(pressed_index))
+            result = self._notebook_session.run_pressed(source, int(pressed_index), inject=inject)
         except Exception as exc:  # last-resort guard: a run never crashes the host worker
             logging.exception("run_cell failed")
             result = {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+        finally:
+            if bt is not None and bt.was_driven:
+                # The cell drove a real run: finalize the RunBuffer → summary (Hakoniwa run_result)
+                # and return the engine to IDLE. A cell that raised mid-run leaves bt.result None →
+                # still force-stop so the engine never stays RUNNING.
+                try:
+                    if bt.result is not None:
+                        result["run_summary"] = self._finalize_run(run_buffer, scenario)
+                except Exception:
+                    logging.exception("run_cell: finalize failed")
+                finally:
+                    self.engine.force_stop_replay()
+
         return _json.dumps(result)
+
+    def _build_notebook_bt(self, scenario_json):
+        """Build the ``bt`` handle for a notebook-driven Replay run (#95 Phase 4 / findings 0073).
+
+        Loads the committed scenario's DuckDB data, wires a ``ReplayKernelObserver`` (the #65
+        running-snapshot seam → ``last_portfolio`` → poll lane → Hakoniwa) and the stop event, and
+        returns ``(bt, run_buffer, scenario)``. The ``on_run_begin`` hook transitions the engine
+        LOADED→RUNNING lazily, the first time the cell actually drives the handle (ADR-0016 D1).
+        """
+        import json as _json
+
+        from engine.strategy_runtime.backtester import Backtester
+        from engine.strategy_runtime.replay_kernel_observer import ReplayKernelObserver
+        from engine.strategy_runtime.run_buffer import (
+            RunBuffer,
+            get_run_buffer_base_dir,
+            make_run_id,
+        )
+
+        scenario = dict(_json.loads(scenario_json))
+        instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
+        primary_id = instruments[0]
+        granularity = normalize_granularity(scenario["granularity"])
+        scenario["instruments"] = list(instruments)
+        scenario["granularity"] = granularity
+        scenario.setdefault("initial_cash", 10_000_000)
+
+        # Load the DuckDB replay data for this committed scenario: sets engine.replay_duckdb_root
+        # and the LOADED state on_run_begin transitions out of (same seam the C# Launcher uses).
+        ok, err = self.engine.load_replay_data(
+            list(instruments), scenario["start"], scenario["end"], granularity
+        )
+        if not ok:
+            raise RuntimeError(f"load_replay_data failed: {err}")
+        duckdb_root = self.engine.replay_duckdb_root
+        if not duckdb_root:
+            raise RuntimeError("no DuckDB replay root after load_replay_data")
+
+        run_buffer = RunBuffer(
+            run_id=make_run_id("notebook", primary_id),
+            strategy_file="notebook",
+            scenario=scenario,
+            base_dir=get_run_buffer_base_dir(),
+        )
+        observer = ReplayKernelObserver(engine=self.engine, run_buffer=run_buffer)
+
+        def on_run_begin():
+            se_ok, se_err = self.engine.start_engine()  # LOADED → RUNNING
+            if not se_ok:
+                raise RuntimeError(f"start_engine failed: {se_err}")
+            # #65: clear the prior run's portfolio so "running but pre-first-bar" is honest-empty;
+            # the observer republishes from bar 1's on_equity.
+            self.engine.last_portfolio = None
+
+        bt = Backtester.from_scenario(
+            scenario,
+            data_root=duckdb_root,
+            sink=observer,
+            stop_event=self.engine.replay_stop_event,
+            on_run_begin=on_run_begin,
+        )
+        return bt, run_buffer, scenario
 
     def _start_engine_duckdb(self, strategy_file, duckdb_root):
         """ADR-0006 (#49): run the production Replay through the DuckDB→kernel path.

@@ -87,12 +87,20 @@ class NotebookSession:
     def cell_count(self) -> int:
         return len(self._cids)
 
-    def run_pressed(self, source: str, pressed_index: int) -> dict[str, Any]:
+    def run_pressed(
+        self, source: str, pressed_index: int, inject: "dict[str, Any] | None" = None
+    ) -> dict[str, Any]:
         """Run the pressed cell + reactive downstream over the LIVE source; return per-cell text.
 
         Returns ``{"ok": bool, "ran": [{"index", "output", "ok"}...], "error": str | None}``.
         ``ran`` is in cell order and contains EXACTLY the cells that ran (pressed + descendants),
         so an upstream-independent cell is structurally absent (AC: it does not recompute).
+
+        ``inject`` (#95 Phase 4) is a dict of host free refs merged into the cell globals — the
+        ``bt`` handle that lets a cell drive a real backtest (ADR-0016 D4). It is injected BEFORE
+        the press run; while the notebook is (re)built (cold-run), an injected ``bt`` is DISARMED
+        so building/editing the notebook never starts a backtest (P4-1). Injected refs persist in
+        globals for the kernel's lifetime; a fresh ``bt`` re-injected on the next press replaces it.
         """
         # marimo's Kernel/RuntimeContext is thread-local: the session must be driven from ONE thread
         # (the host's notebook-run worker — findings 0071 P2-2). Fail-closed if a second thread ever
@@ -108,7 +116,7 @@ class NotebookSession:
             }
         if self._host is None or source != self._source:
             try:
-                self._rebuild(source)
+                self._rebuild(source, inject)
             except Exception as exc:  # malformed source / load failure → fail-soft, kernel torn down
                 return {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
         if not (0 <= pressed_index < len(self._cids)):
@@ -117,7 +125,7 @@ class NotebookSession:
                 "ran": [],
                 "error": f"cell index {pressed_index} out of range (0..{len(self._cids) - 1})",
             }
-        return self._run(pressed_index)
+        return self._run(pressed_index, inject)
 
     def close(self) -> None:
         if self._host is not None:
@@ -128,7 +136,20 @@ class NotebookSession:
 
     # ---- internals (all on the owning thread) ----
 
-    def _rebuild(self, source: str) -> None:
+    @staticmethod
+    def _apply_inject(k: Any, inject: "dict[str, Any] | None", *, armed: bool) -> None:
+        """Merge the host free refs into the kernel globals, arming/disarming a ``bt`` handle.
+
+        Disarmed for the cold-run graph build (so editing the notebook never drives a backtest),
+        armed for the explicit RUN press (#95 P4-1)."""
+        if not inject:
+            return
+        bt = inject.get("bt")
+        if bt is not None and hasattr(bt, "arm"):
+            bt.arm() if armed else bt.disarm()
+        k.globals.update(inject)
+
+    def _rebuild(self, source: str, inject: "dict[str, Any] | None" = None) -> None:
         self.close()
         host = HeadlessKernel()
         try:
@@ -137,6 +158,9 @@ class NotebookSession:
                 raise ValueError("source is not a loadable marimo notebook")
             cids = list(app._cell_manager.cell_ids())
             codes = list(app._cell_manager.codes())
+            # Inject host free refs (bt) BEFORE the cold-run so a cell that references bt resolves
+            # the name — but DISARMED, so cold-running it does not start a backtest (P4-1).
+            self._apply_inject(host.k, inject, armed=False)
             # Register + cold-run every cell so the graph is built and globals populated; after this
             # no cell is stale, so a press scopes to {pressed} + descendants (not stale ancestors).
             reqs = [ExecuteCellCommand(cell_id=cid, code=code) for cid, code in zip(cids, codes)]
@@ -148,8 +172,10 @@ class NotebookSession:
         self._cids = cids
         self._source = source
 
-    def _run(self, pressed_index: int) -> dict[str, Any]:
+    def _run(self, pressed_index: int, inject: "dict[str, Any] | None" = None) -> dict[str, Any]:
         k = self._host.k  # type: ignore[union-attr]
+        # Re-inject (a fresh bt per press replaces the prior one) and ARM for the explicit press.
+        self._apply_inject(k, inject, armed=True)
         pressed = self._cids[pressed_index]
 
         recorded: dict[str, Any] = {}

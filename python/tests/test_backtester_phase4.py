@@ -189,6 +189,55 @@ def test_bt_replay_byte_identical_to_imperative_through_production_observer(monk
 # (stop) mid-run stop — setting the event DURING the stream halts early with a finalize
 # ======================================================================================
 
+# ======================================================================================
+# (P4-1) host lifecycle hooks — on_run_begin fires once on first drive; was_driven / result
+# ======================================================================================
+
+def test_on_run_begin_fires_once_when_cell_drives_replay() -> None:
+    calls: list[int] = []
+    bt = _make_bt(_bars(_CLOSES), _Recorder())
+    bt._on_run_begin = lambda: calls.append(1)  # the host's engine LOADED→RUNNING transition
+
+    assert not bt.was_driven and bt.result is None
+    _bt_body_replay(bt)
+    assert calls == [1]                  # fired exactly once, not per bar
+    assert bt.was_driven
+    assert bt.result is not None and bt.result.success
+
+
+def test_on_run_begin_not_fired_for_pure_compute_cell() -> None:
+    # A 土台 cell that never calls bt.replay()/bt.step() must not transition the engine — the
+    # boundary is the DRIVE call, not the reference (ADR-0016 D1).
+    calls: list[int] = []
+    bt = _make_bt(_bars(_CLOSES), _Recorder())
+    bt._on_run_begin = lambda: calls.append(1)
+
+    _ = bt.portfolio()  # reference-only: read state, never drive
+    assert calls == []
+    assert not bt.was_driven and bt.result is None
+
+
+def test_disarmed_handle_does_not_drive() -> None:
+    # While the host cold-runs the notebook graph the handle is disarmed: a bt.replay() cell
+    # must yield nothing and NOT fire on_run_begin / advance the engine (else editing a notebook
+    # would silently start a backtest — #95 P4-1).
+    calls: list[int] = []
+    bt = _make_bt(_bars(_CLOSES), _Recorder())
+    bt._on_run_begin = lambda: calls.append(1)
+    bt.disarm()
+
+    streamed = list(bt.replay())
+    assert streamed == []
+    assert bt.step() is None
+    assert calls == []
+    assert not bt.was_driven
+
+    # Re-arming (the explicit RUN press) drives normally.
+    bt.arm()
+    assert len(list(bt.replay())) == len(_CLOSES)
+    assert calls == [1] and bt.was_driven
+
+
 def test_stop_event_set_mid_stream_halts_early() -> None:
     import threading
 

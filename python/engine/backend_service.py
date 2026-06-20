@@ -383,12 +383,14 @@ class BackendService:
             "summary_json": result.summary_json if result.success else "",
         }
 
-    def run_cell(self, source: str, pressed_index: int) -> str:
-        """#95 Phase 2 土台: delegate per-cell RUN (pure compute) to DataEngineBackend.run_cell.
+    def run_cell(self, source: str, pressed_index: int, scenario_json: str = None) -> str:
+        """#95 Phase 2/4: delegate per-cell RUN to DataEngineBackend.run_cell.
 
-        Returns the backend's JSON string verbatim (``{"ok","ran","error"}``)."""
+        ``scenario_json`` (Phase 4) is the committed startup-panel scenario; when present and the
+        notebook drives a backtest the backend builds a ``bt`` handle. Returns the backend's JSON
+        string verbatim (``{"ok","ran","error","run_summary"?}``)."""
         try:
-            return self._srv.run_cell(source, pressed_index)
+            return self._srv.run_cell(source, pressed_index, scenario_json)
         except Exception as exc:
             import json as _json
 

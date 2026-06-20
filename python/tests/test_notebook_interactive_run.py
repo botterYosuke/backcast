@@ -59,6 +59,41 @@ def test_pressed_cell_last_expr_output_captured():
         s.close()
 
 
+class _FakeBt:
+    """A stand-in bt handle that records its armed state each time the cell drives it (#95 P4-1)."""
+
+    def __init__(self) -> None:
+        self.armed = True
+        self.drive_states: list[bool] = []
+
+    def arm(self) -> None:
+        self.armed = True
+
+    def disarm(self) -> None:
+        self.armed = False
+
+    def replay(self):
+        self.drive_states.append(self.armed)
+        if self.armed:
+            yield 1
+            yield 2
+
+
+def test_injected_bt_disarmed_during_coldrun_armed_during_press():
+    # The host injects bt as a free ref. While the kernel is (re)built (cold-run) the handle is
+    # DISARMED — a bt.replay() cell yields nothing and starts no backtest; the explicit press ARMS
+    # it (#95 P4-1 / findings 0073). A keystroke must never silently drive a run.
+    bt = _FakeBt()
+    src = _src("seen = list(bt.replay())\nlen(seen)")
+    s = NotebookSession()
+    try:
+        ran = _ran_by_index(s.run_pressed(src, 0, inject={"bt": bt}))
+        assert bt.drive_states == [False, True], bt.drive_states  # cold-run disarmed, press armed
+        assert ran[0]["output"] == "2"  # the armed press streamed 2 items
+    finally:
+        s.close()
+
+
 def test_explicit_mo_output_captured():
     src = _src(_BODY_STATE, _BODY_MO_OUTPUT)
     s = NotebookSession()

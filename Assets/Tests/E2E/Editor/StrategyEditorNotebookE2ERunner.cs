@@ -59,7 +59,11 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section12_Coordinator(spawned)
                 ?? Section13_PerCellRun(spawned)
                 ?? Section14_Phase4BacktestControl(spawned)
-                ?? Section15_Phase5StepResetIdempotency(spawned);
+                ?? Section15_Phase5StepResetIdempotency(spawned)
+                ?? Section16_PerCellStale(spawned)
+                ?? Section17_BlockPopup(spawned)
+                ?? Section18_DocumentBadge()
+                ?? Section19_RichOutput(spawned);
         }
         catch (Exception e)
         {
@@ -98,6 +102,12 @@ public static class StrategyEditorNotebookE2ERunner
                       "+ #95 Phase 5 bt.step() persistence (STRATEGY-24 step press does NOT activate ▶→■ / running guard; " +
                       "STRATEGY-25 same-scenario re-press reuses the cached executor signal (pointer persists); " +
                       "STRATEGY-26 scenario-unset bt.step cell surfaces the guidance error in cell output) " +
+                      "+ #95 Phase 6 per-cell stale/block/badge/rich (STRATEGY-27,28 edit/blur restage projects amber ▶ " +
+                      "badges by cell index + re-press clears the pressed cell while a stale downstream stays amber; " +
+                      "STRATEGY-29 a 2nd RUN while a bt.replay is in flight surfaces the 'already running' block popup, " +
+                      "a non-blocked press is silent; STRATEGY-30,31 document-identity badge = basename / '* ' dirty / " +
+                      "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage, " +
+                      "text/markdown+text/html→rich Text, unsupported→labelled plain fallback) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1186,6 +1196,398 @@ public static class StrategyEditorNotebookE2ERunner
         return null;
     }
 
+    // ======================================================================
+    // 16. #95 Phase 6 Slice 3/4 — per-cell STALE badge (edit-time + post-run residual).
+    //     Covers STRATEGY-27 (an edit/blur restage projects the post-edit stale set to amber ▶ badges
+    //     on the edited cell AND its downstream — routed by cell INDEX to the right window, not always
+    //     window 0), STRATEGY-28 (re-pressing a stale cell runs it → the result drops it from the stale
+    //     set → its amber clears to green ▶, while a still-stale downstream stays amber).
+    //     Python-FREE: a fake executor projects the stale set (Restage returns the edited indices; Run
+    //     drops the pressed index). The REAL NotebookRunController index→region mapping (ApplyResult)
+    //     + the REAL StrategyEditorWindowFrame.SetRunButtonStale amber/green tint are exercised; the
+    //     root's SetCellStaleRegions paint loop is mirrored by the onStaleRegionsChanged wiring. The
+    //     real marimo incremental stale graph (set_stale downstream propagation) is pytest's job
+    //     (test_notebook_stale.py).
+    //     RED litmus (lead, non-destructive): (a) collapse ApplyResult's `RegionOf(cells[idx])` to
+    //     `cells[0]` → region_002 never badges → the "both amber after restage" assert goes RED;
+    //     (b) make the fake's Run NOT drop the pressed index → region_001 stays amber after its press
+    //     → the "region_001 green after press" assert goes RED.
+    // ======================================================================
+    static string Section16_PerCellStale(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+        var amber = new Color(0.8510f, 0.6157f, 0.2078f, 1f);   // #d99d35 stale
+        var green = new Color(0.2275f, 0.6078f, 0.3608f, 1f);   // #3a9b5c clean/idle
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer16", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rootRt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rootRt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rootRt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S16: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var synth = new FakeMarimoSynthesizer();
+        var nb = new MarimoNotebookDocument(synth);
+        nb.AddCell();   // 2 cells -> region_001 + region_002
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1 || coord.RegionOf(nb.Cells[1]) != R2)
+            return "S16: precondition — cells not bound to region_001/region_002";
+
+        var btn1 = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        var btn2 = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R2), font);
+        if (btn1 == null || btn2 == null) return "S16: a cell window has no RUN button";
+        var btns = new Dictionary<string, Button> { { R1, btn1 }, { R2, btn2 } };
+
+        var exec = new _StaleExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        // Mirror the root's SetCellStaleRegions: paint every known button amber if its region is in the
+        // stale set, green otherwise (the controller already mapped indices→regions in ApplyResult).
+        var run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, lane,
+            onStaleRegionsChanged: regions =>
+            {
+                var stale = new HashSet<string>(regions);
+                foreach (var kv in btns)
+                    StrategyEditorWindowFrame.SetRunButtonStale(kv.Value, stale.Contains(kv.Key));
+            });
+
+        // both buttons start green (idle, never edited).
+        if (!ColorApprox(ImgColor(btn1), green) || !ColorApprox(ImgColor(btn2), green))
+            return "S16: precondition — RUN buttons should start green (idle)";
+
+        // STRATEGY-27: an edit/blur restage marks cell 0 AND its downstream cell 1 stale → BOTH amber.
+        // (litmus: a routing that collapses every stale index to window 0 leaves region_002 green here.)
+        exec.StaleSet = new[] { 0, 1 };
+        run.Restage();
+        run.DrainAndRoute();
+        if (!ColorApprox(ImgColor(btn1), amber)) return "S16/STRATEGY-27: region_001 not amber after an edit restage";
+        if (!ColorApprox(ImgColor(btn2), amber)) return "S16/STRATEGY-27: downstream region_002 not amber (stale routing collapsed to one window)";
+
+        // STRATEGY-28: re-pressing region_001 runs cell 0 → the result drops it from the stale set →
+        // region_001 clears to green while the still-stale downstream region_002 stays amber.
+        run.RunCell(R1);
+        run.DrainAndRoute();
+        if (!ColorApprox(ImgColor(btn1), green)) return "S16/STRATEGY-28: region_001 amber did not clear to green after its press";
+        if (!ColorApprox(ImgColor(btn2), amber)) return "S16/STRATEGY-28: still-stale downstream region_002 wrongly cleared on an unrelated press";
+
+        lane.Dispose();
+        return null;
+    }
+
+    // S16 fake: projects a per-cell stale set. Restage returns the current stale set (an edit made
+    // these cells stale); Run drops the pressed index (it just ran → no longer stale) and returns the
+    // remaining stale set, so re-pressing a stale cell clears ITS amber while a downstream stays amber.
+    sealed class _StaleExecutor : INotebookCellExecutor
+    {
+        public int[] StaleSet = Array.Empty<int>();
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        {
+            var remaining = new List<int>();
+            foreach (var i in StaleSet) if (i != pressedIndex) remaining.Add(i);
+            StaleSet = remaining.ToArray();
+            return new NotebookRunResult
+            {
+                Ok = true,
+                Ran = new[] { new NotebookCellOutput { Index = pressedIndex, Output = "out-" + pressedIndex, Ok = true } },
+                Stale = StaleSet,
+            };
+        }
+        public int[] Restage(string source) => StaleSet;
+    }
+
+    // ======================================================================
+    // 17. #95 Phase 6 Slice (P6-4) — block popup: the running-guard rejection surfaces on the
+    //     notification line ONLY when a press is actually blocked.
+    //     Covers STRATEGY-29 (a 2nd per-cell RUN while a bt.replay backtest is in flight is rejected
+    //     and the "already running" message reaches the notification sink; a successful, non-blocked
+    //     press surfaces NO notification — no spurious popup).
+    //     Python-FREE: a fake OK executor + the REAL NotebookRunController running guard. The onError
+    //     lambda mirrors the root's sink (BackcastWorkspaceRoot.cs:383 wires onError →
+    //     _menuBarView.ShowMessage("Run cell: " + msg)). The not-owner / server-not-ready guards are a
+    //     SEPARATE root button-wire gate (`if (_isOwner && _host.ServerReady)`, e.g. cs:371/535) — root/
+    //     HITL, not the controller — so S17 pins the in-flight block message + the silence-on-success
+    //     invariant here; the cross-thread real bt stop is the pytest gate test_notebook_replay_afk.py.
+    //     RED litmus (lead): removing the `if (_btRunActive)` guard in RunCell → the 2nd press runs and
+    //     surfaces no message → the "exactly one notification" assert goes RED; making the notify
+    //     unconditional → the silent first press surfaces a popup → the "Count != 0" assert goes RED.
+    // ======================================================================
+    static string Section17_BlockPopup(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string SCN = "{\"instruments\":[\"8918.TSE\"],\"granularity\":\"Daily\"}";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer17", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S17: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        nb.Cells[0].SetBody("x = 1\n");   // a pure (non-blocking) cell to start
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S17: precondition — cell0 not bound to region_001";
+
+        var btn = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        if (btn == null) return "S17: region_001 has no RUN button";
+
+        // The notification sink: the root wires onError → _menuBarView.ShowMessage (cs:383). The block
+        // popup (P6-4) surfaces ONLY when a press is rejected.
+        var notifications = new List<string>();
+        var exec = new _OkExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        var run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, lane,
+            onError: msg => notifications.Add(msg),
+            scenarioJsonProvider: () => SCN,
+            onStop: () => { },
+            onRunningChanged: (region, running) => StrategyEditorWindowFrame.SetRunButtonGlyph(btn, running));
+
+        // STRATEGY-29a (silence on success): a successful, non-blocked press surfaces NO notification.
+        run.RunCell(R1);
+        run.DrainAndRoute();
+        if (notifications.Count != 0)
+            return "S17/STRATEGY-29: a successful (non-blocked) press surfaced a notification, got [" + string.Join(" | ", notifications) + "]";
+
+        // STRATEGY-29b (block popup): a bt.replay press enters RUNNING; a 2nd press WHILE it is in flight
+        // is rejected and the block message reaches the notification sink.
+        nb.Cells[0].SetBody("for bar in bt.replay():\n    bt.submit_market(100)\n");
+        run.RunCell(R1);                                  // enters RUNNING (guard active); not drained
+        if (!run.IsBacktestRunning) return "S17: precondition — the bt.replay press did not enter RUNNING";
+        run.RunCell(R1);                                  // blocked
+        if (notifications.Count != 1)
+            return "S17/STRATEGY-29: the blocked 2nd press did not surface exactly one notification (got " + notifications.Count + ")";
+        if (!notifications[0].Contains("already running"))
+            return "S17/STRATEGY-29: the block message is not the running-guard popup, got [" + notifications[0] + "]";
+
+        run.StopRunning();
+        run.DrainAndRoute();
+        lane.Dispose();
+        return null;
+    }
+
+    // S17 fake: a minimal OK executor (one ran cell, no stale) — the running guard is the controller's.
+    sealed class _OkExecutor : INotebookCellExecutor
+    {
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+            => new NotebookRunResult
+            {
+                Ok = true,
+                Ran = new[] { new NotebookCellOutput { Index = pressedIndex, Output = "ok", Ok = true } },
+            };
+        public int[] Restage(string source) => Array.Empty<int>();
+    }
+
+    // ======================================================================
+    // 18. #95 Phase 6 Slice 6 (P6-5 / #90) — document-identity badge string.
+    //     Covers STRATEGY-30, STRATEGY-31 (#90 AC: a bound notebook shows its .py basename; an unsaved
+    //     edit prefixes "* "; Save clears the "* "; File→New (ResetUnboundEmpty) shows "Untitled").
+    //     Python-FREE + root-FREE: drives a REAL MarimoNotebookDocument through New/Open/edit/Save and
+    //     asserts the identity TRIPLE (IsBound / IsDirty / CurrentPath — the badge's live source) plus
+    //     the projected badge string. The badge format is mirrored from BackcastWorkspaceRoot
+    //     .DocumentBadgeText (cs:1542-1543); the per-frame MenuBarView _docBadge surfacing
+    //     (MenuBarView.cs:172-176) and the cache-on-source invalidation (cs:1535-1536) are the live
+    //     root wire — covered by the responsibility split (the doc-identity badge is a SEPARATE lane
+    //     from the venue/mode/message badge, MenuBarView.cs:119-123, so #90 AC4 "wording does not
+    //     contradict the Run-disabled reason" holds by construction).
+    //     RED litmus (lead): if MarimoNotebookDocument.Open stopped binding (CurrentPath stays null),
+    //     the post-Open badge falls back to "Untitled" → the "Open → basename" assert goes RED.
+    // ======================================================================
+    static string Section18_DocumentBadge()
+    {
+        Directory.CreateDirectory(TempDir);
+        var synth = new FakeMarimoSynthesizer();
+
+        // File→New: a fresh notebook is unbound + clean → "Untitled".
+        var nb = new MarimoNotebookDocument(synth);
+        if (nb.IsBound || nb.IsDirty) return "S18: precondition — a fresh notebook should be unbound + clean";
+        if (Badge(nb) != "Untitled") return "S18/STRATEGY-30: a fresh (unbound) notebook badge != 'Untitled', got [" + Badge(nb) + "]";
+
+        // SaveAs binds the document → the basename is visible, no dirty marker.
+        string py = Path.Combine(TempDir, "doc18.py");
+        if (!nb.SaveAs(py)) return "S18: SaveAs failed";
+        if (!nb.IsBound || nb.IsDirty) return "S18: SaveAs did not bind + clear dirty";
+        if (Badge(nb) != "doc18.py") return "S18/STRATEGY-30: a saved notebook badge != basename, got [" + Badge(nb) + "]";
+
+        // An unsaved edit prefixes "* " (the dirty marker).
+        nb.Cells[0].SetBody("x = 1\n");
+        if (!nb.IsDirty) return "S18: a body edit did not dirty the notebook";
+        if (Badge(nb) != "* doc18.py") return "S18/STRATEGY-31: a dirty notebook badge missing the '* ' marker, got [" + Badge(nb) + "]";
+
+        // Save clears the dirty marker → "* " disappears.
+        if (!nb.Save()) return "S18: Save failed";
+        if (nb.IsDirty) return "S18: Save did not clear dirty";
+        if (Badge(nb) != "doc18.py") return "S18/STRATEGY-31: Save did not drop the '* ' marker, got [" + Badge(nb) + "]";
+
+        // File→Open of the same .py on a fresh document → basename visible (the #90 AC4 always-visible
+        // basename), bound + clean. (litmus: an Open that fails to bind falls back to 'Untitled'.)
+        var nb2 = new MarimoNotebookDocument(synth);
+        if (!nb2.Open(py)) return "S18: Open failed";
+        if (!nb2.IsBound || nb2.IsDirty) return "S18: Open did not bind + clean";
+        if (Badge(nb2) != "doc18.py") return "S18/STRATEGY-30: an opened notebook badge != basename, got [" + Badge(nb2) + "]";
+
+        // File→New (ResetUnboundEmpty) drops back to "Untitled".
+        nb2.ResetUnboundEmpty();
+        if (nb2.IsBound) return "S18: ResetUnboundEmpty did not unbind";
+        if (Badge(nb2) != "Untitled") return "S18/STRATEGY-30: File→New badge != 'Untitled', got [" + Badge(nb2) + "]";
+        return null;
+    }
+
+    // Mirrors BackcastWorkspaceRoot.DocumentBadgeText (cs:1542-1543): the bound basename (or 'Untitled'
+    // when unbound), prefixed with '* ' while dirty. The live root caches this on its source and feeds
+    // it to MenuBarView's documentBadgeText provider (cs:461 / MenuBarView.cs:174).
+    static string Badge(MarimoNotebookDocument doc)
+    {
+        string name = doc.IsBound ? Path.GetFileName(doc.CurrentPath) : "Untitled";
+        return (doc.IsDirty ? "* " : "") + name;
+    }
+
+    // ======================================================================
+    // 19. #95 Phase 6 Slice 5 (P6-2) — rich output routing by mimetype.
+    //     Covers STRATEGY-32 (text/plain → verbatim Text; text/markdown → rich-text subset <b>…;
+    //     text/html <table> → pipe rows), STRATEGY-33 (an unsupported mimetype → labelled plain
+    //     fallback; image/png → the sibling RawImage decodes + activates, NOT the Text pane).
+    //     Python-FREE: a fake returns a settable {output, mimetype, data} so BOTH the controller's
+    //     mimetype passthrough (ApplyResult → view.SetOutput(output,mimetype,data)) and the view's
+    //     per-mimetype routing are exercised on the REAL StrategyEditorView (built with its RawImage
+    //     sibling by StrategyEditorContentBuilder). The real marimo FormattedOutput(mimetype,data)
+    //     production (matplotlib→image/png, mo.md→text/markdown, df→text/html) is pytest's job
+    //     (test_notebook_rich_output.py).
+    //     RED litmus (lead): collapsing every mimetype to the Text pane leaves the RawImage inactive →
+    //     the image/png assert (OutputIsImage) goes RED.
+    // ======================================================================
+    static string Section19_RichOutput(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        // a real 1x1 PNG (valid header so Texture2D.LoadImage decodes it).
+        const string PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer19", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S19: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S19: precondition — cell0 not bound to region_001";
+
+        var exec = new _RichExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
+        var view = views[R1];
+
+        // STRATEGY-32 (text/plain): a plain payload paints the Text pane verbatim, no image.
+        exec.Set("hello", "text/plain", null);
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.OutputIsImage) return "S19/STRATEGY-32: text/plain wrongly routed to the image pane";
+        if (view.CurrentOutput != "hello") return "S19/STRATEGY-32: text/plain pane != 'hello', got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-32 (text/markdown): markdown converts to the rich-text subset (<b> tags).
+        exec.Set("# Title", "text/markdown", "# Title\n**bold**");
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.OutputIsImage) return "S19/STRATEGY-32: text/markdown wrongly routed to the image pane";
+        if (view.CurrentOutput == null || !view.CurrentOutput.Contains("<b>"))
+            return "S19/STRATEGY-32: text/markdown not rich-converted (no <b>), got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-32 (text/html table): a <table> projects to pipe rows.
+        exec.Set("a b", "text/html", "<table><tr><td>a</td><td>b</td></tr></table>");
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.OutputIsImage) return "S19/STRATEGY-32: text/html wrongly routed to the image pane";
+        if (view.CurrentOutput == null || !view.CurrentOutput.Contains("|"))
+            return "S19/STRATEGY-32: text/html table not projected to pipe rows, got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-33 (unsupported mimetype): falls back to plain text with the mimetype labelled.
+        exec.Set("{\"k\":1}", "application/json", null);
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.OutputIsImage) return "S19/STRATEGY-33: an unsupported mimetype wrongly routed to the image pane";
+        if (view.CurrentOutput == null || !view.CurrentOutput.Contains("[application/json]"))
+            return "S19/STRATEGY-33: unsupported mimetype not labelled in the fallback, got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-33 (image/png): a base64 PNG decodes into the sibling RawImage (active), NOT the Text
+        // pane. (litmus: collapsing every mimetype to Text leaves the RawImage inactive → RED here.)
+        // NOTE (lead): Texture2D.LoadImage decodes a PNG on the CPU; if a -nographics batch cannot decode
+        // it, THIS single assert is the image-routing HITL fallback (the other four mimetypes stay AFK).
+        exec.Set("<figure>", "image/png", PNG_B64);
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.OutputIsImage) return "S19/STRATEGY-33: image/png did not route to the RawImage (RawImage inactive)";
+
+        lane.Dispose();
+        return null;
+    }
+
+    // S19 fake: returns a settable rich payload (output + mimetype + data) for the pressed cell so the
+    // controller's mimetype passthrough (ApplyResult → view.SetOutput(output,mimetype,data)) and the
+    // view's per-mimetype routing are both exercised.
+    sealed class _RichExecutor : INotebookCellExecutor
+    {
+        string _output, _mimetype, _data;
+        public void Set(string output, string mimetype, string data) { _output = output; _mimetype = mimetype; _data = data; }
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+            => new NotebookRunResult
+            {
+                Ok = true,
+                Ran = new[] { new NotebookCellOutput { Index = pressedIndex, Output = _output, Ok = true, Mimetype = _mimetype, Data = _data } },
+            };
+        public int[] Restage(string source) => Array.Empty<int>();
+    }
+
     // Phase 5 stub executor: simulates the backend's step counter (each press +1) and routes the
     // guidance text when the scenario JSON is empty (mirrors the real NoScenarioBacktester).
     sealed class _StepExecutor : INotebookCellExecutor
@@ -1230,6 +1632,9 @@ public static class StrategyEditorNotebookE2ERunner
         var t = glyph != null ? glyph.GetComponent<Text>() : null;
         return t != null ? t.text : null;
     }
+
+    // The RUN button's background tint (run-green / stop-red / stale-amber) — Slice 3/6 badge readback.
+    static Color ImgColor(UnityEngine.UI.Button runButton) => runButton.GetComponent<UnityEngine.UI.Image>().color;
 
     // Records the scenario JSON each press received (Phase 4 control gate). Returns a canned OK result.
     sealed class _RecordingExecutor : INotebookCellExecutor

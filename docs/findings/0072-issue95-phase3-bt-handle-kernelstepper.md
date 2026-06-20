@@ -1,10 +1,12 @@
-# findings 0071 — #95 Phase 3 設計の木（`bt` ハンドル ＋ `KernelRunner` state-machine 化）
+# findings 0072 — #95 Phase 3 設計の木（`bt` ハンドル ＋ `KernelRunner` state-machine 化）
 
-方針: [ADR-0016](../adr/0016-notebook-equals-backtest-per-cell-run.md)（per-cell RUN を strategy 実行エントリーとし notebook = backtest に一本化）。Phase 1 設計の木: [findings 0070](./0070-notebook-equals-backtest-grill.md)。
+> **採番訂正（2026-06-20）**: 本 finding は当初 0071 として起案・commit `443ca72` で push されたが、別ブランチ `feat/#95` 上で **Phase 2 土台**の commit `ebeac4b` が同じ 0071 を `0071-notebook-foundation-per-cell-run.md` で先に占有していた。merge で 2 ファイル共存になったため、**Phase 2 が先**を尊重し本 finding を **0072 へリネーム**（findings 0070 の「番号重複は前半/後半なら統合・別設計の木なら後発をずらす」規律。Phase 2 / Phase 3 は別設計の木）。
+
+方針: [ADR-0016](../adr/0016-notebook-equals-backtest-per-cell-run.md)（per-cell RUN を strategy 実行エントリーとし notebook = backtest に一本化）。Phase 1 設計の木: [findings 0070](./0070-notebook-equals-backtest-grill.md)。**Phase 2 土台**: [findings 0071](./0071-notebook-foundation-per-cell-run.md)。
 
 本 findings は **#95 Phase 3**（`bt` ハンドル ＋ `KernelRunner` state-machine 化）の **`/grill-with-docs` セッション 2026-06-20** で確定した下位決定（Q1–Q7 の lock）を、会話で消えないように固定する。ADR-0016 / ADR-0012 / ADR-0013 / ADR-0006 は immutable（書き戻さない＝自己保護条項）。実装事実は本 findings に固定し ADR を「方針」として参照する。
 
-別ブランチ `feat/#95-phase3`（origin/main 起点 = `4999e8f`）で Phase 2 と並行に実装する。
+別ブランチ `feat/#95-phase3`（origin/main 起点 = `4999e8f`）で Phase 2 と並行に起案したが、grill 開始時点で Phase 2 は未着手の状態だった。Phase 2 は本 grill セッション中に並走で landed（`ebeac4b`）。
 
 ---
 
@@ -221,13 +223,13 @@ class Backtester:
 | 6 | **`bars_per_second` no-op smoke** | `bt.replay(bars_per_second=10)` 引数受理・sleep は入らない（Phase 3 は high-speed only） |
 | 7 | **`bt.submit_market` context-out fail-closed** | bar open 前 / close 直後に呼ぶと `ValueError`（D1 lock の constructive proof） |
 | 8 | **`bt.bar()` / `bt.portfolio()` lifecycle rule** | Q3-b の 4 状態（未開始 / open 中 / close 直後 / END 後）の戻り値を pytest で pin |
-| 9 | **findings 0071 landed** | 本 finding（Q1–Q7 の lock 記録） |
+| 9 | **findings 0072 landed** | 本 finding（Q1–Q7 の lock 記録・0071→0072 リネーム済み） |
 | 10 | **CONTEXT 加筆（必要最小限）** | 既存「notebook = backtest 一本化 / `bt` ハンドル」エントリの**実装確定**注記。新規 term は最小（`KernelStepper` を glossary に立てるかは owner 判断） |
 | 11 | **`code-review(simplify)` Medium+ 0 件** | CLAUDE.md 必須アクション。今回の変更は「単なる wrap より重い」refactor なので Medium+ 0 を done 条件に入れる価値あり |
 
 #### (c) ADR-0016 は不編集
 
-自己保護条項。本 findings 0071 から「方針: ADR-0016」として参照するだけ。
+自己保護条項。本 findings 0072 から「方針: ADR-0016」として参照するだけ。
 
 ---
 

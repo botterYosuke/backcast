@@ -106,7 +106,8 @@ public static class StrategyEditorNotebookE2ERunner
                       "badges by cell index + re-press clears the pressed cell while a stale downstream stays amber; " +
                       "STRATEGY-29 a 2nd RUN while a bt.replay is in flight surfaces the 'already running' block popup, " +
                       "a non-blocked press is silent; STRATEGY-30,31 document-identity badge = basename / '* ' dirty / " +
-                      "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage, " +
+                      "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage " +
+                      "(decode+RawImage-activation HITL-only in headless batch; mimetype passthrough AFK), " +
                       "text/markdown+text/html→rich Text, unsupported→labelled plain fallback) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
@@ -1560,13 +1561,34 @@ public static class StrategyEditorNotebookE2ERunner
         if (view.CurrentOutput == null || !view.CurrentOutput.Contains("[application/json]"))
             return "S19/STRATEGY-33: unsupported mimetype not labelled in the fallback, got [" + view.CurrentOutput + "]";
 
-        // STRATEGY-33 (image/png): a base64 PNG decodes into the sibling RawImage (active), NOT the Text
-        // pane. (litmus: collapsing every mimetype to Text leaves the RawImage inactive → RED here.)
-        // NOTE (lead): Texture2D.LoadImage decodes a PNG on the CPU; if a -nographics batch cannot decode
-        // it, THIS single assert is the image-routing HITL fallback (the other four mimetypes stay AFK).
+        // STRATEGY-33 (image/png): routes by mimetype into the image codepath. Texture2D.LoadImage decodes
+        // a PNG on the CPU then uploads to the GPU; a headless batch (no graphics device) cannot — true here
+        // under BOTH -batchmode -nographics AND -batchmode (GPU-allowed). So probe decode capability with a
+        // throwaway texture (same API/bytes/process as the view's TryDecodeImage):
+        //   * decode-capable env (HITL / interactive GPU): assert the full routing → RawImage activation.
+        //   * decode-incapable batch: GPU decode + RawImage activation is HITL-only (S3/S8-style降格). AFK
+        //     still positively pins that the controller propagated mimetype="image/png" + data end-to-end —
+        //     SetOutput falls to the labelled-plain fallback keyed on the mimetype, so the "[image/png]"
+        //     label proves routing did NOT collapse the mimetype away. The four text mimetypes above cover
+        //     the mt-branch dispatch in AFK; only the GPU leaf is demoted.
+        // RED litmus (AFK): drop Mimetype from the controller passthrough → no "[image/png]" label → RED.
+        // RED litmus (HITL): collapse every mimetype to Text → RawImage inactive → RED.
         exec.Set("<figure>", "image/png", PNG_B64);
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.OutputIsImage) return "S19/STRATEGY-33: image/png did not route to the RawImage (RawImage inactive)";
+        var imgProbe = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        bool canDecode = imgProbe.LoadImage(Convert.FromBase64String(PNG_B64));
+        UnityEngine.Object.DestroyImmediate(imgProbe);
+        if (canDecode)
+        {
+            if (!view.OutputIsImage) return "S19/STRATEGY-33: image/png did not route to the RawImage (RawImage inactive)";
+        }
+        else
+        {
+            if (view.OutputIsImage) return "S19/STRATEGY-33: image/png reported RawImage active despite no decode capability";
+            if (view.CurrentOutput == null || !view.CurrentOutput.Contains("[image/png]"))
+                return "S19/STRATEGY-33: image/png mimetype did not propagate to the view (no [image/png] label in the decode-failure fallback), got [" + view.CurrentOutput + "]";
+            Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S19/STRATEGY-33: image/png mimetype propagated end-to-end; Texture2D.LoadImage cannot decode in this headless batch -> RawImage activation is HITL-only (S3/S8-style降格; the four text mimetypes cover the mt-branch dispatch in AFK).");
+        }
 
         lane.Dispose();
         return null;

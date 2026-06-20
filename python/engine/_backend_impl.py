@@ -493,6 +493,15 @@ class DataEngineBackend:
         # Lazily created on the first run_cell (on the host's notebook-run worker thread — marimo
         # RuntimeContext is thread-local, so it is built + run there, never from another thread).
         self._notebook_session = None
+        # #95 Phase 5 (#98 / findings 0074): the persistent ``bt`` handle for B3 step cells.  A
+        # ``bt.step()`` press keeps the SAME bt across presses so the pointer advances by 1 each
+        # time; the cache is keyed by the committed scenario JSON (a different scenario commit
+        # rebuilds bt, resetting the pointer).  ``bt.replay()`` presses do NOT cache — Phase 4
+        # builds a fresh bt per replay press (each replay = atomic 0→end transaction).
+        self._step_bt = None
+        self._step_bt_run_buffer = None
+        self._step_bt_scenario = None
+        self._step_bt_key: Optional[str] = None
         # Phase 9 Step 0: backend -> frontend event push.
         self._backend_event_bus: BackendEventStream = BackendEventStream()
         # Issue #266: Curated Set (backend-authoritative instrument list).
@@ -823,17 +832,31 @@ class DataEngineBackend:
         return self._start_engine_duckdb(strategy_file, duckdb_root)
 
     def run_cell(self, source, pressed_index, scenario_json=None):
-        """#95 Phase 2/4: run the pressed cell + reactive downstream over the LIVE source.
+        """#95 Phase 2/4/5: run the pressed cell + reactive downstream over the LIVE source.
 
         ``source`` is the LIVE editor content (synthesised marimo ``.py`` text, not a disk path —
         owner HITL: run the unsaved buffer); ``pressed_index`` is the cell-order index of the
         pressed cell. Returns a JSON string ``{"ok", "ran":[...], "error", "run_summary"?}``.
 
         Phase 4 (ADR-0016 D1/D7 / findings 0073 §P4-1): a 土台 cell stays PURE computation (no
-        engine), but when the notebook DRIVES a backtest (``bt.replay`` / ``bt.step``) AND a
-        scenario is committed (``scenario_json``), a ``bt`` handle is built — wired to the
-        production Replay observer (#65 running snapshot → Hakoniwa) and the stop event — injected
-        into the cell globals, and the run is finalized (RunBuffer summary + engine back to IDLE).
+        engine).  A ``bt.replay`` cell builds a FRESH bt per press (each replay = atomic 0→end
+        transaction) — wired to the production Replay observer (#65 running snapshot → Hakoniwa)
+        and the stop event — injected into the cell globals, and the run is finalized (RunBuffer
+        summary + engine back to IDLE).
+
+        Phase 5 (findings 0074): a ``bt.step``-only cell (no ``bt.replay`` in source) PERSISTS its
+        bt across presses — same handle = pointer advances by 1 per press (the cell author wrote
+        ``bar = bt.step()``).  Cache key = ``scenario_json``: a different committed scenario
+        rebuilds bt (pointer reset); the same scenario reuses bt.  Once the persistent bt reaches
+        terminal (``bt.step()`` returned ``None``), the next press still returns ``None``
+        (forward-only) — re-committing the same scenario does NOT reset, only a different
+        scenario does (the gesture = "I changed the config").  When neither ``bt.replay`` nor
+        ``bt.step`` is in source, the bt cache is torn down (back to pure-compute notebook).
+
+        Phase 5 (Q5 fail-closed): when source uses ``bt`` but no scenario has been committed,
+        a ``NoScenarioBacktester`` placeholder is injected so the cell raises a guidance
+        ``RuntimeError`` instead of a ``NameError`` — the user sees "commit the startup panel
+        first" in the cell output (mirrors Phase 3 ``submit_market`` context-out fail-closed).
 
         Lazy-imports the marimo notebook seam so ``_backend_impl`` stays marimo-free at module
         load (ADR-0012 §4 / test_strategy_runtime_offline). Called only on the host's single
@@ -847,25 +870,60 @@ class DataEngineBackend:
             self._notebook_session = NotebookSession()
 
         source = str(source)
+        uses_replay = "bt.replay" in source
+        uses_step = "bt.step" in source
+        uses_bt = uses_replay or uses_step
+
+        # Discard the cached step bt when the notebook no longer references bt.step — the next bt
+        # notebook will rebuild fresh.  A scenario change is handled below by the key check.
+        if not uses_step:
+            self._teardown_step_bt()
+
         bt = None
         run_buffer = None
         scenario = None
         inject = None
-        # Build a bt handle only when the notebook actually drives one AND a scenario is committed
-        # — a pure-compute 土台 notebook keeps the Phase 2 path (no DuckDB load, no engine state).
-        if scenario_json and ("bt.replay" in source or "bt.step" in source):
-            try:
-                bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
-                inject = {"bt": bt}
-            except Exception as exc:
-                # _build_notebook_bt may have already taken the engine IDLE→LOADED (load_replay_data)
-                # before failing — reset to IDLE so the next run isn't bricked ("LoadReplayData is
-                # only allowed from IDLE"). force_stop_replay is idempotent from any state.
-                logging.exception("run_cell: bt build failed")
-                self.engine.force_stop_replay()
-                return _json.dumps(
-                    {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
-                )
+        is_step_bt = False        # True when this press reused / built the persistent step bt
+        step_cache_miss = False   # True when _acquire_step_bt rebuilt (vs cache hit)
+
+        if uses_bt and scenario_json:
+            # Source has bt drive AND a scenario is committed → real ``bt``.
+            if uses_step and not uses_replay:
+                try:
+                    bt, run_buffer, scenario, is_step_bt, step_cache_miss = self._acquire_step_bt(
+                        scenario_json
+                    )
+                except Exception as exc:
+                    # _acquire_step_bt may have already taken the engine IDLE→LOADED via
+                    # _build_notebook_bt before failing — reset to IDLE so the next run isn't
+                    # bricked ("LoadReplayData is only allowed from IDLE").  _teardown_step_bt
+                    # early-returns when _step_bt is None, so call force_stop_replay directly to
+                    # mirror the replay-path guarantee.  Idempotent from any state.
+                    logging.exception("run_cell: step bt acquire failed")
+                    self._teardown_step_bt()
+                    self.engine.force_stop_replay()
+                    return _json.dumps(
+                        {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+                    )
+            else:
+                # Replay path (or mixed step+replay): Phase 4 behavior — fresh bt per press.
+                try:
+                    bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
+                except Exception as exc:
+                    # _build_notebook_bt may have already taken the engine IDLE→LOADED before
+                    # failing — reset to IDLE so the next run isn't bricked.  force_stop_replay
+                    # is idempotent from any state.
+                    logging.exception("run_cell: bt build failed")
+                    self.engine.force_stop_replay()
+                    return _json.dumps(
+                        {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+                    )
+            inject = {"bt": bt}
+        elif uses_bt and not scenario_json:
+            # Phase 5 Q5: the cell uses bt but no scenario is committed.  Inject a fail-closed
+            # placeholder so the cell raises a guidance RuntimeError instead of a NameError.
+            from engine.strategy_runtime.backtester import NoScenarioBacktester
+            inject = {"bt": NoScenarioBacktester()}
 
         try:
             result = self._notebook_session.run_pressed(source, int(pressed_index), inject=inject)
@@ -873,18 +931,21 @@ class DataEngineBackend:
             logging.exception("run_cell failed")
             result = {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
         finally:
+            # Settle any bar the cell left open via ``bt.step()`` / ``bt.replay()`` (findings 0072
+            # §Q2: the per-cell RUN finally MUST close the open bar — idempotent, a no-op on the
+            # NoScenarioBacktester placeholder and on a bt that has no bar currently open).  Done
+            # BEFORE engine-state teardown so submits issued before a cell raise still settle on
+            # THEIR press's bar instead of bleeding into the next press's auto-close.
             if bt is not None:
-                # We built bt, so load_replay_data put the engine in LOADED (and a drive may have
-                # taken it to RUNNING). Whether or not the pressed cell ACTUALLY drove it (a press on
-                # a non-driving cell of a bt notebook still matches the substring), return the engine
-                # to IDLE so the next run can load again. Always finalize the engine state — only the
-                # summary is conditional on a real drive.
+                try:
+                    bt._close_open_bar()
+                except Exception:
+                    logging.exception("run_cell: _close_open_bar failed")
+            if bt is not None and not is_step_bt:
+                # Phase 4 replay path: always teardown after the press (finalize summary if a
+                # drive happened, then take the engine back to IDLE so the next run can load).
                 try:
                     if bt.was_driven:
-                        # A run happened: set run_summary so the Hakoniwa run_result tile reflects
-                        # THIS run (the finalized stats, or null if it stopped/crashed before
-                        # finalize) — never a stale prior summary. The key's presence tells the C#
-                        # side a backtest was driven (a pure-compute press omits it).
                         result["run_summary"] = (
                             self._finalize_run(run_buffer, scenario)
                             if bt.result is not None
@@ -894,8 +955,71 @@ class DataEngineBackend:
                     logging.exception("run_cell: finalize failed")
                 finally:
                     self.engine.force_stop_replay()
+            elif bt is not None and is_step_bt and bt.result is not None:
+                # Phase 5 step path: the persistent step bt reached terminal during this press.
+                # Finalize the RunBuffer summary, drop the cache, and take the engine back to
+                # IDLE.  Subsequent presses on the same scenario will rebuild a fresh bt.
+                try:
+                    result["run_summary"] = self._finalize_run(run_buffer, scenario)
+                except Exception:
+                    logging.exception("run_cell: step finalize failed")
+                self._teardown_step_bt()
+            elif bt is not None and is_step_bt and step_cache_miss and not bt.was_driven:
+                # Substring false-positive guard: ``"bt.step" in source`` matched a comment /
+                # string literal / unrelated identifier (e.g., ``# TODO: bt.step``).  We just
+                # paid for ``_build_notebook_bt`` (engine LOADED, DuckDB load) but nothing drove
+                # the handle — so leaving the cache alive strands the engine in LOADED and
+                # blocks all subsequent ``load_replay_data`` calls until the source changes
+                # (findings 0074 §P5-1 fail-closed).  A cache HIT that doesn't drive is left
+                # alone — the user may genuinely have a conditional ``if cond: bt.step()`` and
+                # the cached pointer should persist for the next press.
+                self._teardown_step_bt()
 
         return _json.dumps(result)
+
+    def _acquire_step_bt(self, scenario_json):
+        """Reuse or build the persistent ``bt`` for a B3 step cell (#95 Phase 5 / findings 0074).
+
+        Returns ``(bt, run_buffer, scenario, is_step_bt=True, cache_miss: bool)``.  Cache hit
+        (same scenario_json as the cached step bt) reuses the existing bt so ``bt.step()``
+        advances the pointer by 1 (``cache_miss=False``); cache miss tears down the previous one
+        (different scenario commit = new bt = pointer reset) and builds a fresh bt that will
+        stay alive until the scenario changes or terminal (``cache_miss=True``).  The caller
+        uses ``cache_miss`` to distinguish "freshly built but undriven this press" (substring
+        false-positive — teardown the engine to IDLE) from "cache hit but undriven this press"
+        (the user has a conditional bt.step() that didn't fire — preserve the cached pointer).
+        """
+        key = str(scenario_json)
+        if self._step_bt is not None and self._step_bt_key == key:
+            return self._step_bt, self._step_bt_run_buffer, self._step_bt_scenario, True, False
+
+        # Different scenario (or first acquire): tear the previous one down before building anew.
+        self._teardown_step_bt()
+        bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
+        self._step_bt = bt
+        self._step_bt_run_buffer = run_buffer
+        self._step_bt_scenario = scenario
+        self._step_bt_key = key
+        return bt, run_buffer, scenario, True, True
+
+    def _teardown_step_bt(self):
+        """Drop the persistent step bt and take the engine back to IDLE.  Idempotent.
+
+        Called when (a) the scenario commit changed, (b) the notebook no longer references
+        ``bt.step``, (c) the bt reached terminal mid-press.  Does NOT finalize the RunBuffer
+        (the run_cell terminal-handling path owns that — this is the "abandon without summary"
+        path for a mid-flight teardown; the RunBuffer's atexit hook flushes it as aborted).
+        """
+        if self._step_bt is None:
+            return
+        try:
+            self.engine.force_stop_replay()
+        except Exception:
+            logging.exception("_teardown_step_bt: force_stop_replay failed")
+        self._step_bt = None
+        self._step_bt_run_buffer = None
+        self._step_bt_scenario = None
+        self._step_bt_key = None
 
     def _build_notebook_bt(self, scenario_json):
         """Build the ``bt`` handle for a notebook-driven Replay run (#95 Phase 4 / findings 0073).

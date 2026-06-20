@@ -29,7 +29,7 @@ Marimo-free (gated by test_strategy_runtime_offline): importing this module pull
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Iterator, NoReturn, Optional
 
 from typing import Callable
 
@@ -198,3 +198,59 @@ class Backtester:
         ``finally`` calls this so a cell's submits settle (and Hakoniwa updates) before the user
         runs the next cell. Idempotent; safe to call when no bar is open (#95 Q2)."""
         self._stepper.close_current_bar()
+
+
+# #95 Phase 5 (#98 / findings 0074): guidance text the placeholder ``bt`` emits.
+_NO_SCENARIO_GUIDANCE = (
+    "no active scenario; commit the startup panel first, then press RUN again"
+)
+
+
+class NoScenarioBacktester:
+    """The fail-closed ``bt`` the host injects BEFORE the startup panel commits (#95 Phase 5 Q5).
+
+    Every cell-facing drive / read operation raises a ``RuntimeError`` whose message tells the
+    user how to recover ("commit the startup panel first").  Mirrors the Phase 3 ``submit_market``
+    context-out fail-closed pattern (ADR-0016 D1).  ``_close_open_bar`` is a no-op so the Phase 2
+    per-cell-RUN ``finally`` works without scenario-aware guarding.  ``arm`` / ``disarm`` are
+    no-ops so ``NotebookSession._apply_inject`` can call them uniformly.
+
+    The placeholder is type-compatible with ``Backtester`` on the union the cell body uses
+    (``bt.step / bt.replay / bt.bar / bt.portfolio / bt.submit_market / bt._close_open_bar``) —
+    so a cell written for the real ``bt`` surfaces the guidance INSTEAD of a NameError.
+    """
+
+    @staticmethod
+    def _raise(method: str) -> NoReturn:
+        raise RuntimeError(f"bt.{method}(): {_NO_SCENARIO_GUIDANCE}")
+
+    def step(self) -> Optional[Bar]:
+        self._raise("step")
+
+    def replay(self, *, bars_per_second: Optional[float] = None) -> Iterator[Bar]:
+        # Raised on call, not on iteration — ``for bar in bt.replay():`` sees the error before
+        # the loop body, so the cell never enters a body that might observe undefined state.
+        # Kept as a regular function (no ``yield``) so the error fires immediately; a generator
+        # body would defer the raise until ``next()``, hiding the cause.
+        self._raise("replay")
+
+    def bar(self) -> Optional[Bar]:
+        self._raise("bar")
+
+    def portfolio(self) -> PortfolioSnapshot:
+        self._raise("portfolio")
+
+    def submit_market(self, qty: float) -> None:
+        self._raise("submit_market")
+
+    def _close_open_bar(self) -> None:
+        # No bar is open — the Phase 2 finally must not raise here.
+        return None
+
+    def arm(self) -> None:
+        # NotebookSession._apply_inject calls arm/disarm on the injected bt uniformly; on the
+        # placeholder they are no-ops (there is no run to arm/disarm).
+        return None
+
+    def disarm(self) -> None:
+        return None

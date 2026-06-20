@@ -55,6 +55,13 @@ public sealed class NotebookRunController
     // committed, the committed scenario rides along (the backend builds the bt handle) and the cell
     // enters the RUNNING state (▶→■). A second RUN while a backtest is in flight is REJECTED, not
     // queued (ADR-0016 D3) — the running cell's ■ stops it first.
+    //
+    // #95 Phase 5 (findings 0074): a STEP-only cell (`bt.step` in source, no `bt.replay`) does NOT
+    // activate the running guard / ▶→■ toggle.  Step is an instant single-bar operation and is
+    // INTENTIONALLY stateful across presses (the cell author wrote `bar = bt.step()` and expects
+    // each press to advance the pointer by 1), so showing ■ between presses would be misleading
+    // and the guard would reject the very next press the user expects to fire.  Only `bt.replay`
+    // (a multi-bar transaction with potentially long pacing) activates the guard.
     public void RunCell(string regionId)
     {
         if (_btRunActive)
@@ -69,7 +76,9 @@ public sealed class NotebookRunController
         string source = _coordinator.Notebook.SynthesizeLiveSource();
         if (source == null) { _onError?.Invoke("could not synthesise the notebook source"); return; }
 
-        bool drivesBacktest = source.Contains("bt.replay") || source.Contains("bt.step");
+        bool drivesReplay = source.Contains("bt.replay");
+        bool drivesStep = source.Contains("bt.step");
+        bool drivesBacktest = drivesReplay || drivesStep;
         string scenarioJson = drivesBacktest ? _scenarioJsonProvider?.Invoke() : null;
         int runId = ++_runSeq;
         _lane.Submit(new NotebookRunRequest
@@ -81,7 +90,10 @@ public sealed class NotebookRunController
             RunId = runId,
         });
 
-        if (drivesBacktest && !string.IsNullOrEmpty(scenarioJson))
+        // #95 Phase 5: only `bt.replay` activates the running guard / ▶→■ toggle.  `bt.step` is
+        // instant per press and persistent across presses, so guarding it would block the very
+        // next press the user expects to fire.
+        if (drivesReplay && !string.IsNullOrEmpty(scenarioJson))
         {
             _btRunActive = true;
             _btRunId = runId;

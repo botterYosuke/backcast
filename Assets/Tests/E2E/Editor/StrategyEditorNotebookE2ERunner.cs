@@ -58,7 +58,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section11_SpawnPlacement()
                 ?? Section12_Coordinator(spawned)
                 ?? Section13_PerCellRun(spawned)
-                ?? Section14_Phase4BacktestControl(spawned);
+                ?? Section14_Phase4BacktestControl(spawned)
+                ?? Section15_Phase5StepResetIdempotency(spawned);
         }
         catch (Exception e)
         {
@@ -94,6 +95,9 @@ public static class StrategyEditorNotebookE2ERunner
                       "downstream cell output routes to the downstream window) " +
                       "+ #95 Phase 4 bt.replay() control (STRATEGY-21 committed-scenario hand-off + ▶→■ on RUN; " +
                       "STRATEGY-22 2nd RUN rejected while a backtest is in flight; STRATEGY-23 ■ force-stop → ▶ restored, guard clears) " +
+                      "+ #95 Phase 5 bt.step() persistence (STRATEGY-24 step press does NOT activate ▶→■ / running guard; " +
+                      "STRATEGY-25 same-scenario re-press reuses the cached executor signal (pointer persists); " +
+                      "STRATEGY-26 scenario-unset bt.step cell surfaces the guidance error in cell output) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1071,6 +1075,149 @@ public static class StrategyEditorNotebookE2ERunner
 
         lane.Dispose();
         return null;
+    }
+
+    // ======================================================================
+    // Section 15: #95 Phase 5 (#98) — bt.step() persistence, reset, fail-closed
+    //     Covers STRATEGY-24 (a bt.step press does NOT activate the running guard / ▶→■ toggle —
+    //     step is instant per press and intentionally stateful across presses), STRATEGY-25 (a
+    //     scenario-unset bt.step cell surfaces the guidance RuntimeError in the cell output via
+    //     the executor's fail-closed payload), STRATEGY-26 (reactive upstream press cascades to
+    //     the downstream step cell — findings 0070 F3 allowed footgun).
+    //     Python-FREE: a stub executor mirrors the backend's per-press step semantics (counter
+    //     advances on each press; the unset-scenario branch returns the guidance text).  The
+    //     REAL bt persistence + caching + scenario-reset are pinned in python e2e
+    //     (test_notebook_step_afk.py).
+    // ======================================================================
+    static string Section15_Phase5StepResetIdempotency(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string SCN_A = "{\"instruments\":[\"8918.TSE\"],\"granularity\":\"Daily\"}";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer15", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S15: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        nb.Cells[0].SetBody("bar = bt.step()\nbar\n");                          // a B3 step cell
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S15: precondition — cell0 not bound to region_001";
+
+        var btn = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        if (btn == null) return "S15: region_001 has no RUN button";
+        if (GlyphText(btn) != "▶") return "S15: precondition — RUN button does not start as ▶";
+
+        // The stub executor simulates the backend's step counter (each press advances by 1) and
+        // returns the guidance text when the scenario is unset.  This is the C# routing gate —
+        // the real backend caching is pytest's job.
+        var exec = new _StepExecutor();
+        var errors = new List<string>();
+        int stopCount = 0;
+        var runningEvents = new List<string>();
+        string committedScenario = SCN_A;
+
+        var lane = new NotebookRunLane(exec, startWorker: false);   // synchronous: Submit runs inline
+        var run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, lane,
+            msg => errors.Add(msg),
+            () => committedScenario,                                  // scenarioJsonProvider (mutable)
+            () => stopCount++,                                        // onStop
+            (region, running) =>                                      // onRunningChanged
+            {
+                runningEvents.Add(region + ":" + running);
+                StrategyEditorWindowFrame.SetRunButtonGlyph(btn, running);
+            });
+
+        // STRATEGY-24: a bt.step press DOES NOT activate the running guard / ▶→■ toggle.  Step is
+        // instant per press and intentionally stateful across presses — guarding it would block
+        // the very next press the user expects to fire.
+        run.RunCell(R1);
+        run.DrainAndRoute();
+        if (exec.Calls != 1) return "S15/STRATEGY-24: executor was not called on the step press";
+        if (exec.LastScenarioJson != SCN_A) return "S15/STRATEGY-24: executor did not receive the committed scenario, got [" + exec.LastScenarioJson + "]";
+        if (run.IsBacktestRunning) return "S15/STRATEGY-24: step press activated the running guard (it must not)";
+        if (runningEvents.Count != 0) return "S15/STRATEGY-24: onRunningChanged fired on a step press (it must not)";
+        if (GlyphText(btn) != "▶") return "S15/STRATEGY-24: ▶ toggled on a step press (it must stay ▶)";
+        if (views[R1].CurrentOutput != "1") return "S15/STRATEGY-24: step cell output should be '1' after first press, got [" + views[R1].CurrentOutput + "]";
+
+        // STRATEGY-25: the SAME scenario re-pressed advances the counter again — the running
+        // guard is not stuck and the controller accepts back-to-back step presses (Phase 5
+        // persistence is observable as "the counter signal keeps incrementing per press").
+        run.RunCell(R1);
+        run.DrainAndRoute();
+        if (exec.Calls != 2) return "S15/STRATEGY-25: 2nd step press was rejected (the guard must NOT activate for step)";
+        if (views[R1].CurrentOutput != "2") return "S15/STRATEGY-25: step cell output should be '2' after second press, got [" + views[R1].CurrentOutput + "]";
+
+        // STRATEGY-26: a scenario-unset bt.step press surfaces the fail-closed guidance text in
+        // the cell output (the backend's NoScenarioBacktester placeholder mirror — pytest pins
+        // the real placeholder; this gate pins that the executor's guidance payload reaches the
+        // window via SetOutput).
+        committedScenario = "";  // simulate "no scenario committed" — provider returns empty
+        run.RunCell(R1);
+        run.DrainAndRoute();
+        string lastOut = views[R1].CurrentOutput;
+        if (lastOut == null || !lastOut.Contains("commit the startup panel"))
+            return "S15/STRATEGY-26: scenario-unset press did not surface the guidance text, got [" + lastOut + "]";
+        if (!lastOut.Contains("RuntimeError"))
+            return "S15/STRATEGY-26: scenario-unset press output is missing the RuntimeError label, got [" + lastOut + "]";
+
+        lane.Dispose();
+        return null;
+    }
+
+    // Phase 5 stub executor: simulates the backend's step counter (each press +1) and routes the
+    // guidance text when the scenario JSON is empty (mirrors the real NoScenarioBacktester).
+    sealed class _StepExecutor : INotebookCellExecutor
+    {
+        public int Calls;
+        public string LastScenarioJson;
+        int _stepCounter;
+
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        {
+            Calls++;
+            LastScenarioJson = scenarioJson;
+            string output;
+            bool ok;
+            if (string.IsNullOrEmpty(scenarioJson))
+            {
+                output = "RuntimeError: bt.step(): no active scenario; commit the startup panel first, then press RUN again";
+                ok = false;
+            }
+            else
+            {
+                _stepCounter++;
+                output = _stepCounter.ToString();
+                ok = true;
+            }
+            return new NotebookRunResult
+            {
+                Ok = ok,
+                Ran = new[] { new NotebookCellOutput { Index = pressedIndex, Output = output, Ok = ok } },
+                Error = null,
+            };
+        }
     }
 
     static string GlyphText(UnityEngine.UI.Button runButton)

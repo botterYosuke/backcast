@@ -376,7 +376,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             msg => _menuBarView?.ShowMessage("Run cell: " + msg),
             BuildNotebookScenarioJson,
             () => _host.ForceStop(),
-            SetCellRunButtonState);
+            SetCellRunButtonState,
+            SetCellStaleRegions);
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
@@ -694,6 +695,23 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             btn.onClick.AddListener(() => { if (_isOwner) _notebookRun?.StopRunning(); });
         else
             btn.onClick.AddListener(() => { if (_isOwner && _host.ServerReady) _notebookRun?.RunCell(regionId); });
+    }
+
+    // #95 Phase 6 Slice 3 (findings 0075 P6-1): paint the per-cell STALE badge. The controller hands the
+    // regions whose cells are still stale after a run (edited but not re-pressed) — each gets an amber ▶;
+    // every OTHER known cell button is restored to green ▶. running (■) and stale (amber) are mutually
+    // exclusive: when this fires the controller has already cleared any running ■ back to ▶ and no other
+    // cell can be running (the running guard rejects a concurrent press), so painting the non-stale set
+    // green never clobbers a live ■. Re-pressing a stale cell runs it → next result drops it → green.
+    void SetCellStaleRegions(IReadOnlyList<string> staleRegions)
+    {
+        if (_cellRunButtons == null) return;
+        var stale = staleRegions != null ? new HashSet<string>(staleRegions) : new HashSet<string>();
+        foreach (var kv in _cellRunButtons)
+        {
+            if (kv.Value == null) continue;
+            StrategyEditorWindowFrame.SetRunButtonStale(kv.Value, stale.Contains(kv.Key));
+        }
     }
 
     // #95 Phase 4: serialise the committed startup-panel scenario into the dict the backend's

@@ -150,6 +150,22 @@ public static class StrategyEditorWindowFrame
                 : new Color(0.2275f, 0.6078f, 0.3608f, 1f); // #3a9b5c run-green when idle
     }
 
+    // #95 Phase 6 Slice 3 (findings 0075 P6-1 / ANCHOR self-decision): the THIRD run-button state —
+    // STALE. A cell whose code was edited (or whose upstream went stale) but not yet re-pressed shows
+    // an amber ▶ (marimo's "needs a run" cue). Driven by a SEPARATE signal from `running` (they are
+    // mutually exclusive — a running ■ cell is not in the stale set), so this never touches the glyph
+    // text and only re-tints: amber while stale, run-green when clean/idle. The caller must NOT call
+    // this on a cell currently showing ■ (running owns the tint there).
+    public static void SetRunButtonStale(Button runButton, bool stale)
+    {
+        if (runButton == null) return;
+        var img = runButton.GetComponent<Image>();
+        if (img == null) return;
+        img.color = stale
+            ? new Color(0.8510f, 0.6157f, 0.2078f, 1f)   // #d99d35 stale-amber: edited, needs a press
+            : new Color(0.2275f, 0.6078f, 0.3608f, 1f);  // #3a9b5c run-green when clean/idle
+    }
+
     static RectTransform FindChild(RectTransform parent, string name)
     {
         if (parent == null) return null;

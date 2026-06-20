@@ -45,6 +45,12 @@ public struct NotebookCellOutput
     public int Index;
     public string Output;
     public bool Ok;
+    // #95 Phase 6 Slice 2 (findings 0075 P6-2): the cell's REAL rich output — `Mimetype` (image/png,
+    // text/markdown, text/plain, …) and `Data` (base64 for images, text otherwise). `Output` stays the
+    // interim plain-text projection the current Text renderer paints; Slice 5 renders image/markdown/
+    // table natively from these. Absent on a legacy/text-only payload → empty (backward compatible).
+    public string Mimetype;
+    public string Data;
 }
 
 // The result of one RUN: the cells that ran (pressed + reactive downstream) + a run-level error.
@@ -56,6 +62,10 @@ public sealed class NotebookRunResult
     public string Error;
     public int Generation;
     public int RunId;   // copied from the request so the controller can match its busy-flag run (#95 P4)
+    // #95 Phase 6 Slice 2 (findings 0075 P6-1): cell-order indices still STALE after this run (cells
+    // edited but not yet re-pressed). The controller routes these to amber ▶ badges (Slice 3). Empty
+    // on a legacy payload that omits the key (backward compatible).
+    public int[] Stale = Array.Empty<int>();
 
     public static NotebookRunResult Failure(string error)
         => new NotebookRunResult { Ok = false, Ran = Array.Empty<NotebookCellOutput>(), Error = error };

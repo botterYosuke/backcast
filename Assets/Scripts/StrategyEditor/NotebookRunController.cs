@@ -11,6 +11,7 @@
 // list at drain time — so a cell that was deleted between submit and drain is simply skipped.
 
 using System;
+using System.Collections.Generic;
 
 public sealed class NotebookRunController
 {
@@ -21,6 +22,7 @@ public sealed class NotebookRunController
     readonly Func<string> _scenarioJsonProvider;     // #95 P4: committed scenario JSON (null-tolerant)
     readonly Action _onStop;                         // #95 P4: ■ press → force-stop the running backtest
     readonly Action<string, bool> _onRunningChanged;  // #95 P4: (region, running) → swap ▶/■ on the cell
+    readonly Action<IReadOnlyList<string>> _onStaleRegionsChanged;  // #95 P6 S3: regions still stale → amber ▶
     int _generation;                    // notebook epoch; bumped by Invalidate to drop stale in-flight runs
 
     int _runSeq;                        // monotonic run id source
@@ -37,7 +39,8 @@ public sealed class NotebookRunController
         Action<string> onError = null,
         Func<string> scenarioJsonProvider = null,
         Action onStop = null,
-        Action<string, bool> onRunningChanged = null)
+        Action<string, bool> onRunningChanged = null,
+        Action<IReadOnlyList<string>> onStaleRegionsChanged = null)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _viewFor = viewFor ?? (_ => null);
@@ -46,6 +49,7 @@ public sealed class NotebookRunController
         _scenarioJsonProvider = scenarioJsonProvider;
         _onStop = onStop;
         _onRunningChanged = onRunningChanged;
+        _onStaleRegionsChanged = onStaleRegionsChanged;
     }
 
     // A RUN press on the cell in `regionId`: synthesise the LIVE source (unsaved buffer ok — owner
@@ -139,9 +143,30 @@ public sealed class NotebookRunController
         }
         if (result.Generation != _generation) return;   // stale: the notebook was replaced mid-flight
         if (!result.Ok && !string.IsNullOrEmpty(result.Error)) _onError?.Invoke(result.Error);
-        if (result.Ran == null) return;
 
         var cells = _coordinator.Notebook.Cells;
+
+        // #95 Phase 6 Slice 3 (findings 0075 P6-1): project the post-run stale set (cell-order indices
+        // still needing a press) to their regions and hand them to the badge driver — the root paints
+        // amber ▶ on stale windows and green ▶ elsewhere. Mapped here (the controller owns the cell
+        // list); the root just paints. The just-pressed cell ran, so it is no longer stale → re-pressing
+        // a stale cell is how the user clears its amber.
+        if (_onStaleRegionsChanged != null)
+        {
+            var staleRegions = new List<string>();
+            if (result.Stale != null)
+            {
+                foreach (var idx in result.Stale)
+                {
+                    if (idx < 0 || idx >= cells.Count) continue;
+                    string r = _coordinator.RegionOf(cells[idx]);
+                    if (r != null) staleRegions.Add(r);
+                }
+            }
+            _onStaleRegionsChanged(staleRegions);
+        }
+
+        if (result.Ran == null) return;
         foreach (var co in result.Ran)
         {
             if (co.Index < 0 || co.Index >= cells.Count) continue;   // stale index (cell deleted) — skip

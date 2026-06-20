@@ -68,7 +68,21 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
                         Index = item.Value<int?>("index") ?? -1,
                         Output = item.Value<string>("output") ?? string.Empty,
                         Ok = item.Value<bool?>("ok") ?? true,
+                        // #95 Phase 6 Slice 2: rich output (absent on a legacy text-only payload → empty).
+                        Mimetype = item.Value<string>("mimetype") ?? string.Empty,
+                        Data = item.Value<string>("data") ?? string.Empty,
                     });
+                }
+            }
+            // #95 Phase 6 Slice 2: top-level `stale` = cell-order indices still needing a press (absent
+            // on a legacy payload → empty). A non-int entry is skipped defensively.
+            var stale = new List<int>();
+            if (o["stale"] is JArray staleArr)
+            {
+                foreach (var s in staleArr)
+                {
+                    int? v = s.Value<int?>();
+                    if (v.HasValue) stale.Add(v.Value);
                 }
             }
             return new NotebookRunResult
@@ -76,6 +90,7 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
                 Ok = o.Value<bool?>("ok") ?? false,
                 Ran = ran.ToArray(),
                 Error = o.Value<string>("error"),
+                Stale = stale.ToArray(),
             };
         }
         catch (Exception e)

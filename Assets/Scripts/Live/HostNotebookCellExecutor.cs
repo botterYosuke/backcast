@@ -33,6 +33,42 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         return result;
     }
 
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection. Crosses pythonnet
+    // (WorkspaceEngineHost.InvokeNotebookRestage -> engine.inproc_server.notebook_restage) on the
+    // NotebookRunLane worker thread (same thread discipline as Run — the IncrementalNotebookSession is
+    // thread-guarded to the lane worker). Returns the cell-order indices still stale; a null/unparsable
+    // response degrades to an empty set (an edit must never crash the lane).
+    public int[] Restage(string source)
+    {
+        string json = _host.InvokeNotebookRestage(source);
+        return ParseStale(json);
+    }
+
+    // Decode the backend restage JSON ({"stale":[indices],"error"}). Defensive: a missing/typed-off
+    // field never throws; an unparsable payload becomes an empty stale set.
+    public static int[] ParseStale(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return Array.Empty<int>();
+        try
+        {
+            var o = JObject.Parse(json);
+            var stale = new List<int>();
+            if (o["stale"] is JArray arr)
+            {
+                foreach (var s in arr)
+                {
+                    int? v = s.Value<int?>();
+                    if (v.HasValue) stale.Add(v.Value);
+                }
+            }
+            return stale.ToArray();
+        }
+        catch (Exception)
+        {
+            return Array.Empty<int>();
+        }
+    }
+
     // Returns true iff the backend reported a backtest drive (the "run_summary" key is present);
     // `summary` is its finalized JSON, or null when the driven run produced no summary.
     static bool TryGetRunSummary(string json, out string summary)

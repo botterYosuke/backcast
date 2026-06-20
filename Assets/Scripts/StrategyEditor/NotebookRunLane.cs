@@ -37,6 +37,10 @@ public struct NotebookRunRequest
     // Monotonic per-run id so the controller's running guard can correlate THIS run's result and
     // clear the busy flag for the right run (not a faster pure-compute run that drained first).
     public int RunId;
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): an edit/blur RESTAGE rather than a RUN. The worker
+    // calls executor.Restage(Source) instead of Run, and the result carries ONLY the post-edit stale
+    // set (no ran cells). Routed on the SAME lane so the incremental session's thread guard is honoured.
+    public bool IsRestage;
 }
 
 // One ran cell's result (pressed cell or a reactive descendant), by cell-order index.
@@ -76,6 +80,10 @@ public sealed class NotebookRunResult
 public interface INotebookCellExecutor
 {
     NotebookRunResult Run(string source, int pressedIndex, string scenarioJson);
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection — diff-register the live
+    // source WITHOUT running any cell. Returns the cell-order indices still stale (empty when nothing
+    // is stale). Runs on the lane worker thread (same thread discipline as Run).
+    int[] Restage(string source);
 }
 
 public sealed class NotebookRunLane : IDisposable
@@ -134,8 +142,19 @@ public sealed class NotebookRunLane : IDisposable
         NotebookRunResult r;
         try
         {
-            r = _executor.Run(req.Source, req.PressedIndex, req.ScenarioJson)
-                ?? NotebookRunResult.Failure("executor returned null");
+            if (req.IsRestage)
+            {
+                // #95 Phase 6 Slice 4 (findings 0075 P6-1): an edit/blur restage — diff-register the live
+                // source WITHOUT running any cell and carry back ONLY the post-edit stale set (no ran
+                // cells). Same worker thread as Run, so the incremental session's thread guard is honoured.
+                int[] stale = _executor.Restage(req.Source) ?? Array.Empty<int>();
+                r = new NotebookRunResult { Ok = true, Ran = Array.Empty<NotebookCellOutput>(), Stale = stale };
+            }
+            else
+            {
+                r = _executor.Run(req.Source, req.PressedIndex, req.ScenarioJson)
+                    ?? NotebookRunResult.Failure("executor returned null");
+            }
         }
         catch (Exception e)
         {

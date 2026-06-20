@@ -268,6 +268,31 @@ public sealed class WorkspaceEngineHost
         }
     }
 
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection through the persistent
+    // in-proc session (engine.inproc_server.notebook_restage -> IncrementalNotebookSession). NOTEBOOK-RUN
+    // WORKER THREAD ONLY (NotebookRunLane): the IncrementalNotebookSession is thread-guarded to the
+    // thread that first drove it (the lane worker, via run_cell), so a restage from Unity main would be
+    // rejected — it MUST ride the same lane. `source` is the LIVE synthesised marimo `.py` text; returns
+    // the backend JSON ({"stale":[indices],"error"}), or null on a not-ready server / Python error (the
+    // executor maps null to an empty stale set).
+    public string InvokeNotebookRestage(string source)
+    {
+        if (!Volatile.Read(ref _serverReady)) return null;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _server.InvokeMethod(
+                "notebook_restage",
+                new PyString(source ?? "")))
+                return res.As<string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] notebook_restage failed: " + e.Message);
+            return null;
+        }
+    }
+
     // #95 Phase 4: a bt-driven notebook run finalizes its own summary (the title-bar Run path sets
     // _runSummaryJson from start_engine's return; this surfaces the per-cell-RUN equivalent so the
     // Hakoniwa run_result tile fills the same way). Thread-safe: called on the notebook-run worker.

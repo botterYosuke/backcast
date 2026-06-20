@@ -1218,6 +1218,10 @@ public static class StrategyEditorNotebookE2ERunner
                 Error = null,
             };
         }
+
+        // #95 Phase 6 Slice 4: interface satisfaction only (the edit-stale AFK sections S16–S19 are
+        // Slice 7). This fake projects no stale.
+        public int[] Restage(string source) => Array.Empty<int>();
     }
 
     static string GlyphText(UnityEngine.UI.Button runButton)
@@ -1244,6 +1248,10 @@ public static class StrategyEditorNotebookE2ERunner
                 Error = null,
             };
         }
+
+        // #95 Phase 6 Slice 4: interface satisfaction only (the edit-stale AFK sections S16–S19 are
+        // Slice 7). This fake projects no stale.
+        public int[] Restage(string source) => Array.Empty<int>();
     }
 
     // Fake per-cell executor (Python-FREE): pressed cell -> "out-{index}"; pressing cell 0 also emits a
@@ -1261,6 +1269,10 @@ public static class StrategyEditorNotebookE2ERunner
                 ran.Add(new NotebookCellOutput { Index = 1, Output = "down-1", Ok = true });
             return new NotebookRunResult { Ok = true, Ran = ran.ToArray(), Error = null };
         }
+
+        // #95 Phase 6 Slice 4: interface satisfaction only (the edit-stale AFK sections S16–S19 are
+        // Slice 7). This fake projects no stale.
+        public int[] Restage(string source) => Array.Empty<int>();
     }
 
     // ---- helpers ----

@@ -106,6 +106,29 @@ public sealed class NotebookRunController
         }
     }
 
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): an edit/blur RESTAGE. Synthesise the LIVE notebook
+    // source (unsaved buffer ok) and queue a restage on the SAME worker lane as RunCell — the
+    // IncrementalNotebookSession is thread-guarded to the lane worker, so a direct host call from Unity
+    // main (the onEndEdit handler) would be rejected. The result carries ONLY the post-edit stale set
+    // (no ran cells) and drains through the SAME ApplyResult path, which routes it to the amber ▶ badges
+    // exactly like a run's residual stale set (the just-edited cells light up; re-pressing clears them).
+    // No-op on a synthesiser failure (leave the badges untouched). The notebook epoch rides along so a
+    // restage queued against a notebook that is then replaced (File→Open/New) is dropped at drain time.
+    public void Restage()
+    {
+        string source = _coordinator.Notebook.SynthesizeLiveSource();
+        if (source == null) return;
+        _lane.Submit(new NotebookRunRequest
+        {
+            Source = source,
+            PressedIndex = -1,
+            Generation = _generation,
+            ScenarioJson = null,
+            RunId = ++_runSeq,
+            IsRestage = true,
+        });
+    }
+
     // The running cell's ■ press: ask the engine to stop the in-flight backtest. The run still
     // completes (the stepper returns STOPPED) and its result drains through ApplyResult, which
     // clears the busy flag and restores ▶. No-op when nothing is running.

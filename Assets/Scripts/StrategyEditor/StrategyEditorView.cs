@@ -19,6 +19,7 @@
 // in the same GameObject shell), and on Open (the aggregate replaced the cell list). The pure logic
 // (highlight, history) is AFK-authoritative; THIS boundary (InputField sync, keys, IME) is HITL.
 
+using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -31,6 +32,12 @@ public class StrategyEditorView : MonoBehaviour
     // #95 Phase 2 土台: the per-cell RUN output currently shown (test/probe observability; the
     // production path is SetOutput). Null when there is no output pane.
     public string CurrentOutput => _output != null ? _output.text : null;
+
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): fired when an edit is COMMITTED (the field loses focus
+    // after a change — onEndEdit, which for a MultiLineNewline field is blur, NOT Enter). The root wires
+    // this to NotebookRunController.Restage so an edit/blur re-projects the per-cell stale badges. Null
+    // when no restage consumer is attached (e.g. an unbound shell before the root wires it).
+    public Action EditCommitted;
 
     InputField _input;
     PythonSyntaxMeshEffect _effect;
@@ -57,6 +64,7 @@ public class StrategyEditorView : MonoBehaviour
         BoundCell = cell;
 
         _input.onValueChanged.AddListener(OnValueChanged);
+        _input.onEndEdit.AddListener(OnEditCommitted);   // #95 P6 S4: blur -> restage (per-cell stale)
         SyncFromCell();   // initial: the bound cell's body, or empty when unbound
 
         ThemeService.Changed += ApplyTheme;
@@ -65,7 +73,11 @@ public class StrategyEditorView : MonoBehaviour
 
     void OnDestroy()
     {
-        if (_input != null) _input.onValueChanged.RemoveListener(OnValueChanged);
+        if (_input != null)
+        {
+            _input.onValueChanged.RemoveListener(OnValueChanged);
+            _input.onEndEdit.RemoveListener(OnEditCommitted);
+        }
         ThemeService.Changed -= ApplyTheme;
     }
 
@@ -129,6 +141,12 @@ public class StrategyEditorView : MonoBehaviour
         _prevFocus = curFocus;
         Retokenize(newText);
     }
+
+    // #95 Phase 6 Slice 4 (findings 0075 P6-1): the field committed an edit (blur). Notify the root so
+    // it re-projects the per-cell stale badges. onEndEdit ALSO fires on Enter for a single-line field,
+    // but this field is MultiLineNewline (Enter inserts a newline), so this is blur-only — marimo-like.
+    // Cheap: the restage is a no-op when the source is unchanged (the backend diff-registers).
+    void OnEditCommitted(string _) => EditCommitted?.Invoke();
 
     void Retokenize(string text)
     {

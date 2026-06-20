@@ -362,7 +362,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #81: the adopted window's content is a Cell fragment view (no Document / no registry — the
         // notebook aggregate, registered above under NOTEBOOK_ID, is the sole provider).
         var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, font: _font);
-        if (editorView != null) _editors[WINDOW_ID] = editorView;
+        if (editorView != null)
+        {
+            _editors[WINDOW_ID] = editorView;
+            // #95 Phase 6 Slice 4 (findings 0075 P6-1): an edit/blur re-projects the per-cell stale
+            // badges. Owner-gated like the ▶ press (a restage only lands on the owner's in-proc kernel);
+            // _notebookRun is wired just below and read lazily at blur time.
+            editorView.EditCommitted = () => { if (_isOwner && _host.ServerReady) _notebookRun?.Restage(); };
+        }
 
         _coordinator = new NotebookCellCoordinator(_notebook, _windows, ViewFor, SpawnAnchorTopLeft, _cellWindowSize);
         // #95 Phase 2 土台 (ADR-0016 D2): per-cell RUN — every cell window gets a ▶ that runs THAT cell
@@ -521,7 +528,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // #81: a spawned cell window — a Cell fragment view (the coordinator binds its cell right
             // after the spawn) + a title-bar X wired to delete that cell.
             var view = StrategyEditorContentBuilder.Build(body, font: _font);
-            if (view != null) _editors[id] = view;
+            if (view != null)
+            {
+                _editors[id] = view;
+                view.EditCommitted = () => { if (_isOwner && _host.ServerReady) _notebookRun?.Restage(); };   // #95 P6 S4: blur -> restage
+            }
             WireCellCloseButton(root, id);
             WireCellRunButton(root, id);   // #95 Phase 2 土台: spawned cell windows get a ▶ RUN too
         }

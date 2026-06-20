@@ -172,6 +172,27 @@ public static class FooterModeE2ERunner
             view.Refresh();
             Check(!SegInteractable(segs, FooterModeViewModel.Replay),
                 "FOOTER-06 view: visible segment interactable=false while locked");
+
+            // ============ U4 cutover negative invariant — RE-HOMED from the retired RunButtonE2ERunner
+            // SectionC (#95 Phase 6 Slice 9; findings 0075 §3c). The footer AFTER the transport→reactive
+            // cutover (#76 S6b-β-clean / Phase 6 global ▶ Run sunset) keeps the mode segments but has NO
+            // replay-transport controls (▶/⏸ play-pause, ⏭ step, ⏹ stop, the 1/2/5/10/50x speed buttons).
+            // NON-VACUITY: pin all 3 mode segment GameObjects exist FIRST (a renamed/removed footer would
+            // false-green the absence check). WorkspaceFooterView.MakeButton names every button "btn:"+label,
+            // so a re-added transport control surfaces as btn:▶ etc. under the built footer `bar`.
+            // RED litmus: add a MakeButton(bar,"▶",…) to WorkspaceFooterView.Build → btn:▶ appears → RED.
+            // (Covers: FOOTER-11 — re-homed U4) ============
+            var footerBtnNames = new HashSet<string>();
+            foreach (var b in bar.GetComponentsInChildren<Button>(true)) footerBtnNames.Add(b.gameObject.name);
+            Check(footerBtnNames.Contains("btn:Replay")
+                && footerBtnNames.Contains("btn:Manual")
+                && footerBtnNames.Contains("btn:Auto"),
+                "U4: footer has the 3 mode segments (non-vacuity guard for the transport-absence check)");
+            string retiredTransport = null;
+            foreach (var t in new[] { "btn:▶", "btn:⏸", "btn:⏭", "btn:⏹", "btn:1x", "btn:2x", "btn:5x", "btn:10x", "btn:50x" })
+                if (footerBtnNames.Contains(t)) { retiredTransport = t; break; }
+            Check(retiredTransport == null,
+                "FOOTER-11 (re-homed U4): footer has NO retired replay-transport button (found: " + (retiredTransport ?? "none") + ")");
         }
         finally { UnityEngine.Object.DestroyImmediate(fgo); }
 

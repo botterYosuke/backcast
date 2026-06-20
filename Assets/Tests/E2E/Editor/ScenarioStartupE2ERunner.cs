@@ -53,7 +53,8 @@ public static class ScenarioStartupE2ERunner
                 ?? Section8_TileBlurResyncsStaleField()
                 ?? Section9_IndividualWritersAreMutateExistingOnly()
                 ?? Section10_InlineReaderMatchesGolden()
-                ?? Section11_FileNewClearsInMemory();
+                ?? Section11_FileNewClearsInMemory()
+                ?? Section12_StartupTileHasNoRunButton();
         }
         catch (Exception e)
         {
@@ -630,5 +631,47 @@ public static class ScenarioStartupE2ERunner
         if (after != before) return "clear: Clear() mutated the on-disk sidecar (must be in-memory only — destructive over-reach)";
 
         return null;
+    }
+
+    // ---- 12. U5 cutover negative invariant — RE-HOMED from the retired RunButtonE2ERunner SectionC
+    // (#95 Phase 6 Slice 9; findings 0075 §3c). The startup tile is SCENARIO-EDITING-ONLY (#76 S6b-β-clean
+    // U5 / Phase 6 title-bar Run sunset): the Run button + run-readiness display moved to the Strategy
+    // Editor title bar, so the tile keeps only the scenario fields + the Daily/Minute granularity buttons
+    // and has NO run-trigger button. NON-VACUITY: pin the tile DID build its granularity buttons FIRST
+    // (a tile that built nothing would false-green the Run-absence check). ScenarioStartupTile.MakeButton
+    // names every button "btn:"+label, so a re-added Run control surfaces as btn:Run… under the tile.
+    // RED litmus: add a MakeButton(tile,"Run Replay",…) to ScenarioStartupTile.Build → btn:Run Replay
+    // appears → RED.
+    // Covers: SCENARIO-13 (re-homed U5 — startup tile carries no Run trigger)
+    static string Section12_StartupTileHasNoRunButton()
+    {
+        var go = new GameObject("probe_tile_norun", typeof(RectTransform));
+        try
+        {
+            var tileRt = (RectTransform)go.transform;
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            var ctrl = new ScenarioStartupController();
+            ctrl.Populate(Path.Combine(TempDir, "norun_strategy.py"), new DateTime(2026, 6, 14));
+            var tile = new ScenarioStartupTile(ctrl, font);
+            tile.Build(tileRt);
+
+            var names = new System.Collections.Generic.HashSet<string>();
+            foreach (var b in tileRt.GetComponentsInChildren<Button>(true)) names.Add(b.gameObject.name);
+
+            // non-vacuity guard: the tile really built its scenario-editing (granularity) buttons.
+            if (!names.Contains("btn:Daily") || !names.Contains("btn:Minute"))
+                return "U5: startup tile did not build its granularity buttons (non-vacuity guard failed)";
+
+            // THE negative: no run-trigger button under the tile — verbatim retired name first, then a
+            // broader contains-'Run' guard so a renamed Run button can't slip through.
+            if (names.Contains("btn:Run Replay"))
+                return "SCENARIO-13 (re-homed U5): startup tile still has its retired Run button (btn:Run Replay)";
+            foreach (var n in names)
+                if (n.IndexOf("Run", StringComparison.Ordinal) >= 0)
+                    return "SCENARIO-13 (re-homed U5): startup tile has a run-trigger button '" + n + "' (Run moved to the Strategy Editor title bar)";
+
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 }

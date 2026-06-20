@@ -173,6 +173,7 @@ Navigator が主導するので lead の仕事は限られる:
 - **team セットアップ**と Navigator へのゴール受け渡し（slice ごとに要るスキルの invoke 指示を spawn prompt に含める）。
 - **Human ⇄ Navigator の橋渡し**: owner 判断の質問を Human に提示し回答を返す／手元 E2E のバグ報告を Navigator に **verbatim** で渡す（仮説を採用して Driver を直接動かさない）。
 - **最終ゲート**: 完了宣言の前に「テストを実際に回したか」を締める（下記「Medium 以上なし」節）。
+- **batchmode/build の分業（実例 #93 hakoniwa perspective stage / 2026-06）**: 検証用の **単発 probe 実走（compile-only / `-executeMethod` の RED/GREEN 確認）は Navigator の同期（非 background）Bash に委譲**してよい — 同期実行は Navigator のターン内で完結するので揮発せず、結果を Navigator の context で即解釈でき往復が減る（MEMORY「Unity batchmode probes runnable here」前提）。lead が握り続けるゲートは 2 つに絞る: ① **`run_in_background` が要る長尺ビルド**（Navigator の background は死ぬ・下記 fallback 節）、② **tracked ファイルを mutate する Build（`SceneBuilder.Build` で `.unity`/`TagManager.asset`/RT asset 再生成）と `git add`/`commit`**。後者は「正本を書き換える」ので lead が締める。GPU が要る probe（`-nographics` 不可・RT readback）は lead が回し、INCONCLUSIVE なら owner HITL に畳む。
 - **完了報告**を Human に短く並べる。
 - **respawn / cleanup**: Navigator から context 逼迫の合図が来たら新個体に引き継ぐ。team を畳む。
 

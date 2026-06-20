@@ -1035,6 +1035,46 @@ class DataEngineBackend:
             out["run_summary"] = result["run_summary"]
         return _json.dumps(out)
 
+    def notebook_restage(self, source):
+        """#95 Phase 6 Slice 4 (findings 0075): edit-time stale projection — diff-register the
+        LIVE editor source against the incremental session WITHOUT running any cell, and return
+        the window indices that became stale.  Mirrors ``run_cell``'s front half (synthesise the
+        marimo app, map ordered bodies to stable ``c{i}`` ids), but stops after ``restage`` so a
+        keystroke never executes anything (marimo edit-time staleness, findings 0075 P6-1).
+
+        Called on the host's single notebook-run worker thread (same as ``run_cell``), so the
+        ``IncrementalNotebookSession``'s thread-local kernel and ``_thread_guard`` owner stay
+        consistent across run/restage. Returns a JSON string ``{"stale":[indices], "error"}``;
+        ``stale`` is cell-order indices (windows are addressed by index, mirroring ``run_cell``).
+        """
+        import json as _json
+
+        from engine.strategy_runtime.cell_synthesis import load_app_from_text
+        from engine.strategy_runtime.notebook_session import IncrementalNotebookSession
+
+        if self._notebook_session is None:
+            self._notebook_session = IncrementalNotebookSession()
+
+        source = str(source)
+        app = load_app_from_text(source)
+        if app is None:
+            return _json.dumps(
+                {"stale": [], "error": "source is not a loadable marimo notebook"}
+            )
+        bodies = list(app._cell_manager.codes())
+        cells = [{"cell_id": f"c{i}", "code": b} for i, b in enumerate(bodies)]
+
+        try:
+            result = self._notebook_session.restage(cells)
+        except Exception as exc:  # last-resort guard: a restage never crashes the host worker
+            logging.exception("notebook_restage failed")
+            return _json.dumps({"stale": [], "error": f"{type(exc).__name__}: {exc}"})
+
+        # Map stable cell ids back to cell-order indices for the C# side (mirrors run_cell).
+        id_to_index = {f"c{i}": i for i in range(len(bodies))}
+        stale = sorted(id_to_index[cid] for cid in result.get("stale", []) if cid in id_to_index)
+        return _json.dumps({"stale": stale, "error": result.get("error")})
+
     @staticmethod
     def _normalize_scenario_key(scenario_json):
         """Canonical step-bt cache key for a committed scenario (carry-over C / findings 0075).

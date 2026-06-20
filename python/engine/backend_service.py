@@ -397,6 +397,18 @@ class BackendService:
             logging.exception("[backend_service] run_cell failed")
             return _json.dumps({"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"})
 
+    def notebook_restage(self, source: str) -> str:
+        """#95 Phase 6 Slice 4: delegate edit-time stale projection to
+        DataEngineBackend.notebook_restage.  Returns the backend's JSON string verbatim
+        (``{"stale":[indices], "error"}``)."""
+        try:
+            return self._srv.notebook_restage(source)
+        except Exception as exc:
+            import json as _json
+
+            logging.exception("[backend_service] notebook_restage failed")
+            return _json.dumps({"stale": [], "error": f"{type(exc).__name__}: {exc}"})
+
     # #50 (ADR-0006): the nautilus BacktestEngine→GUI bridge (#68 start_nautilus_replay +
     # pause/step/resume/set_replay_speed) was retired with nautilus. Production Replay runs
     # through start_engine (DuckDB→kernel); these forwarders had no production caller.

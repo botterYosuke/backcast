@@ -215,6 +215,11 @@ class InprocLiveServer:
         ``{"ok","ran":[{"index","output","ok"}...],"error","run_summary"?}``."""
         return self._svc.run_cell(source, pressed_index, scenario_json)
 
+    def notebook_restage(self, source: str) -> str:
+        """#95 Phase 6 Slice 4: edit-time stale projection (diff-register the live source WITHOUT
+        running). Returns a JSON string ``{"stale":[indices], "error"}``."""
+        return self._svc.notebook_restage(source)
+
     def get_portfolio(self) -> dict:
         return self._svc.get_portfolio()
 

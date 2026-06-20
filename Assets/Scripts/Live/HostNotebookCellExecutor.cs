@@ -51,22 +51,29 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         if (string.IsNullOrEmpty(json)) return Array.Empty<int>();
         try
         {
-            var o = JObject.Parse(json);
-            var stale = new List<int>();
-            if (o["stale"] is JArray arr)
-            {
-                foreach (var s in arr)
-                {
-                    int? v = s.Value<int?>();
-                    if (v.HasValue) stale.Add(v.Value);
-                }
-            }
-            return stale.ToArray();
+            return ExtractStale(JObject.Parse(json));
         }
         catch (Exception)
         {
             return Array.Empty<int>();
         }
+    }
+
+    // Extract the `stale` JArray (cell-order indices) from an already-parsed object. A missing/typed-off
+    // field yields an empty set; a non-int entry is skipped defensively. Shared by ParseStale (restage)
+    // and Parse (run-result) so the two paths agree on stale semantics.
+    static int[] ExtractStale(JObject o)
+    {
+        var stale = new List<int>();
+        if (o["stale"] is JArray arr)
+        {
+            foreach (var s in arr)
+            {
+                int? v = s.Value<int?>();
+                if (v.HasValue) stale.Add(v.Value);
+            }
+        }
+        return stale.ToArray();
     }
 
     // Returns true iff the backend reported a backtest drive (the "run_summary" key is present);
@@ -110,23 +117,14 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
                     });
                 }
             }
-            // #95 Phase 6 Slice 2: top-level `stale` = cell-order indices still needing a press (absent
-            // on a legacy payload → empty). A non-int entry is skipped defensively.
-            var stale = new List<int>();
-            if (o["stale"] is JArray staleArr)
-            {
-                foreach (var s in staleArr)
-                {
-                    int? v = s.Value<int?>();
-                    if (v.HasValue) stale.Add(v.Value);
-                }
-            }
             return new NotebookRunResult
             {
                 Ok = o.Value<bool?>("ok") ?? false,
                 Ran = ran.ToArray(),
                 Error = o.Value<string>("error"),
-                Stale = stale.ToArray(),
+                // #95 Phase 6 Slice 2: top-level `stale` = cell-order indices still needing a press
+                // (absent on a legacy payload → empty).
+                Stale = ExtractStale(o),
             };
         }
         catch (Exception e)

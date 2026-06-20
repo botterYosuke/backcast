@@ -1798,14 +1798,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             OnFileSave();
             bool saved = _notebook != null && !_notebook.IsDirty;
             if (_saveGuardController.ResolveSave(saved) == SaveGuardOutcome.SaveThenProceed) RunGuardProceed();   // .py persisted → proceed
-            // still dirty → Save failed: ResolveSave returns Abort, keep the document (data-protection guard)
+            else _guardProceed = null;                        // still dirty → Save failed: keep the document, abandon the deferred action (data-protection guard)
         }
         else if (outcome == SaveGuardOutcome.SaveAsThenProceed) // (untitled): native picker, then resolve via the controller (案A)
         {
             OnFileSaveAs();
             bool committed = _notebook != null && !_notebook.IsDirty;
             if (_saveGuardController.ResolveSaveAs(committed) == SaveGuardOutcome.SaveAsThenProceed) RunGuardProceed();
-            // picker cancelled / write failed → Abort: stay in the app, document preserved
+            else _guardProceed = null;                        // picker cancelled / write failed → Abort: keep the document, abandon the deferred action
         }
         else _guardProceed = null;                            // closed-dialog Abort no-op: abandon any deferred action
     }

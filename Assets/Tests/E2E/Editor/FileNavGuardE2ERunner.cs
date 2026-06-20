@@ -238,7 +238,7 @@ public static class FileNavGuardE2ERunner
         if (!h.Sgc.IsOpen) return "FILEGUARD-09: dirty File→Open did not prompt";
         stub.NextResult = null;                            // the upcoming Save-As picker is cancelled
         h.OnGuardSave();                                   // untitled → Save As → cancelled → still dirty → Abort
-        if (Current(h) == Path.GetFullPath(tgt)) return "FILEGUARD-09: a cancelled Save still LOADED the picked .py (data-protection Abort missing)";
+        if (SamePath(Current(h), tgt)) return "FILEGUARD-09: a cancelled Save still LOADED the picked .py (data-protection Abort missing)";
         if (h.Nb.IsBound) return "FILEGUARD-09: the untitled document was wrongly bound after a cancelled Save";
         if (!h.Nb.IsDirty) return "FILEGUARD-09: the unsaved work was lost (must stay dirty after Abort)";
         if (!h.Nb.Cells[0].Body.Contains("unsaved")) return "FILEGUARD-09: the dirty body was replaced despite the Abort";

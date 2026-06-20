@@ -292,15 +292,20 @@ infinite canvas の Content 座標系の座標。**画面ピクセルでも zoom
 フィールド**として載る（capability surface 追加・findings 0004 §10 の予約項目）。
 _Avoid_: pan/zoom 状態を panel `LayoutRect`（正規化 0..1 表示矩形）に混ぜること（別次元・別フィールド）
 
-**Hakoniwa（split-grid surface）**:
-infinite canvas の Content 上に乗る単一の **split-grid サーフェス**。chart + status 系 tile（`chart` /
-`status` / `positions` / `orders` / `run_result`）を **locked `ceil(√n)` グリッド**（n=5 → 3 列×2 行・最終
-cell は空）に並べる。TTWR の Hakoniwa（`src/ui/hakoniwa.rs`・ADR 0011/0014）の **capability parity**（ADR-0003・
-形式非互換）。Content の子なので pan/zoom に自動追従する（chrome は追従しない）。実装は #14。
-_Avoid_: free-float／overlap（tile は grid slot を占めるだけ）／chart を Hakoniwa の外の常設 floating window と
-定義すること（TTWR 現行も chart は Hakoniwa tile）
+**Hakoniwa（ドッキング window クラスタ）** ※2026-06-21 **再定義**・方針 [[ADR-0017]]（findings 0075）:
+infinite canvas の Content 上で、**独立した floating window**（`chart` / `positions` / `orders` / `run_result` /
+`buying_power` / `startup`）が **磁石スナップでくっついた集合**を指す概念ラベル。専用の bounded サーフェス
+GameObject（HakoniwaRoot）は持たず、全 window は [[floating window / FloatingWindowLayer / z-order]] の
+`FloatingWindowLayer` の子（pan/zoom 追従）。くっつき方は drag リリース時の**辺の磁石スナップ**（flush 隣接＋同辺整列）で、
+結合・群一体移動・detach 状態は無い（各 window 常に独立・隙間/重なり許容）。
+~~旧定義（SUPERSEDED・findings 0007・TTWR `src/ui/hakoniwa.rs`/ADR 0011/0014 parity）: `ceil(√n)` split-grid に tile を
+並べ swap で並べ替える単一サーフェス~~——ADR-0017 で TTWR split-grid parity から意図的逸脱し退役（grid/box-grow/swap/per-mode を全廃）。
+_Avoid_: 「Hakoniwa = 固有の GameObject/bounded box」と捉えること（クラスタの概念ラベル・実体は floating window 群）／
+タイリング強制・resize 連動・group 一体移動を持ち込むこと（磁石スナップは結合なし）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）
 
-**tile / slot / tile swap**:
+**tile / slot / tile swap** ※**SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）で退役。
+パネルは独立 floating window（canvas 論理座標の position+size）になり、slot 順序の正本・swap・`ceil(√n)` 派生 rect は廃止。
+くっつきは磁石スナップ。以下は履歴:
 **tile** = Hakoniwa の 1 区画（安定 `id` で同定）。**slot** = tile が占める grid スロット番号（row-major・
 左→右／上→下）＝ #12 `PanelLayout.slot`（**順序の正本**）。tile の実表示矩形（`LayoutRect`）は n+slot から
 **等分グリッドで派生**する snapshot で、自由配置や split 比率の正本ではない。**tile swap** = ヘッダ drag で 2 tile の
@@ -308,29 +313,37 @@ slot を入れ替える操作（**swap であって自由配置ではない**・
 比率変更・ADR 0015 parity）と box 移動（root の canvas 位置永続化）は #14 **外**＝将来 slice の additive 拡張。
 _Avoid_: slot を rect から導く／rect を split 比率や root 位置の正本に流用すること（slot が正本・rect は派生）
 
-**chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）**:
+**chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）** ※**一部 SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）:
+**維持**: chart は universe（`InstrumentRegistry`）と常時同期し銘柄 add/remove で spawn/despawn・membership 正本は universe。
+**退役**: chart/base は **floating window**（grid tile ではない）。box-grow / `ceil(√n)` grid / slot 並びは廃止し、actuation は
+`FloatingWindowController.Spawn/Close`。doc は座標（floatingWindows）を保存。以下は履歴:
 **chart tile family** = Hakoniwa の chart を「固定 1 枚（id `chart`）」から **universe 登録銘柄ごとの動的な tile 集合**へ拡張したもの。各 chart tile の id は `chart:<instrument-id>`。**どの chart が存在するか（メンバーシップ）の正本は universe（`InstrumentRegistry`）**で、universe と**常に同期**する（銘柄 add/remove で即 spawn/despawn＝`InstrumentRegistry.Changed`）。layout doc は **並び順（slot）だけ**を保存し、メンバーは universe から導出する（doc にあって universe に無い id は skip、universe にあって doc に無い id は末尾へ＝既存 tolerance を流用・スキーマ追加 0）。**base tile** = 銘柄に紐づかない常駐 tile（`startup` 等）で、chart tile の**前**に並ぶ。box は銘柄数 n から決定的に grow する（TTWR `compute_hakoniwa_box_size` の port・**位置/サイズは persist しない**＝derived）。TTWR の `InstrumentRegistry`→chart tile sync（ADR 0011 Update／#169）の capability parity。base tile を**モード別**にする（Replay=設定込み／Live=設定無し・ADR 0013）と **per-mode profile**（Replay/Live で別レイアウト）、box 位置/サイズの**永続化＋drag-handle 移動/リサイズ**は、それぞれ別の後続 additive slice。
 _Avoid_: chart の集合を layout doc 側の正本にすること（正本は universe）／`chart:<id>` を base tile と同じ「固定 id」前提で persist すること（chart はメンバーが動的）／box の derived-grow を box 位置/サイズの永続化（将来 slice）と混ぜること
 
-**mode-conditional base tile / base retile（モード別 base・[[ExecutionMode（実行モード）]] 所有）**:
+**mode-conditional base tile / base retile（モード別 base・[[ExecutionMode（実行モード）]] 所有）** ※**縮退 SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）:
+despawn/respawn の base retile は廃止。mode 差は **`startup` window を Replay のときだけ Show / Live で Hide** の可視性トグルだけに縮退
+（`FloatingWindowController.Show`/`Hide`・dormant 温存）。chart は mode をまたいで identity 保持（spawn したまま）。以下は履歴:
 **base tile の集合（種類）を [[ExecutionMode（実行モード）]] が決める**。Replay = `[startup, buying_power, orders, positions, run_result]`（`startup` を index 0）、Live（LiveManual/LiveAuto 共通）= `[buying_power, orders, positions, run_result]`（`startup` 無し）。mode が切り替わって **base の集合が変わったときだけ** base tile を despawn/respawn する＝**base retile**。chart tile（[[chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）]]）は mode 切替をまたいで **identity を保持**し、新 grid の後半スロットへ再配置される（**所有権分離**: base=ExecutionMode／chart=universe`InstrumentRegistry`）。`HakoniwaController.Order` は常に `[base…, chart…]` の順を保ち、grid は `n_base + n_chart` から再構築する。backcast には TTWR の `ExecutionMode` enum/Resource が無く、mode の正本は footer の [[FooterModeViewModel.DisplayMode]]（poll が overwrite）なので、base の集合判定は `DisplayMode → {Replay, Live}` の 2 値（LiveManual/LiveAuto は同一 Live base）で行う。base 集合の所有は membership orchestrator（`BackcastWorkspaceRoot`）= chart の universe 同期と対の構造。TTWR `hakoniwa_tile_kinds(mode)`／`reconcile_hakoniwa_tiles`（base-only rebuild）・ADR 0013(#169 amendment) の capability parity。
 _Avoid_: mode 切替で chart tile を despawn すること（所有権違反・identity を壊す）／base↔chart の cross-swap 後に base/chart 判定を slot 位置で行うこと（判定は **id prefix `chart:`** で・TTWR は component kind で判定）／LiveManual⇄LiveAuto で retile すること（base 集合が同一なので no-op）／単一共有レイアウトと per-mode profile（別 slice）を混ぜること
 
-**per-mode layout profile（モード別レイアウト・[[ExecutionMode（実行モード）]] 別に Hakoniwa tile 並び順を保存）**:
+**per-mode layout profile（モード別レイアウト・[[ExecutionMode（実行モード）]] 別に Hakoniwa tile 並び順を保存）** ※**SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）で退役。
+配置は全 mode で**単一共有**（floating window の flat 共有へ統一）・`HakoniwaLayoutProfiles` と `hakoniwaProfiles` スキーマ read は廃止。
+mode 差は `startup` の show/hide のみ。以下は履歴:
 **Replay と Live が各々の Hakoniwa tile 並び順を別の profile として覚え**、mode 切替で当該 profile を復元する（TTWR `HakoniwaLayoutProfiles { replay, live }` の capability parity・`from_mode`: Replay→replay／LiveManual・LiveAuto→**同一 live profile**）。per-mode 化の対象は **Hakoniwa の tile 並び順（`_hako.Capture().panels`）だけ**で、infinite-canvas の pan/zoom・floating window・Strategy Editor の開きファイルは **mode 横断で単一共有**（doc 直下に flat 保持。TTWR `restore.rs` も camera/windows は flat 復元）。disk スキーマは `LayoutDocument.hakoniwaProfiles { replay, live }`（nested・**additive**・version bump 無し）を**正本**とし、`panels` は active mode の互換ミラー＆旧 doc の **forward-compat seed** 用（read は常に profiles 優先で drift しない）。mode 切替は TTWR `reconcile_hakoniwa_tiles` 準拠＝**旧 profile に現 layout 退避 → current 切替 → 新 profile を検証 load**。検証（`is_valid_for` parity）= 保存 profile の **非 chart（base）id 集合が当該 mode の `HakoniwaBaseTiles.Kinds` と一致するか**で、一致なら user の base 並び順を honor・不一致/無は canonical `Kinds(mode)` に落とす（[[backcast-layout-default-id-collision]] の #61 衝突安全を strict superset で包含）。chart の並び順はどの場合も honor し membership は universe 再導出（#60 不変）。ロジックは pure class `HakoniwaLayoutProfiles`（UnityEngine-free・AFK 権威）に集約し、`HakoniwaController` が actuation・`BackcastWorkspaceRoot` が membership/box-grow。box 位置/サイズ・cols/rows（divider）の per-mode 化は後続 additive slice（同コンテナ `HakoniwaProfile` へ拡張）。
 _Avoid_: per-mode 化対象を tile 順以外（canvas/window/editor）へ広げること（TTWR は flat 共有）／`panels` を per-mode の正本にすること（正本は `hakoniwaProfiles`・panels はミラー/seed）／検証なしで legacy/衝突 doc の base 順を honor すること（集合不一致は canonical へ＝#61 衝突安全）／LiveManual と LiveAuto を別 profile にすること（同一 live profile を共有）
 
-**floating window / FloatingWindowLayer / z-order**:
-infinite canvas の Content 上を **自由配置（free placement）**で漂う window（Strategy Editor / Order 等）。Hakoniwa の
-**tile swap とは別物**（tile は grid slot を占めるだけ・自由配置不可。floating window は canvas 論理座標で position+size を
-自由に持つ）。**chart は floating window ではない**（Hakoniwa tile。TTWR で chart floating は廃止＝`dispatcher.rs` が
-`PanelKind::Chart` spawn を拒否）。**FloatingWindowLayer** = Content 直下の単一コンテナで、全 floating window はその子。
+**floating window / FloatingWindowLayer / z-order** ※2026-06-21 拡張・[[ADR-0017]]（findings 0075）:
+infinite canvas の Content 上を **自由配置（free placement）**で漂う window。**ADR-0017 以降、Hakoniwa のパネル
+（`chart` / `positions` / `orders` / `run_result` / `buying_power` / `startup`）も floating window**＝旧「chart は
+floating window ではない」は**反転**（chart は multi-instance kind `chart:<id>`・universe 同期）。**ドッキング = 磁石スナップ**：
+drag リリース時に近接 window の辺が閾値内なら揃う（`FloatingWindowMath.SnapOffset`・pure/AFK 権威・結合なし）。
+**FloatingWindowLayer** = Content 直下の単一コンテナで、全 floating window はその子。
 HakoniwaRoot と sibling order（z-order）を混在させないための層（Content の子なので pan/zoom には追従する）。**z-order** =
 window の前後関係。live は **FloatingWindowLayer 内の sibling index**（後の sibling ほど前面）、persist は **`zOrder` int**
 （#12 `PanelLayout.slot` とは同一視しない＝findings 0004 §3 が「zOrder は別 field」と予約済み）。**click-to-front** =
 window をクリック/drag したとき最前面へ（TTWR `WindowManager.max_z` bump の capability parity・形式非互換）。**move** =
 title bar drag で position を移動（screen delta / zoom → canvas 論理 delta）。実装は #15。
-_Avoid_: chart を floating window と呼ぶこと（Hakoniwa tile が正）／zOrder を `slot` に相乗りさせること（別 field）／
+_Avoid_: ~~chart を floating window と呼ぶこと~~（ADR-0017 で反転＝**chart は floating window**）／磁石スナップに resize 連動・group 一体移動・detach 状態を持ち込むこと（結合なし）／zOrder を `slot` に相乗りさせること（別 field）／
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
 resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）
 

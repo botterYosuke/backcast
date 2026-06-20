@@ -31,9 +31,10 @@ public sealed class OrderTicketView
     public string Qty => _qty != null ? _qty.text : "";
     public string Price => _price != null ? _price.text : "";
 
-    static readonly Color BtnColor = new Color(0.22f, 0.25f, 0.31f, 1f);
-    static readonly Color FieldColor = new Color(0.10f, 0.11f, 0.13f, 1f);
-    static readonly Color TextColor = new Color(0.92f, 0.93f, 0.95f, 1f);
+    // Space re-skin 2026-06-20 (raw literals, TODO: route via ThemeService).
+    static readonly Color BtnColor = new Color(0.0941f, 0.1216f, 0.2275f, 1f);   // #181f3a Neutral.Step4
+    static readonly Color FieldColor = new Color(0.0392f, 0.0549f, 0.1216f, 1f); // #0a0e1f Neutral.Step2 (input bg)
+    static readonly Color TextColor = new Color(0.8784f, 0.9059f, 0.9608f, 1f);  // #e0e7f5 starlight (Neutral.Step12)
 
     public void Build(RectTransform body, Font font)
     {

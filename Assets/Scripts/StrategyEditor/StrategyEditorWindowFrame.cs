@@ -13,8 +13,10 @@ using UnityEngine.UI;
 public static class StrategyEditorWindowFrame
 {
     public const float TitleHeight = 28f;
-    static readonly Color BodyColor = new Color(0.13f, 0.14f, 0.17f, 0.98f);
-    static readonly Color TitleColor = new Color(0.24f, 0.27f, 0.34f, 1f);
+    // Space re-skin 2026-06-20: body = Neutral.Step3 (#11162b), title = Accent.Step8 Neptune-storm
+    // violet (#6a4eb3) — muted brand violet without the cyberpunk scream. TODO: route via ThemeService.
+    static readonly Color BodyColor = new Color(0.0667f, 0.0863f, 0.1686f, 0.98f);
+    static readonly Color TitleColor = new Color(0.4157f, 0.3059f, 0.7020f, 1f);
 
     // Build a window-frame subtree rooted at a new GameObject (NOT parented/positioned — the caller
     // owns that). `titleInput` is the title bar's FloatingWindowTitleInput (the caller Initialize()s
@@ -69,7 +71,7 @@ public static class StrategyEditorWindowFrame
         float side = TitleHeight - 6f;
         btnRt.sizeDelta = new Vector2(side, side);
         btnRt.anchoredPosition = new Vector2(-3f, -3f);
-        btnGo.GetComponent<Image>().color = new Color(0.45f, 0.18f, 0.20f, 1f);
+        btnGo.GetComponent<Image>().color = new Color(0.8510f, 0.3882f, 0.2627f, 1f); // #d96343 mars-rust close (space re-skin)
 
         var label = new GameObject("X", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var labelRt = (RectTransform)label.transform;

@@ -13,8 +13,11 @@ using UnityEngine.UI;
 public static class OrderTicketWindowFrame
 {
     public const float TitleHeight = 28f;
-    static readonly Color BodyColor = new Color(0.13f, 0.14f, 0.17f, 0.98f);
-    static readonly Color TitleColor = new Color(0.30f, 0.24f, 0.14f, 1f);   // amber-ish (order accent, findings 0020)
+    // Space re-skin 2026-06-20: body = Neutral.Step3; ORDER title keeps the amber semantic
+    // (findings 0020) but in muted gold-star so it stays distinct from the editor's violet
+    // title bar without screaming. TODO: route via ThemeService.
+    static readonly Color BodyColor = new Color(0.0667f, 0.0863f, 0.1686f, 0.98f); // #11162b
+    static readonly Color TitleColor = new Color(0.8471f, 0.6588f, 0.2314f, 1f);   // #d8a83b Yellow.Step9 gold star
 
     public static RectTransform Build(string id, out FloatingWindowTitleInput titleInput, out RectTransform body)
     {
@@ -36,7 +39,7 @@ public static class OrderTicketWindowFrame
         lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = new Vector2(8f, 0f); lrt.offsetMax = new Vector2(-8f, 0f);
         var lt = labelGo.GetComponent<Text>();
         lt.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        lt.fontSize = 12; lt.color = new Color(0.92f, 0.92f, 0.94f, 1f);
+        lt.fontSize = 12; lt.color = new Color(0.1098f, 0.0863f, 0.0196f, 1f); // #1c1605 dark on gold-star title for legibility
         lt.alignment = TextAnchor.MiddleLeft; lt.text = "ORDER (manual)"; lt.raycastTarget = false;
 
         var bodyGo = new GameObject("Body", typeof(RectTransform));

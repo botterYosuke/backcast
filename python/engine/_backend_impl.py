@@ -1013,9 +1013,19 @@ class DataEngineBackend:
         # Map the incremental session's stable cell ids back to cell-order indices for the C# side
         # (windows are addressed by index).  ``stale`` (cell indices still needing a press) is
         # additive — Phase 6 C# badges idle/stale from it; older callers ignore the extra key.
+        from engine.strategy_runtime.notebook_session import text_projection
+
         id_to_index = {f"c{i}": i for i in range(len(bodies))}
         ran = [
-            {"index": id_to_index[r["cell_id"]], "output": r["output"], "ok": r["ok"]}
+            {
+                "index": id_to_index[r["cell_id"]],
+                "mimetype": r["mimetype"],
+                "data": r["data"],
+                # Interim plain-text view for the current C# Text renderer (Phase 6 Slice 5 renders
+                # image/markdown/table natively from mimetype+data); also the fallback for any type.
+                "output": text_projection(r["mimetype"], r["data"]),
+                "ok": r["ok"],
+            }
             for r in result.get("ran", [])
             if r.get("cell_id") in id_to_index
         ]

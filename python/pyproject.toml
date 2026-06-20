@@ -38,6 +38,14 @@ dependencies = [
     # on every marimo upgrade. The runtime seam must still lazy-import marimo (ADR-0012
     # Decision 4) — enforced by tests/test_strategy_runtime_offline.py.
     "marimo>=0.20.4",
+    # #95 Phase 6 (ADR-0016 D11 / findings 0075 P6-3): rich notebook output. matplotlib is the
+    # named charting producer — a figure crosses to Unity as a self-contained image/png data: URL
+    # (via marimo's mpl formatter mimebundle) the C# side decodes to a Texture2D. Strategy-layer
+    # only: the kernel/engine never import it (the runtime seam stays marimo/mpl-free at module
+    # load — tests/test_strategy_runtime_offline.py), so the blast radius is the cell author's
+    # output. altair/vl-convert are intentionally NOT bundled (findings 0075 P6-3: Vega needs a
+    # JS renderer Unity lacks; matplotlib covers the charting need).
+    "matplotlib>=3.9",
 ]
 
 [dependency-groups]

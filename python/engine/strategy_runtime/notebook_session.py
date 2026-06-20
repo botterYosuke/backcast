@@ -25,7 +25,9 @@ it (``_backend_impl.run_cell``) must LAZY-import it — proven by tests/test_str
 from __future__ import annotations
 
 import asyncio
+import html as _html
 import inspect
+import re as _re
 import threading
 from typing import Any
 
@@ -68,6 +70,83 @@ def _output_text(run_result: Any) -> str:
             return html.text
     value = run_result.output
     return "" if value is None else repr(value)
+
+
+def _maybe_matplotlib_png(value: Any) -> "tuple[str, str] | None":
+    """Render a matplotlib Figure/Axes to a SELF-CONTAINED ``image/png`` data URL (P6-3).
+
+    marimo's own mpl formatter only activates via an import hook AND, once registered, swaps every
+    library's static repr for an opinionated *interactive* formatter that serialises empty without
+    the web frontend.  We sidestep both: detect a Figure (or an Axes' Figure) by type — only when
+    matplotlib is already imported (a cell imported it), so this stays lazy — and ``savefig`` to a
+    base64 PNG the C# side decodes straight to a Texture2D.  Returns ``None`` for non-figures."""
+    import sys as _sys
+
+    mpl = _sys.modules.get("matplotlib")
+    if mpl is None:  # no cell imported matplotlib → not a figure (stay lazy, never import it here)
+        return None
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+
+    fig = value if isinstance(value, Figure) else (value.figure if isinstance(value, Axes) else None)
+    if fig is None:
+        return None
+    import base64
+    import io
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    return "image/png", f"data:image/png;base64,{b64}"
+
+
+def _format_output(run_result: Any) -> "tuple[str, str]":
+    """The Phase 6 rich output of a cell as ``(mimetype, data)`` (findings 0075 P6-2).
+
+    Uses marimo's own ``try_format`` so a value crosses with its REAL mimetype: a DataFrame →
+    ``text/html`` table, ``mo.md(...)`` → ``text/markdown`` (rendered HTML), an image / matplotlib
+    figure → ``image/png`` (a ``data:`` URL) or ``application/vnd.marimo+mimebundle``, a plain value
+    → marimo's ``<pre>`` HTML.  An explicit ``mo.output`` publish takes precedence (its stacked
+    Html).  A raised cell → its exception text as ``text/plain``.  The C# side renders images as
+    textures and HTML/markdown via an HTML→TMP subset; ``text_projection`` is the interim text view.
+    """
+    if not run_result.success():
+        exc = run_result.exception
+        return "text/plain", (f"{type(exc).__name__}: {exc}" if exc is not None else "error")
+    acc = getattr(run_result, "accumulated_output", None)
+    if acc:  # an explicit mo.output.replace/append — the stacked Html is the cell's output
+        html = acc.stack()
+        if html is not None:
+            return "text/html", html.text
+    value = run_result.output
+    if value is None:
+        return "text/plain", ""
+    png = _maybe_matplotlib_png(value)  # the named charting producer → self-contained image/png
+    if png is not None:
+        return png
+    from marimo._output.formatting import try_format
+
+    formatted = try_format(value)
+    data = formatted.data if isinstance(formatted.data, str) else str(formatted.data)
+    return str(formatted.mimetype), data
+
+
+_TAG_RE = _re.compile(r"<[^>]+>")
+
+
+def text_projection(mimetype: str, data: str) -> str:
+    """An interim plain-text view of a rich output for the current C# Text renderer.
+
+    Phase 6 Slice 5 adds native image/markdown/table renderers keyed on ``mimetype``; until then a
+    cell window still shows text, so: an image → a short ``[image/png]`` placeholder; HTML/markdown
+    → its tags stripped and entities unescaped (so ``<pre>20</pre>`` reads as ``20`` and a table
+    reads as its cell text); ``text/plain`` → as-is.  Kept as the fallback for unsupported types.
+    """
+    if mimetype.startswith("image/") or "mimebundle" in mimetype:
+        return f"[{mimetype}]"
+    if mimetype in ("text/html", "text/markdown"):
+        return _html.unescape(_TAG_RE.sub("", data)).strip()
+    return data
 
 
 class NotebookSession:
@@ -386,10 +465,11 @@ class IncrementalNotebookSession:
                 k.graph.cells[cid].set_stale(stale=False, broadcast=False)
 
         order_of = {cid: i for i, cid in enumerate(self._order)}
-        ran = [
-            {"cell_id": cid, "output": _output_text(rr), "ok": rr.success()}
-            for cid, rr in recorded.items()
-            if cid in order_of  # only cells the C# side can map back to a window
-        ]
+        ran = []
+        for cid, rr in recorded.items():
+            if cid not in order_of:  # only cells the C# side can map back to a window
+                continue
+            mimetype, data = _format_output(rr)
+            ran.append({"cell_id": cid, "mimetype": mimetype, "data": data, "ok": rr.success()})
         ran.sort(key=lambda r: order_of[r["cell_id"]])
         return {"ok": True, "ran": ran, "stale": self.stale(), "error": None}

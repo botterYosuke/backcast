@@ -50,8 +50,8 @@ def test_press_runs_stale_ancestors_not_independent():
         res = s.run_pressed([_A, _B, _C], "b")  # press downstream b
         assert res["ok"], res
         assert _ids(res) == {"a", "b"}  # b + its stale ancestor a; NOT independent c
-        out = {r["cell_id"]: r["output"] for r in res["ran"]}
-        assert out["b"] == "20"  # threshold(10) * 2
+        out = {r["cell_id"]: r for r in res["ran"]}
+        assert "20" in out["b"]["data"] and out["b"]["mimetype"]  # threshold(10) * 2, rich {mimetype,data}
         assert set(res["stale"]) == {"c"}  # a,b cleared; c still needs its own press
         g = s._host.k.globals
         assert g["threshold"] == 10 and g["downstream"] == 20

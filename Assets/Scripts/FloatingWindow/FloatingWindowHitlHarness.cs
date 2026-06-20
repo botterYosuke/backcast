@@ -172,7 +172,7 @@ public class FloatingWindowHitlHarness : MonoBehaviour
         return root;
     }
 
-    // ---- HUD + EventSystem (mirror HakoniwaHitlHarness) ----
+    // ---- HUD + EventSystem ----
 
     void EnsureEventSystem()
     {

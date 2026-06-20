@@ -1,25 +1,25 @@
 // BackcastWorkspaceProbe.cs — issue #59 "Backcast workspace root" (headless AFK regression gate)
 //
+// #99 / ADR-0017 RETIREMENT NOTE: the Hakoniwa split-grid surface has been retired in favor of
+// magnet-snap floating windows. Sections that drove HakoniwaController / HakoniwaBaseTiles /
+// HakoniwaGridMath / per-mode HakoniwaLayoutProfiles have been DELETED here (their behavioral
+// invariants no longer exist), and the chart-family probe has been re-pointed at the new
+// `_windows` (FloatingWindowController) seam + the `chart:<instrument-id>` window-id family.
+// The remaining sections (composition root, OnceGate, ownership, shared universe, run-commit
+// re-prime, File→Open behavior, chrome z-order layering, sidebar overflow clipping, editor-
+// seeds-universe gate) still gate behavior that survived the retirement.
+//
 // The headless, Python-FREE, render-FREE gate for the composition root (findings 0025 §11). Run:
 //
 //   <Unity> -batchmode -nographics -projectPath /Users/sasac/backcast \
 //           -executeMethod BackcastWorkspaceProbe.Run -logFile <log>
 //   # expect: [BACKCAST WORKSPACE PASS] ... / exit=0
 //
-// It (re)builds BackcastWorkspace.unity, asserts the authored hierarchy + serialized references +
+// It opens BackcastWorkspace.unity, asserts the authored hierarchy + serialized references +
 // build settings, and value-asserts the Python-FREE seams: the 4-dimension layout round-trip, the
 // adopt-not-respawn floating restore, the OnceGate teardown idempotency, and the single-Play-owner
 // decision (via an INJECTED predicate — never initializes Python). The visual 1-screen check,
 // zoomed swap, real Replay streaming, and real Play-stop teardown are the owner-run HITL.
-//
-// SECTIONS (findings 0025 §11):
-//   1. scene built + only enabled build scene + required objects/components/serialized refs
-//   2. authored hierarchy (Viewport/Content/{HakoniwaRoot,FloatingWindowLayer}) + chrome OUTSIDE Content
-//   3. Hakoniwa Startup=slot0 / Chart=slot1 + swap apply (live RectTransforms)
-//   4. non-default 4-dimension disk round-trip (temp path + a real temp .py)
-//   5. adopt: scene-authored editor window registered + restored IN PLACE (same instance, not respawned)
-//   6. OnceGate: save/force-stop guard fires exactly once across repeated Stop/Dispose
-//   7. single-Play-owner decision via injected predicate (no Python)
 
 using System;
 using System.Collections.Generic;
@@ -51,16 +51,14 @@ public static class BackcastWorkspaceProbe
 
             fail = Section1_SceneAndRefs()
                 ?? Section2_Hierarchy()
-                ?? Section3_HakoniwaSlots(spawned)
                 ?? Section4_DiskRoundTrip()
                 ?? Section5_AdoptNotRespawn(spawned)
                 ?? Section6_OnceGate()
                 ?? Section7_Ownership()
                 ?? Section8_SharedUniverse()
                 ?? Section9_RunCommitRePrimesWriteback()
-                ?? Section10_ChartTileFamily()
+                ?? Section10_ChartWindowFamily()
                 ?? Section11_EditorSeedsUniverseAndGatesRun()
-                ?? Section12_PerModeProfileFlipAndRestore()
                 ?? Section13_ChromeZOrderLayering()
                 ?? Section15_SidebarOverflowClipping()   // #84: complements Section13 (clip ↔ z-layer)
                 ?? Section14_FileOpenBareStrategy();
@@ -91,6 +89,9 @@ public static class BackcastWorkspaceProbe
     // Read-only: a regression gate must not mutate source-controlled assets, so it asserts the
     // committed BackcastWorkspace.unity / EditorBuildSettings rather than rebuilding them (the
     // builder is the explicit Tools > Backcast > Build Workspace Scene authoring step).
+    //
+    // #99 / ADR-0017: _hakoniwaRoot / _startupTile / _chartTile / _ordersTile / _positionsTile /
+    // _runResultTile were removed from the scene authoring along with the split-grid surface.
     static string Section1_SceneAndRefs()
     {
         if (!File.Exists(BackcastWorkspaceSceneBuilder.ScenePath))
@@ -114,11 +115,11 @@ public static class BackcastWorkspaceProbe
         string[] refs =
         {
             "_centerWorkspace", "_footerContainer", "_menuBarView", "_sidebarView",
-            "_viewport", "_content", "_inputSurface", "_hakoniwaRoot", "_startupTile",
-            "_chartTile", "_floatingLayer", "_strategyEditorWindow", "_strategyEditorBody",
+            "_viewport", "_content", "_inputSurface",
+            "_floatingLayer", "_strategyEditorWindow", "_strategyEditorBody",
             "_strategyEditorTitleInput",
-            // #23 re-home: three live data tiles + the adopted Order ticket window.
-            "_ordersTile", "_positionsTile", "_runResultTile",
+            // #23 / #99 re-home: the adopted Order ticket window survives the Hakoniwa retirement
+            // because it has always been a floating window (not a split-grid tile).
             "_orderWindow", "_orderWindowBody", "_orderWindowTitleInput",
         };
         foreach (var r in refs)
@@ -131,6 +132,9 @@ public static class BackcastWorkspaceProbe
     }
 
     // ── 2. authored hierarchy + chrome outside Content ──
+    //
+    // #99 / ADR-0017: HakoniwaRoot was removed; only FloatingWindowLayer lives under Content now
+    // (all dock kinds + the editor + chart windows are children of the floating layer).
     static string Section2_Hierarchy()
     {
         var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
@@ -139,7 +143,6 @@ public static class BackcastWorkspaceProbe
 
         var viewport = Ref("_viewport");
         var content = Ref("_content");
-        var hako = Ref("_hakoniwaRoot");
         var layer = Ref("_floatingLayer");
         var center = Ref("_centerWorkspace");
         var footer = Ref("_footerContainer");
@@ -147,7 +150,6 @@ public static class BackcastWorkspaceProbe
         var body = Ref("_strategyEditorBody");
 
         if (content.parent != viewport) return "Content is not a child of Viewport";
-        if (hako.parent != content) return "HakoniwaRoot is not a child of Content";
         if (layer.parent != content) return "FloatingWindowLayer is not a child of Content";
         if (window.parent != layer) return "Strategy Editor window is not a child of FloatingWindowLayer";
         if (body.parent != window) return "Strategy Editor body is not a child of the window";
@@ -171,43 +173,6 @@ public static class BackcastWorkspaceProbe
             return "CenterWorkspace field must be full-screen (zero offsets)";
         if (center.GetSiblingIndex() != 0)
             return "CenterWorkspace field must be the BACKMOST sibling (chrome overlays on top)";
-        return null;
-    }
-
-    // ── 3. Hakoniwa Startup=slot0 / Chart=slot1 + swap apply ──
-    static string Section3_HakoniwaSlots(List<GameObject> spawned)
-    {
-        var rootGo = new GameObject("probe_hako", typeof(RectTransform));
-        spawned.Add(rootGo);
-        var root = (RectTransform)rootGo.transform;
-        root.sizeDelta = new Vector2(800f, 600f);
-        var startup = NewChild(root, "startup");
-        var chart = NewChild(root, "chart");
-
-        var hako = new HakoniwaController(root,
-            new Dictionary<string, RectTransform> { { "startup", startup }, { "chart", chart } },
-            new[] { "startup", "chart" });
-
-        var cap = hako.Capture();
-        var ps = cap.Find("startup");
-        var pc = cap.Find("chart");
-        if (ps == null || pc == null) return "Hakoniwa capture missing tiles";
-        if (ps.slot != 0) return $"Startup must be slot 0 (got {ps.slot})";
-        if (pc.slot != 1) return $"Chart must be slot 1 (got {pc.slot})";
-
-        // swap apply: chart→slot0, startup→slot1.
-        var swap = new LayoutDocument
-        {
-            version = LayoutDocument.CURRENT_VERSION,
-            panels = new List<PanelLayout>
-            {
-                new PanelLayout("chart", 0, true, new LayoutRect(0, 0, 0.5f, 1)),
-                new PanelLayout("startup", 1, true, new LayoutRect(0.5f, 0, 1, 1)),
-            },
-        };
-        hako.Apply(swap);
-        var cap2 = hako.Capture();
-        if (cap2.Find("chart").slot != 0 || cap2.Find("startup").slot != 1) return "Hakoniwa swap apply did not reorder slots";
         return null;
     }
 
@@ -419,14 +384,15 @@ public static class BackcastWorkspaceProbe
         return null;
     }
 
-    // ── 10. chart tile family (#60): chart:<id> tiles track the universe SoT (spawn/despawn on
-    // InstrumentRegistry.Changed), base is [startup] only (the fixed "chart" tile is retired), and the
-    // membership orchestrator grows the box derived from n. Drives the REAL root headlessly. ──
-    static string Section10_ChartTileFamily()
+    // ── 10. chart WINDOW family (#60 → #99): chart:<id> floating windows track the universe SoT
+    // (spawn/despawn on InstrumentRegistry.Changed). Replaces the retired Hakoniwa split-grid
+    // chart-tile family — chart kinds are now FLOATING WINDOWS adopted into `_windows` with the
+    // `chart:<instrument-id>` id convention (DockShape.ChartId). Drives the REAL root headlessly. ──
+    static string Section10_ChartWindowFamily()
     {
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
-        if (root == null) return "charttile: BackcastWorkspaceRoot missing";
+        if (root == null) return "chartwin: BackcastWorkspaceRoot missing";
 
         var ty = typeof(BackcastWorkspaceRoot);
         const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
@@ -435,40 +401,28 @@ public static class BackcastWorkspaceProbe
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
 
         var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
-        var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
+        var windows = ty.GetField("_windows", BF).GetValue(root) as FloatingWindowController;
         var chartViews = ty.GetField("_chartViews", BF).GetValue(root) as System.Collections.IDictionary;
-        var hakoRoot = ty.GetField("_hakoniwaRoot", BF).GetValue(root) as RectTransform;
-        if (scenario == null || hako == null || chartViews == null || hakoRoot == null)
-            return "charttile: root internals not found (renamed?)";
+        if (scenario == null || windows == null || chartViews == null)
+            return "chartwin: root internals not found (renamed?)";
 
-        // #61: base = Replay shape [startup, buying_power, orders, positions, run_result] (5 tiles);
-        // the old fixed "chart" tile is retired (not in the controller order).
-        if (hako.SlotOf("startup") < 0) return "charttile: base startup tile missing";
-        if (hako.SlotOf("chart") >= 0) return "charttile: retired fixed 'chart' tile still in the grid";
-        foreach (var id in HakoniwaBaseTiles.PanelOrder)
-            if (hako.SlotOf(id) < 0) return "charttile: #61 base panel tile missing: " + id;
+        // #99 base dock cluster: the 5 base dock windows are spawned by SpawnBaseDockWindows at
+        // BuildWorkspace; they live in _windows under fixed ids.
+        string[] baseIds = { "startup", "buying_power", "orders", "positions", "run_result" };
+        foreach (var id in baseIds)
+            if (!windows.Has(id)) return "chartwin: base dock window missing: " + id;
 
-        // membership tracks the universe SoT: a known 2-instrument universe spawns 2 chart tiles.
+        // membership tracks the universe SoT: a known 2-instrument universe spawns 2 chart windows.
         scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });
-        if (hako.SlotOf("chart:AAA.TSE") < 0 || hako.SlotOf("chart:BBB.TSE") < 0)
-            return "charttile: chart tiles not spawned for universe instruments (Changed not wired?)";
+        if (!windows.Has(DockShape.ChartId("AAA.TSE")) || !windows.Has(DockShape.ChartId("BBB.TSE")))
+            return "chartwin: chart windows not spawned for universe instruments (Changed not wired?)";
         if (!chartViews.Contains("AAA.TSE") || !chartViews.Contains("BBB.TSE"))
-            return "charttile: ChartView not created per instrument";
-        // 5 base (Replay) + 2 chart = 7.
-        if (hako.Count != 7) return "charttile: expected 5 base + 2 chart = 7 tiles, got " + hako.Count;
+            return "chartwin: ChartView not created per instrument";
 
-        // box-grow: the box SIZE is derived from n (orchestrator-applied, NOT persisted).
-        var min = new Vector2(280f, 180f); var def = new Vector2(700f, 450f);
-        var expected = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
-        if ((hakoRoot.sizeDelta - expected).sqrMagnitude > EPS)
-            return "charttile: box-grow not applied (got " + hakoRoot.sizeDelta + ", expected " + expected + ")";
-
-        // remove one instrument -> its chart tile despawns; box re-derives.
+        // remove one instrument -> its chart window despawns.
         scenario.Universe.Remove("AAA.TSE");
-        if (hako.SlotOf("chart:AAA.TSE") >= 0) return "charttile: removed instrument's chart tile still present";
-        if (chartViews.Contains("AAA.TSE")) return "charttile: removed instrument's ChartView not cleared";
-        var expected2 = HakoniwaGridMath.ComputeBoxSize(hako.Count, min, 0f, def);
-        if ((hakoRoot.sizeDelta - expected2).sqrMagnitude > EPS) return "charttile: box-grow not re-applied after despawn";
+        if (windows.Has(DockShape.ChartId("AAA.TSE"))) return "chartwin: removed instrument's chart window still present";
+        if (chartViews.Contains("AAA.TSE")) return "chartwin: removed instrument's ChartView not cleared";
         return null;
     }
 
@@ -673,75 +627,6 @@ public static class BackcastWorkspaceProbe
         return null;
     }
 
-    // ── 12. per-mode layout profile flip + restore (#62, findings 0029 §7) — integration smoke ──
-    // On the REAL root: a user swaps base order in Replay, flips to Live and swaps DIFFERENTLY, then
-    // flips back — each mode's own arrangement is restored (AC1). Then the real CaptureLayout →
-    // LayoutStore round-trip → ApplyLayout restores the current mode's profile from disk (AC1/AC2).
-    static string Section12_PerModeProfileFlipAndRestore()
-    {
-        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
-        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
-        if (root == null) return "profile: BackcastWorkspaceRoot missing";
-
-        var ty = typeof(BackcastWorkspaceRoot);
-        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
-        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
-        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
-        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
-
-        var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
-        var hako = ty.GetField("_hako", BF).GetValue(root) as HakoniwaController;
-        var sync = ty.GetMethod("SyncBaseTilesToMode", BF);
-        var capture = ty.GetMethod("CaptureLayout", BF);
-        var applyLayout = ty.GetMethod("ApplyLayout", BF);
-        if (scenario == null || hako == null || sync == null || capture == null || applyLayout == null)
-            return "profile: root internals not found (renamed?)";
-
-        scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });   // Replay shape: 5 base + 2 chart
-
-        // (1) Replay: swap buying_power <-> orders → a distinct Replay arrangement.
-        if (!hako.Swap(hako.SlotOf("buying_power"), hako.SlotOf("orders"))) return "profile: Replay base swap failed";
-        var replayWanted = new[] { "startup", "orders", "buying_power", "positions", "run_result" };
-        string e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(Replay swap): " + e;
-
-        // (2) → Live: stashes the Replay profile; canonical Live base. Make a DIFFERENT Live swap
-        // (run_result to the front).
-        sync.Invoke(root, new object[] { true });
-        if (hako.SlotOf("startup") >= 0) return "profile→Live: startup must leave";
-        if (!hako.Swap(hako.SlotOf("run_result"), hako.SlotOf("buying_power"))) return "profile: Live base swap failed";
-        var liveWanted = new[] { "run_result", "orders", "positions", "buying_power" };
-        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(Live swap): " + e;
-
-        // (3) → Replay: the Replay profile must be RESTORED (not canonical, not the Live order).
-        sync.Invoke(root, new object[] { false });
-        e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(Replay restored): " + e;
-
-        // (4) → Live again: the Live profile must be RESTORED independently.
-        sync.Invoke(root, new object[] { true });
-        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(Live restored): " + e;
-
-        // (5) disk path: capture (active = Live) → save → load → ApplyLayout adopts BOTH profiles.
-        var doc = capture.Invoke(root, null) as LayoutDocument;
-        if (doc == null || doc.hakoniwaProfiles == null) return "profile: CaptureLayout did not emit hakoniwaProfiles";
-        string path = System.IO.Path.Combine(Application.temporaryCachePath, "workspace_profile_probe.json");
-        if (System.IO.File.Exists(path)) System.IO.File.Delete(path);
-        LayoutStore.Save(doc, path);
-        var loaded = LayoutStore.Load(path);
-        // perturb the live order, then restore from disk and adopt the per-mode profiles.
-        hako.Swap(0, 1);
-        applyLayout.Invoke(root, new object[] { loaded });
-        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(disk restore Live): " + e;
-        // NON-VACUOUS: the doc's `panels` mirror equals the Live order, so flipping to Replay and getting
-        // replayWanted back can ONLY come from the persisted hakoniwaProfiles.replay sub-profile (a dropped
-        // field would seed Replay from the Live mirror → liveWanted, failing here). Then back to Live.
-        sync.Invoke(root, new object[] { false });
-        e = AssertBaseOrder(hako, replayWanted); if (e != null) return "profile(disk restore Replay — distinct per-mode persisted): " + e;
-        sync.Invoke(root, new object[] { true });
-        e = AssertBaseOrder(hako, liveWanted); if (e != null) return "profile(disk re-flip Live): " + e;
-        System.IO.File.Delete(path);
-        return null;
-    }
-
     // ── 13. chrome z-order layering (#77) — the menu dropdown must draw IN FRONT of the sidebar ──
     // The #77 bug: menu + sidebar were BOTH OnGUI (IMGUI); GUI.depth is ignored in a single-camera
     // Screen-Space setup, so the sidebar (later OnGUI) overpainted the dropdown. The fix uGUI-ifies
@@ -864,19 +749,6 @@ public static class BackcastWorkspaceProbe
         if (canvas == null) return $"zorder: {what} has no Canvas (still IMGUI? #77 uGUI-ification missing)";
         if (!canvas.overrideSorting) return $"zorder: {what} Canvas.overrideSorting must be true (else sortingOrder is ignored)";
         if (go.GetComponent<UnityEngine.UI.GraphicRaycaster>() == null) return $"zorder: {what} has no GraphicRaycaster (clicks won't hit the uGUI chrome)";
-        return null;
-    }
-
-    // assert the base tiles (non-chart) appear in EXACTLY `wanted` order at the front, charts after.
-    static string AssertBaseOrder(HakoniwaController hako, string[] wanted)
-    {
-        for (int i = 0; i < wanted.Length; i++)
-            if (hako.SlotOf(wanted[i]) != i)
-                return wanted[i] + " expected slot " + i + ", got " + hako.SlotOf(wanted[i]) + " (order [" + string.Join(",", hako.Order) + "])";
-        // every chart id must sit after the base region.
-        for (int i = 0; i < hako.Order.Count; i++)
-            if (HakoniwaBaseTiles.IsChartId(hako.Order[i]) && i < wanted.Length)
-                return "chart tile " + hako.Order[i] + " sits inside the base region";
         return null;
     }
 

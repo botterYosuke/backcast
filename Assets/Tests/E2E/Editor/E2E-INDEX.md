@@ -14,9 +14,9 @@
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..18` | 18 | 0 | 7 | 5 | 2 | 4 |
 | [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
-| [HakoniwaE2ERunner](./HakoniwaE2ERunner.md) ✅ | `HAKONIWA-01..13` | 13 | 10 | 0 | 0 | 1 | 2 |
+| ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
-| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
+| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..10,SNAP-01,02,DOCK-01,02` | 14 | 12 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..26` | 26 | 22 | 0 | 1 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
 | [RunButtonE2ERunner](./RunButtonE2ERunner.md) ✅ | `RUN-01..12` | 12 | 8 | 0 | 2 | 1 | 1 |
@@ -30,7 +30,7 @@
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
-| [ReplayToHakoniwaE2ERunner](./ReplayToHakoniwaE2ERunner.md) ✅ | （7 step※） | 7 | 7 | 0 | 0 | 0 | 0 |
+| ~~ReplayToHakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) ✅ | `JOURNEY-LAYOUT-01..15` | 15 | 15 | 0 | 0 | 0 | 0 |
 | [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) ✅ | `JOURNEY-AUTHOR-01..13` | 13 | 13 | 0 | 0 | 0 | 0 |
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) ✅ | `JOURNEY-LIVE-01..15` | 15 | 14 | 0 | 0 | 1 | 0 |

@@ -42,7 +42,10 @@ public static class ThemeProbe
             Section2_NonDefaultDiffers();
             Section3_ServiceSemantics();
             Section4_WiringKill();
-            Section5_ChromeSubscriptionKill();
+            // Section5_ChromeSubscriptionKill retired with the Hakoniwa surface (#99 / ADR-0017): the
+            // Hakoniwa root/tile chrome and its ApplyHakoniwaChromeTheme subscription no longer exist.
+            // ChartView / DepthLadderView still self-subscribe to ThemeService.Changed for their own
+            // candle/board colors; their tests (ChartViewProbe / DepthLadderProbe) cover that.
         }
         catch (Exception e)
         {
@@ -277,50 +280,6 @@ public static class ThemeProbe
     // 5 — Hakoniwa tile chrome: REAL subscription kill (findings 0054, P2 review). The chrome used to be
     // painted from hard literals that ignored theme. Build the ACTUAL BackcastWorkspaceRoot (the same
     // headless compose BackcastWorkspaceProbe uses: scene open + reflect _font + ResolvePaths +
-    // BuildWorkspace — Python-free in batchmode), sample the root box + a real tile's card/header/label
-    // under dark, then call SetTheme(NonDefault) and ONLY that — do NOT repaint by hand. If the
-    // `ThemeService.Changed += ApplyHakoniwaChromeTheme` wiring in BuildWorkspace is removed, the chrome
-    // stays dark and this FAILS (the earlier hand-repaint version passed even with the subscription gone).
-    static void Section5_ChromeSubscriptionKill()
-    {
-        ThemeService.ResetForTests();   // pristine dark + drop subscribers BEFORE the root subscribes
-        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
-        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
-        if (root == null) { _fails.Add("chrome: BackcastWorkspaceRoot missing in scene"); return; }
-
-        var ty = typeof(BackcastWorkspaceRoot);
-        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
-        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
-        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
-        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);   // paints chrome under dark + subscribes ApplyHakoniwaChromeTheme
-
-        // Sample the REAL chrome graphics: root box Image + the orders tile's card / header / label.
-        var hakoRoot = ty.GetField("_hakoniwaRoot", BF).GetValue(root) as RectTransform;
-        var ordersTile = ty.GetField("_ordersTile", BF).GetValue(root) as RectTransform;
-        if (hakoRoot == null || ordersTile == null) { _fails.Add("chrome: _hakoniwaRoot/_ordersTile not found (renamed?)"); return; }
-        var rootImg = hakoRoot.GetComponent<Image>();
-        var cardImg = ordersTile.GetComponent<Image>();
-        var headerRt = ordersTile.Find("Header");
-        var headImg = headerRt != null ? headerRt.GetComponent<Image>() : null;
-        var labelTxt = headerRt != null ? headerRt.Find("Label")?.GetComponent<Text>() : null;
-        if (rootImg == null || cardImg == null || headImg == null || labelTxt == null)
-        { _fails.Add("chrome: tile chrome graphics not found (card/header/label structure changed?)"); return; }
-
-        var d = Theme.Dark();
-        Eq(rootImg.color, d.colors.hakoniwa_root_background, "chrome root == dark hakoniwa_root_background");
-        Eq(cardImg.color, d.colors.hakoniwa_tile_background, "chrome card == dark hakoniwa_tile_background");
-        Eq(headImg.color, d.colors.hakoniwa_tile_header, "chrome header == dark hakoniwa_tile_header");
-        Eq(labelTxt.color, d.colors.hakoniwa_tile_header_text, "chrome label == dark hakoniwa_tile_header_text");
-
-        // THE kill: switch theme and nothing else. The chrome must follow via its Changed subscription.
-        ThemeService.SetTheme(Theme.NonDefault());
-        var nd = ThemeService.Current;
-        Eq(rootImg.color, nd.colors.hakoniwa_root_background, "chrome root followed SetTheme (subscription live)");
-        Eq(cardImg.color, nd.colors.hakoniwa_tile_background, "chrome card followed SetTheme (subscription live)");
-        Eq(headImg.color, nd.colors.hakoniwa_tile_header, "chrome header followed SetTheme (subscription live)");
-        Eq(labelTxt.color, nd.colors.hakoniwa_tile_header_text, "chrome label followed SetTheme (subscription live)");
-    }
-
     // ---- helpers ----
     static GameObject Spawn(string name, params Type[] components)
     {

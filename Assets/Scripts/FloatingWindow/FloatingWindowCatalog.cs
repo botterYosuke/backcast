@@ -6,12 +6,16 @@
 // (forward-evolution discipline, findings 0008 §3) — a window kind added by a newer build
 // survives a round-trip through an older build that can't render it.
 //
-// Default() ships the #15 demo kinds (findings 0008 §0/§1, owner-locked): the GENUINE TTWR
-// floating windows `strategy_editor` and `order`. CHART IS NOT HERE — chart is a Hakoniwa tile
-// (#14); TTWR's dispatcher rejects a Chart floating spawn outright. `order` is conceptually a
-// singleton (one Order window), `strategy_editor` is multi-instance (ids like
-// "strategy_editor:region_001" share this one kind), but the catalog only maps kind -> spec;
-// instance identity is the document's job.
+// Default() ships:
+//   * `strategy_editor` and `order` — the GENUINE TTWR floating windows (findings 0008 §0/§1).
+//   * #99 Slice 2 / ADR-0017 / findings 0075 §2 — `chart` / `buying_power` / `orders` /
+//     `positions` / `run_result` / `startup`. The Hakoniwa surface is being ported FROM
+//     split-grid tiles TO the floating-window seam (ADR-0017 Decision 1), so the former tile
+//     KINDS land here. `chart` is MULTI-INSTANCE (ids "chart:<instrument-id>" share this one
+//     kind, same shape as `strategy_editor:<region>`); the other 5 are conceptually singletons
+//     (one BuyingPower etc.). The catalog only maps kind -> spec; instance identity is the
+//     document's job. Per-kind accents come from PlayerColors so the dock cluster stays
+//     visually distinguishable without inline literals (findings 0020).
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -20,6 +24,16 @@ public class FloatingWindowCatalog
 {
     public const string KIND_STRATEGY_EDITOR = "strategy_editor";
     public const string KIND_ORDER = "order";
+
+    // #99 Slice 2 (ADR-0017 / findings 0075 §2, owner-locked): the kinds that succeed
+    // `Hakoniwa` (the dock cluster). Names preserve the existing tile ids so an old persisted
+    // doc that mentions e.g. "orders" is forward-compatible when read as a floating-window kind.
+    public const string KIND_CHART = "chart";
+    public const string KIND_BUYING_POWER = "buying_power";
+    public const string KIND_ORDERS = "orders";
+    public const string KIND_POSITIONS = "positions";
+    public const string KIND_RUN_RESULT = "run_result";
+    public const string KIND_STARTUP = "startup";
 
     readonly Dictionary<string, FloatingWindowSpec> _specs;
 
@@ -40,10 +54,14 @@ public class FloatingWindowCatalog
 
     public bool Contains(string kind) => !string.IsNullOrEmpty(kind) && _specs.ContainsKey(kind);
 
-    // The #15 demo catalog: the two real TTWR floating windows (NOT chart).
-    // Issue #44: per-kind accents come from the theme PlayerColors palette (findings 0020) so the
-    // two windows stay distinguishable (editor = players[0] iris, order = players[2] amber) without
-    // an inline literal. PlayerColors has no blue family, so the editor's "blue" is iris (blue-ish).
+    // The default catalog: the 2 floating-window seam kinds (strategy_editor / order) + the
+    // 6 #99 dock kinds (chart / buying_power / orders / positions / run_result / startup) that
+    // replace the retired Hakoniwa split-grid tile system (ADR-0017). Per-kind accents come from
+    // the theme PlayerColors palette (findings 0020) so the cluster stays distinguishable
+    // without inline literals; PlayerColors cycles modulo 8, so all 8 slots are used distinctly.
+    // closeable=false on the dock kinds: they are WORKSPACE-OWNED (the View menu / mode poll
+    // governs visibility), so an in-title-bar X is suppressed — the user does not close them
+    // accidentally and lose them (the strategy_editor / order frames keep their X as before).
     public static FloatingWindowCatalog Default()
     {
         var players = ThemeService.Current.players;
@@ -57,6 +75,33 @@ public class FloatingWindowCatalog
                 KIND_ORDER, "Order",
                 defaultSize: new Vector2(360f, 300f), minSize: new Vector2(280f, 180f),
                 accent: players.Get(2), closeable: true),
+            // #99 dock kinds (findings 0075 §2): the 6 former Hakoniwa tile kinds, now floating
+            // windows. defaultSize is reasonable for first-launch read; minSize keeps a tile from
+            // collapsing to unreadable; accents spread across the remaining PlayerColors slots.
+            new FloatingWindowSpec(
+                KIND_CHART, "Chart",
+                defaultSize: new Vector2(520f, 360f), minSize: new Vector2(280f, 200f),
+                accent: players.Get(1), closeable: false),
+            new FloatingWindowSpec(
+                KIND_BUYING_POWER, "Buying Power",
+                defaultSize: new Vector2(340f, 140f), minSize: new Vector2(220f, 100f),
+                accent: players.Get(3), closeable: false),
+            new FloatingWindowSpec(
+                KIND_ORDERS, "Orders",
+                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
+                accent: players.Get(4), closeable: false),
+            new FloatingWindowSpec(
+                KIND_POSITIONS, "Positions",
+                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
+                accent: players.Get(5), closeable: false),
+            new FloatingWindowSpec(
+                KIND_RUN_RESULT, "Run Result",
+                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
+                accent: players.Get(6), closeable: false),
+            new FloatingWindowSpec(
+                KIND_STARTUP, "Scenario Startup",
+                defaultSize: new Vector2(380f, 260f), minSize: new Vector2(280f, 200f),
+                accent: players.Get(7), closeable: false),
         });
     }
 }

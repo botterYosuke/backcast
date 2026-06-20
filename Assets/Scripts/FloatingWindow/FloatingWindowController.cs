@@ -39,6 +39,13 @@ public class FloatingWindowController
     static readonly Vector2 CENTER = new Vector2(0.5f, 0.5f);
     static readonly Vector2 TOP_LEFT = new Vector2(0f, 1f);
 
+    // #99 Slice 1 (ADR-0017 / findings 0075 §1, owner-locked): the magnet-snap default threshold
+    // in canvas-LOGICAL px (NOT screen pixels — drag is already in logical coords, so zoom does
+    // not change the felt distance). 12px = a comfortable feel: a slow approach catches, a
+    // brisk drag past a neighbour does not surprise-snap (owner-recommended initial value;
+    // findings 0075 §8 leaves the final tuning to HITL).
+    public const float DEFAULT_SNAP_THRESHOLD = 12f;
+
     readonly RectTransform _layer;
     readonly FloatingWindowCatalog _catalog;
     readonly Func<FloatingWindowSpec, string, RectTransform> _factory;
@@ -176,6 +183,40 @@ public class FloatingWindowController
         if (_windows.TryGetValue(id, out var e) && e.rt != null)
             e.rt.anchoredPosition += logicalDelta;
     }
+
+    // #99 Slice 1 (ADR-0017 / findings 0075 §1): magnet snap on drag release. The title-bar
+    // input boundary calls this from OnEndDrag with the window's id; the controller reads every
+    // OTHER live window's (top-left, size) into DockRects, asks FloatingWindowMath.SnapOffset
+    // for the canvas-logical Δ (x and y INDEPENDENT — one window may snap horizontally to A and
+    // vertically to B), and applies it via MoveByLogical so the snap goes through the same
+    // anchoredPosition write path the drag uses. The dragged window is EXCLUDED from `others`
+    // (a window never snaps to itself). Returns the applied offset (Vector2.zero if there was
+    // nothing to snap to or the nearest edge was beyond threshold). No-op for an unknown id.
+    //
+    // The default threshold is DEFAULT_SNAP_THRESHOLD (12px logical). A live HITL tuner could
+    // pass a different value; the production input path uses the default.
+    public Vector2 SnapOnRelease(string id, float threshold)
+    {
+        if (string.IsNullOrEmpty(id)) return Vector2.zero;
+        if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null) return Vector2.zero;
+
+        var draggedRect = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
+        var others = new List<FloatingWindowMath.DockRect>(_windows.Count > 0 ? _windows.Count - 1 : 0);
+        foreach (var kv in _windows)
+        {
+            if (kv.Key == id) continue;                                          // never snap to self
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;        // hidden windows do not pull
+            others.Add(new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta));
+        }
+
+        Vector2 offset = FloatingWindowMath.SnapOffset(draggedRect, others, threshold);
+        if (offset != Vector2.zero) dragged.rt.anchoredPosition += offset;
+        return offset;
+    }
+
+    // Convenience: production path (the title-bar input) snaps with the default threshold.
+    public Vector2 SnapOnRelease(string id) => SnapOnRelease(id, DEFAULT_SNAP_THRESHOLD);
 
     // Raise a window to the front (last sibling = topmost draw). No-op for an unknown id.
     public void BringToFront(string id)

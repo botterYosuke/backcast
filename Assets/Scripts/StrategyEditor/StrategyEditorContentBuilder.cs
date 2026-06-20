@@ -24,12 +24,17 @@ public static class StrategyEditorContentBuilder
         history ??= new EditHistory();
         font ??= BuiltinFont();
 
-        // InputField host (fills the body). StrategyInputField exposes the visible draw-window start
-        // so the mesh effect can offset token spans when a focused multiline field scrolls.
+        // #95 Phase 2 土台: the body splits into the editor (top) + a per-cell RUN output pane (bottom).
+        // The InputField host fills the TOP region; the output Text fills the BOTTOM region (hidden
+        // until a run produces text). StrategyInputField exposes the visible draw-window start so the
+        // mesh effect can offset token spans when a focused multiline field scrolls.
+        const float OutputFrac = 0.26f;   // bottom 26% of the body = output pane
+        const float OutputGapFrac = 0.02f; // gap between the editor (above) and the output pane (below)
         var inputGo = new GameObject("StrategyCodeInput", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(StrategyInputField));
         var inputRt = (RectTransform)inputGo.transform;
         inputRt.SetParent(body, false);
-        Stretch(inputRt);
+        inputRt.anchorMin = new Vector2(0f, OutputFrac + OutputGapFrac); inputRt.anchorMax = Vector2.one;
+        inputRt.offsetMin = Vector2.zero; inputRt.offsetMax = Vector2.zero;
         inputGo.GetComponent<Image>().color = ThemeService.Current.colors.background; // issue #44
 
         // Text component (the editing surface) + the syntax mesh effect.
@@ -63,6 +68,26 @@ public static class StrategyEditorContentBuilder
         placeholder.color = phColor;
         phGo.SetActive(false);
 
+        // #95 Phase 2 土台: per-cell RUN output pane (bottom of the body). A single read-only Text (the
+        // window body already supplies the background; no separate Graphic — Image and Text on one
+        // GameObject would conflict). Wrapped + truncated so a long output stays inside the window;
+        // hidden until SetOutput gets text. Phase 6 turns this into rich output (mo.md/table/chart).
+        var outGo = new GameObject("CellOutput", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var outRt = (RectTransform)outGo.transform;
+        outRt.SetParent(body, false);
+        outRt.anchorMin = Vector2.zero; outRt.anchorMax = new Vector2(1f, OutputFrac);
+        outRt.offsetMin = new Vector2(2f, 2f); outRt.offsetMax = new Vector2(-2f, -2f);
+        var output = outGo.GetComponent<Text>();
+        output.font = font; output.fontSize = 12;
+        var outColor = ThemeService.Current.colors.text; outColor.a = 0.85f;
+        output.color = outColor;
+        output.alignment = TextAnchor.UpperLeft;
+        output.horizontalOverflow = HorizontalWrapMode.Wrap;
+        output.verticalOverflow = VerticalWrapMode.Truncate;
+        output.supportRichText = false;
+        output.raycastTarget = false;
+        outGo.SetActive(false);   // hidden until a run produces output
+
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
         var input = inputGo.GetComponent<StrategyInputField>();
@@ -76,7 +101,7 @@ public static class StrategyEditorContentBuilder
         effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
 
         var view = inputGo.AddComponent<StrategyEditorView>();
-        view.Initialize(input, effect, history, cell, placeholder);
+        view.Initialize(input, effect, history, cell, placeholder, output);
         return view;
     }
 

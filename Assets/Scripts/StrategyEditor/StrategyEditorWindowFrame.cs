@@ -88,6 +88,52 @@ public static class StrategyEditorWindowFrame
         return btnGo.GetComponent<Button>();
     }
 
+    // #95 Phase 2 土台 (ADR-0016 D2): the per-cell ▶ RUN button — runs THIS cell + reactive
+    // downstream as pure computation, output in the window. IDEMPOTENT find-or-create (same shape
+    // as EnsureCloseButton) so BOTH the adopted scene-authored window (region_001) and a runtime-
+    // spawned window (region_002+) get a consistent ▶ WITHOUT diverging — the caller wires onClick
+    // to NotebookRunController.RunCell(regionId) (via BackcastWorkspaceRoot.WireCellRunButton). Sits
+    // in the title bar, just LEFT of the X.
+    // Returns the Button (existing or newly created); null for a null root.
+    const string RunButtonName = "CellRunButton";
+
+    public static Button EnsureRunButton(RectTransform windowRoot, Font font)
+    {
+        if (windowRoot == null) return null;
+
+        var titleBar = FindChild(windowRoot, "TitleBar") ?? windowRoot;
+        var existing = FindChild(titleBar, RunButtonName);
+        if (existing != null)
+        {
+            var b = existing.GetComponent<Button>();
+            if (b != null) return b;
+        }
+
+        var btnGo = new GameObject(RunButtonName, typeof(RectTransform), typeof(Image), typeof(Button));
+        var btnRt = (RectTransform)btnGo.transform;
+        btnRt.SetParent(titleBar, false);
+        // top-right inset square, one slot to the LEFT of the X close button.
+        btnRt.anchorMin = new Vector2(1f, 1f); btnRt.anchorMax = new Vector2(1f, 1f); btnRt.pivot = new Vector2(1f, 1f);
+        float side = TitleHeight - 6f;
+        btnRt.sizeDelta = new Vector2(side, side);
+        btnRt.anchoredPosition = new Vector2(-(side + 6f), -3f);   // X is at -3; clear it by side+gap
+        btnGo.GetComponent<Image>().color = new Color(0.2275f, 0.6078f, 0.3608f, 1f); // #3a9b5c run-green
+
+        var label = new GameObject("RunGlyph", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        var labelRt = (RectTransform)label.transform;
+        labelRt.SetParent(btnRt, false);
+        labelRt.anchorMin = Vector2.zero; labelRt.anchorMax = Vector2.one;
+        labelRt.offsetMin = Vector2.zero; labelRt.offsetMax = Vector2.zero;
+        var t = label.GetComponent<Text>();
+        t.font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        t.text = "▶";   // ▶
+        t.alignment = TextAnchor.MiddleCenter;
+        t.color = Color.white;
+        t.fontSize = 12;
+
+        return btnGo.GetComponent<Button>();
+    }
+
     static RectTransform FindChild(RectTransform parent, string name)
     {
         if (parent == null) return null;

@@ -487,6 +487,10 @@ class DataEngineBackend:
         self.engine = engine
         self.mode_manager = mode_manager
         self.venue_sm = venue_sm
+        # #95 Phase 2 土台: the persistent in-proc marimo kernel for per-cell RUN (pure compute).
+        # Lazily created on the first run_cell (on the host's notebook-run worker thread — marimo
+        # RuntimeContext is thread-local, so it is built + run there, never from another thread).
+        self._notebook_session = None
         # Phase 9 Step 0: backend -> frontend event push.
         self._backend_event_bus: BackendEventStream = BackendEventStream()
         # Issue #266: Curated Set (backend-authoritative instrument list).
@@ -815,6 +819,32 @@ class DataEngineBackend:
                 ),
             )
         return self._start_engine_duckdb(strategy_file, duckdb_root)
+
+    def run_cell(self, source, pressed_index):
+        """#95 Phase 2 土台: run the pressed cell + reactive downstream as PURE computation.
+
+        The engine is NOT connected (no bt, no order submission, no per-bar drain — that is
+        Phase 3+). ``source`` is the LIVE editor content (synthesised marimo ``.py`` text, not a
+        disk path — owner HITL: run the unsaved buffer); ``pressed_index`` is the cell-order index
+        of the pressed cell. Returns a JSON string ``{"ok", "ran":[{"index","output","ok"}...],
+        "error"}`` (a JSON string keeps the nested list trivial to marshal across pythonnet).
+
+        Lazy-imports the marimo notebook seam so ``_backend_impl`` stays marimo-free at module
+        load (ADR-0012 §4 / test_strategy_runtime_offline). Called only on the host's single
+        notebook-run worker thread (findings 0071 P2-2), so the thread-local kernel is consistent.
+        """
+        import json as _json
+
+        from engine.strategy_runtime.notebook_session import NotebookSession
+
+        if self._notebook_session is None:
+            self._notebook_session = NotebookSession()
+        try:
+            result = self._notebook_session.run_pressed(str(source), int(pressed_index))
+        except Exception as exc:  # last-resort guard: a run never crashes the host worker
+            logging.exception("run_cell failed")
+            result = {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+        return _json.dumps(result)
 
     def _start_engine_duckdb(self, strategy_file, duckdb_root):
         """ADR-0006 (#49): run the production Replay through the DuckDB→kernel path.

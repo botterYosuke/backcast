@@ -209,6 +209,11 @@ class InprocLiveServer:
         """Delegate to BackendService.start_engine() for strategy backtest runs."""
         return self._svc.start_engine(cfg)
 
+    def run_cell(self, source: str, pressed_index: int) -> str:
+        """#95 Phase 2 土台: per-cell RUN (pure compute). Returns a JSON string
+        ``{"ok","ran":[{"index","output","ok"}...],"error"}``."""
+        return self._svc.run_cell(source, pressed_index)
+
     def get_portfolio(self) -> dict:
         return self._svc.get_portfolio()
 

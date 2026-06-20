@@ -383,6 +383,18 @@ class BackendService:
             "summary_json": result.summary_json if result.success else "",
         }
 
+    def run_cell(self, source: str, pressed_index: int) -> str:
+        """#95 Phase 2 土台: delegate per-cell RUN (pure compute) to DataEngineBackend.run_cell.
+
+        Returns the backend's JSON string verbatim (``{"ok","ran","error"}``)."""
+        try:
+            return self._srv.run_cell(source, pressed_index)
+        except Exception as exc:
+            import json as _json
+
+            logging.exception("[backend_service] run_cell failed")
+            return _json.dumps({"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"})
+
     # #50 (ADR-0006): the nautilus BacktestEngine→GUI bridge (#68 start_nautilus_replay +
     # pause/step/resume/set_replay_speed) was retired with nautilus. Production Replay runs
     # through start_engine (DuckDB→kernel); these forwarders had no production caller.

@@ -1,0 +1,140 @@
+// NotebookRunLane.cs — #95 Phase 2 土台 (ADR-0016 D2 / findings 0070 F5 / findings 0071 P2-2/P2-3)
+//
+// The dedicated worker lane for per-cell RUN (pure computation; engine NOT connected). marimo's
+// RuntimeContext is thread-local (thin_drain.py:152), so the persistent in-proc kernel must be
+// built AND run from ONE consistent thread — this lane owns that single background thread, so the
+// press returns immediately (the click never blocks on the run) and the kernel is never touched
+// from Unity main or the Replay launcher. RUNs QUEUE (one engine, one thread — F5): a second press
+// while one run is in flight waits its turn. NOTE: Python work still serialises on the GIL, so a
+// long pure-compute cell can still make the main thread's NEXT GIL op wait until the run yields —
+// 土台 cells are expected to be light; cooperative pacing is a later phase, not Phase 2.
+//
+// The work itself is delegated to an INotebookCellExecutor so the AFK gate
+// (StrategyEditorNotebookE2ERunner) can inject a Python-FREE fake and assert the C# wiring
+// (button presence + index->window output routing) without standing up the embedded interpreter;
+// the real reactive correctness is the Python pytest gate (test_notebook_interactive_run.py).
+//
+// Lifecycle: Submit(req) from main -> queued -> worker calls executor.Run -> result enqueued ->
+// the root drains TryDrainResult() each frame and routes each cell's output to its window. The
+// executor result carries ABSOLUTE cell indices, so routing needs no request<->result correlation.
+
+using System;
+using System.Collections.Concurrent;
+using System.Threading;
+using UnityEngine;
+
+// One RUN press: the LIVE synthesised marimo source + the pressed cell's order index. Generation is
+// the notebook epoch at submit time — a result whose generation no longer matches (the notebook was
+// replaced by File→Open/New mid-flight) is dropped instead of painted into a different document.
+public struct NotebookRunRequest
+{
+    public string Source;
+    public int PressedIndex;
+    public int Generation;
+}
+
+// One ran cell's result (pressed cell or a reactive descendant), by cell-order index.
+public struct NotebookCellOutput
+{
+    public int Index;
+    public string Output;
+    public bool Ok;
+}
+
+// The result of one RUN: the cells that ran (pressed + reactive downstream) + a run-level error.
+// Generation is copied from the originating request so a stale in-flight result can be discarded.
+public sealed class NotebookRunResult
+{
+    public bool Ok;
+    public NotebookCellOutput[] Ran;
+    public string Error;
+    public int Generation;
+
+    public static NotebookRunResult Failure(string error)
+        => new NotebookRunResult { Ok = false, Ran = Array.Empty<NotebookCellOutput>(), Error = error };
+}
+
+// Runs one press. Real impl crosses pythonnet (HostNotebookCellExecutor); the AFK gate injects a fake.
+public interface INotebookCellExecutor
+{
+    NotebookRunResult Run(string source, int pressedIndex);
+}
+
+public sealed class NotebookRunLane : IDisposable
+{
+    readonly INotebookCellExecutor _executor;
+    readonly BlockingCollection<NotebookRunRequest> _requests;
+    readonly ConcurrentQueue<NotebookRunResult> _results = new ConcurrentQueue<NotebookRunResult>();
+    readonly Thread _worker;
+    volatile bool _disposed;
+
+    // startWorker:false = synchronous mode: Submit runs the executor inline on the caller thread (the
+    // AFK gate drives it deterministically without the background thread / per-frame pump).
+    public NotebookRunLane(INotebookCellExecutor executor, bool startWorker = true)
+    {
+        _executor = executor ?? throw new ArgumentNullException(nameof(executor));
+        if (startWorker)
+        {
+            _requests = new BlockingCollection<NotebookRunRequest>();
+            _worker = new Thread(Loop) { IsBackground = true, Name = "NotebookRunLane" };
+            _worker.Start();
+        }
+    }
+
+    // Queue a press (worker mode) or run it inline (synchronous mode). Never throws.
+    public void Submit(NotebookRunRequest req)
+    {
+        if (_disposed) return;
+        if (_requests != null)
+        {
+            try { _requests.Add(req); } catch (InvalidOperationException) { /* completed/disposed */ }
+        }
+        else
+        {
+            ProcessOne(req);
+        }
+    }
+
+    // Main-thread drain: pull one completed result to route into the windows. Returns false when empty.
+    public bool TryDrainResult(out NotebookRunResult result) => _results.TryDequeue(out result);
+
+    void Loop()
+    {
+        try
+        {
+            foreach (var req in _requests.GetConsumingEnumerable())
+                ProcessOne(req);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[NotebookRunLane] worker loop ended: " + e.Message);
+        }
+    }
+
+    void ProcessOne(NotebookRunRequest req)
+    {
+        NotebookRunResult r;
+        try
+        {
+            r = _executor.Run(req.Source, req.PressedIndex) ?? NotebookRunResult.Failure("executor returned null");
+        }
+        catch (Exception e)
+        {
+            r = NotebookRunResult.Failure(e.Message);
+        }
+        r.Generation = req.Generation;   // carry the epoch so the router can drop a stale in-flight result
+        _results.Enqueue(r);
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_requests != null)
+        {
+            _requests.CompleteAdding();
+            try { _worker?.Join(500); } catch { }
+            _requests.Dispose();
+        }
+    }
+}

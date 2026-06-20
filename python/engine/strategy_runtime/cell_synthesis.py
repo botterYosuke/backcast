@@ -45,13 +45,13 @@ def synthesize_json(cells_json: str) -> str:
     return generate_filecontents(codes=codes, names=names, cell_configs=configs, config=None)
 
 
-def decompose_json(py: str) -> Optional[str]:
-    """Decompose a marimo ``.py`` into an ordered list of cells (the Open direction).
+def load_app_from_text(py: str) -> Any:
+    """Parse marimo ``.py`` SOURCE TEXT into an App, or ``None`` when it is not a loadable marimo app.
 
-    Returns a JSON array of ``{"body", "name", "config"}`` in ``.py`` cell order, or ``None`` when
-    the source is not a loadable marimo app (broken syntax / not a marimo file) — the fail-soft
-    signal the aggregate turns into "keep the buffer + notice" (findings 0044). ``load_app`` takes
-    a path, so the text is written to a temp file (the proven golden path) and removed.
+    ``load_app`` takes a path, so the text is written to a temp file (the proven golden path) and
+    removed. Shared by ``decompose_json`` (Open) and the #95 Phase 2 notebook_session (per-cell RUN),
+    so the temp-file dance lives in ONE place. marimo is imported lazily here (this module stays
+    marimo-free at load time).
     """
     from marimo._ast.load import load_app
 
@@ -60,7 +60,7 @@ def decompose_json(py: str) -> Optional[str]:
         with os.fdopen(fd, "w", encoding="utf-8", newline="") as f:
             f.write(py or "")
         try:
-            app = load_app(path)
+            return load_app(path)
         except Exception:
             return None
     finally:
@@ -69,6 +69,15 @@ def decompose_json(py: str) -> Optional[str]:
         except OSError:
             pass
 
+
+def decompose_json(py: str) -> Optional[str]:
+    """Decompose a marimo ``.py`` into an ordered list of cells (the Open direction).
+
+    Returns a JSON array of ``{"body", "name", "config"}`` in ``.py`` cell order, or ``None`` when
+    the source is not a loadable marimo app (broken syntax / not a marimo file) — the fail-soft
+    signal the aggregate turns into "keep the buffer + notice" (findings 0044).
+    """
+    app = load_app_from_text(py)
     if app is None:
         return None
 

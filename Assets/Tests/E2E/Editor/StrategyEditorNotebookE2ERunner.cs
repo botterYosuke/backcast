@@ -56,7 +56,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section9_RegistryRunWiring()
                 ?? Section10_NotebookAggregate()
                 ?? Section11_SpawnPlacement()
-                ?? Section12_Coordinator(spawned);
+                ?? Section12_Coordinator(spawned)
+                ?? Section13_PerCellRun(spawned);
         }
         catch (Exception e)
         {
@@ -87,6 +88,9 @@ public static class StrategyEditorNotebookE2ERunner
                       "5-condition, ResetUnboundEmpty) + SpawnPlacement (anchor-start, diagonal cascade, overlap-allowed, " +
                       "<10 threshold, full-chain clear) + NotebookCellCoordinator (cell0->region_001, AddCell->region_002 spawn, " +
                       "DeleteCell despawn region_002 / hide-dormant region_001, >=1 guard, dormant reuse, CapturePositions cell-order) " +
+                      "+ #95 Phase 2 土台 per-cell RUN (adopted+spawned both carry a ▶ RUN button via EnsureRunButton find-or-create, " +
+                      "idempotent; press routes the run output to ITS window by cell index; pressing one window does not overwrite another; " +
+                      "downstream cell output routes to the downstream window) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -873,6 +877,119 @@ public static class StrategyEditorNotebookE2ERunner
         // CapturePositions is cell-order parallel (regenerated from live).
         if (coord.CapturePositions().Count != nb.CellCount) return "S12: CapturePositions count != cell count";
         return null;
+    }
+
+    // ======================================================================
+    // 13. #95 Phase 2 土台 — per-cell RUN button + index->window output routing.
+    //     Covers: STRATEGY-19 (adopted+spawned both carry a ▶ RUN via EnsureRunButton find-or-create,
+    //              idempotent), STRATEGY-20 (press routes the run output to ITS window by cell index;
+    //              a downstream cell's output routes to the downstream window; pressing one window
+    //              does not overwrite another).
+    //     Python-FREE: a fake INotebookCellExecutor returns canned output keyed by the pressed index
+    //     (the real marimo reactive correctness is the pytest gate test_notebook_interactive_run.py).
+    //     REAL StrategyEditorView output panes (StrategyEditorContentBuilder) + REAL NotebookRunController
+    //     + a synchronous NotebookRunLane, so the production button->controller->lane->view path runs.
+    // ======================================================================
+    static string Section13_PerCellRun(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer13", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rootRt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rootRt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rootRt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        // adopt the scene-authored region_001 shell — a real frame + view (so it owns an output pane).
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S13: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var synth = new FakeMarimoSynthesizer();
+        var nb = new MarimoNotebookDocument(synth);
+        nb.AddCell();   // 2 cells -> region_001 + region_002
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);   // cell0->region_001, cell1->region_002 spawn
+        if (coord.RegionOf(nb.Cells[0]) != R1 || coord.RegionOf(nb.Cells[1]) != R2)
+            return "S13: precondition — cells not bound to region_001/region_002";
+        if (!views.ContainsKey(R2)) return "S13: region_002 view not built on spawn";
+
+        var lane = new NotebookRunLane(new _FakeCellExecutor(), startWorker: false);   // synchronous
+        var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
+
+        // STRATEGY-19: both windows carry a ▶ RUN button (find-or-create), idempotent.
+        var btn1 = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        if (btn1 == null) return "S13/STRATEGY-19: adopted region_001 has no RUN button";
+        var btn2 = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R2), font);
+        if (btn2 == null) return "S13/STRATEGY-19: spawned region_002 has no RUN button";
+        if (!ReferenceEquals(StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font), btn1))
+            return "S13/STRATEGY-19: EnsureRunButton not idempotent (duplicate button on region_001)";
+        btn1.onClick.AddListener(() => run.RunCell(R1));
+        btn2.onClick.AddListener(() => run.RunCell(R2));
+
+        // Bind cleared any output; both panes start empty.
+        if (!string.IsNullOrEmpty(views[R1].CurrentOutput) || !string.IsNullOrEmpty(views[R2].CurrentOutput))
+            return "S13: precondition — output panes should start empty";
+
+        // STRATEGY-20a: press region_001 (cell 0). The fake routes cell 0's output to region_001 AND a
+        // downstream cell 1's output to region_002 (proves index->window routing for a multi-cell run).
+        btn1.onClick.Invoke();
+        run.DrainAndRoute();
+        if (views[R1].CurrentOutput != "out-0") return "S13/STRATEGY-20: region_001 did not show its own (cell 0) output, got [" + views[R1].CurrentOutput + "]";
+        if (views[R2].CurrentOutput != "down-1") return "S13/STRATEGY-20: downstream output not routed to region_002 (cell 1), got [" + views[R2].CurrentOutput + "]";
+
+        // STRATEGY-20b: press region_002 (cell 1). Only cell 1 runs; region_002 updates, region_001 is
+        // UNCHANGED (litmus: routing is by cell index, not "always the first window").
+        btn2.onClick.Invoke();
+        run.DrainAndRoute();
+        if (views[R2].CurrentOutput != "out-1") return "S13/STRATEGY-20: region_002 did not show its own (cell 1) output, got [" + views[R2].CurrentOutput + "]";
+        if (views[R1].CurrentOutput != "out-0") return "S13/STRATEGY-20: pressing region_002 overwrote region_001's output (routing collapsed to one window)";
+
+        // STRATEGY-20c: a run queued against the current notebook, then Invalidate() (File→Open/New
+        // replaced the notebook mid-flight), must be DROPPED at drain — not painted into the new
+        // same-index cell. Sentinels prove the stale result never lands (generation-token guard).
+        views[R1].SetOutput("keep-1");
+        views[R2].SetOutput("keep-2");
+        btn1.onClick.Invoke();   // queues a run that WOULD write region_001 + region_002
+        run.Invalidate();        // notebook replaced before the result is drained
+        run.DrainAndRoute();
+        if (views[R1].CurrentOutput != "keep-1" || views[R2].CurrentOutput != "keep-2")
+            return "S13/STRATEGY-20: a run invalidated mid-flight (notebook replaced) still painted its output";
+
+        lane.Dispose();
+        return null;
+    }
+
+    // Fake per-cell executor (Python-FREE): pressed cell -> "out-{index}"; pressing cell 0 also emits a
+    // downstream cell-1 output to exercise multi-cell index->window routing. Mirrors the JSON the real
+    // backend returns (ran = pressed + reactive descendants), without the embedded interpreter.
+    sealed class _FakeCellExecutor : INotebookCellExecutor
+    {
+        public NotebookRunResult Run(string source, int pressedIndex)
+        {
+            var ran = new List<NotebookCellOutput>
+            {
+                new NotebookCellOutput { Index = pressedIndex, Output = "out-" + pressedIndex, Ok = true },
+            };
+            if (pressedIndex == 0)
+                ran.Add(new NotebookCellOutput { Index = 1, Output = "down-1", Ok = true });
+            return new NotebookRunResult { Ok = true, Ran = ran.ToArray(), Error = null };
+        }
     }
 
     // ---- helpers ----

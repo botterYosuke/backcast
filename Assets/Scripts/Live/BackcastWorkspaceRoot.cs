@@ -89,8 +89,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // ── reused brains / VMs (findings 0025 §5) ──
     readonly ScenarioStartupController _scenario = new ScenarioStartupController();
-    // #76 S6b-β-clean U1: the title-bar Run button's readiness brain (pure; non-mutating mirror of OnRun's gates).
-    readonly RunReadinessViewModel _runReadiness = new RunReadinessViewModel();
 
     // #41 instruments universe prune: change-gated, on-demand prune of universe-outside instruments.
     // _pruneSource is a null source today (no live fetch / catalog producer yet — prune stays dormant
@@ -148,7 +146,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     HakoniwaLayoutProfiles _profiles = new HakoniwaLayoutProfiles();
     ScenarioStartupTile _tile;
     WorkspaceFooterView _footer;
-    StrategyEditorRunButton _editorRunButton;   // #76 S6b-β-clean U1: Run on the adopted editor title bar
     NotebookRunLane _notebookRunLane;           // #95 Phase 2 土台: dedicated worker thread for per-cell RUN
     NotebookRunController _notebookRun;          // #95 Phase 2 土台: per-cell RUN orchestration brain
     readonly Dictionary<string, Button> _cellRunButtons = new Dictionary<string, Button>();  // #95 P4: region → ▶/■ button
@@ -229,7 +226,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
     volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
     string _lastFooterSig = "";
-    string _lastRunReadySig;                // #76 U1: change-gate the title-bar Run button Refresh
     string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
 
     void Awake()
@@ -428,11 +424,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_strategyEditorTitleInput != null)
         {
             _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
-            // #76 S6b-β-clean U1: the SINGLE Run entry — a small ▶ Run on the adopted editor's title bar.
-            // Run targets WHAT THE EDITOR SHOWS via EditorFileProvider — now the NOTEBOOK aggregate (#81),
-            // resolved through the registry under NOTEBOOK_ID; the ▶ wiring is unchanged. Click → OnRun().
-            _editorRunButton = new StrategyEditorRunButton(OnRun);
-            _editorRunButton.Build((RectTransform)_strategyEditorTitleInput.transform, _font);
+            // #95 Phase 6 (ADR-0016 D2/D4 / findings 0075 P6-4): the title-bar ▶ Run is SUNSET. The
+            // sole strategy execution entry is per-cell RUN (each cell window's ▶, wired below). The
+            // old StrategyEditorRunButton + OnRun (batch-run-of-saved-strategy) are retired.
         }
         // #81: the adopted window's content is a Cell fragment view (no Document / no registry — the
         // notebook aggregate, registered above under NOTEBOOK_ID, is the sole provider).
@@ -981,59 +975,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return body;
     }
 
-    // ---- run path (footer ▶ / Startup tile Run): controller validates + writes the sidecar, then
-    // the Host drives load_replay_data → start_engine (findings 0025 §4/§5). ----
-    void OnRun()
-    {
-        if (_host.IsRunning) return;
-
-        // #76 S6b-β-clean U1/U5: the title-bar Run button shows the steady block reason (RunReadiness),
-        // and is only clickable when ready — so these click-time gates are defensive. Surface a click-
-        // time failure (a commit I/O exception, or a race that flipped readiness) on the menu notice line
-        // (the tile is scenario-editing-only now; it no longer carries a Run message).
-        RunGateResult gate;
-        try { gate = _scenario.TryStartRun(EditorFileProvider); }
-        catch (Exception e) { _menuBarView?.ShowMessage("Could not save scenario: " + e.Message); Debug.LogError("[BackcastWorkspaceRoot] commit failed: " + e); return; }
-        if (!gate.IsReady) { _menuBarView?.ShowMessage(gate.Message); Debug.LogWarning("[BackcastWorkspaceRoot] run blocked: " + gate.Message); return; }
-
-        // Commit just wrote the sidecar to the CURRENT universe; re-prime the sidebar writeback's
-        // _lastFlushed to match, so a later sidebar ×/add (the only path that flushes) diffs against
-        // what is actually on disk. Without this, a tile-added id committed at Run leaves _lastFlushed
-        // stale -> the next sidebar edit sees no diff -> Flush SKIPS -> phantom id persists on disk
-        // (findings 0025 §12, Finding 1).
-        _sidebarCtrl.PrimeWritebackFromCurrent();
-
-        if (!_isOwner) { _menuBarView?.ShowMessage(RunReadinessViewModel.NotOwner); return; }
-
-        _chartRendered.Clear();
-        _depthRendered.Clear();        // #57: a fresh run invalidates the cached per-id ladder renders
-        _lastDepthPayload = null;
-        _lastPayload = null;
-        _errLogged = false;
-
-        var req = new WorkspaceEngineHost.RunRequest
-        {
-            Instruments = new List<string>(_scenario.Universe.Ids).ToArray(),
-            Start = _scenario.Params.Start,
-            End = _scenario.Params.End,
-            Granularity = ScenarioStartupParams.GranularityToString(_scenario.Params.Granularity),
-            StrategyPath = gate.StrategyPath,
-        };
-        _host.TryStartRun(req);
-    }
+    // #95 Phase 6 (ADR-0016 D2/D4 / findings 0075 P6-4): OnRun — the batch-run-of-saved-strategy
+    // entry the title-bar ▶ Run drove — is SUNSET. Strategy execution is per-cell RUN only (the
+    // engine-run primitive WorkspaceEngineHost.TryStartRun survives for the Replay→Hakoniwa path;
+    // the scenario sidecar is committed by the startup panel's Commit, not a Run gate).
 
     void Update()
     {
-        // #76 S6b-β-clean U1: drive the title-bar Run button readiness EVERY frame, BEFORE the owner
-        // guard — a non-owner session must still see Run greyed with "Not the Python owner". strategyReady
-        // = the provider's 5-condition supplyable (non-mutating); scenarioValid = no validation errors.
-        // Only Refresh the uGUI button when the readiness actually changed (change-gated like DriveFooter's
-        // _lastFooterSig), so a steady workspace costs the read but not the per-frame color/text churn.
-        _runReadiness.Evaluate(_isOwner, _host.IsRunning,
-            EditorFileProvider.TryGetStrategyFile(out _), !_scenario.Validate().Any);
-        string readySig = _runReadiness.CanRun + "|" + _runReadiness.BlockReason;
-        if (readySig != _lastRunReadySig) { _lastRunReadySig = readySig; _editorRunButton?.Refresh(_runReadiness); }
-
         // #95 Phase 2 土台: route any completed per-cell RUN outputs into their windows. Drained every
         // frame (cheap when empty), BEFORE the owner guard so a queued press is never stranded.
         _notebookRun?.DrainAndRoute();

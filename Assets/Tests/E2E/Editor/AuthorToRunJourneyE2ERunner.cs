@@ -41,7 +41,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
-using System.Threading;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -52,8 +51,6 @@ public static class AuthorToRunJourneyE2ERunner
     const string ADOPTED_CELL = NotebookCellCoordinator.AdoptedRegionId;   // strategy_editor:region_001
     const string FIRST = "8918.TSE";
     const string SECOND = "7203.TSE";
-    const int LAUNCH_POLL = 50;          // step 10: bounded poll for the run-launched signal (absorb the finally micro-window)
-    const int LAUNCH_SLEEP_MS = 20;
 
     static WorkspaceEngineHost s_host;
 
@@ -78,7 +75,7 @@ public static class AuthorToRunJourneyE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E AUTHOR→RUN PASS] blank notebook → authored cell + scenario → save made the strategy supplyable → run gate committed the scenario sidecar → host.TryStartRun accepted the run.");
+            Debug.Log("[E2E AUTHOR→RUN PASS] blank notebook → authored cell + scenario → save made the strategy supplyable → run gate committed the scenario sidecar (post-#95-Phase6: the run TRIGGER is per-cell RUN, covered by StrategyEditorNotebookE2ERunner S14 + test_notebook_replay_afk).");
             EditorApplication.Exit(0);
         }
         else
@@ -112,15 +109,14 @@ public static class AuthorToRunJourneyE2ERunner
         var onFileNew = ty.GetMethod("OnFileNew", BF);
         var onGuardDiscard = ty.GetMethod("OnGuardDiscard", BF);   // #87: File→New on a dirty notebook defers behind the SaveGuard; Discard proceeds
         var onFileSaveAs = ty.GetMethod("OnFileSaveAs", BF);
-        var onRun = ty.GetMethod("OnRun", BF);
         var isOwnerField = ty.GetField("_isOwner", BF);
-        if (onFileNew == null || onGuardDiscard == null || onFileSaveAs == null || onRun == null) return "JOURNEY-AUTHOR-01: File/Run ops not found (renamed?)";
+        if (onFileNew == null || onGuardDiscard == null || onFileSaveAs == null) return "JOURNEY-AUTHOR-01: File ops not found (renamed?)";
         if (isOwnerField == null) return "JOURNEY-AUTHOR-01: _isOwner not found (renamed?)";
 
         var host = ty.GetField("_host", BF)?.GetValue(root) as WorkspaceEngineHost;
         if (host == null) return "JOURNEY-AUTHOR-01: _host not built (renamed?)";
         s_host = host;
-        isOwnerField.SetValue(root, true);   // OnRun's owner guard (read only at step 10; harmless before)
+        isOwnerField.SetValue(root, true);
 
         // ── JOURNEY-AUTHOR-02: File→New clears to one empty cell + empty universe + untitled. NON-VACUOUS:
         //   dirty the workspace first (a 2nd cell + an edit + an instrument), so New's CLEAR is what we
@@ -218,21 +214,13 @@ public static class AuthorToRunJourneyE2ERunner
             return "JOURNEY-AUTHOR-09: committed sidecar missing instruments (got [" + string.Join(",", committed.Instruments) +
                    "]) — the run gate's Commit did not persist the post-save universe";
 
-        // ── JOURNEY-AUTHOR-10: claim Python ("MOCK") ONLY now (steps 2-9 were Python-FREE), then drive the
-        //   production OnRun → host.TryStartRun ACCEPTS the run (the seam's terminal). Observed at the host: a
-        //   fresh host (not running / not finished) transitions to a launched run. We don't run real data —
-        //   MOCK load_replay_data may fail fast; ACCEPTANCE is the observation. Run's finally tears it down. ──
-        host.InitializePython("MOCK");
-        if (!host.ServerReady)
-            return "JOURNEY-AUTHOR-10: host server not ready after InitializePython(MOCK)";
-        if (host.IsRunning || host.RunFinished)
-            return "JOURNEY-AUTHOR-10: precondition — host already running/finished before OnRun";
-        onRun.Invoke(root, null);
-        bool launched = host.IsRunning || host.RunFinished;
-        for (int i = 0; i < LAUNCH_POLL && !launched; i++) { Thread.Sleep(LAUNCH_SLEEP_MS); launched = host.IsRunning || host.RunFinished; }
-        if (!launched)
-            return "JOURNEY-AUTHOR-10: OnRun did not launch a run (host.TryStartRun refused or was not called)";
-
+        // ── JOURNEY-AUTHOR-10: the RUN TRIGGER is SUNSET (#95 Phase 6 / ADR-0016 D2/D4 / findings 0075
+        //   P6-4). The title-bar ▶ Run → OnRun → host.TryStartRun batch path is retired; strategy
+        //   execution is per-cell RUN. The "press RUN launches a real backtest" contract migrated to
+        //   StrategyEditorNotebookE2ERunner S14 (C# wiring: per-cell RUN → run_cell with scenario_json)
+        //   + python/tests/test_notebook_replay_afk.py (the engine-run DATA, end to end). This journey
+        //   therefore terminates at the scenario-commit seam (step 9): author → save → supplyable →
+        //   committed sidecar carries the post-save universe. No host launch is driven here anymore.
         return null;
     }
 

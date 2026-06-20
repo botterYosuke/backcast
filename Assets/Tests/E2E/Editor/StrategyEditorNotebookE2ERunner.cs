@@ -738,6 +738,29 @@ public static class StrategyEditorNotebookE2ERunner
         if (nb5.Cells[0].Body != beforeBody0 || nb5.Cells[1].Body != beforeBody1) return "S10/F1: refused Open mutated cell bodies";
         if (!nb5.IsDirty) return "S10/F1: refused Open cleared the dirty flag";
 
+        // F1-DISCARD (#87 slice 2 — MarimoNotebookDocument discard-authorization seam): the F1 refuse
+        // above is the DEFAULT (discardDirty:false). When the caller AUTHORIZES a discard via
+        // discardDirty:true (the higher-layer SaveGuard "Discard" verdict, wired in a later slice),
+        // a dirty notebook DISCARDS its unsaved cells and wraps the new non-marimo `.py` as 1 cell,
+        // binding clean — this is the exact aggregate seam the SaveGuard→Discard→Open(discardDirty:true)
+        // path will call. Non-vacuous litmus (two stakes, mutually protective): deleting the
+        // `&& !discardDirty` relaxation makes THIS section RED (Open refuses an authorized discard),
+        // while removing the `_dirty` guard entirely makes the nb5 F1-refuse section above RED.
+        var nb7 = new MarimoNotebookDocument(failSynth);
+        nb7.AddCell();                                            // 2 cells
+        nb7.Cells[0].SetBody("unsaved_work = 99");                // dirty
+        if (!nb7.IsDirty) return "S10/F1-DISCARD: precondition — nb7 should be dirty";
+        if (!nb7.Open(rawPath2, discardDirty: true))
+            return "S10/F1-DISCARD: dirty Open(non-marimo, discardDirty:true) should succeed (authorized discard, LastError=" + (nb7.LastError ?? "<null>") + ")";
+        if (nb7.CellCount != 1) return "S10/F1-DISCARD: authorized-discard wrap should produce exactly 1 cell (dirty cells not discarded)";
+        if (nb7.Cells[0].Body != "class Other(Strategy):\n    pass\n")
+            return "S10/F1-DISCARD: authorized-discard wrap body != the new file content (stale dirty cell survived)";
+        if (nb7.Cells[0].Name != "_") return "S10/F1-DISCARD: authorized-discard wrap should use anonymous name '_'";
+        if (!nb7.IsBound || nb7.IsDirty) return "S10/F1-DISCARD: authorized-discard wrap should bind + be clean";
+        if (!nb7.WrapMode) return "S10/F1-DISCARD: authorized-discard wrap did not set WrapMode (toast cannot warn about §D2 conversion)";
+        if (nb7.LastError != null) return "S10/F1-DISCARD: authorized-discard wrap set LastError (it is success, not fail-soft)";
+        if (!nb7.TryGetStrategyFile(out _)) return "S10/F1-DISCARD: authorized-discard wrap notebook not supplyable";
+
         // Sanity: a CLEAN notebook still wraps (F1 only guards the dirty case — the happy path above stays green).
         var nb6 = new MarimoNotebookDocument(failSynth);
         if (!nb6.Open(rawPath2)) return "S10/F1: clean notebook should still wrap-Open a non-marimo .py";

@@ -132,7 +132,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     // through `generate_filecontents` (owner: destructive overwrite into marimo form is OK), so a
     // non-marimo `.py` opened + saved is a ONE-WAY migration into the cell-DAG model. A VALID but
     // empty/0-cell marimo `.py` opens with one bootstrapped empty cell (>=1 invariant).
-    public bool Open(string path)
+    public bool Open(string path, bool discardDirty = false)
     {
         _lastError = null;
         if (string.IsNullOrEmpty(path)) return Fail("no path");
@@ -154,13 +154,16 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         // Open(non-marimo `.py`) would silently overwrite the user's in-progress edits with a 1-cell
         // wrap of an unrelated file. Fail-soft: set LastError and return WITHOUT touching `_cells` /
         // `_path` / `_dirty`. Valid marimo `.py` (Decompose != null) still replaces a dirty notebook
-        // — that's the explicit "switch notebook" intent. Discard-confirm modal is a higher-layer UX
-        // slice (out of scope for this fix); the aggregate just guards the invariant.
+        // — that's the explicit "switch notebook" intent.
+        // #87 slice 2 (discard-authorization seam): a caller that has ALREADY obtained the user's
+        // consent to lose the unsaved work — the higher-layer SaveGuard "Discard" verdict on
+        // File→Open — passes discardDirty:true to RELAX the F1 refuse, so the wrap discards `_cells`
+        // and binds the new file. discardDirty:false (default) keeps F1 intact for every other caller.
         IReadOnlyList<Cell> decomposed = _synth.Decompose(content);
         bool wrapLeg;
         if (decomposed == null)
         {
-            if (_dirty) return Fail("dirty workspace — Save or File→New before opening a non-marimo .py");
+            if (_dirty && !discardDirty) return Fail("dirty workspace — Save or File→New before opening a non-marimo .py");
             decomposed = new List<Cell> { new Cell(content, "_", "{}") };
             wrapLeg = true;
         }

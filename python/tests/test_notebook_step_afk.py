@@ -324,5 +324,67 @@ def test_step_bt_torn_down_when_source_no_longer_uses_bt_step(tmp_path) -> None:
             backend._notebook_session.close()
 
 
+# ----------------------------------------------------------------------------------------
+# P6-6 (findings 0075): mixed bt.replay + bt.step notebook — pressing the STEP cell persists
+# ----------------------------------------------------------------------------------------
+
+def test_mixed_replay_and_step_notebook_pressing_step_persists(tmp_path) -> None:
+    """findings 0074 §範囲外 / 0075 P6-6: a notebook holding BOTH a bt.replay cell and a bt.step
+    cell.  Pressing the STEP cell must use the persistent step cache (pointer advances).  The old
+    whole-source substring match saw ``bt.replay`` anywhere and built a FRESH bt every press,
+    resetting the step pointer; pressed-cell AST detection chooses the path from the pressed cell."""
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+    src = synthesize_json(json.dumps([
+        {"body": "for _bar in bt.replay():\n    pass", "name": "_", "config": {}},  # 0: replay (independent, not pressed)
+        {"body": "bar = bt.step()\nbar", "name": "_", "config": {}},                # 1: step (pressed)
+    ]))
+    try:
+        out1 = _press(backend, src, _SCENARIO_A, idx=1)
+        assert out1["ok"], out1
+        bt1 = backend._step_bt
+        assert bt1 is not None, "pressing the step cell built no step cache (replay sibling bypassed it)"
+
+        out2 = _press(backend, src, _SCENARIO_A, idx=1)
+        assert out2["ok"], out2
+        assert backend._step_bt is bt1, "step cache was rebuilt — the replay sibling reset the pointer"
+        # Pointer persisted across presses → the chart accumulated 2 bars (cache hit, not rebuild).
+        assert len(backend.engine._rs.ohlc_points) == 2
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
+
+# ----------------------------------------------------------------------------------------
+# carry-over C (findings 0075): step-bt cache key is JSON-key-order insensitive
+# ----------------------------------------------------------------------------------------
+
+def test_scenario_cache_key_is_order_insensitive(tmp_path) -> None:
+    """carry-over C: the cache key normalises JSON key order, so the same committed scenario
+    serialised with a different key order is a cache HIT — not a silent rebuild that would reset
+    the step pointer."""
+    import collections
+
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+    src = _source(_step_cell())
+    a = json.dumps(_SCENARIO_A)
+    reordered = json.dumps(collections.OrderedDict(reversed(list(_SCENARIO_A.items()))))
+    assert a != reordered, "test setup: the two serialisations must differ as raw strings"
+
+    try:
+        out1 = json.loads(backend.run_cell(src, 0, a))
+        assert out1["ok"], out1
+        bt1 = backend._step_bt
+        assert bt1 is not None
+
+        out2 = json.loads(backend.run_cell(src, 0, reordered))
+        assert out2["ok"], out2
+        assert backend._step_bt is bt1, "reordered-key scenario rebuilt bt — cache key not normalised"
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

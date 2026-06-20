@@ -126,9 +126,10 @@ def test_pure_compute_cell_does_not_touch_engine(tmp_path) -> None:
 
 def test_non_driving_press_in_bt_notebook_leaves_engine_idle(tmp_path) -> None:
     # A notebook with a bt.replay cell, but the PRESSED cell is an independent pure-compute cell
-    # that never drives bt. The whole-source substring match still builds bt (→ load_replay_data →
-    # engine LOADED), so run_cell MUST reset the engine to IDLE even though bt was not driven — else
-    # the next run fails "LoadReplayData is only allowed from IDLE" (the #95 P4 leak fix).
+    # that never drives bt. Phase 6 (P6-6) detects bt drive PER PRESSED CELL via AST, so pressing
+    # the pure cell builds NO bt at all (carry-over A: a bt.replay sibling no longer drags the
+    # engine to LOADED on a pure press) — the engine simply stays IDLE. Either way the invariant
+    # under test holds: a non-driving press never strands the engine, so the next real run loads.
     _build_synthetic_duckdb(tmp_path)
     backend = _backend(tmp_path)
     src = synthesize_json(json.dumps([

@@ -862,21 +862,55 @@ class DataEngineBackend:
         load (ADR-0012 §4 / test_strategy_runtime_offline). Called only on the host's single
         notebook-run worker thread (findings 0071 P2-2), so the thread-local kernel is consistent.
         """
+        import ast as _ast
         import json as _json
 
-        from engine.strategy_runtime.notebook_session import NotebookSession
+        from engine.strategy_runtime.cell_synthesis import load_app_from_text
+        from engine.strategy_runtime.notebook_session import IncrementalNotebookSession
 
         if self._notebook_session is None:
-            self._notebook_session = NotebookSession()
+            self._notebook_session = IncrementalNotebookSession()
 
         source = str(source)
-        uses_replay = "bt.replay" in source
-        uses_step = "bt.step" in source
-        uses_bt = uses_replay or uses_step
+        pressed_index = int(pressed_index)
 
-        # Discard the cached step bt when the notebook no longer references bt.step — the next bt
-        # notebook will rebuild fresh.  A scenario change is handled below by the key check.
-        if not uses_step:
+        # Phase 6 (findings 0075 P6-1/P6-6): parse the live source into ordered cell BODIES and
+        # drive the kernel INCREMENTALLY (faithful staleness, no rebuild) keyed by stable cell id.
+        # bt drive is detected PER PRESSED CELL via an AST walk — the pressed cell's body, not the
+        # whole source, chooses replay vs step vs pure (carry-over A: mixed replay+step notebooks),
+        # and walking the AST means ``bt.replay`` in a comment / string literal is NOT a false
+        # match (carry-over B).
+        app = load_app_from_text(source)
+        if app is None:
+            return _json.dumps(
+                {"ok": False, "ran": [], "stale": [], "error": "source is not a loadable marimo notebook"}
+            )
+        bodies = list(app._cell_manager.codes())
+        cells = [{"cell_id": f"c{i}", "code": b} for i, b in enumerate(bodies)]
+
+        def _drives(body: str, attr: str) -> bool:
+            try:
+                tree = _ast.parse(body)
+            except SyntaxError:
+                return False
+            return any(
+                isinstance(n, _ast.Attribute)
+                and n.attr == attr
+                and isinstance(n.value, _ast.Name)
+                and n.value.id == "bt"
+                for n in _ast.walk(tree)
+            )
+
+        pressed_body = bodies[pressed_index] if 0 <= pressed_index < len(bodies) else ""
+        uses_replay = _drives(pressed_body, "replay")
+        uses_step = _drives(pressed_body, "step")
+        uses_bt = uses_replay or uses_step
+        # The step cache lives as long as ANY cell still drives bt.step — pressing a pure sibling
+        # must not tear down a step cell's pointer (P6-6).  Only a notebook that dropped bt.step
+        # from EVERY cell tears it down; a scenario change is handled below by the key check.
+        notebook_uses_step = any(_drives(b, "step") for b in bodies)
+
+        if not notebook_uses_step:
             self._teardown_step_bt()
 
         bt = None
@@ -903,7 +937,7 @@ class DataEngineBackend:
                     self._teardown_step_bt()
                     self.engine.force_stop_replay()
                     return _json.dumps(
-                        {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+                        {"ok": False, "ran": [], "stale": [], "error": f"{type(exc).__name__}: {exc}"}
                     )
             else:
                 # Replay path (or mixed step+replay): Phase 4 behavior — fresh bt per press.
@@ -916,7 +950,7 @@ class DataEngineBackend:
                     logging.exception("run_cell: bt build failed")
                     self.engine.force_stop_replay()
                     return _json.dumps(
-                        {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+                        {"ok": False, "ran": [], "stale": [], "error": f"{type(exc).__name__}: {exc}"}
                     )
             inject = {"bt": bt}
         elif uses_bt and not scenario_json:
@@ -925,11 +959,12 @@ class DataEngineBackend:
             from engine.strategy_runtime.backtester import NoScenarioBacktester
             inject = {"bt": NoScenarioBacktester()}
 
+        pressed_id = f"c{pressed_index}"
         try:
-            result = self._notebook_session.run_pressed(source, int(pressed_index), inject=inject)
+            result = self._notebook_session.run_pressed(cells, pressed_id, inject=inject)
         except Exception as exc:  # last-resort guard: a run never crashes the host worker
             logging.exception("run_cell failed")
-            result = {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
+            result = {"ok": False, "ran": [], "stale": [], "error": f"{type(exc).__name__}: {exc}"}
         finally:
             # Settle any bar the cell left open via ``bt.step()`` / ``bt.replay()`` (findings 0072
             # §Q2: the per-cell RUN finally MUST close the open bar — idempotent, a no-op on the
@@ -975,7 +1010,32 @@ class DataEngineBackend:
                 # the cached pointer should persist for the next press.
                 self._teardown_step_bt()
 
-        return _json.dumps(result)
+        # Map the incremental session's stable cell ids back to cell-order indices for the C# side
+        # (windows are addressed by index).  ``stale`` (cell indices still needing a press) is
+        # additive — Phase 6 C# badges idle/stale from it; older callers ignore the extra key.
+        id_to_index = {f"c{i}": i for i in range(len(bodies))}
+        ran = [
+            {"index": id_to_index[r["cell_id"]], "output": r["output"], "ok": r["ok"]}
+            for r in result.get("ran", [])
+            if r.get("cell_id") in id_to_index
+        ]
+        stale = sorted(id_to_index[cid] for cid in result.get("stale", []) if cid in id_to_index)
+        out = {"ok": result.get("ok", False), "ran": ran, "stale": stale, "error": result.get("error")}
+        if "run_summary" in result:
+            out["run_summary"] = result["run_summary"]
+        return _json.dumps(out)
+
+    @staticmethod
+    def _normalize_scenario_key(scenario_json):
+        """Canonical step-bt cache key for a committed scenario (carry-over C / findings 0075).
+
+        JSON object key ordering must NOT cause a same-scenario cache miss (which would silently
+        rebuild bt and reset the step pointer), so parse and re-serialise with sorted keys. Falls
+        back to the raw string when the value is not parseable JSON (defensive)."""
+        try:
+            return json.dumps(json.loads(scenario_json), sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return str(scenario_json)
 
     def _acquire_step_bt(self, scenario_json):
         """Reuse or build the persistent ``bt`` for a B3 step cell (#95 Phase 5 / findings 0074).
@@ -989,7 +1049,7 @@ class DataEngineBackend:
         false-positive — teardown the engine to IDLE) from "cache hit but undriven this press"
         (the user has a conditional bt.step() that didn't fire — preserve the cached pointer).
         """
-        key = str(scenario_json)
+        key = self._normalize_scenario_key(scenario_json)
         if self._step_bt is not None and self._step_bt_key == key:
             return self._step_bt, self._step_bt_run_buffer, self._step_bt_scenario, True, False
 

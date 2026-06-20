@@ -45,6 +45,16 @@ description: >-
 **backcast での本スキルの実体＝「probe/pytest を回帰ゲートとして著したか／findings に RED→GREEN・再走手順を
 記録したか」**。FLOWS.md 採番に拘泥しない。
 
+> **挙動が C#→Python を跨ぐとき＝「Python-FREE fake で C# 配線、pytest で engine 正しさ」の 2 ゲート分割**（#95 Phase 2
+> per-cell RUN 実例 2026-06-20）。AFK probe から実埋め込みインタプリタを起こそうとせず、**host-bridge を interface
+> 化してその AFK section に Python-FREE な fake executor を注入**し、C# 側（ボタン presence・index→窓 routing・stale
+> result の drop 等）だけを assert する。engine 側の実挙動（例: marimo reactive で下流が再計算され独立 cell は再計算
+> されない）は **pytest が正本**。こうすると AFK runner が Python-FREE のまま速く・隔離されたゲートになり（既存
+> `StrategyEditorNotebookE2ERunner` が FakeMarimoSynthesizer で同型）、RED→GREEN litmus も両ゲートで別々に立つ
+> （C#: routing を 1 窓に collapse させると RED ／ Python: `compute_cells_to_run` の autorun を縮める/広げると RED）。
+> orchestration brain は MonoBehaviour-free な plain C# クラス（`NotebookCellCoordinator` と同型）にして、AFK が
+> root 無しで RunCell/Drain を直駆動できる形にするのが配線テストの肝。
+
 ## 二層 E2E と台本規約（ADR-0015）
 
 E2E は `Assets/Tests/E2E/Editor/*E2ERunner.{md,cs}` に置く。`.md`＝台本（仕様・観測点・合格条件の正本）、`.cs`＝

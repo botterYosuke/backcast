@@ -124,6 +124,32 @@ def test_pure_compute_cell_does_not_touch_engine(tmp_path) -> None:
     assert backend.engine.last_portfolio is None
 
 
+def test_non_driving_press_in_bt_notebook_leaves_engine_idle(tmp_path) -> None:
+    # A notebook with a bt.replay cell, but the PRESSED cell is an independent pure-compute cell
+    # that never drives bt. The whole-source substring match still builds bt (→ load_replay_data →
+    # engine LOADED), so run_cell MUST reset the engine to IDLE even though bt was not driven — else
+    # the next run fails "LoadReplayData is only allowed from IDLE" (the #95 P4 leak fix).
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+    src = synthesize_json(json.dumps([
+        {"body": "x = 1\nx", "name": "_", "config": {}},        # cell 0: pure compute (pressed)
+        {"body": _bt_cell(), "name": "_", "config": {}},        # cell 1: independent bt.replay cell
+    ]))
+    try:
+        out = json.loads(backend.run_cell(src, 0, json.dumps(_SCENARIO)))   # press cell 0
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
+    assert out["ok"], out
+    assert "run_summary" not in out                      # cell 0 did not drive a backtest
+    assert backend.engine._replay_state == "IDLE", "engine stranded in LOADED after a non-driving press"
+
+    # The leak would have bricked this: a real bt run still loads + runs afterwards.
+    out2 = _run_cell(_backend(tmp_path), _source(_bt_cell()), _SCENARIO)
+    assert out2["ok"] and "run_summary" in out2, out2
+
+
 def test_cross_thread_stop_halts_paced_run_mid_flight(tmp_path) -> None:
     _build_synthetic_duckdb(tmp_path)
     backend = _backend(tmp_path)

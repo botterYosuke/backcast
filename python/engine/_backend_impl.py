@@ -858,7 +858,11 @@ class DataEngineBackend:
                 bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
                 inject = {"bt": bt}
             except Exception as exc:
+                # _build_notebook_bt may have already taken the engine IDLE→LOADED (load_replay_data)
+                # before failing — reset to IDLE so the next run isn't bricked ("LoadReplayData is
+                # only allowed from IDLE"). force_stop_replay is idempotent from any state.
                 logging.exception("run_cell: bt build failed")
+                self.engine.force_stop_replay()
                 return _json.dumps(
                     {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
                 )
@@ -869,13 +873,23 @@ class DataEngineBackend:
             logging.exception("run_cell failed")
             result = {"ok": False, "ran": [], "error": f"{type(exc).__name__}: {exc}"}
         finally:
-            if bt is not None and bt.was_driven:
-                # The cell drove a real run: finalize the RunBuffer → summary (Hakoniwa run_result)
-                # and return the engine to IDLE. A cell that raised mid-run leaves bt.result None →
-                # still force-stop so the engine never stays RUNNING.
+            if bt is not None:
+                # We built bt, so load_replay_data put the engine in LOADED (and a drive may have
+                # taken it to RUNNING). Whether or not the pressed cell ACTUALLY drove it (a press on
+                # a non-driving cell of a bt notebook still matches the substring), return the engine
+                # to IDLE so the next run can load again. Always finalize the engine state — only the
+                # summary is conditional on a real drive.
                 try:
-                    if bt.result is not None:
-                        result["run_summary"] = self._finalize_run(run_buffer, scenario)
+                    if bt.was_driven:
+                        # A run happened: set run_summary so the Hakoniwa run_result tile reflects
+                        # THIS run (the finalized stats, or null if it stopped/crashed before
+                        # finalize) — never a stale prior summary. The key's presence tells the C#
+                        # side a backtest was driven (a pure-compute press omits it).
+                        result["run_summary"] = (
+                            self._finalize_run(run_buffer, scenario)
+                            if bt.result is not None
+                            else None
+                        )
                 except Exception:
                     logging.exception("run_cell: finalize failed")
                 finally:

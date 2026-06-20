@@ -25,22 +25,28 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         // handle when the notebook drives a backtest.
         string json = _host.InvokeRunCell(source, pressedIndex, scenarioJson);
         var result = Parse(json);
-        // A bt-driven run returns a finalized summary — surface it so the Hakoniwa run_result tile
+        // A bt-driven run returns a "run_summary" key — set the Hakoniwa run_result tile to it so it
         // fills like a title-bar Run (the live portfolio/positions already stream via the poll lane).
-        string summary = TryExtractRunSummary(json);
-        if (summary != null) _host.SetReplayRunSummary(summary);
+        // The value may be null (the run stopped/crashed before finalize): set it anyway so a STALE
+        // prior summary is cleared. A pure-compute press OMITS the key → leave the tile untouched.
+        if (TryGetRunSummary(json, out string summary)) _host.SetReplayRunSummary(summary);
         return result;
     }
 
-    static string TryExtractRunSummary(string json)
+    // Returns true iff the backend reported a backtest drive (the "run_summary" key is present);
+    // `summary` is its finalized JSON, or null when the driven run produced no summary.
+    static bool TryGetRunSummary(string json, out string summary)
     {
-        if (string.IsNullOrEmpty(json)) return null;
+        summary = null;
+        if (string.IsNullOrEmpty(json)) return false;
         try
         {
             var token = JObject.Parse(json)["run_summary"];
-            return token != null && token.Type != JTokenType.Null ? token.ToString(Newtonsoft.Json.Formatting.None) : null;
+            if (token == null) return false;   // key absent: a pure-compute press, not a backtest
+            summary = token.Type == JTokenType.Null ? null : token.ToString(Newtonsoft.Json.Formatting.None);
+            return true;
         }
-        catch (Exception) { return null; }
+        catch (Exception) { return false; }
     }
 
     // Decode the backend JSON. Defensive: a missing/typed-off field never throws (a per-cell run must

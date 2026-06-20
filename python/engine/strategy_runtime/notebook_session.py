@@ -205,3 +205,191 @@ class NotebookSession:
         ]
         ran.sort(key=lambda r: r["index"])
         return {"ok": True, "ran": ran, "error": None}
+
+
+class IncrementalNotebookSession:
+    """A persistent marimo kernel driven incrementally for faithful per-cell staleness (#95 Phase 6).
+
+    This is the P6-1 replacement for the rebuild-on-change ``NotebookSession`` above. Instead of
+    tearing the kernel down and cold-running every cell when the source changes (which makes
+    "stale" impossible — a press always runs everything fresh), it keeps ONE kernel for the
+    notebook's lifetime and:
+
+      - ``restage(cells)`` diff-registers each cell BY STABLE ID (the C# window/region id). A cell
+        whose code changed is re-registered ``stale=True`` and its downstream is marked stale via
+        ``graph.set_stale`` — but nothing runs. The current stale set is returned so the C# side can
+        badge each window idle/stale (stale appears on EDIT, not on RUN).
+      - ``run_pressed(cells, pressed_id)`` restages, then drives a bare ``Runner`` rooted at the
+        pressed cell in ``autorun`` mode — which runs the pressed cell + its STALE ANCESTORS +
+        reactive descendants (``compute_cells_to_run`` runs stale ancestors). After the run it
+        clears stale on every cell that ran (the bare Runner does not), so the remaining stale set
+        is exactly the cells still needing a press.
+
+    Globals PERSIST across edits (no rebuild), so an injected ``bt`` handle and step-cache state are
+    not destroyed by a keystroke — the Phase 2/4/5 "edit wipes live state" landmine dissolves
+    structurally. Proven against real marimo by ``python/spike/phase6_stale_spike.py``.
+
+    Thread-local discipline is identical to ``NotebookSession``: built AND driven on the host's one
+    notebook-run worker thread (marimo Kernel/RuntimeContext is thread-local).
+    """
+
+    def __init__(self) -> None:
+        self._host: "HeadlessKernel | None" = None
+        self._codes: dict[str, str] = {}   # cell_id -> last registered code (diff source of truth)
+        self._order: list[str] = []          # cell_id order (output ordering + index mapping)
+        self._owner_thread: "int | None" = None
+
+    @property
+    def cell_count(self) -> int:
+        return len(self._order)
+
+    def close(self) -> None:
+        if self._host is not None:
+            self._host.teardown()
+        self._host = None
+        self._codes = {}
+        self._order = []
+
+    def stale(self) -> list[str]:
+        """The current stale set (cells needing a press), in cell order — empty when no kernel."""
+        if self._host is None:
+            return []
+        stale = self._host.k.graph.get_stale()
+        return [cid for cid in self._order if cid in stale]
+
+    def restage(
+        self, cells: "list[dict[str, Any]]", inject: "dict[str, Any] | None" = None
+    ) -> dict[str, Any]:
+        """Diff-register ``cells`` by stable id; mark changed+downstream stale WITHOUT running.
+
+        ``cells`` is an ordered list of ``{"cell_id": str, "code": str}`` (the C# window order).
+        Returns ``{"stale": [cell_id...], "error": str | None}``. Idempotent: re-staging the same
+        cells changes nothing (``_maybe_register_cell`` no-ops on identical code).
+        """
+        guard = self._thread_guard()
+        if guard is not None:
+            return {"stale": [], "error": guard}
+        try:
+            self._restage(cells, inject)
+        except Exception as exc:  # malformed registration → fail-soft, surface to the notice line
+            return {"stale": self.stale(), "error": f"{type(exc).__name__}: {exc}"}
+        return {"stale": self.stale(), "error": None}
+
+    def run_pressed(
+        self,
+        cells: "list[dict[str, Any]]",
+        pressed_cell_id: str,
+        inject: "dict[str, Any] | None" = None,
+    ) -> dict[str, Any]:
+        """Restage ``cells``, then run the pressed cell + stale ancestors + reactive descendants.
+
+        Returns ``{"ok", "ran": [{"cell_id", "output", "ok"}...], "stale": [...], "error"}``. ``ran``
+        contains exactly the cells that executed (so an upstream-independent cell is structurally
+        absent). ``stale`` is what remains after clearing stale on the cells that ran.
+        """
+        guard = self._thread_guard()
+        if guard is not None:
+            return {"ok": False, "ran": [], "stale": [], "error": guard}
+        try:
+            self._restage(cells, inject)
+        except Exception as exc:
+            return {"ok": False, "ran": [], "stale": self.stale(), "error": f"{type(exc).__name__}: {exc}"}
+        if pressed_cell_id not in self._codes:
+            return {
+                "ok": False,
+                "ran": [],
+                "stale": self.stale(),
+                "error": f"pressed cell {pressed_cell_id!r} is not registered",
+            }
+        return self._run(pressed_cell_id, inject)
+
+    # ---- internals (all on the owning thread) ----
+
+    def _thread_guard(self) -> "str | None":
+        tid = threading.get_ident()
+        if self._owner_thread is None:
+            self._owner_thread = tid
+            return None
+        if tid != self._owner_thread:
+            return "IncrementalNotebookSession driven from a second thread (marimo kernel is thread-local)"
+        return None
+
+    def _ensure_host(self) -> "HeadlessKernel":
+        if self._host is None:
+            self._host = HeadlessKernel()
+        return self._host
+
+    def _restage(self, cells: "list[dict[str, Any]]", inject: "dict[str, Any] | None") -> None:
+        host = self._ensure_host()
+        k = host.k
+        # bt / host free refs must resolve as names when a cell is registered+run; seed them
+        # DISARMED (registration never executes, and a later run arms before pressing — P4-1).
+        NotebookSession._apply_inject(k, inject, armed=False)
+
+        new_ids = [str(c["cell_id"]) for c in cells]
+        new_codes = {str(c["cell_id"]): str(c.get("code", "")) for c in cells}
+
+        # Deletions: cells that left the notebook. Purge their defs from globals so a downstream
+        # re-run cannot read a vanished cell's stale value, then stale the orphaned children.
+        for cid in self._order:
+            if cid in new_codes:
+                continue  # retained — keep its code-cache entry so it is not re-registered (re-staled)
+            if cid in k.graph.cells:
+                cell = k.graph.cells[cid]
+                defs = set(getattr(cell, "defs", ()) or ())
+                children = k.graph.delete_cell(cid)
+                for name in defs:
+                    k.globals.pop(name, None)
+                if children:
+                    k.graph.set_stale(children, prune_imports=True)
+            self._codes.pop(cid, None)
+
+        # Registrations: new or code-changed cells become stale (+ downstream via set_stale).
+        for cid in new_ids:
+            code = new_codes[cid]
+            if self._codes.get(cid) == code and cid in k.graph.cells:
+                continue  # unchanged — keep its current (clean or stale) state
+            k._maybe_register_cell(cid, code, stale=True)
+            if cid in k.graph.cells:
+                k.graph.set_stale({cid}, prune_imports=True)
+            self._codes[cid] = code
+
+        self._order = new_ids
+
+    def _run(self, pressed_cell_id: str, inject: "dict[str, Any] | None") -> dict[str, Any]:
+        k = self._host.k  # type: ignore[union-attr]
+        NotebookSession._apply_inject(k, inject, armed=True)
+
+        recorded: dict[str, Any] = {}
+
+        def _record(cell: Any, _ctx: Any, run_result: Any) -> None:
+            recorded[cell.cell_id] = run_result
+
+        hooks = create_default_hooks()
+        hooks.add_post_execution(_record)
+        runner = Runner(
+            roots={pressed_cell_id},
+            graph=k.graph,
+            glbls=k.globals,
+            debugger=k.debugger,
+            hooks=hooks,
+            execution_mode="autorun",  # pressed + stale ancestors + reactive descendants
+            excluded_cells=set(k.errors),
+            execution_context=k._install_execution_context,
+        )
+        _await(runner.run_all())
+
+        # The bare Runner does not clear stale; the host does, so the next press's stale set is
+        # exactly the cells STILL needing a run (faithful to marimo's post-run stale clear).
+        for cid in recorded:
+            if cid in k.graph.cells:
+                k.graph.cells[cid].set_stale(stale=False, broadcast=False)
+
+        order_of = {cid: i for i, cid in enumerate(self._order)}
+        ran = [
+            {"cell_id": cid, "output": _output_text(rr), "ok": rr.success()}
+            for cid, rr in recorded.items()
+            if cid in order_of  # only cells the C# side can map back to a window
+        ]
+        ran.sort(key=lambda r: order_of[r["cell_id"]])
+        return {"ok": True, "ran": ran, "stale": self.stale(), "error": None}

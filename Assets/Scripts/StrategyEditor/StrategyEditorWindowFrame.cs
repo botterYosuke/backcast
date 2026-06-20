@@ -134,6 +134,22 @@ public static class StrategyEditorWindowFrame
         return btnGo.GetComponent<Button>();
     }
 
+    // #95 Phase 4 (ADR-0016 D9 / findings 0073 §2 — owner HITL: ship the stop affordance): while a
+    // bt.replay() backtest runs, the cell's ▶ becomes a red ■ (stop). The caller re-points onClick
+    // to StopRunning while running and back to RunCell when idle.
+    public static void SetRunButtonGlyph(Button runButton, bool running)
+    {
+        if (runButton == null) return;
+        var glyph = FindChild((RectTransform)runButton.transform, "RunGlyph");
+        var t = glyph != null ? glyph.GetComponent<Text>() : null;
+        if (t != null) t.text = running ? "■" : "▶";
+        var img = runButton.GetComponent<Image>();
+        if (img != null)
+            img.color = running
+                ? new Color(0.78f, 0.30f, 0.30f, 1f)        // #c74d4d stop-red while running
+                : new Color(0.2275f, 0.6078f, 0.3608f, 1f); // #3a9b5c run-green when idle
+    }
+
     static RectTransform FindChild(RectTransform parent, string name)
     {
         if (parent == null) return null;

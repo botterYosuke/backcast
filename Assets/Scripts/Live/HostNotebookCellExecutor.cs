@@ -19,10 +19,28 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         _host = host ?? throw new ArgumentNullException(nameof(host));
     }
 
-    public NotebookRunResult Run(string source, int pressedIndex)
+    public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
     {
-        string json = _host.InvokeRunCell(source, pressedIndex);   // GIL acquired inside; worker thread
-        return Parse(json);
+        // GIL acquired inside; worker thread. scenarioJson (#95 Phase 4) lets the backend build a bt
+        // handle when the notebook drives a backtest.
+        string json = _host.InvokeRunCell(source, pressedIndex, scenarioJson);
+        var result = Parse(json);
+        // A bt-driven run returns a finalized summary — surface it so the Hakoniwa run_result tile
+        // fills like a title-bar Run (the live portfolio/positions already stream via the poll lane).
+        string summary = TryExtractRunSummary(json);
+        if (summary != null) _host.SetReplayRunSummary(summary);
+        return result;
+    }
+
+    static string TryExtractRunSummary(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return null;
+        try
+        {
+            var token = JObject.Parse(json)["run_summary"];
+            return token != null && token.Type != JTokenType.Null ? token.ToString(Newtonsoft.Json.Formatting.None) : null;
+        }
+        catch (Exception) { return null; }
     }
 
     // Decode the backend JSON. Defensive: a missing/typed-off field never throws (a per-cell run must

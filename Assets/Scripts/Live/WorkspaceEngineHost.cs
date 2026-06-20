@@ -246,13 +246,19 @@ public sealed class WorkspaceEngineHost
     // `source` is the LIVE synthesised marimo `.py` text (unsaved buffer ok); `pressedIndex` is the
     // cell-order index. Returns the backend JSON string ({"ok","ran":[{"index","output","ok"}...],
     // "error"}), or null on a not-ready server / Python error (the executor maps null to fail-soft).
-    public string InvokeRunCell(string source, int pressedIndex)
+    public string InvokeRunCell(string source, int pressedIndex, string scenarioJson = null)
     {
         if (!Volatile.Read(ref _serverReady)) return null;
         try
         {
+            // An empty scenario string is falsy on the Python side (no bt built) — same as omitting
+            // it — so a pure-compute press needs no None marshaling.
             using (Py.GIL())
-            using (PyObject res = _server.InvokeMethod("run_cell", new PyString(source ?? ""), new PyInt(pressedIndex)))
+            using (PyObject res = _server.InvokeMethod(
+                "run_cell",
+                new PyString(source ?? ""),
+                new PyInt(pressedIndex),
+                new PyString(scenarioJson ?? "")))
                 return res.As<string>();
         }
         catch (Exception e)
@@ -261,6 +267,11 @@ public sealed class WorkspaceEngineHost
             return null;
         }
     }
+
+    // #95 Phase 4: a bt-driven notebook run finalizes its own summary (the title-bar Run path sets
+    // _runSummaryJson from start_engine's return; this surfaces the per-cell-RUN equivalent so the
+    // Hakoniwa run_result tile fills the same way). Thread-safe: called on the notebook-run worker.
+    public void SetReplayRunSummary(string summaryJson) => Volatile.Write(ref _runSummaryJson, summaryJson);
 
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----

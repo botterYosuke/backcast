@@ -36,6 +36,7 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using Python.Runtime;
+using Newtonsoft.Json.Linq;
 
 public sealed class BackcastWorkspaceRoot : MonoBehaviour
 {
@@ -150,6 +151,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     StrategyEditorRunButton _editorRunButton;   // #76 S6b-β-clean U1: Run on the adopted editor title bar
     NotebookRunLane _notebookRunLane;           // #95 Phase 2 土台: dedicated worker thread for per-cell RUN
     NotebookRunController _notebookRun;          // #95 Phase 2 土台: per-cell RUN orchestration brain
+    readonly Dictionary<string, Button> _cellRunButtons = new Dictionary<string, Button>();  // #95 P4: region → ▶/■ button
     MenuBarViewModel _menuBar;
     VenueMenuViewModel _venueMenu;
     UniverseSidebarController _sidebarCtrl;
@@ -443,8 +445,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // RUNs queue — findings 0070 F5), output routed back to each window. The engine-run path (OnRun)
         // is untouched; the title-bar single Run sunsets in Phase 6, not here.
         _notebookRunLane = new NotebookRunLane(new HostNotebookCellExecutor(_host));
+        // #95 Phase 4: a bt.replay()/bt.step() cell drives a real backtest — the committed scenario
+        // rides along, ■ force-stops the in-flight run, and the running cell's ▶ toggles to ■.
         _notebookRun = new NotebookRunController(_coordinator, ViewFor, _notebookRunLane,
-            msg => _menuBarView?.ShowMessage("Run cell: " + msg));
+            msg => _menuBarView?.ShowMessage("Run cell: " + msg),
+            BuildNotebookScenarioJson,
+            () => _host.ForceStop(),
+            SetCellRunButtonState);
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
@@ -620,6 +627,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         var btn = StrategyEditorWindowFrame.EnsureRunButton(windowRoot, _font);
         if (btn == null) return;
+        _cellRunButtons[regionId] = btn;   // #95 P4: remember it so the run state can toggle ▶/■
         btn.onClick.RemoveAllListeners();
         // Only run when this session owns the Python engine and the server is up — otherwise the press
         // would do a wasteful main-thread synthesise under the GIL and then report a generic backend
@@ -629,6 +637,42 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             if (_isOwner && _host.ServerReady) _notebookRun?.RunCell(regionId);
         });
+    }
+
+    // #95 Phase 4: toggle a running cell's button between ▶ (idle → RunCell) and ■ (running →
+    // StopRunning). Called by the controller as a backtest starts/stops. Tolerates a vanished window
+    // (the cell was deleted / notebook replaced mid-run) — the lookup simply misses.
+    void SetCellRunButtonState(string regionId, bool running)
+    {
+        if (regionId == null) return;
+        if (!_cellRunButtons.TryGetValue(regionId, out var btn) || btn == null) return;
+        StrategyEditorWindowFrame.SetRunButtonGlyph(btn, running);
+        btn.onClick.RemoveAllListeners();
+        if (running)
+            btn.onClick.AddListener(() => { if (_isOwner) _notebookRun?.StopRunning(); });
+        else
+            btn.onClick.AddListener(() => { if (_isOwner && _host.ServerReady) _notebookRun?.RunCell(regionId); });
+    }
+
+    // #95 Phase 4: serialise the committed startup-panel scenario into the dict the backend's
+    // _build_notebook_bt expects (instruments / start / end / granularity / initial_cash). Returns
+    // null when no universe is committed (the backend then keeps the pure-compute path / errors
+    // visibly), so a bt cell run only starts against a real scenario (ADR-0016 D5).
+    string BuildNotebookScenarioJson()
+    {
+        var ids = _scenario?.Universe?.Ids;
+        if (ids == null || ids.Count == 0) return null;
+        var p = _scenario.Params;
+        var o = new JObject
+        {
+            ["instruments"] = new JArray(ids),
+            ["start"] = p.Start ?? "",
+            ["end"] = p.End ?? "",
+            ["granularity"] = ScenarioStartupParams.GranularityToString(p.Granularity),
+        };
+        if (long.TryParse(p.InitialCash, NumberStyles.Integer, CultureInfo.InvariantCulture, out long cash))
+            o["initial_cash"] = cash;
+        return o.ToString(Newtonsoft.Json.Formatting.None);
     }
 
     // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override

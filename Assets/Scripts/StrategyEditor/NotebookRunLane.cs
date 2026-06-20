@@ -31,6 +31,12 @@ public struct NotebookRunRequest
     public string Source;
     public int PressedIndex;
     public int Generation;
+    // #95 Phase 4: the committed startup-panel scenario (JSON). Non-null lets the backend build a
+    // bt handle when the notebook drives a backtest (ADR-0016 D4). Null = pure-compute 土台 press.
+    public string ScenarioJson;
+    // Monotonic per-run id so the controller's running guard can correlate THIS run's result and
+    // clear the busy flag for the right run (not a faster pure-compute run that drained first).
+    public int RunId;
 }
 
 // One ran cell's result (pressed cell or a reactive descendant), by cell-order index.
@@ -49,15 +55,17 @@ public sealed class NotebookRunResult
     public NotebookCellOutput[] Ran;
     public string Error;
     public int Generation;
+    public int RunId;   // copied from the request so the controller can match its busy-flag run (#95 P4)
 
     public static NotebookRunResult Failure(string error)
         => new NotebookRunResult { Ok = false, Ran = Array.Empty<NotebookCellOutput>(), Error = error };
 }
 
 // Runs one press. Real impl crosses pythonnet (HostNotebookCellExecutor); the AFK gate injects a fake.
+// scenarioJson (#95 Phase 4) is the committed scenario (null for a pure-compute press).
 public interface INotebookCellExecutor
 {
-    NotebookRunResult Run(string source, int pressedIndex);
+    NotebookRunResult Run(string source, int pressedIndex, string scenarioJson);
 }
 
 public sealed class NotebookRunLane : IDisposable
@@ -116,13 +124,15 @@ public sealed class NotebookRunLane : IDisposable
         NotebookRunResult r;
         try
         {
-            r = _executor.Run(req.Source, req.PressedIndex) ?? NotebookRunResult.Failure("executor returned null");
+            r = _executor.Run(req.Source, req.PressedIndex, req.ScenarioJson)
+                ?? NotebookRunResult.Failure("executor returned null");
         }
         catch (Exception e)
         {
             r = NotebookRunResult.Failure(e.Message);
         }
         r.Generation = req.Generation;   // carry the epoch so the router can drop a stale in-flight result
+        r.RunId = req.RunId;             // carry the run id so the controller clears the right busy flag
         _results.Enqueue(r);
     }
 

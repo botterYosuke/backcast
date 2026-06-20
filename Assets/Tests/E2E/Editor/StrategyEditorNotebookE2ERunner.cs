@@ -980,7 +980,7 @@ public static class StrategyEditorNotebookE2ERunner
     // backend returns (ran = pressed + reactive descendants), without the embedded interpreter.
     sealed class _FakeCellExecutor : INotebookCellExecutor
     {
-        public NotebookRunResult Run(string source, int pressedIndex)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
         {
             var ran = new List<NotebookCellOutput>
             {

@@ -642,7 +642,7 @@ public static class ScenarioStartupE2ERunner
     // names every button "btn:"+label, so a re-added Run control surfaces as btn:Run… under the tile.
     // RED litmus: add a MakeButton(tile,"Run Replay",…) to ScenarioStartupTile.Build → btn:Run Replay
     // appears → RED.
-    // Covers: SCENARIO-13 (re-homed U5 — startup tile carries no Run trigger)
+    // Covers: SCENARIO-15 (re-homed U5 — startup tile carries no Run trigger)
     static string Section12_StartupTileHasNoRunButton()
     {
         var go = new GameObject("probe_tile_norun", typeof(RectTransform));
@@ -665,10 +665,10 @@ public static class ScenarioStartupE2ERunner
             // THE negative: no run-trigger button under the tile — verbatim retired name first, then a
             // broader contains-'Run' guard so a renamed Run button can't slip through.
             if (names.Contains("btn:Run Replay"))
-                return "SCENARIO-13 (re-homed U5): startup tile still has its retired Run button (btn:Run Replay)";
+                return "SCENARIO-15 (re-homed U5): startup tile still has its retired Run button (btn:Run Replay)";
             foreach (var n in names)
                 if (n.IndexOf("Run", StringComparison.Ordinal) >= 0)
-                    return "SCENARIO-13 (re-homed U5): startup tile has a run-trigger button '" + n + "' (Run moved to the Strategy Editor title bar)";
+                    return "SCENARIO-15 (re-homed U5): startup tile has a run-trigger button '" + n + "' (Run moved to the Strategy Editor title bar)";
 
             return null;
         }

@@ -181,7 +181,7 @@ public static class FooterModeE2ERunner
             // false-green the absence check). WorkspaceFooterView.MakeButton names every button "btn:"+label,
             // so a re-added transport control surfaces as btn:▶ etc. under the built footer `bar`.
             // RED litmus: add a MakeButton(bar,"▶",…) to WorkspaceFooterView.Build → btn:▶ appears → RED.
-            // (Covers: FOOTER-11 — re-homed U4) ============
+            // (Covers: FOOTER-13 — re-homed U4) ============
             var footerBtnNames = new HashSet<string>();
             foreach (var b in bar.GetComponentsInChildren<Button>(true)) footerBtnNames.Add(b.gameObject.name);
             Check(footerBtnNames.Contains("btn:Replay")
@@ -192,7 +192,7 @@ public static class FooterModeE2ERunner
             foreach (var t in new[] { "btn:▶", "btn:⏸", "btn:⏭", "btn:⏹", "btn:1x", "btn:2x", "btn:5x", "btn:10x", "btn:50x" })
                 if (footerBtnNames.Contains(t)) { retiredTransport = t; break; }
             Check(retiredTransport == null,
-                "FOOTER-11 (re-homed U4): footer has NO retired replay-transport button (found: " + (retiredTransport ?? "none") + ")");
+                "FOOTER-13 (re-homed U4): footer has NO retired replay-transport button (found: " + (retiredTransport ?? "none") + ")");
         }
         finally { UnityEngine.Object.DestroyImmediate(fgo); }
 
@@ -275,7 +275,7 @@ public static class FooterModeE2ERunner
         Check(g3.PlayPauseDecision().Action == LiveAutoAction.Pause, "guard releases on RUNNING → ▶ Pause");
 
         string summary = $"{_pass} pass / {_fail} fail";
-        if (_fail == 0) Debug.Log("[E2E FOOTER MODE PASS] " + summary + " (FooterModeViewModel FOOTER-01..10 + view FOOTER-06/07; LiveAuto pin)");
+        if (_fail == 0) Debug.Log("[E2E FOOTER MODE PASS] " + summary + " (FooterModeViewModel FOOTER-01..10 + view FOOTER-06/07 + re-homed FOOTER-13; LiveAuto pin)");
         else Debug.LogError("[E2E FOOTER MODE FAIL] " + summary);
         EditorApplication.Exit(_fail == 0 ? 0 : 1);
     }

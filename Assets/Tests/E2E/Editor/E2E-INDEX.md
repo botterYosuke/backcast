@@ -13,13 +13,13 @@
 |---|---|---:|---:|---:|---:|---:|---:|
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..18` | 18 | 0 | 7 | 5 | 2 | 4 |
 | [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
-| [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..12` | 12 | 10 | 0 | 0 | 1 | 1 |
+| [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..13` | 13 | 11 | 0 | 0 | 1 | 1 |
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..10,SNAP-01,02,DOCK-01,02` | 14 | 12 | 0 | 0 | 1 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..33` | 33 | 29 | 0 | 1 | 2 | 1 |
-| [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..14` | 14 | 12 | 0 | 0 | 2 | 0 |
-| [RunButtonE2ERunner](./RunButtonE2ERunner.md) ✅ | `RUN-01..12` | 12 | 8 | 0 | 2 | 1 | 1 |
+| [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
+| ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) ✅ | `DEPTH-01..11` | 11 | 9 | 1 | 0 | 1 | 0 |
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
@@ -66,7 +66,7 @@
   RUN-01/05/06 は sealed `WorkspaceEngineHost` のため spy 不可 → 実 root＋`host.InitializePython("MOCK")` で server-ready にし
   host private `_req` を観測（非 vacuous: blocked が `_req` 既定・ready が `_req` 充填）。findings 0063）。RUN-01..08 を
   `自動(E2E済)` へ、RUN-09/10 は `要新規自動化` 据え置き・RUN-11 HITL・RUN-12 対象外。`WorkspaceUiCutoverProbe` は
-  S3（boot→File→New）のみ残置。
+  S3（boot→File→New）のみ残置。**【RETIRED #95 Phase 6 / global ▶ Run sunset・findings 0075 §3c】** runner は削除（`StrategyEditorRunButton`/`_editorRunButton`/`OnRun` 直参照が撤去後 compile 不能）。RUN-01..08 の readiness/trigger 契約は per-cell RUN（STRATEGY-19/20・S13/S14/S16）＋ `test_notebook_replay_afk` へ移送、cutover 負 invariant **U4→FOOTER-13（`FooterModeE2ERunner`）／ U5→SCENARIO-15（`ScenarioStartupE2ERunner`）** へ re-home（commit d19dec6＝section 移送、Slice 9＝ID 衝突修正：当初 FOOTER-11/SCENARIO-13 を焼いたが台本で実 venue Live HITL／theme HITL に既割当だったため空き番号へ振り直し）。
   **11本目 = `OrderTicketE2ERunner`**（全行新規オーサリング＝既存 view 側 probe ゼロ。RunButton SectionD と同型に実
   root を反射合成し `OnManualPlace`/`OnManualCancel`/`DriveOrderTicket` を反射 invoke。production の
   `OrderTicketValidation` 抽出は不要＝検証ゲートが `SetStatus` を同期で出すので `_status` 反射で観測（parity-first・最小

@@ -4,7 +4,7 @@
 ``KernelRunner.run()`` (#24). Splitting "drive one bar" out of "drive every bar" lets the
 notebook ``bt`` handle (``engine.strategy_runtime.backtester.Backtester``) consume the SAME
 state machine as a public API to step bar-by-bar (``bt.step()``) or stream
-(``bt.replay()``), without reaching into ``KernelRunner`` private state (#95 findings 0071
+(``bt.replay()``), without reaching into ``KernelRunner`` private state (#95 findings 0072
 Q1). ``KernelRunner.run()`` is now a thin wrapper that loads bars and drives the stepper to
 the end — so the #24 golden stays byte-identical (ADR-0006): the wrapper, ``bt.replay()``
 and ``bt.step()`` all hit the same three primitives in the same order.
@@ -231,7 +231,7 @@ class KernelStepper:
         self._stop_event = stop_event
 
         # Hoisted run state (was method-local in runner.run()). These produce the golden, so
-        # extracting them is what makes this "more than a wrap" (#95 findings 0071 Q1).
+        # extracting them is what makes this "more than a wrap" (#95 findings 0072 Q1).
         self._index = -1
         self._current_bar: Optional[Bar] = None
         self._last_bar: Optional[Bar] = None

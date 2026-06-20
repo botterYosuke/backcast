@@ -270,7 +270,7 @@ Q1–Q7 の設計の木どおりに実装し、done-gate 1–11 を GREEN 化し
 6. **`bars_per_second` no-op** — `test_bars_per_second_accepted_no_sleep`（引数 store・`stepper._bar_interval_sec==0`＝pacing 未配線）
 7. **context-out fail-closed** — `test_submit_market_{before_first_step,after_close,after_end}_raises`
 8. **lifecycle rule** — `test_lifecycle_states_bar_and_portfolio`（未開始/open中/close後/END後の 4 状態）
-9. 本節 = findings 0071 実装着地記録
+9. 本節 = findings 0072 実装着地記録
 10. CONTEXT 加筆（`bt` ハンドル entry に「実装着地（#95 Phase 3）」注記）
 11. `code-review(simplify)` Medium+ 0
 

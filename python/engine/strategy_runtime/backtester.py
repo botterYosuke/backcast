@@ -4,7 +4,7 @@
 It is a thin, marimo-free façade over ``engine.kernel.stepper.KernelStepper`` — the SAME
 per-bar Replay state machine ``KernelRunner`` drives — so notebook-authored backtests run
 the real engine, byte-identical to the imperative golden (ADR-0016 "notebook = backtest";
-#95 findings 0071). The cell author writes either style on the one handle:
+#95 findings 0072). The cell author writes either style on the one handle:
 
     for bar in bt.replay(bars_per_second=2):   # B2 (#97): stream every bar
         if bar.close > bt.portfolio().avg_price and bt.portfolio().position == 0:

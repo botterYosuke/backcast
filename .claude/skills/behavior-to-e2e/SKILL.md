@@ -54,6 +54,10 @@ description: >-
 > （C#: routing を 1 窓に collapse させると RED ／ Python: `compute_cells_to_run` の autorun を縮める/広げると RED）。
 > orchestration brain は MonoBehaviour-free な plain C# クラス（`NotebookCellCoordinator` と同型）にして、AFK が
 > root 無しで RunCell/Drain を直駆動できる形にするのが配線テストの肝。
+>
+> **跨ぎが「DATA 経路」（C# press → Python RPC → 実 engine → 実データ → 状態更新）のときは、engine 側ゲートを純 pytest 単体ではなく「実バックエンド RPC を端から端まで叩く Python e2e」にするのが最短で最強**（#95 Phase 4 実例 2026-06-20）。Unity AFK runner を新規に起こして実 backtest を駆動すると 1 走 2–3 分 ＋ 反復デバッグで重いが、**`DataEngineBackend.run_cell(source, index, scenario_json)` を合成 DuckDB ＋ 実 marimo で直接呼ぶ Python e2e**（`test_notebook_replay_afk.py` 同型）なら、bt 構築→注入→`bt.replay()` 駆動→observer→`last_portfolio`→summary の **DATA 半分を決定論的に・秒で**固定できる（pacing は実 wallclock 差、cross-thread stop は worker thread ＋ `force_stop` で実証可能）。Unity AFK は **Python-FREE な control-logic fake**（scenario hand-off・running guard・▶↔■ トグルだけ）に絞る＝「Unity でしか証明できないこと」だけを Unity に残す。**marimo thread-local RuntimeContext は per-test で同一スレッド close が要る**（複数 backend を立てると "RuntimeContext already initialized"）。
+>
+> **AFK の AC 文言そのものが後発 finding に supersede されていないか、probe を書く前に binding と突き合わせる**（#95 Phase 4 実例: issue 本文 AC「速度変更が効く（mid-run 変更）」は F6 で「速度は開始時キャプチャ・走行中変更不可」に確定済み＝実現不能なので、AFK は「`bars_per_second` 違いで wallclock が変わる」へ**読み替えて** pin した）。issue 本文の AFK AC を額面で probe 化すると、設計が却下した挙動をテストしようとして詰む。[[grill-with-docs]] の「ADR×findings 突合」を AFK AC にも適用する。
 
 ## 二層 E2E と台本規約（ADR-0015）
 

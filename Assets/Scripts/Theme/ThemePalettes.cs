@@ -18,24 +18,31 @@ public sealed class ThemeColors
 {
     public Color background, surface_background, elevated_surface_background, panel_background;
     // workspace_background — the infinite-canvas FIELD behind every Hakoniwa tile / floating window
-    // (BackcastWorkspaceRoot._viewport). NOT a Radix scale step: a deliberate owner override (2026-06-19,
-    // same流儀 as the AddCellButton bottom-right divergence) so the empty space reads light-blue while
-    // the content surfaces keep `background` (dark). Kept distinct from `background` precisely so changing
-    // the field hue does NOT lighten chart / ladder / editor backgrounds.
+    // (BackcastWorkspaceRoot._viewport). NOT a Radix scale step: a deliberate owner override so the field
+    // hue can be tuned independently of `background`. Kept distinct from `background` precisely so changing
+    // the field hue does NOT recolor chart / ladder / editor backgrounds. Current (space re-skin
+    // 2026-06-20) value is a deep-cosmos void slightly darker than `background` so floating panels read as
+    // illuminated cards against outer space; was light-blue under the earlier farm palette.
     public Color workspace_background;
     // hakoniwa_* — the Hakoniwa-ISOLATED surface roles (findings 0054). The chart / ladder / panel
     // tiles and the tile chrome (card / header / label) read THESE, not the shared `background` /
-    // `panel_background`, so brightening Hakoniwa does NOT lighten the strategy editor / footer /
-    // sidebar (which keep the dark shared roles). All owner literals (raw sRGB, scale-non-derived,
-    // same流儀 as workspace_background) so a future light scale can't silently recolor them; swap
-    // these literals + Play to try a new palette (no scene re-bake).
+    // `panel_background`, so the Hakoniwa farm CAN evolve independently of the strategy editor /
+    // footer / sidebar (which keep the dark shared roles). All owner literals (raw sRGB,
+    // scale-non-derived, same流儀 as workspace_background) so a future light scale can't silently
+    // recolor them; swap these literals + Play to try a new palette (no scene re-bake). After the
+    // space re-skin (2026-06-20) the values cohere with the dark shared chrome rather than diverging
+    // brightly, but the isolation seam stays in place so a future Hakoniwa-only palette can re-diverge
+    // without disturbing the rest.
     public Color hakoniwa_root_background, hakoniwa_tile_background, hakoniwa_tile_header;
     public Color hakoniwa_chart_background, hakoniwa_panel_surface;
     public Color hakoniwa_tile_header_text, hakoniwa_text, hakoniwa_text_muted;
-    // hakoniwa trading colors (findings 0054 P1): the `status.*` green/red/warning are dark-scale steps
-    // tuned for a DARK bg and wash out on the bright/cream Hakoniwa surfaces (WCAG ~1.3–2.5:1). These are
-    // darker, cream-legible crop-green / barn-red / dark-amber used by ChartView candles + change% and the
-    // ladder bid/ask/LAST — Hakoniwa-isolated so the rest of the app keeps semantic status.* unchanged.
+    // hakoniwa trading colors (findings 0054 P1, re-tuned for the space re-skin 2026-06-20): kept as a
+    // SEPARATE override from `status.*` so the candle / ladder colors can be tuned for the Hakoniwa
+    // chart background independently of the shared error/success/warning hues. Under the original farm
+    // palette these were darker crop-green / barn-red / dark-amber for cream-surface legibility; under
+    // the space palette they are aurora-teal / mars-rust / gold-star tuned for the near-void chart
+    // face. ChartView candles + change% and the ladder bid/ask/LAST read these — Hakoniwa-isolated so
+    // the rest of the app keeps semantic status.* unchanged.
     public Color hakoniwa_up, hakoniwa_down, hakoniwa_last;
     public Color panel_focused_border, status_bar_background, title_bar_background;
     public Color toolbar_background, tab_bar_background, tab_active_background, tab_inactive_background;
@@ -57,22 +64,25 @@ public sealed class ThemeColors
         return new ThemeColors
         {
             background = n.Step1,
-            workspace_background = new Color(0.4980f, 0.6431f, 0.7451f), // #7fa4be — owner-chosen field hue (raw sRGB, findings 0020)
-            // hakoniwa FARM palette (findings 0054) — inspired by "The Farmer Was Replaced": the box-garden
-            // reads like a farm plot. grass-green field behind tiles; soil-brown tile headers/frames; light
-            // tilled-earth + cream surfaces so charts/panels stay legible (the dark-scale status green/red read
-            // like crops on cream); dark-soil text. NOT near-white (washes out ladder bid/ask). Swap + Play to tune.
-            hakoniwa_root_background  = new Color(0.4157f, 0.6078f, 0.2549f), // #6a9b41 — grass-green field (ground tiles sit on)
-            hakoniwa_tile_background  = new Color(0.8902f, 0.8353f, 0.6902f), // #e3d5b0 — tilled-earth tile card (panel bg)
-            hakoniwa_tile_header      = new Color(0.5412f, 0.3843f, 0.2235f), // #8a6239 — soil-brown header bar / frame
-            hakoniwa_chart_background = new Color(0.9373f, 0.9059f, 0.8235f), // #efe7d2 — cream crop face (chart + ladder)
-            hakoniwa_panel_surface    = new Color(0.9216f, 0.8824f, 0.7843f), // #ebe1c8 — warm cream (startup tile)
-            hakoniwa_tile_header_text = new Color(0.9529f, 0.9255f, 0.8471f), // #f3ecd8 — cream label on soil-brown header
-            hakoniwa_text             = new Color(0.1843f, 0.1490f, 0.0863f), // #2f2616 — dark-soil text on cream
-            hakoniwa_text_muted       = new Color(0.4353f, 0.3686f, 0.2471f), // #6f5e3f — mid-brown axes / change% / ladder header
-            hakoniwa_up               = new Color(0.1804f, 0.4314f, 0.1922f), // #2e6e31 — crop-green: candle up / change% gain / ladder bid (cream-legible)
-            hakoniwa_down             = new Color(0.6275f, 0.1765f, 0.1216f), // #a02d1f — barn-red: candle down / change% loss / ladder ask
-            hakoniwa_last             = new Color(0.4784f, 0.3529f, 0.0706f), // #7a5a12 — dark-amber: ladder LAST marker
+            workspace_background = new Color(0.0118f, 0.0235f, 0.0627f), // #030610 — deep cosmos void around floating panels (owner re-skin 2026-06-20)
+            // hakoniwa SPACE palette (2026-06-20 owner re-skin, supersedes farm theme from findings 0054):
+            // tile is an instrument panel floating in deep space. Outer field is the darkest void (#030610);
+            // tiles sit on Neutral.Step3 so they read as illuminated card on void; steel-blue header frames
+            // the tile (Neutral.Step7, no extra primary); chart face is a hair lighter than void for ink
+            // contrast. Up/down/LAST use the muted aurora-teal / mars-rust / gold-star scale anchors so
+            // candles glow without screaming. Owner literals (raw sRGB) — a future light scale can't
+            // silently recolor them; swap + Play to tune.
+            hakoniwa_root_background  = new Color(0.0118f, 0.0235f, 0.0627f), // #030610 — deepest cosmos (ground)
+            hakoniwa_tile_background  = new Color(0.0667f, 0.0863f, 0.1686f), // #11162b — illuminated panel card (Neutral.Step3)
+            hakoniwa_tile_header      = new Color(0.2078f, 0.2588f, 0.4471f), // #354272 — steel-blue header / frame (Neutral.Step7)
+            hakoniwa_chart_background = new Color(0.0314f, 0.0471f, 0.1098f), // #080c1c — near-void chart face for ink contrast
+            hakoniwa_panel_surface    = new Color(0.0667f, 0.0863f, 0.1686f), // #11162b — same panel hue (startup tile)
+            hakoniwa_tile_header_text = new Color(0.7843f, 0.8824f, 0.9608f), // #c8e1f5 — pale stellar text on steel header
+            hakoniwa_text             = new Color(0.8784f, 0.9059f, 0.9608f), // #e0e7f5 — starlight white text
+            hakoniwa_text_muted       = new Color(0.6588f, 0.7059f, 0.8314f), // #a8b4d4 — cool grey-blue axes / change% / ladder header
+            hakoniwa_up               = new Color(0.2314f, 0.7686f, 0.5961f), // #3bc498 — aurora teal: candle up / change% gain / ladder bid
+            hakoniwa_down             = new Color(0.8510f, 0.3882f, 0.2627f), // #d96343 — mars rust: candle down / change% loss / ladder ask
+            hakoniwa_last             = new Color(0.8471f, 0.6588f, 0.2314f), // #d8a83b — gold star: ladder LAST marker
             surface_background = n.Step2,
             elevated_surface_background = n.Step3,
             panel_background = n.Step2,

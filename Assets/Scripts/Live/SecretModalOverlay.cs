@@ -60,7 +60,7 @@ public sealed class SecretModalOverlay : MonoBehaviour
         prt.SetParent(brt, false);
         prt.anchorMin = prt.anchorMax = new Vector2(0.5f, 0.5f); prt.pivot = new Vector2(0.5f, 0.5f);
         prt.sizeDelta = new Vector2(380f, 150f);
-        panel.GetComponent<Image>().color = new Color(0.14f, 0.15f, 0.18f, 1f);
+        panel.GetComponent<Image>().color = new Color(0.0667f, 0.0863f, 0.1686f, 1f); // #11162b Neutral.Step3 (space re-skin)
 
         MakeLabel(prt, font, 12f, 10f, 356f, 22f, "<b>Second password</b> (typed; masked, never stored as text)").supportRichText = true;
         _masked = MakeLabel(prt, font, 12f, 40f, 356f, 24f, "secret: ");
@@ -129,7 +129,7 @@ public sealed class SecretModalOverlay : MonoBehaviour
         rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 1f);
         rt.anchoredPosition = new Vector2(x, -yTop); rt.sizeDelta = new Vector2(w, h);
         var t = go.GetComponent<Text>();
-        t.font = font; t.fontSize = 12; t.color = new Color(0.92f, 0.93f, 0.95f, 1f);
+        t.font = font; t.fontSize = 12; t.color = new Color(0.8784f, 0.9059f, 0.9608f, 1f); // #e0e7f5 starlight (Neutral.Step12)
         t.alignment = TextAnchor.MiddleLeft; t.text = text; t.raycastTarget = false;
         return t;
     }
@@ -141,7 +141,7 @@ public sealed class SecretModalOverlay : MonoBehaviour
         rt.SetParent(parent, false);
         rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 1f);
         rt.anchoredPosition = new Vector2(x, -yTop); rt.sizeDelta = new Vector2(w, h);
-        go.GetComponent<Image>().color = new Color(0.22f, 0.25f, 0.31f, 1f);
+        go.GetComponent<Image>().color = new Color(0.0941f, 0.1216f, 0.2275f, 1f); // #181f3a Neutral.Step4
         go.GetComponent<Button>().onClick.AddListener(() => onClick());
 
         var labelGo = new GameObject("Text", typeof(RectTransform), typeof(Text));
@@ -149,7 +149,7 @@ public sealed class SecretModalOverlay : MonoBehaviour
         lrt.SetParent(rt, false);
         lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
         var lt = labelGo.GetComponent<Text>();
-        lt.font = font; lt.fontSize = 12; lt.color = new Color(0.92f, 0.93f, 0.95f, 1f);
+        lt.font = font; lt.fontSize = 12; lt.color = new Color(0.8784f, 0.9059f, 0.9608f, 1f); // #e0e7f5 starlight (Neutral.Step12)
         lt.alignment = TextAnchor.MiddleCenter; lt.text = text; lt.raycastTarget = false;
     }
 }

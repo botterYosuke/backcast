@@ -114,9 +114,12 @@ public sealed class NotebookCellCoordinator
     // The aggregate replaces the cell list; this rebuilds the windows to match, applying the
     // sidecar positions (cell-order parallel; null/short -> auto-cascade). Returns false (and shows
     // nothing) when the aggregate's Open fails — the caller reads Notebook.LastError for the notice.
-    public bool Open(string path, IReadOnlyList<Vector2> positions)
+    // #87 slice 3: a caller that already obtained the user's discard consent (the SaveGuard "Discard"
+    // verdict on File→Open) passes discardDirty:true to RELAX the aggregate's #86 F1 dirty-refuse. The
+    // default false keeps F1 intact for every other caller (restore / probes / clean opens).
+    public bool Open(string path, IReadOnlyList<Vector2> positions, bool discardDirty = false)
     {
-        if (!_notebook.Open(path)) return false;
+        if (!_notebook.Open(path, discardDirty)) return false;
         SyncWindowsToNotebook(positions);
         return true;
     }

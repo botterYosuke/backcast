@@ -110,10 +110,11 @@ public static class AuthorToRunJourneyE2ERunner
         if (currentPathField == null) return "JOURNEY-AUTHOR-01: _currentLayoutPath not found (renamed?)";
 
         var onFileNew = ty.GetMethod("OnFileNew", BF);
+        var onGuardDiscard = ty.GetMethod("OnGuardDiscard", BF);   // #87: File→New on a dirty notebook defers behind the SaveGuard; Discard proceeds
         var onFileSaveAs = ty.GetMethod("OnFileSaveAs", BF);
         var onRun = ty.GetMethod("OnRun", BF);
         var isOwnerField = ty.GetField("_isOwner", BF);
-        if (onFileNew == null || onFileSaveAs == null || onRun == null) return "JOURNEY-AUTHOR-01: File/Run ops not found (renamed?)";
+        if (onFileNew == null || onGuardDiscard == null || onFileSaveAs == null || onRun == null) return "JOURNEY-AUTHOR-01: File/Run ops not found (renamed?)";
         if (isOwnerField == null) return "JOURNEY-AUTHOR-01: _isOwner not found (renamed?)";
 
         var host = ty.GetField("_host", BF)?.GetValue(root) as WorkspaceEngineHost;
@@ -123,13 +124,19 @@ public static class AuthorToRunJourneyE2ERunner
 
         // ── JOURNEY-AUTHOR-02: File→New clears to one empty cell + empty universe + untitled. NON-VACUOUS:
         //   dirty the workspace first (a 2nd cell + an edit + an instrument), so New's CLEAR is what we
-        //   observe — not the build-time blank. ──
+        //   observe — not the build-time blank. #87: File→New on a DIRTY document is GUARDED — onFileNew
+        //   opens the SaveGuard modal and DEFERS the clear; choosing Discard (OnGuardDiscard) proceeds. ──
         coordinator.AddCell();
         coordinator.Notebook.Cells[0].SetBody("dirty = 1\n");
         scenario.AddInstrument(SECOND);
         onFileNew.Invoke(root, null);
+        // #87 non-vacuous: the dirty guard DEFERRED the clear (modal open) — the 2-cell dirty notebook is
+        // still intact here, proving New did NOT clear immediately (delete the #87 guard → this fails).
+        if (coordinator.Notebook.CellCount != 2)
+            return "JOURNEY-AUTHOR-02: File→New on a DIRTY notebook did not DEFER the clear behind the SaveGuard (#87) — count " + coordinator.Notebook.CellCount;
+        onGuardDiscard.Invoke(root, null);   // "Don't Save" → New proceeds with the clear
         if (coordinator.Notebook.CellCount != 1)
-            return "JOURNEY-AUTHOR-02: File→New left " + coordinator.Notebook.CellCount + " cells (expected 1)";
+            return "JOURNEY-AUTHOR-02: File→New (after Discard) left " + coordinator.Notebook.CellCount + " cells (expected 1)";
         if (!string.IsNullOrEmpty(coordinator.Notebook.Cells[0].Body))
             return "JOURNEY-AUTHOR-02: File→New cell 0 is not empty";
         if (scenario.Universe.Count != 0)

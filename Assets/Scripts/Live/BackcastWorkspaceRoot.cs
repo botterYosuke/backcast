@@ -186,6 +186,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     SaveGuardOverlay _saveGuardOverlay;
     SaveGuardController _saveGuardController;
     bool _quitConfirmed;
+    // #87 slice 3: the deferred action the SaveGuard authorizes (Quit / File→New / File→Open). Set when a
+    // dirty document defers an action behind the modal; run on Save-then-proceed or Discard; cleared on Cancel.
+    Action _guardProceed;
     // Manual ticket status crosses worker→main: LiveRpcLanes invokes the result callback on a lane
     // thread, but the OrderTicketView (uGUI) is main-only. Stash to volatiles; DriveOrderTicket applies.
     volatile string _manualStatusLine = "-";   // pre-formatted on the worker; applied to the view on main
@@ -471,9 +474,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         quitGo.transform.SetParent(transform, false);
         _saveGuardOverlay = quitGo.AddComponent<SaveGuardOverlay>();
         _saveGuardOverlay.Build(_font);
-        _saveGuardOverlay.SaveClicked += OnQuitSave;
-        _saveGuardOverlay.DiscardClicked += OnQuitDiscard;
-        _saveGuardOverlay.CancelClicked += OnQuitCancel;
+        _saveGuardOverlay.SaveClicked += OnGuardSave;
+        _saveGuardOverlay.DiscardClicked += OnGuardDiscard;
+        _saveGuardOverlay.CancelClicked += OnGuardCancel;
         _saveGuardController = new SaveGuardController();
         if (!Application.isBatchMode) Application.wantsToQuit += OnWantsToQuit;
 
@@ -1604,7 +1607,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         var decision = _menuBar.FileNew(out string modeReq, out string refuse);
         if (decision == FileNewDecision.RefusedRunning) { _menuBarView?.ShowMessage(refuse); return; }
+        // #87: a dirty document asks Save/Discard/Cancel before New clears it. The running-run refuse above
+        // is evaluated FIRST — a running run blocks New regardless of dirty state (AC unchanged).
+        GuardThenProceed(() => DoFileNew(modeReq));
+    }
 
+    // The actual File→New clear — run immediately on a clean document, or after the SaveGuard authorizes it.
+    void DoFileNew(string modeReq)
+    {
         // #81: full in-memory reset (findings 0017 §4) honouring the adopt invariant (findings 0025 §8):
         // the coordinator resets the notebook to one empty cell and rebuilds the cell windows — region_001
         // is reset IN PLACE (never destroyed), region_002+ cell windows are despawned. canvas pan/zoom +
@@ -1637,7 +1647,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // come from its <strategy>.json sidecar. Cancel = no-op.
         string py = _fileDialog.OpenStrategy(InitialDir());
         if (string.IsNullOrEmpty(py)) { _menuBarView?.ShowMessage("Open: cancelled."); return; }
+        // #87: a dirty document asks Save/Discard/Cancel before the picked .py replaces the buffer. The
+        // picker runs FIRST (a cancelled picker is a no-op with nothing to guard); the guard defers the
+        // load behind the modal. On Discard the load passes discardDirty:true (DoFileOpen) so even a
+        // non-marimo wrap may replace dirty cells — the guard IS the discard authorization (#86 F1).
+        GuardThenProceed(() => DoFileOpen(py));
+    }
 
+    // The actual File→Open load — run immediately on a clean document, or after the SaveGuard authorizes it
+    // (clean / saved / explicit Discard). discardDirty:true is always correct here: control only reaches
+    // this point once the guard has authorized losing any unsaved work.
+    void DoFileOpen(string py)
+    {
         // Layout is OPTIONAL (#80 intent / findings 0051). A valid "layout" key RESTORES the saved
         // geometry; a missing / scenario-only / corrupt sidecar still OPENS the .py BARE — keep the
         // current geometry and reseed so Run unblocks (the door for a fresh v19 whose <strategy>.json
@@ -1655,7 +1676,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // `.py` BOOTSTRAPS as one anonymous cell (raw file text as body) — the only Open failures
         // now are path/IO errors (missing file / unreadable / wrong extension). On any failure the
         // workspace is untouched and we surface LastError.
-        if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null))
+        if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null, discardDirty: true))
         {
             _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "could not be opened"));
             return;
@@ -1724,22 +1745,50 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _menuBarView?.ShowMessage("Saved as " + Path.GetFileName(newPy));
     }
 
-    // ── #89 quit-confirm wiring (findings 0068). The pure SaveGuardController decides; here we run
-    // the real Save/SaveAs + Application.Quit and hold the _quitConfirmed latch so the 2nd wantsToQuit
-    // (fired by our own Quit() after a confirmed save/discard) is allowed through. Data-protection
-    // guard: a Save that leaves the notebook still dirty (write failed / picker cancelled) ABORTS the
-    // quit — edits are never lost silently (this replaces the old silent autosave-on-quit behaviour).
+    // ── #89/#87 SaveGuard wiring (findings 0068/0069). The pure SaveGuardController decides; here we run
+    // the real Save/SaveAs and the DEFERRED action (_guardProceed) the guard authorizes — Application.Quit
+    // for OS-close (the _quitConfirmed latch lets our own Quit() through), or File→New / File→Open for the
+    // nav-guard reuse (#87). Data-protection guard: a Save that leaves the notebook still dirty (write
+    // failed / picker cancelled) ABORTS the action — edits are never lost silently.
     bool OnWantsToQuit()
     {
         if (_quitConfirmed) return true;                       // our own confirmed Quit() — let it through
         if (_saveGuardController == null) return true;              // not wired (defensive) — don't block shutdown
         if (_saveGuardController.RequestProceed(_notebook != null && _notebook.IsDirty) == SaveGuardDecision.Proceed)
             return true;                                       // clean (or no notebook) → quit immediately
-        _saveGuardOverlay?.SetVisible(true);                        // dirty → show modal, block this quit
+        OpenSaveGuard(ConfirmAndQuit);                         // dirty → modal; on proceed, quit
         return false;
     }
 
-    void OnQuitSave()
+    // #87: run `proceed` NOW if the document is clean (or the guard is unwired), else defer it behind the
+    // SaveGuard modal (a Save/Discard verdict resolves it). Used by File→New / File→Open. OnWantsToQuit
+    // can't use this directly — its clean branch returns a bool to the OS instead of acting — so it shares
+    // only the dirty tail via OpenSaveGuard.
+    void GuardThenProceed(Action proceed)
+    {
+        if (proceed == null) return;
+        if (_saveGuardController == null ||
+            _saveGuardController.RequestProceed(_notebook != null && _notebook.IsDirty) == SaveGuardDecision.Proceed)
+        { proceed(); return; }
+        OpenSaveGuard(proceed);
+    }
+
+    // Open the SaveGuard modal, deferring `proceed` until a Save/Discard verdict resolves it.
+    void OpenSaveGuard(Action proceed)
+    {
+        _guardProceed = proceed;
+        _saveGuardOverlay?.SetVisible(true);
+    }
+
+    // Run + clear the deferred guarded action (null-safe, one-shot).
+    void RunGuardProceed()
+    {
+        var proceed = _guardProceed;
+        _guardProceed = null;
+        proceed?.Invoke();
+    }
+
+    void OnGuardSave()
     {
         bool isBound = !string.IsNullOrEmpty(_currentLayoutPath);
         var outcome = _saveGuardController.ChooseSave(isBound);     // closes the modal (IsOpen=false)
@@ -1748,29 +1797,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             OnFileSave();
             bool saved = _notebook != null && !_notebook.IsDirty;
-            if (_saveGuardController.ResolveSave(saved) == SaveGuardOutcome.SaveThenProceed) ConfirmAndQuit();   // .py persisted → quit
+            if (_saveGuardController.ResolveSave(saved) == SaveGuardOutcome.SaveThenProceed) RunGuardProceed();   // .py persisted → proceed
             // still dirty → Save failed: ResolveSave returns Abort, keep the document (data-protection guard)
         }
         else if (outcome == SaveGuardOutcome.SaveAsThenProceed) // (untitled): native picker, then resolve via the controller (案A)
         {
             OnFileSaveAs();
             bool committed = _notebook != null && !_notebook.IsDirty;
-            if (_saveGuardController.ResolveSaveAs(committed) == SaveGuardOutcome.SaveAsThenProceed) ConfirmAndQuit();
+            if (_saveGuardController.ResolveSaveAs(committed) == SaveGuardOutcome.SaveAsThenProceed) RunGuardProceed();
             // picker cancelled / write failed → Abort: stay in the app, document preserved
         }
+        else _guardProceed = null;                            // closed-dialog Abort no-op: abandon any deferred action
     }
 
-    void OnQuitDiscard()
+    void OnGuardDiscard()
     {
         _saveGuardController.ChooseDiscard();                       // ProceedWithoutSave
         _saveGuardOverlay?.SetVisible(false);
-        ConfirmAndQuit();                                      // quit without saving (dirty edits discarded)
+        RunGuardProceed();                                     // proceed without saving (dirty edits discarded)
     }
 
-    void OnQuitCancel()
+    void OnGuardCancel()
     {
         _saveGuardController.ChooseCancel();                        // Abort
         _saveGuardOverlay?.SetVisible(false);                       // stay in the app
+        _guardProceed = null;                                 // abandon the deferred action
     }
 
     void ConfirmAndQuit()

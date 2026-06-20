@@ -76,3 +76,70 @@ F1-DISCARD leg の assert: dirty 2-cell → `Open(rawPath2, discardDirty:true)` 
   user-reachable でないため台本 action table は据え置き）。
 - File→New 側（`ResetUnboundEmpty`）は dirty でも破壊しない（unbound 空へ reset するだけ）ので F1 のような refuse は無い；
   SaveGuard の絡みは「dirty で File→New したら Save/Discard を問う」UX のみ（slice 3 で配線）。
+
+## 追記（2026-06-20・slice 3: `BackcastWorkspaceRoot` の File→New/Open ガード配線）
+
+slice 2 の集約シーム（`Open(discardDirty)`）の上位配線を実装した。#89 の終了確認 SaveGuard を File 操作へ一般化し、
+**dirty な File→New / File→Open が即実行せず Save/Discard/Cancel を挟む**ようにした。
+
+### 何を配線したか
+
+- **`_guardProceed`（deferred `Action`）**: dirty で defer された「続行アクション」（Quit / New / Open）を 1-shot で保持。
+- **`GuardThenProceed(Action)`**: clean（または未配線）→ `proceed()` を即実行 / dirty → `OpenSaveGuard(proceed)` で modal へ defer。
+  File→New（`OnFileNew`→`DoFileNew`）と File→Open（`OnFileOpen`→`DoFileOpen`）の入口。picker は guard の **前**（cancel は no-op）。
+- **`OnGuardSave/OnGuardDiscard/OnGuardCancel`**（旧 `OnQuit*` を rename・一般化）: overlay ボタンに配線。Save→実 Save/SaveAs→
+  `ResolveSave/ResolveSaveAs`→認可されたら `RunGuardProceed()`（=`_guardProceed`）/ Discard→即 `RunGuardProceed()` / Cancel→
+  `_guardProceed=null`。終了確認（`OnWantsToQuit`→`OpenSaveGuard(ConfirmAndQuit)`）も同じ seam を共有（#89↔#87 統合）。
+- **`DoFileOpen` は `_coordinator.Open(py, positions, discardDirty:true)`** を呼ぶ。`DoFileOpen` に到達した時点で guard は既に
+  「clean / 保存済 / 明示 Discard」のいずれかで discard を認可しているので、`discardDirty:true` は常に正しい（guard が認可そのもの）。
+
+### owner-veto supersession（owner 確定・confirmation #1）
+
+旧挙動「valid marimo `.py` への File→Open は dirty でも黙って切替」（#86 §F1 が valid-marimo を refuse 対象外にしていた、
+CONTEXT L389 旧文）を **#87 で意図的に廃止**。File→Open は valid-marimo 切替も含め、dirty なら必ず確認を出す（marimo/非marimo
+一様）。集約 F1（`MarimoNotebookDocument.Open` の dirty-refuse）は **slice 2 のまま不変**——supersede したのは **root/UX 層**で、
+root が aggregate を呼ぶ前に SaveGuard で包む。`FakeMarimoSynthesizer`（`FailDecompose=false`）の Decompose 成功経路＝この
+silent-switch 経路が、`FileNavGuardE2ERunner` `FILEGUARD-07` で「dirty なら確認必須」として固定される。
+
+### 同 slice の必須回帰修正（grill で捕捉）
+
+`AuthorToRunJourneyE2ERunner` `JOURNEY-AUTHOR-02` は dirty な notebook に `OnFileNew` を invoke し **即 clear** を assert していた。
+#87 で File→New が dirty 時に defer するため、この assert は壊れる。修正: invoke 後に **(a) defer の非空虚 assert**（cell 数==2 の
+まま＝clear されていない）→ **(b) `OnGuardDiscard` invoke**（Discard で続行）→ **(c) clear assert**（cell 数==1）。
+
+### 他の reflective 呼出し側の監査（不変）
+
+`OnFileNew/OnFileOpen` を反射 invoke する他の probe/runner——`BackcastWorkspaceProbe` S14 / `MenuBarCutoverProbe` /
+`RunButtonE2ERunner` / `ReplayToHakoniwaE2ERunner` / `LayoutPersistenceJourneyE2ERunner`——はすべて **clean notebook 上**で
+invoke する（新規 compose の `MarimoNotebookDocument` は constructor が 1 空セルを `AddCell` 経由でなく直接足すので `_dirty=false`、
+Open/Save 後も clean）。clean→`RequestProceed`=Proceed→即実行なので **挙動・契約とも不変**（FILEGUARD-08 がこの「過剰発火しない」
+不変を固定）。`OnQuit*`→`OnGuard*` の rename も root 内のみの参照で probe/runner 非反射＝安全。
+
+### 新規ゲート
+
+- **`FileNavGuardE2ERunner.cs`（`FILEGUARD-01..09`）** + 台本 `FileNavGuardE2ERunner.md`。Python-FREE・実 root 反射駆動。
+  defer / Cancel 据え置き / Discard 続行 / Save 続行 / データ保護 Abort / clean 素通し / valid-marimo も確認（owner-veto）を観測。
+- STRATEGY-16 行（`StrategyEditorNotebookE2ERunner.md`）に discard UX 横断配線への相互参照を追記。
+
+### RED→GREEN / litmus
+
+- **RED**: production 配線前に runner を著すと `OnGuardSave/OnGuardDiscard/OnGuardCancel`/`GuardThenProceed`/`DoFileOpen` 未定義で
+  compile-only ゲートが `error CS\d+`。
+- **GREEN**: 配線後 compile-only `error CS\d+` 0 件 → `-executeMethod FileNavGuardE2ERunner.Run` が exit 0 + `[E2E FILE-NAV-GUARD PASS]`。
+- **delete-the-production-logic litmus**:
+  - `OnFileNew` の `GuardThenProceed` を外し `DoFileNew` 直呼び → FILEGUARD-01/02/03 RED。
+  - `OnFileOpen` の `GuardThenProceed` を外し `DoFileOpen` 直呼び → FILEGUARD-05/07 RED（dirty が黙って切替）。
+  - `DoFileOpen` の `discardDirty:true` を既定 false に戻す → FILEGUARD-06 RED（F1 refuse で buffer 据え置き）。
+  - `OnGuardSave` のデータ保護（`ResolveSaveAs(false)`→Abort）を常に proceed に壊す → FILEGUARD-09 RED。
+
+### 再走手順（AFK）
+
+```
+<Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
+        -executeMethod FileNavGuardE2ERunner.Run -logFile <log>
+# expect: [E2E FILE-NAV-GUARD PASS] / exit=0  （Bash `grep -a "FILE-NAV-GUARD"`）
+# AuthorToRun 回帰: -executeMethod AuthorToRunJourneyE2ERunner.Run → [E2E AUTHOR→RUN PASS]（`grep -a` ・→ 取りこぼし注意）
+# 終了確認の純判定: -executeMethod QuitConfirmE2ERunner.Run（QUIT-01..10 不変・rename 後も GREEN）
+# compile-only ゲート: -executeMethod を外した同コマンドで `error CS\d+` が 0 件。
+# Unity = C:\Program Files\Unity\Hub\Editor\6000.4.11f1\Editor\Unity.exe
+```

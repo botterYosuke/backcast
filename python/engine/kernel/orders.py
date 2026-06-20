@@ -10,7 +10,9 @@ uses (engine.live.pre_trade_gate), now import-pure (#24).
 from __future__ import annotations
 
 import enum
+import math
 from dataclasses import dataclass
+from typing import Optional
 
 from engine.kernel.risk import RiskEngine
 from engine.live.safety_rails import RailViolation
@@ -19,6 +21,31 @@ from engine.live.safety_rails import RailViolation
 class OrderSide(enum.Enum):
     BUY = "BUY"
     SELL = "SELL"
+
+
+def signed_qty_to_side(qty: float) -> Optional[tuple["OrderSide", float]]:
+    """Map a SIGNED reactive quantity to ``(side, positive size)``, or ``None`` for a no-op.
+
+    The reactive idiom is ``qty = signal * size``: the sign is the side (``> 0`` BUY,
+    ``< 0`` SELL), ``abs(qty)`` is the order size, and ``0`` / ``-0.0`` is a no-op (flat =
+    no order). ``qty`` is a DELTA — the quantity to trade THIS bar, not a target position.
+
+    This is the single point that turns a host-/cell-supplied signed quantity into the
+    kernel's per-bar contract (``OrderSide`` enum + positive quantity); ``NaN`` / ``±inf``
+    fail-closed with ``ValueError`` (a reactive div-by-zero must never reach the broker,
+    where ``notional = price * quantity`` would go non-finite). Shared by the marimo cell
+    adapter (``cell_api.make_submit_market``) and the ``bt`` handle's per-bar
+    ``submit_market`` (#95 Q3) so both paths validate identically.
+    """
+    q = float(qty)
+    if not math.isfinite(q):
+        raise ValueError(
+            f"submit_market got a non-finite quantity {qty!r} — a reactive NaN/inf must "
+            "never reach the broker (fail-closed)"
+        )
+    if q == 0.0:  # also catches -0.0
+        return None
+    return (OrderSide.BUY if q > 0.0 else OrderSide.SELL, abs(q))
 
 
 class OrderStatus(enum.Enum):

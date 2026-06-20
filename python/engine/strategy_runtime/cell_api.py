@@ -16,10 +16,9 @@ Wiring it to the real kernel ``_Context`` is S6.
 
 from __future__ import annotations
 
-import math
 from typing import Any, Callable, Optional
 
-from engine.kernel.orders import OrderSide
+from engine.kernel.orders import signed_qty_to_side
 
 
 def make_submit_market(
@@ -46,19 +45,15 @@ def make_submit_market(
     """
 
     def submit_market(qty: float, *, instrument_id: Optional[str] = None) -> None:
-        q = float(qty)
-        if not math.isfinite(q):
-            raise ValueError(
-                f"submit_market got a non-finite quantity {qty!r} — a reactive NaN/inf must "
-                "never reach the broker (fail-closed)"
-            )
-        if q == 0.0:  # also catches -0.0
+        resolved = signed_qty_to_side(qty)  # NaN/inf → ValueError; 0/-0.0 → None (no-op)
+        if resolved is None:
             return
+        side, quantity = resolved
         ctx.submit_market(
             strategy_id=strategy_id,
             instrument_id=instrument_id if instrument_id is not None else default_instrument_id,
-            side=OrderSide.BUY if q > 0.0 else OrderSide.SELL,
-            quantity=abs(q),
+            side=side,
+            quantity=quantity,
         )
 
     return submit_market

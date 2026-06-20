@@ -243,3 +243,37 @@ class Backtester:
 - cross-instrument 発注 API（`bt.submit_market(qty, instrument="...")` 等） → 将来 additive ADR
 
 これらは ADR-0016 の方針下で各 Phase の findings に固定する（ADR は書き戻さない＝自己保護条項）。
+
+---
+
+## 実装着地（2026-06-20・`feat/#95-phase3`）
+
+Q1–Q7 の設計の木どおりに実装し、done-gate 1–11 を GREEN 化した。
+
+### landed したコード
+
+| 物 | 場所 | 内容 |
+|---|---|---|
+| `KernelStepper` / `StepEvent` / `StepHandle` / `RunResult` / `_Context` | `engine/kernel/stepper.py`（新規） | per-bar 状態機械（3 primitive `open_next_bar`/`close_current_bar`/`finalize`）。golden を作る `_equity_curve`/`_fills`/`_last_prices`/`_baseline_equity`/`_index`/`_stopped_reason` を instance state へ hoist（Q1 の「wrap より重い」refactor）。`strategy=None` は user hook だけ skip・fills/denials/sink push/portfolio apply は stepper 責務（Q4） |
+| `KernelRunner` | `engine/kernel/runner.py`（薄化） | 「全 bar load（`load_universe_bars` は runner 名前空間に残置＝既存 8 本の monkeypatch test 無改変）→ stepper を end まで駆動 → finalize」の wrapper。`RunResult`/`_Context`/`StepEvent`/`StepHandle`/`KernelStepper` を re-export |
+| `Backtester` | `engine/strategy_runtime/backtester.py`（新規・marimo-free） | `bt` ハンドル。5 ADR-API ＋ `_close_open_bar`（Phase 2 hook）＋ `from_scenario(scenario_dict)` |
+| `signed_qty_to_side` | `engine/kernel/orders.py` | signed delta → `(side, size)`/`None` を `cell_api.make_submit_market`（refactor で共有）と `bt.submit_market`（Q3 延長）が共用。kernel→strategy_runtime の層逆転を避けるため orders に置いた |
+
+### done-gate 結果
+
+1. **既存 #24 / golden 系 green** — full suite **418 passed / 0 skipped**（owner DuckDB mount present）。`test_kernel_subprocess_matches_committed_golden` が byte-identical で通過＝extract の安全網を実データで実証（**主 gate**）
+2–3. **replay parity / step-to-end parity** — `test_backtester_phase3.py` の (β)`test_backtester_replay_byte_identical_to_kernel_runner` / (γ)`test_backtester_step_to_end_byte_identical_to_kernel_runner` が `KernelRunner`（命令型 `Strategy` 双子）の sink buffer と完全一致。F4(A)「step を終端まで押し切れば replay と byte-identical」を構造で pin
+4. **stop_event seam** — `test_pre_set_stop_event_streams_no_bars` / `_via_bt_handle`（pre-set で bar を流さず `STOPPED`・`bars==0`）
+5. **offline purity** — `test_strategy_runtime_offline` に `stepper` / `backtester` を追加して marimo-free を pin（GREEN）
+6. **`bars_per_second` no-op** — `test_bars_per_second_accepted_no_sleep`（引数 store・`stepper._bar_interval_sec==0`＝pacing 未配線）
+7. **context-out fail-closed** — `test_submit_market_{before_first_step,after_close,after_end}_raises`
+8. **lifecycle rule** — `test_lifecycle_states_bar_and_portfolio`（未開始/open中/close後/END後の 4 状態）
+9. 本節 = findings 0071 実装着地記録
+10. CONTEXT 加筆（`bt` ハンドル entry に「実装着地（#95 Phase 3）」注記）
+11. `code-review(simplify)` Medium+ 0
+
+### 実装中に確定した下位の下位決定
+
+- **bar lifecycle の golden 同値性**: `open_next_bar()` は「前 bar を close（denials/fills/equity/rail）→ 次 bar を open（push_bar/ref_prices/on_bar）」の順で叩く。`while open_next_bar().event is BAR_OPEN: pass` が旧 `runner.run()` の per-bar 列を**演算順まで完全再現**する（stop は push_bar 前・rail は equity append 後の break-before-sleep も保存）。
+- **CONTEXT 既述「replay は呼ばれるたび 0 に reset / 再走」との整合**: Phase 3 は **1 `bt` = 単一 forward-only run**（replay と step は同一 pointer を共有）。reset/再走は `bt` ライフサイクル＝**Phase 5**（最初の grill コメント ⑩）。Phase 3 で再走するなら `bt` を作り直す（Q6 α teardown）。CONTEXT の bt entry にこの境界を明記した（in-place 注記・ADR-0016 は無改変）。
+- **`load_universe_bars` の名前空間**: stepper へ移さず runner に残置。既存 8 test の `monkeypatch.setattr(runner_mod, "load_universe_bars", ...)` を 1 つも壊さない（gate 1 のリスク最小化）。`Backtester.from_scenario` は backtester 名前空間で load。

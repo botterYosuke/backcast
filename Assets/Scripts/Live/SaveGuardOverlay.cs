@@ -1,4 +1,4 @@
-// QuitConfirmOverlay.cs — issue #89「終了時の確認ダイアログ」(durable tier, Unity boundary)
+// SaveGuardOverlay.cs — issue #89「終了時の確認ダイアログ」(durable tier, Unity boundary)
 //
 // The screen-fixed, input-blocking uGUI overlay for the quit-confirm modal (findings 0068). It is
 // CHROME: its own ScreenSpaceOverlay canvas at a high sort order, OUTSIDE the infinite-canvas Content,
@@ -7,14 +7,14 @@
 //
 // Unlike SecretModalOverlay this view drains NO keystrokes — it has no text entry. It exposes only the
 // three button events Save / Don't Save / Cancel. The owner (BackcastWorkspaceRoot) routes those into
-// QuitConfirmController.ChooseSave / ChooseDiscard / ChooseCancel and decides quit continuation; this
+// SaveGuardController.ChooseSave / ChooseDiscard / ChooseCancel and decides quit continuation; this
 // view holds no logic and no buffer.
 
 using System;
 using UnityEngine;
 using UnityEngine.UI;
 
-public sealed class QuitConfirmOverlay : MonoBehaviour
+public sealed class SaveGuardOverlay : MonoBehaviour
 {
     public event Action SaveClicked;
     public event Action DiscardClicked;
@@ -44,7 +44,7 @@ public sealed class QuitConfirmOverlay : MonoBehaviour
         _panelRoot = backdrop;
 
         // centered panel.
-        var panel = new GameObject("QuitConfirmPanel", typeof(RectTransform), typeof(Image));
+        var panel = new GameObject("SaveGuardPanel", typeof(RectTransform), typeof(Image));
         var prt = (RectTransform)panel.transform;
         prt.SetParent(brt, false);
         prt.anchorMin = prt.anchorMax = new Vector2(0.5f, 0.5f); prt.pivot = new Vector2(0.5f, 0.5f);
@@ -52,7 +52,7 @@ public sealed class QuitConfirmOverlay : MonoBehaviour
         panel.GetComponent<Image>().color = new Color(0.14f, 0.15f, 0.18f, 1f);
 
         MakeLabel(prt, font, 12f, 12f, 376f, 22f, "<b>Unsaved changes</b>").supportRichText = true;
-        MakeLabel(prt, font, 12f, 40f, 376f, 36f, "Save the open document before quitting?");
+        MakeLabel(prt, font, 12f, 40f, 376f, 36f, "Save the open document before continuing?");
 
         MakeButton(prt, font, 12f, 96f, 120f, 30f, "Save", () => SaveClicked?.Invoke());
         MakeButton(prt, font, 140f, 96f, 120f, 30f, "Don't Save", () => DiscardClicked?.Invoke());

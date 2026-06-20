@@ -183,8 +183,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // #89: quit-confirm (findings 0068). The pure controller decides; this root wires the real
     // Save/SaveAs/Quit + a _quitConfirmed latch so the 2nd wantsToQuit (fired by our own Quit() after
     // a confirmed save/discard) is allowed through.
-    QuitConfirmOverlay _quitOverlay;
-    QuitConfirmController _quitController;
+    SaveGuardOverlay _saveGuardOverlay;
+    SaveGuardController _saveGuardController;
     bool _quitConfirmed;
     // Manual ticket status crosses worker→main: LiveRpcLanes invokes the result callback on a lane
     // thread, but the OrderTicketView (uGUI) is main-only. Stash to volatiles; DriveOrderTicket applies.
@@ -467,14 +467,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #89: quit-confirm overlay + pure controller (findings 0068). On OS close with a dirty
         // document, wantsToQuit blocks and this modal asks Save / Don't Save / Cancel. NOT wired in
         // batchmode so AFK -quit is never held by a modal (QUIT-08). Build() already SetVisible(false).
-        var quitGo = new GameObject("QuitConfirmOverlay");
+        var quitGo = new GameObject("SaveGuardOverlay");
         quitGo.transform.SetParent(transform, false);
-        _quitOverlay = quitGo.AddComponent<QuitConfirmOverlay>();
-        _quitOverlay.Build(_font);
-        _quitOverlay.SaveClicked += OnQuitSave;
-        _quitOverlay.DiscardClicked += OnQuitDiscard;
-        _quitOverlay.CancelClicked += OnQuitCancel;
-        _quitController = new QuitConfirmController();
+        _saveGuardOverlay = quitGo.AddComponent<SaveGuardOverlay>();
+        _saveGuardOverlay.Build(_font);
+        _saveGuardOverlay.SaveClicked += OnQuitSave;
+        _saveGuardOverlay.DiscardClicked += OnQuitDiscard;
+        _saveGuardOverlay.CancelClicked += OnQuitCancel;
+        _saveGuardController = new SaveGuardController();
         if (!Application.isBatchMode) Application.wantsToQuit += OnWantsToQuit;
 
         // #76 S6b-β-clean U4: workspace footer = mode segments (Replay/Manual/Auto) + status ONLY.
@@ -1724,7 +1724,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _menuBarView?.ShowMessage("Saved as " + Path.GetFileName(newPy));
     }
 
-    // ── #89 quit-confirm wiring (findings 0068). The pure QuitConfirmController decides; here we run
+    // ── #89 quit-confirm wiring (findings 0068). The pure SaveGuardController decides; here we run
     // the real Save/SaveAs + Application.Quit and hold the _quitConfirmed latch so the 2nd wantsToQuit
     // (fired by our own Quit() after a confirmed save/discard) is allowed through. Data-protection
     // guard: a Save that leaves the notebook still dirty (write failed / picker cancelled) ABORTS the
@@ -1732,45 +1732,45 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     bool OnWantsToQuit()
     {
         if (_quitConfirmed) return true;                       // our own confirmed Quit() — let it through
-        if (_quitController == null) return true;              // not wired (defensive) — don't block shutdown
-        if (_quitController.RequestQuit(_notebook != null && _notebook.IsDirty) == QuitDecision.QuitNow)
+        if (_saveGuardController == null) return true;              // not wired (defensive) — don't block shutdown
+        if (_saveGuardController.RequestProceed(_notebook != null && _notebook.IsDirty) == SaveGuardDecision.Proceed)
             return true;                                       // clean (or no notebook) → quit immediately
-        _quitOverlay?.SetVisible(true);                        // dirty → show modal, block this quit
+        _saveGuardOverlay?.SetVisible(true);                        // dirty → show modal, block this quit
         return false;
     }
 
     void OnQuitSave()
     {
         bool isBound = !string.IsNullOrEmpty(_currentLayoutPath);
-        var outcome = _quitController.ChooseSave(isBound);     // closes the modal (IsOpen=false)
-        _quitOverlay?.SetVisible(false);
-        if (outcome == QuitOutcome.SaveThenQuit)
+        var outcome = _saveGuardController.ChooseSave(isBound);     // closes the modal (IsOpen=false)
+        _saveGuardOverlay?.SetVisible(false);
+        if (outcome == SaveGuardOutcome.SaveThenProceed)
         {
             OnFileSave();
             bool saved = _notebook != null && !_notebook.IsDirty;
-            if (_quitController.ResolveSave(saved) == QuitOutcome.SaveThenQuit) ConfirmAndQuit();   // .py persisted → quit
-            // still dirty → Save failed: ResolveSave returns AbortQuit, keep the document (data-protection guard)
+            if (_saveGuardController.ResolveSave(saved) == SaveGuardOutcome.SaveThenProceed) ConfirmAndQuit();   // .py persisted → quit
+            // still dirty → Save failed: ResolveSave returns Abort, keep the document (data-protection guard)
         }
-        else if (outcome == QuitOutcome.SaveAsThenQuit) // (untitled): native picker, then resolve via the controller (案A)
+        else if (outcome == SaveGuardOutcome.SaveAsThenProceed) // (untitled): native picker, then resolve via the controller (案A)
         {
             OnFileSaveAs();
             bool committed = _notebook != null && !_notebook.IsDirty;
-            if (_quitController.ResolveSaveAs(committed) == QuitOutcome.SaveAsThenQuit) ConfirmAndQuit();
-            // picker cancelled / write failed → AbortQuit: stay in the app, document preserved
+            if (_saveGuardController.ResolveSaveAs(committed) == SaveGuardOutcome.SaveAsThenProceed) ConfirmAndQuit();
+            // picker cancelled / write failed → Abort: stay in the app, document preserved
         }
     }
 
     void OnQuitDiscard()
     {
-        _quitController.ChooseDiscard();                       // QuitWithoutSave
-        _quitOverlay?.SetVisible(false);
+        _saveGuardController.ChooseDiscard();                       // ProceedWithoutSave
+        _saveGuardOverlay?.SetVisible(false);
         ConfirmAndQuit();                                      // quit without saving (dirty edits discarded)
     }
 
     void OnQuitCancel()
     {
-        _quitController.ChooseCancel();                        // AbortQuit
-        _quitOverlay?.SetVisible(false);                       // stay in the app
+        _saveGuardController.ChooseCancel();                        // Abort
+        _saveGuardOverlay?.SetVisible(false);                       // stay in the app
     }
 
     void ConfirmAndQuit()

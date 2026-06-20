@@ -239,6 +239,29 @@ public sealed class WorkspaceEngineHost
         }
     }
 
+    // #95 Phase 2 土台: per-cell RUN (pure compute) through the persistent in-proc marimo kernel
+    // (engine.inproc_server.run_cell -> NotebookSession). NOTEBOOK-RUN WORKER THREAD ONLY
+    // (NotebookRunLane): marimo's RuntimeContext is thread-local, so the session must be built + run
+    // from ONE consistent thread; the lane guarantees that (never main, never the Replay launcher).
+    // `source` is the LIVE synthesised marimo `.py` text (unsaved buffer ok); `pressedIndex` is the
+    // cell-order index. Returns the backend JSON string ({"ok","ran":[{"index","output","ok"}...],
+    // "error"}), or null on a not-ready server / Python error (the executor maps null to fail-soft).
+    public string InvokeRunCell(string source, int pressedIndex)
+    {
+        if (!Volatile.Read(ref _serverReady)) return null;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _server.InvokeMethod("run_cell", new PyString(source ?? ""), new PyInt(pressedIndex)))
+                return res.As<string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] run_cell failed: " + e.Message);
+            return null;
+        }
+    }
+
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----
     public bool DrainLiveEvents()

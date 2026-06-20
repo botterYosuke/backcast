@@ -28,10 +28,15 @@ public class StrategyEditorView : MonoBehaviour
 {
     public Cell BoundCell { get; private set; }
 
+    // #95 Phase 2 土台: the per-cell RUN output currently shown (test/probe observability; the
+    // production path is SetOutput). Null when there is no output pane.
+    public string CurrentOutput => _output != null ? _output.text : null;
+
     InputField _input;
     PythonSyntaxMeshEffect _effect;
     EditHistory _history;
     Text _placeholder;          // host-API hint shown when this is the only cell and it is empty
+    Text _output;               // #95 Phase 2 土台: per-cell RUN output text (below the editor)
 
     // Snapshot of the InputField state BEFORE the change currently being recorded.
     string _prevText = string.Empty;
@@ -42,12 +47,13 @@ public class StrategyEditorView : MonoBehaviour
     // (an unbound shell — e.g. the adopted region_001 before the notebook binds cell 0); Bind() points
     // it at a real cell later. `placeholder` is optional (the single-cell host-API hint).
     public void Initialize(InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
-                           Cell cell = null, Text placeholder = null)
+                           Cell cell = null, Text placeholder = null, Text output = null)
     {
         _input = input;
         _effect = effect;
         _history = history;
         _placeholder = placeholder;
+        _output = output;
         BoundCell = cell;
 
         _input.onValueChanged.AddListener(OnValueChanged);
@@ -70,7 +76,17 @@ public class StrategyEditorView : MonoBehaviour
     {
         BoundCell = cell;
         _history.Clear();
+        SetOutput(null);   // a different cell's run output is not this cell's — clear on rebind
         SyncFromCell();
+    }
+
+    // #95 Phase 2 土台: show this cell's per-cell RUN output (text repr; rich output is Phase 6).
+    // Null/empty hides the pane so an un-run cell shows no stale/empty box. Cheap, idempotent.
+    public void SetOutput(string text)
+    {
+        if (_output == null) return;
+        _output.text = text ?? string.Empty;
+        _output.gameObject.SetActive(!string.IsNullOrEmpty(text));
     }
 
     // Show/hide the single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell).

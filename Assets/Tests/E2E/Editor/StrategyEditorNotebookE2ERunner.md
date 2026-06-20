@@ -50,6 +50,8 @@ notebook 効果なので参照行として載せる。
 | STRATEGY-16 | File→Open が `.py` を N セル窓へ分解 | `NotebookCellCoordinator.cs:117`→`Open`→`SyncWindowsToNotebook` | aggregate `Open` が cell list 置換・window を cells に一致再構築・sidecar 位置適用・fail-soft 非破壊 | open 後の window↔cell 整合は **MenuBar `MENU-04` / Journey** が縦串。本台本は `SyncWindowsToNotebook` の orphan 一掃を assert。**非 marimo `.py` の 1-cell wrap policy（#86）の正本ゲートは [FileOpenNonMarimoE2ERunner](./FileOpenNonMarimoE2ERunner.md) `OPEN-NM-01..04`**。**dirty な File→Open の未保存ガード（Save/Discard/Cancel）＋ discard 認可（discardDirty）の横断配線は [FileNavGuardE2ERunner](./FileNavGuardE2ERunner.md) `FILEGUARD-05..07,09`（#87）** | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S10,S12) |
 | STRATEGY-17 | File→Save が N セル → 1 `.py` 合成 | `NotebookCellCoordinator.cs:132`→`Save`→`MarimoNotebookDocument.cs:87`→`Save` | 順序付きセルを synthesizer で 1 `.py` 合成・atomic temp+replace・dirty クリア・name/config opaque 往復 | Save→Open round-trip で body+name+config 一致を assert（layout sidecar は MenuBar `MENU-05`） | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S10) |
 | STRATEGY-18 | InputField 直接タイプ / IME / caret 同期 | `StrategyEditorView.cs:102,124`（uGUI InputField boundary） | キー入力→InputField.text→onValueChanged 同期、IME 合成、`_suppress` 中の自己 write 無視 | — | HITL専用（uGUI InputField・IME・実キーボードの編集フィール＝findings 0010 §9） | `Strategy Editor HITL` |
+| STRATEGY-19 | per-cell ▶ RUN ボタン（adopted+spawned 両窓に在る） | `BackcastWorkspaceRoot.cs`→`WireCellRunButton`→`StrategyEditorWindowFrame.cs`→`EnsureRunButton` | adopted region_001 ＋ spawned region_002 の title bar に ▶ RUN を find-or-create（idempotent・X ボタンと同型・ADR-0016 D2） | Section13 で両 region に `EnsureRunButton` 非null・2 回目呼出が同一 Button（重複生成しない）を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S13) |
+| STRATEGY-20 | per-cell RUN 押下 → 出力がその窓に出る | `EnsureRunButton` onClick→`NotebookRunController.cs`→`RunCell`→`NotebookRunLane`→`StrategyEditorView.cs`→`SetOutput` | 押した cell＋reactive 下流の出力が各 cell index の窓へ routing・別窓を上書きしない（engine 非接続の純粋計算「土台」・ADR-0016 D1/D2）。marimo reactive の正しさ（下流再計算/上流非依存 cell 不変）は **Python pytest** が正本 | Section13: press region_001→region_001="out-0" ＆ region_002="down-1"（下流 routing）、press region_002→region_002="out-1" ＆ region_001 不変（index→window routing・1 窓に collapse しない）を assert | 自動(E2E済)（C# routing。reactive 正しさは `python/tests/test_notebook_interactive_run.py`） | `StrategyEditorNotebookE2ERunner`(S13) |
 
 > 物理窓 ≠ 論理セル（ADR-0013 Decision4）: region_001 は never-Destroy の adopted shell。**notebook は常に ≥1 セル**
 > （aggregate の ≥1 guard）。1 ノート = 1 `.py`（合成/分解は marimo 純正）。供給可能 = path バインド済 ∧ not dirty ∧
@@ -83,6 +85,11 @@ notebook 効果なので参照行として載せる。
 - delete-the-production-logic litmus: `MarimoNotebookDocument.RemoveCell` の `_cells.Count<=1` ガードを消すと
   STRATEGY-10 が落ちる／`Cell.SetBody` の dirty hook を消すと STRATEGY-12 が落ちる／`NotebookCellCoordinator.DeleteCell`
   の region_001 分岐（hide vs close）を入れ替えると STRATEGY-08/09 が落ちること。
+- **STRATEGY-19/20（per-cell RUN）litmus**: `StrategyEditorWindowFrame.EnsureRunButton` を消すと STRATEGY-19 が落ちる／
+  `NotebookRunController.ApplyResult` の index→region routing を「常に cells[0] の region」へ collapse させると STRATEGY-20 が
+  落ちる（**実証済み RED→GREEN**・findings 0071: `cells[co.Index]`→`cells[0]` で `region_001 did not show its own (cell 0)
+  output, got [down-1]` を確認）。reactive 正しさ（pressed 子孫が走る/独立 cell が走らない）の litmus は Python pytest 側
+  （`compute_cells_to_run` autorun を縮める/広げると RED）。
 
 ## カバー状態の語彙
 

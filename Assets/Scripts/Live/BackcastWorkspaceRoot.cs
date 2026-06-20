@@ -148,6 +148,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     ScenarioStartupTile _tile;
     WorkspaceFooterView _footer;
     StrategyEditorRunButton _editorRunButton;   // #76 S6b-β-clean U1: Run on the adopted editor title bar
+    NotebookRunLane _notebookRunLane;           // #95 Phase 2 土台: dedicated worker thread for per-cell RUN
+    NotebookRunController _notebookRun;          // #95 Phase 2 土台: per-cell RUN orchestration brain
     MenuBarViewModel _menuBar;
     VenueMenuViewModel _venueMenu;
     UniverseSidebarController _sidebarCtrl;
@@ -436,7 +438,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (editorView != null) _editors[WINDOW_ID] = editorView;
 
         _coordinator = new NotebookCellCoordinator(_notebook, _windows, ViewFor, SpawnAnchorTopLeft, _cellWindowSize);
+        // #95 Phase 2 土台 (ADR-0016 D2): per-cell RUN — every cell window gets a ▶ that runs THAT cell
+        // + reactive downstream as pure computation on a dedicated worker thread (one marimo kernel,
+        // RUNs queue — findings 0070 F5), output routed back to each window. The engine-run path (OnRun)
+        // is untouched; the title-bar single Run sunsets in Phase 6, not here.
+        _notebookRunLane = new NotebookRunLane(new HostNotebookCellExecutor(_host));
+        _notebookRun = new NotebookRunController(_coordinator, ViewFor, _notebookRunLane,
+            msg => _menuBarView?.ShowMessage("Run cell: " + msg));
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
+        WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
@@ -561,6 +571,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             var view = StrategyEditorContentBuilder.Build(body, font: _font);
             if (view != null) _editors[id] = view;
             WireCellCloseButton(root, id);
+            WireCellRunButton(root, id);   // #95 Phase 2 土台: spawned cell windows get a ▶ RUN too
         }
         return root;
     }
@@ -600,6 +611,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_coordinator == null) return;
         if (!_coordinator.DeleteCell(regionId))
             _menuBarView?.ShowMessage("Delete cell: a notebook keeps at least one cell.");
+    }
+
+    // #95 Phase 2 土台: find-or-create the title-bar ▶ RUN on a cell window and wire it to run that
+    // cell. Idempotent (StrategyEditorWindowFrame.EnsureRunButton), so the adopted scene window and a
+    // spawned window get a consistent ▶ without diverging (X-button と同型・WireCellCloseButton と並ぶ).
+    void WireCellRunButton(RectTransform windowRoot, string regionId)
+    {
+        var btn = StrategyEditorWindowFrame.EnsureRunButton(windowRoot, _font);
+        if (btn == null) return;
+        btn.onClick.RemoveAllListeners();
+        // Only run when this session owns the Python engine and the server is up — otherwise the press
+        // would do a wasteful main-thread synthesise under the GIL and then report a generic backend
+        // failure (the run can only land on the owner's in-proc kernel). The AFK gate wires its own
+        // onClick straight to RunCell, so this owner gate is production-only.
+        btn.onClick.AddListener(() =>
+        {
+            if (_isOwner && _host.ServerReady) _notebookRun?.RunCell(regionId);
+        });
     }
 
     // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override
@@ -960,6 +989,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             EditorFileProvider.TryGetStrategyFile(out _), !_scenario.Validate().Any);
         string readySig = _runReadiness.CanRun + "|" + _runReadiness.BlockReason;
         if (readySig != _lastRunReadySig) { _lastRunReadySig = readySig; _editorRunButton?.Refresh(_runReadiness); }
+
+        // #95 Phase 2 土台: route any completed per-cell RUN outputs into their windows. Drained every
+        // frame (cheap when empty), BEFORE the owner guard so a queued press is never stranded.
+        _notebookRun?.DrainAndRoute();
 
         if (!_isOwner) return;
 
@@ -1626,6 +1659,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // A one-empty-cell notebook still synthesises to a valid (runnable-once-saved) marimo app. #76
         // (2026-06-19): a no-resume boot lands in this SAME File→New blank state (OpenFileNewDefault →
         // _coordinator.New()); strategies are opened via File→Open, not auto-opened at boot.
+        _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
         _coordinator.New();
 
         // scenario buffer + universe (the in-memory clear the host owns).
@@ -1679,8 +1713,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null, discardDirty: true))
         {
             _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "could not be opened"));
-            return;
+            return;   // fail-soft: the notebook is UNCHANGED, so an in-flight run is still valid — do NOT invalidate
         }
+        _notebookRun?.Invalidate();   // #95 Phase 2: notebook replaced — drop any in-flight per-cell run against the old one
         if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present
         _currentLayoutPath = py;
         PersistResumePointer(py);
@@ -1858,6 +1893,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
             // the File→New blank state rather than leaving a half-restored state.
             ApplyLayout(doc);
+            _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
             if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
             {
                 _currentLayoutPath = py;
@@ -1876,6 +1912,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // blocked until the user saves (WYSIWYR). The layout document stays UNTITLED (_currentLayoutPath = "").
     void OpenFileNewDefault()
     {
+        _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
         _coordinator.New();
         ReseedFromEditor();
     }
@@ -2014,6 +2051,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         ThemeService.Changed -= ApplyHakoniwaChromeTheme;   // Hakoniwa chrome theme unsubscribe (findings 0054)
         if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe
+        _notebookRunLane?.Dispose();              // #95 Phase 2 土台: stop the per-cell RUN worker thread
         _host.Stop();                             // 3-7. force_stop → poll stop → bounded join → no Shutdown
         Debug.Log("[BackcastWorkspaceRoot] teardown complete.");
     }

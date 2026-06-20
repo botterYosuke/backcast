@@ -89,6 +89,13 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         return true;
     }
 
+    // #95 Phase 2 土台: the LIVE notebook source as one canonical marimo `.py` text, WITHOUT
+    // writing to disk and WITHOUT requiring not-dirty (owner HITL: per-cell RUN runs the unsaved
+    // buffer). This is the pure-compute run input — distinct from the engine-run path, which still
+    // takes the saved file via TryGetStrategyFile (golden reproducibility). Returns null on a
+    // synthesiser seam failure (the caller skips the run + surfaces a notice).
+    public string SynthesizeLiveSource() => _synth.Synthesize(_cells);
+
     // Synthesise the ordered cells and write them to the bound path via an atomic temp+replace.
     public bool Save()
     {

@@ -136,24 +136,42 @@ Phase 4/5 が前倒しした ▶→■ トグル＋running state の上に、Pha
 
 ---
 
-## 3. AFK / pytest ゲート方針（behavior-to-e2e で正式起票してから着手）
+## 3. AFK / pytest ゲート設計（`behavior-to-e2e` 2026-06-21）
 
-新規 AFK probe（per-cell stale・block popup・document badge・rich output 描画）を **書く前に `behavior-to-e2e` を formal invoke**（handoff §6.2 / skill 不変条件）。想定 gate:
+### 3a. Python ゲート（**landed・GREEN**・DATA 半分は秒で決定論的に固定＝skill「DATA 経路は実 RPC e2e」）
 
-| 層 | gate | 観測（AC） |
+| gate | 観測（AC） | RED→GREEN litmus | 状態 |
+|---|---|---|---|
+| stale incremental（`test_notebook_stale.py` 6） | 編集 cell＋下流が stale 集合／無関係 cell は入らない／press で stale ancestor 実行／globals 持続／delete 伝播 | `_restage` の delete-only pop を全 pop に戻すと idempotent RED | ✅ |
+| rich output（`test_notebook_rich_output.py` 8） | `mo.md`→`text/markdown`・df→`text/html` table・matplotlib→`image/png` data URL・plain→`text/html`・exc→`text/plain`・`mo.image`→`@file` html | `_maybe_matplotlib_png` を外すと figure が空 text/html で RED | ✅ |
+| pressed-cell detection（`test_notebook_step_afk.py` mixed） | mixed `replay`+`step` で押した cell の kind が正しい／コメント `bt.replay` 非誤検出 | 検出を whole-source substring に戻すと mixed が `_step_bt is None` で RED | ✅ |
+| cache key 正規化 | key 順違いの同 scenario が cache hit | `_normalize_scenario_key` を `str()` に戻すと別 bt で RED | ✅ |
+| golden byte-identical / offline purity | Phase 1–5 不退行・matplotlib/rich 追加後も `_backend_impl` marimo-free | — | ✅（58 passed） |
+
+### 3b. C# AFK ゲート（Python-FREE fake executor＝skill「跨ぎは fake で C# 配線・pytest で engine」）
+
+fake executor を `{stale:[...], ran:[{index, mimetype, data, ok}]}` を返す形へ拡張（既存 `StrategyEditorNotebookE2ERunner` の Python-FREE パターン）。`StrategyEditorNotebookE2ERunner` に Section16–19 を追加:
+
+| Section / Action | pin する挙動 | RED→GREEN litmus | カバー状態 |
+|---|---|---|---|
+| S16 / STRATEGY-27,28 **per-cell stale** | 編集通知で該当窓に stale badge（amber）／press で idle へ戻り stale クリア／下流窓も badge | stale routing を「常に窓0」へ collapse → 別窓 badge で RED ／ press 後 clear を消すと badge 残留 RED | 要新規自動化 |
+| S17 / STRATEGY-29 **block popup** | bt running 中の第二 per-cell RUN → 通知ライン `bt is already running`／非ブロック press は通知無し（not-owner/server-not-ready も） | block guard を外すと通知無しで RED ／ 無条件通知にすると非ブロックで誤通知 RED | 要新規自動化 |
+| S18 / STRATEGY-30,31 **document badge（#90）** | Open→basename 常時可視／編集→`* name.py`／Save→`*` 消える／New→`Untitled` | badge 更新を消すと Open 後 stale title で RED（#90 AC4 文言非矛盾も） | 要新規自動化 |
+| S19 / STRATEGY-32,33 **rich output routing** | `image/png`→RawImage(Texture2D) active／`text/markdown`+`text/html`→TMP rich／未対応→text fallback | 全 mimetype を Text へ collapse → image で RawImage 非 active RED | 要新規自動化 |
+
+### 3c. Sunset probe 裁定（削除スライス規律＝契約の移送か冗長カバーかを exact assertion で確認）
+
+| probe | 契約 | 裁定 |
 |---|---|---|
-| Python | stale incremental | 編集 cell＋下流が stale 集合に入る／無関係 cell は入らない／RUN で stale ancestor が走る／globals が rebuild で消えない |
-| Python | rich output mimetype | `mo.md`→`text/markdown`・pandas→`text/html`(table)・`mo.image`→`image/png`・未対応→fallback の `{mimetype,data}` |
-| Python | pressed-cell detection | mixed `replay`+`step` notebook で押した cell の kind が正しい／コメント内 `bt.replay` を誤検出しない |
-| Python | cache key 正規化 | key 順違いの同 scenario が cache hit |
-| Python | matplotlib | matplotlib figure が `image/png` で出る（同梱後） |
-| Python | golden byte-identical | Phase 1–5 不退行（主 gate・ADR-0006） |
-| Python | offline purity | matplotlib/rich 追加後も `_backend_impl` が marimo-free |
-| C# AFK | per-cell stale | 編集→該当窓が stale badge／RUN で idle へ戻る |
-| C# AFK | block popup | running 中の第二 per-cell RUN → 通知ラインに「already running」／非ブロック時は出ない |
-| C# AFK | document badge | Open で basename 常時可視／編集で `*`／Save で `*` 消える／New で `Untitled`（#90 AC） |
-| C# AFK | rich output 描画 | image/markdown/table の各 mimetype が該当 renderer に届く |
-| C# AFK | Run sunset | title-bar Run / global ▶ Run が無い（撤去の litmus）／per-cell RUN が唯一の実行入口 |
+| **`RunButtonE2ERunner`（#63 / findings 0063）** | title-bar Run button presence ＋ `RunReadinessViewModel` readiness（RUN-01..06） | **retire**: button/VM ごと撤去（D2/D4）。「strategy が走れる」契約は per-cell RUN（S13/S14/S16）へ移送済＝冗長カバー。runner＋`.md` 削除・INDEX 減算 |
+| **`AuthorToRunJourneyE2ERunner`（#66 / findings 0066）** | author→save→**commit→run** の縫い目（`scenario.TryStartRun` の Commit ＋ `OnRun→host.TryStartRun` 受理） | **migrate**: run-trigger を per-cell RUN へ。Commit 契約は startup panel `Commit()`（survive）＋ per-cell bt run（`test_notebook_replay_afk` が DATA を pin）。journey は「author cell＋scenario commit→per-cell RUN が run_cell を scenario_json 付きで呼ぶ」C# 配線に置換 |
+| **`ReplayToHakoniwaE2ERunner`** | `host.TryStartRun` 直叩きの engine-run primitive＋逐次 render | **keep**: UI trigger ではなく engine 経路。Phase 4 GIL reconfirm も使用。無改変 |
+
+> sunset の安全根拠は exact assertion まで読む（skill 規律）: `RunButtonE2ERunner` の RUN-01..06 は「button presence＋VM Reason 表」を assert、これは per-cell RUN section が窓ごとの RUN button presence（S13 `EnsureRunButton`）で冗長カバー。VM の readiness 表は「save 必須 batch run」固有で per-cell RUN（save 不要）では無意味＝移送先なし・撤去が正。
+
+### 3d. AFK 実走規律（serial・recompile-skip・`grep -a`・lock 確認）
+
+新規 section は `StrategyEditorNotebookE2ERunner` の単一 compile 単位なので **1 本ずつ直列**で著し AFK 実走（memory `e2e-wave2-runner-promotion`）。compile gate（`-batchmode -quit` ＋ bash `grep -a "error CS"`）→ AFK（`-executeMethod ….Run`・2 回目で実行・`Found no leaked weakptrs` 待ち）。`E2E-INDEX.md` 登録は台本更新と別作業（漏れ注意）。
 
 ---
 

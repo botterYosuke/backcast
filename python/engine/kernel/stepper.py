@@ -246,6 +246,23 @@ class KernelStepper:
         self._terminal: Optional[StepHandle] = None  # set once END / STOPPED is reached
         self._result: Optional[RunResult] = None     # set once finalize runs
 
+    # -- pacing (#95 Phase 4) -------------------------------------------------
+
+    def set_pacing(self, bars_per_second: Optional[float]) -> None:
+        """Set the per-bar wallclock throttle from a bars-per-second rate (#95 Phase 4 / D8-D9).
+
+        ``None`` → full speed (no sleep); the GIL is handed off by CPython auto-switch, not an
+        explicit floor (findings 0070 F6 — ``bt.replay()`` captures the rate at the START of a
+        stream so it is immutable for that run; speed is NOT a live-mutable register). A positive
+        rate sets ``1 / bars_per_second`` as the per-bar pacing sleep (the watchable-playback
+        feature); a non-positive rate is a caller typo and fails closed."""
+        if bars_per_second is None:
+            self._bar_interval_sec = 0.0
+        elif bars_per_second > 0:
+            self._bar_interval_sec = 1.0 / bars_per_second
+        else:
+            raise ValueError(f"bars_per_second must be positive, got {bars_per_second!r}")
+
     # -- primitives -----------------------------------------------------------
 
     def open_next_bar(self) -> StepHandle:

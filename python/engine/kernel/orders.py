@@ -45,7 +45,10 @@ def signed_qty_to_side(qty: float) -> Optional[tuple["OrderSide", float]]:
         )
     if q == 0.0:  # also catches -0.0
         return None
-    return (OrderSide.BUY if q > 0.0 else OrderSide.SELL, abs(q))
+    # Preserve the caller's numeric type: abs(qty) keeps an int an int so the fill record is
+    # byte-identical to the imperative golden — bt.submit_market(100) must record qty "100", not
+    # "100.0" (the production ReplayKernelObserver str()-formats last_qty raw; #95 P4-6).
+    return (OrderSide.BUY if q > 0.0 else OrderSide.SELL, abs(qty))
 
 
 class OrderStatus(enum.Enum):

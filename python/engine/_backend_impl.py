@@ -183,10 +183,12 @@ class PortfolioResult:
     unrealized_pnl: float = 0.0
 
 
-# Per-bar wallclock throttle for both production Replay runners (legacy catalog + DuckDB
-# kernel): releases the GIL between bars so the poll thread reads the bar-by-bar chart
-# (#29). Kept in one place so the two paths animate at the same cadence.
-_REPLAY_BAR_INTERVAL_SEC = 0.01
+# Per-bar wallclock throttle removed in #95 Phase 4 (ADR-0016 D8-D9 / findings 0070 F6,
+# 0073): the imperative Replay path runs at full speed and the GIL is handed off to the poll
+# thread by CPython's auto-switch (~5ms), NOT an explicit per-bar sleep floor — owner priority
+# "never let Hakoniwa's update cadence throttle the engine". Watchable pacing is now opt-in per
+# run via bt.replay(bars_per_second=N) (start-captured), the only place a sleep is inserted.
+# The auto-switch handoff is reconfirmed on real Unity (findings 0073 §P4-5) before this lock.
 
 
 # Phase 10 §2.9 / M6: 発注主体を示す OrderEvent.strategy_id のタグ規則。
@@ -949,7 +951,8 @@ class DataEngineBackend:
                     initial_cash=initial_cash,
                     strategy=strategy,
                     sink=observer,
-                    bar_interval_sec=_REPLAY_BAR_INTERVAL_SEC,
+                    # bar_interval_sec defaults to 0.0 (full speed) — #95 Phase 4 removed the
+                    # _REPLAY_BAR_INTERVAL_SEC throttle (F6: GIL via auto-switch, not a sleep floor).
                     stop_event=self.engine.replay_stop_event,  # #76 S6b-β: force_stop teardown only
                 ).run()
             finally:

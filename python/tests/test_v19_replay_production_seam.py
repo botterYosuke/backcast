@@ -45,11 +45,9 @@ def test_v19_runs_through_production_replay_seam(monkeypatch) -> None:
     from engine.kernel.strategy import Strategy as KernelStrategy
     from engine.strategy_runtime.strategy_loader import load as load_strategy
 
-    # Drop the real-time chart throttle (0.01s/bar × ~81k bars ≈ 14min of wall-clock that
-    # only paces the watchable chart). This is a WIRING gate, not a pacing test; faithfulness
-    # is covered by test_v19_replay_core. The throttle is exercised separately by #30's tests.
-    monkeypatch.setattr("engine._backend_impl._REPLAY_BAR_INTERVAL_SEC", 0.0)
-
+    # #95 Phase 4 (F6): the imperative Replay path no longer has a per-bar throttle (the
+    # _REPLAY_BAR_INTERVAL_SEC constant was removed), so it already runs at full speed — no
+    # monkeypatch needed. This stays a WIRING gate; faithfulness is covered by test_v19_replay_core.
     root = _minute_root()
     # The app loads the chart/window state from the sidecar scenario, then start_engine
     # re-reads the same sidecar — mirror that (same single source of truth).

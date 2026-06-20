@@ -91,10 +91,13 @@ class Backtester:
         and the final ``next()`` closes the last bar and finalizes (StopIteration path), so the
         per-bar order matches the golden (findings 0070 F4/0008 §2).
 
-        ``bars_per_second`` is accepted and stored; Phase 3 inserts NO sleep (high-speed only).
-        Per-bar pacing (``sleep(1 / bars_per_second)``) is Phase 4 (#95 Q5 A1).
+        ``bars_per_second`` is CAPTURED here, at the start of the stream (#95 Phase 4 / ADR-0016
+        D8-D9): the rate is immutable for this run (speed is not a live-mutable register — findings
+        0070 F6). ``None`` → full speed (no sleep, GIL handed off by CPython auto-switch); a positive
+        rate inserts a per-bar ``sleep(1 / bars_per_second)`` so the playback is watchable.
         """
         self._bars_per_second = bars_per_second
+        self._stepper.set_pacing(bars_per_second)
         while True:
             handle = self._stepper.open_next_bar()
             if handle.event is not StepEvent.BAR_OPEN:

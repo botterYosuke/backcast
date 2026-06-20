@@ -214,20 +214,20 @@ def test_pre_set_stop_event_via_bt_handle() -> None:
 
 
 # --------------------------------------------------------------------------------------
-# (6) bars_per_second no-op smoke — Phase 3 accepts the arg, inserts no sleep
+# (6) bars_per_second accepted — every bar still streams (pacing itself is pinned in
+#     test_backtester_phase4.py now that Phase 4 wired the per-bar sleep)
 # --------------------------------------------------------------------------------------
 
-def test_bars_per_second_accepted_no_sleep() -> None:
-    # Phase 3 (Q5 A1): bt.replay(bars_per_second=N) accepts + stores the arg but wires NO
-    # pacing — the stepper's throttle (bar_interval_sec) stays 0, so the sleep path is never
-    # active. Per-bar sleep(1/N) is Phase 4.
+def test_bars_per_second_accepted() -> None:
+    # bt.replay(bars_per_second=N) accepts + stores the arg and streams every bar. Phase 4
+    # CAPTURES the rate into the stepper's throttle at the start of the stream — that pacing
+    # behaviour (1/N capture, full-speed default) is pinned in test_backtester_phase4.py.
     bars = _bars(_CLOSES)
     bt = _make_bt(bars, _Recorder())
     streamed = list(bt.replay(bars_per_second=10))
 
     assert len(streamed) == len(bars)         # every bar streamed
-    assert bt._bars_per_second == 10          # arg stored for Phase 4
-    assert bt._stepper._bar_interval_sec == 0.0  # no pacing wired into the engine
+    assert bt._bars_per_second == 10          # arg stored
 
 
 # --------------------------------------------------------------------------------------

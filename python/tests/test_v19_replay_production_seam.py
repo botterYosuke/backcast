@@ -39,7 +39,7 @@ def _minute_root() -> str | None:
     _minute_root() is None,
     reason="J-Quants DuckDB minute mount absent (BACKCAST_JQUANTS_DUCKDB_ROOT)",
 )
-def test_v19_runs_through_production_replay_seam(monkeypatch) -> None:
+def test_v19_runs_through_production_replay_seam() -> None:
     from engine.core import DataEngine
     from engine._backend_impl import DataEngineBackend
     from engine.kernel.strategy import Strategy as KernelStrategy

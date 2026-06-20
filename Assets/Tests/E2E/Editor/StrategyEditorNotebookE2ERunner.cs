@@ -57,7 +57,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section10_NotebookAggregate()
                 ?? Section11_SpawnPlacement()
                 ?? Section12_Coordinator(spawned)
-                ?? Section13_PerCellRun(spawned);
+                ?? Section13_PerCellRun(spawned)
+                ?? Section14_Phase4BacktestControl(spawned);
         }
         catch (Exception e)
         {
@@ -91,6 +92,8 @@ public static class StrategyEditorNotebookE2ERunner
                       "+ #95 Phase 2 土台 per-cell RUN (adopted+spawned both carry a ▶ RUN button via EnsureRunButton find-or-create, " +
                       "idempotent; press routes the run output to ITS window by cell index; pressing one window does not overwrite another; " +
                       "downstream cell output routes to the downstream window) " +
+                      "+ #95 Phase 4 bt.replay() control (STRATEGY-21 committed-scenario hand-off + ▶→■ on RUN; " +
+                      "STRATEGY-22 2nd RUN rejected while a backtest is in flight; STRATEGY-23 ■ force-stop → ▶ restored, guard clears) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -973,6 +976,127 @@ public static class StrategyEditorNotebookE2ERunner
 
         lane.Dispose();
         return null;
+    }
+
+    // ======================================================================
+    // 14. #95 Phase 4 — bt.replay() run CONTROL: scenario hand-off + running guard + stop (▶→■).
+    //     Covers STRATEGY-21 (a bt.replay press hands the committed scenario to the backend and the
+    //     cell enters RUNNING: ▶→■), STRATEGY-22 (a 2nd RUN while a backtest is in flight is REJECTED,
+    //     not queued — ADR-0016 D3), STRATEGY-23 (■ requests a force-stop; draining the result clears
+    //     the guard and restores ▶, and a fresh press is accepted again).
+    //     Python-FREE: a recording fake executor captures the scenario JSON; the REAL controller +
+    //     REAL StrategyEditorWindowFrame glyph toggle are exercised. The real bt drive (run_cell→bt→
+    //     Hakoniwa), pacing and cross-thread stop are the pytest gate test_notebook_replay_afk.py.
+    // ======================================================================
+    static string Section14_Phase4BacktestControl(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string SCN = "{\"instruments\":[\"8918.TSE\"],\"granularity\":\"Daily\"}";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer14", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S14: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        nb.Cells[0].SetBody("for bar in bt.replay():\n    bt.submit_market(100)\n");   // a B2 drive cell
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S14: precondition — cell0 not bound to region_001";
+
+        var btn = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        if (btn == null) return "S14: region_001 has no RUN button";
+        if (GlyphText(btn) != "▶") return "S14: precondition — RUN button does not start as ▶";
+
+        string gotScenario = null;
+        var exec = new _RecordingExecutor(s => gotScenario = s);
+        var errors = new List<string>();
+        int stopCount = 0;
+        var runningEvents = new List<string>();
+
+        var lane = new NotebookRunLane(exec, startWorker: false);   // synchronous: Submit runs inline
+        var run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, lane,
+            msg => errors.Add(msg),
+            () => SCN,                                   // scenarioJsonProvider
+            () => stopCount++,                           // onStop (force-stop the in-flight backtest)
+            (region, running) =>                          // onRunningChanged: ▶/■ toggle
+            {
+                runningEvents.Add(region + ":" + running);
+                StrategyEditorWindowFrame.SetRunButtonGlyph(btn, running);
+            });
+
+        // STRATEGY-21: a bt.replay press hands the committed scenario to the backend and enters RUNNING.
+        run.RunCell(R1);
+        if (gotScenario != SCN) return "S14/STRATEGY-21: executor did not receive the committed scenario JSON, got [" + gotScenario + "]";
+        if (!run.IsBacktestRunning) return "S14/STRATEGY-21: controller not RUNNING after a bt.replay press";
+        if (runningEvents.Count != 1 || runningEvents[0] != R1 + ":True") return "S14/STRATEGY-21: running-changed(region,true) not fired";
+        if (GlyphText(btn) != "■") return "S14/STRATEGY-21: ▶ did not toggle to ■ while running";
+
+        // STRATEGY-22: a 2nd RUN while a backtest is in flight is REJECTED (no second executor call).
+        int callsBefore = exec.Calls;
+        run.RunCell(R1);
+        if (exec.Calls != callsBefore) return "S14/STRATEGY-22: a 2nd RUN ran while a backtest was in flight (guard failed)";
+        if (errors.Count == 0) return "S14/STRATEGY-22: the rejected 2nd RUN surfaced no message";
+
+        // STRATEGY-23: ■ requests a force-stop; draining the result clears the guard + restores ▶.
+        run.StopRunning();
+        if (stopCount != 1) return "S14/STRATEGY-23: ■ press did not request a force-stop";
+        run.DrainAndRoute();
+        if (run.IsBacktestRunning) return "S14/STRATEGY-23: still RUNNING after the result drained";
+        if (GlyphText(btn) != "▶") return "S14/STRATEGY-23: ■ did not restore to ▶ after the run finished";
+        // a fresh press is accepted again (the guard is not stuck).
+        run.RunCell(R1);
+        if (!run.IsBacktestRunning) return "S14/STRATEGY-23: a new run was not accepted after the prior one finished";
+        run.DrainAndRoute();
+
+        lane.Dispose();
+        return null;
+    }
+
+    static string GlyphText(UnityEngine.UI.Button runButton)
+    {
+        var glyph = runButton != null ? runButton.transform.Find("RunGlyph") : null;
+        var t = glyph != null ? glyph.GetComponent<Text>() : null;
+        return t != null ? t.text : null;
+    }
+
+    // Records the scenario JSON each press received (Phase 4 control gate). Returns a canned OK result.
+    sealed class _RecordingExecutor : INotebookCellExecutor
+    {
+        readonly Action<string> _onScenario;
+        public int Calls;
+        public _RecordingExecutor(Action<string> onScenario) { _onScenario = onScenario; }
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        {
+            Calls++;
+            _onScenario?.Invoke(scenarioJson);
+            return new NotebookRunResult
+            {
+                Ok = true,
+                Ran = new[] { new NotebookCellOutput { Index = pressedIndex, Output = "ran", Ok = true } },
+                Error = null,
+            };
+        }
     }
 
     // Fake per-cell executor (Python-FREE): pressed cell -> "out-{index}"; pressing cell 0 also emits a

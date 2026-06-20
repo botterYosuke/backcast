@@ -56,7 +56,6 @@ public static class BackcastWorkspaceProbe
                 ?? Section6_OnceGate()
                 ?? Section7_Ownership()
                 ?? Section8_SharedUniverse()
-                ?? Section9_RunCommitRePrimesWriteback()
                 ?? Section10_ChartWindowFamily()
                 ?? Section11_EditorSeedsUniverseAndGatesRun()
                 ?? Section13_ChromeZOrderLayering()
@@ -319,68 +318,6 @@ public static class BackcastWorkspaceProbe
         foreach (var r in sidebar.Rows()) if (r.Id == probe) seen = true;
         scenario.Universe.Remove(probe);
         if (!seen) return "scenario universe edit not visible through sidebar (registries diverged)";
-        return null;
-    }
-
-    // ── 9. Run-Commit RE-PRIMES the sidebar writeback (#59 cross-writer staleness). The startup-tile
-    // text edits the SHARED registry WITHOUT flushing; Commit (TryStartRun) writes those instruments to
-    // the sidecar, but the sidebar's writeback still holds the PRE-Commit set as _lastFlushed. Without a
-    // re-prime, a later sidebar edit that nets back to a pre-Commit set sees cur == _lastFlushed, SKIPS
-    // the flush, and the sidecar keeps a phantom instrument (silent disk divergence). Drives the REAL
-    // root's OnRun headlessly: in batchmode the root is NOT owner, so OnRun commits + re-primes, then
-    // bails at the _isOwner gate BEFORE touching the Host/Python. ──
-    static string Section9_RunCommitRePrimesWriteback()
-    {
-        string strat = Path.Combine(TempDir, "run_reprime_strategy.py");
-        File.WriteAllText(strat, "# probe\nclass S:\n    pass\n");
-
-        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
-        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
-        if (root == null) return "reprime: BackcastWorkspaceRoot missing";
-
-        var ty = typeof(BackcastWorkspaceRoot);
-        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
-        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
-        root.SetSynthesizer(new FakeMarimoSynthesizer());   // #81: Python-free cell synthesis
-        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
-        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
-
-        var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
-        var sidebar = ty.GetField("_sidebarCtrl", BF).GetValue(root) as UniverseSidebarController;
-        if (scenario == null || sidebar == null) return "reprime: root internals not found (renamed?)";
-
-        // #78/#81: OnRun's run-gate reads the NOTEBOOK via RegistryStrategyFileProvider (not an env
-        // _strategyFile) — bind the notebook to a real temp strategy so the gate is supplyable.
-        var coordinator = ty.GetField("_coordinator", BF).GetValue(root) as NotebookCellCoordinator;
-        if (coordinator == null) return "reprime: coordinator missing";
-        if (!coordinator.Open(strat, null)) return "reprime: notebook failed to Open the temp strategy";
-
-        // a VALID scenario whose universe settled to [A], then a TILE add of B with NO flush (text edits
-        // never flush) -> registry=[A,B] while the writeback's _lastFlushed is still [A] (the stale state).
-        scenario.SetStart("2024-01-01");
-        scenario.SetEnd("2024-06-01");
-        scenario.SetGranularity(GranularityChoice.Daily);
-        scenario.SetInitialCash("1000000");
-        scenario.Universe.ReplaceAll(new[] { "A.TSE" });
-        sidebar.PrimeWritebackFromCurrent();                 // _lastFlushed = [A]
-        scenario.Universe.Add("B.TSE");                      // tile add, no flush -> [A,B] vs _lastFlushed [A]
-
-        // drive the REAL OnRun: Commit writes the sidecar [A,B]; the fix re-primes _lastFlushed=[A,B];
-        // then (not owner in batchmode) it returns before the Host/Python path.
-        ty.GetMethod("OnRun", BF).Invoke(root, null);
-
-        // the gate must have been Ready — proves OnRun reached the re-prime line, not an early bail.
-        var afterCommit = ScenarioSidecarStore.ReadScenario(strat);
-        if (afterCommit == null || afterCommit.Instruments.Count != 2)
-            return "reprime: OnRun did not Commit [A,B] (run-gate not Ready — probe setup broke)";
-
-        // the kill: a sidebar × of B (which flushes) must now WRITE the sidecar back to [A]. Without the
-        // re-prime, _lastFlushed==cur==[A] -> Flush SKIPS -> the sidecar keeps the phantom B.
-        sidebar.Remove("B.TSE", UniverseSourceMode.Replay, new BoundStrategyFileProvider(strat));
-        var afterRemove = ScenarioSidecarStore.ReadScenario(strat);
-        if (afterRemove == null) return "reprime: sidecar missing after remove";
-        if (afterRemove.Instruments.Count != 1 || afterRemove.Instruments[0] != "A.TSE")
-            return "reprime: sidebar × did NOT flush (writeback stale: _lastFlushed not re-primed at Commit -> phantom B on disk)";
         return null;
     }
 

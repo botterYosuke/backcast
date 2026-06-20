@@ -18,24 +18,31 @@ public sealed class ThemeColors
 {
     public Color background, surface_background, elevated_surface_background, panel_background;
     // workspace_background — the infinite-canvas FIELD behind every Hakoniwa tile / floating window
-    // (BackcastWorkspaceRoot._viewport). NOT a Radix scale step: a deliberate owner override (2026-06-19,
-    // same流儀 as the AddCellButton bottom-right divergence) so the empty space reads light-blue while
-    // the content surfaces keep `background` (dark). Kept distinct from `background` precisely so changing
-    // the field hue does NOT lighten chart / ladder / editor backgrounds.
+    // (BackcastWorkspaceRoot._viewport). NOT a Radix scale step: a deliberate owner override so the field
+    // hue can be tuned independently of `background`. Kept distinct from `background` precisely so changing
+    // the field hue does NOT recolor chart / ladder / editor backgrounds. Current (space re-skin
+    // 2026-06-20) value is a deep-cosmos void slightly darker than `background` so floating panels read as
+    // illuminated cards against outer space; was light-blue under the earlier farm palette.
     public Color workspace_background;
     // hakoniwa_* — the Hakoniwa-ISOLATED surface roles (findings 0054). The chart / ladder / panel
     // tiles and the tile chrome (card / header / label) read THESE, not the shared `background` /
-    // `panel_background`, so brightening Hakoniwa does NOT lighten the strategy editor / footer /
-    // sidebar (which keep the dark shared roles). All owner literals (raw sRGB, scale-non-derived,
-    // same流儀 as workspace_background) so a future light scale can't silently recolor them; swap
-    // these literals + Play to try a new palette (no scene re-bake).
+    // `panel_background`, so the Hakoniwa farm CAN evolve independently of the strategy editor /
+    // footer / sidebar (which keep the dark shared roles). All owner literals (raw sRGB,
+    // scale-non-derived, same流儀 as workspace_background) so a future light scale can't silently
+    // recolor them; swap these literals + Play to try a new palette (no scene re-bake). After the
+    // space re-skin (2026-06-20) the values cohere with the dark shared chrome rather than diverging
+    // brightly, but the isolation seam stays in place so a future Hakoniwa-only palette can re-diverge
+    // without disturbing the rest.
     public Color hakoniwa_root_background, hakoniwa_tile_background, hakoniwa_tile_header;
     public Color hakoniwa_chart_background, hakoniwa_panel_surface;
     public Color hakoniwa_tile_header_text, hakoniwa_text, hakoniwa_text_muted;
-    // hakoniwa trading colors (findings 0054 P1): the `status.*` green/red/warning are dark-scale steps
-    // tuned for a DARK bg and wash out on the bright/cream Hakoniwa surfaces (WCAG ~1.3–2.5:1). These are
-    // darker, cream-legible crop-green / barn-red / dark-amber used by ChartView candles + change% and the
-    // ladder bid/ask/LAST — Hakoniwa-isolated so the rest of the app keeps semantic status.* unchanged.
+    // hakoniwa trading colors (findings 0054 P1, re-tuned for the space re-skin 2026-06-20): kept as a
+    // SEPARATE override from `status.*` so the candle / ladder colors can be tuned for the Hakoniwa
+    // chart background independently of the shared error/success/warning hues. Under the original farm
+    // palette these were darker crop-green / barn-red / dark-amber for cream-surface legibility; under
+    // the space palette they are aurora-teal / mars-rust / gold-star tuned for the near-void chart
+    // face. ChartView candles + change% and the ladder bid/ask/LAST read these — Hakoniwa-isolated so
+    // the rest of the app keeps semantic status.* unchanged.
     public Color hakoniwa_up, hakoniwa_down, hakoniwa_last;
     public Color panel_focused_border, status_bar_background, title_bar_background;
     public Color toolbar_background, tab_bar_background, tab_active_background, tab_inactive_background;

@@ -241,4 +241,18 @@ S1（必須 ＝ #81 本体 AC：セル追加 UI・複数セル編集→Save→Ru
 - 統合時の cleanup（simplify pass）: `ReseedFromEditor` 呼出コメントの `#78/#80` → `#78`、`FileDialog.cs` の "(matches the #80 strategy picker)" 削除。
 - 検証: compile gate `error CS` 0・`MenuBarCutoverProbe` PASS（統合後ツリー）。
 
+## #91 close 判断（2026-06-21）— title-bar X = delete を現状維持
+
+issue #91（「title-bar X が close ではなく cell 削除になっていて危険」）を **wont-fix で close**。Decision 4（`X = delete`・region_002+ despawn / region_001 hide-dormant・≥1 ガード）は不変。owner 判断（grill `2026-06-21`）。
+
+- **背景**: 現行 `StrategyEditorWindowFrame.EnsureCloseButton` は title bar 右上に `✕`（mars-rust 赤・22px square）を作り、`BackcastWorkspaceRoot.WireCellCloseButton` → `NotebookCellCoordinator.DeleteCell` に配線。一般的な「閉じる」アイコンが破壊操作に当たっており、誤クリックで cell 本体が消える懸念が指摘された。
+- **検討した代替**: (a) 確認ダイアログ/Undo を足す、(b) `✕` を「閉じる/隠す」に意味替えして hidden-cell sidebar 等で復元、(c) `✕` を撤去し別 affordance（trash／右クリックメニュー）。いずれも marimo 3D 本家（`cell-3d-renderer.tsx` も title bar X = delete）からの **divergence**。
+- **却下理由（owner 判断）**:
+  - marimo 3D 忠実を優先（[[ttwr-parity-first]]・autosave の差は backcast の Save 規律＋#87 SaveGuard で塞いでいる）。
+  - hidden-cell モデル（案 b）は「どこから復元するか」の sidebar 等を新設する必要があり、編集面の認知負荷が増える。
+  - 確認ダイアログ（案 a 一部）は marimo 体験を阻害し、頻繁な編集を遅くする。Undo を cell add/delete に拡張するのは EditHistory のスコープを per-cell から notebook 全体へ広げる別作業（#81 で意図的に per-cell に限定）。
+  - 実害観測なし: ≥1 ガードで「全消し」は防げており、bound notebook なら File→Open で復元、untitled でも #87 SaveGuard が quit/replace 時に dirty を捕捉する（誤 X → 即座に dirty なので Save 不能リスクは無い）。
+- **採用基準**: `✕` の destructive な見た目（mars-rust 赤）と ≥1 ガードと marimo 忠実をもって妥協ライン。後段でユーザーから実害（誤クリックで作業損失）が観測されたら再開する——再開時の出発点は本節＋上記 (a)/(b)/(c) の選択肢。
+- **コード変更なし**。本 findings 追記のみ。ADR-0013 Decision 4 は immutable 保持。
+
 正本: `docs/adr/0013`（immutable・不変）＋ 本 findings。

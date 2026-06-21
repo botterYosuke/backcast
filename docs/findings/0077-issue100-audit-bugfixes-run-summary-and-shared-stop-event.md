@@ -97,6 +97,18 @@ owner 選択（issue ① AC L11「File→New/Open 跨ぎでも前回 run の sta
 - `test_get_run_summary_json_empty_when_no_summary`（honest-empty `""`）
 - `test_clear_run_view_clears_both_last_portfolio_and_last_run_summary`（document-boundary reset）
 
+### ① RENDER 半分（C# AFK）: `ReplayRunResultTileE2ERunner`（RRT-01..05）
+
+D1 は run_summary の single source を Python（`engine.last_run_summary`）へ寄せた＝**「source が空なら running／非空なら full-stats を描く」分岐は C# (`BackcastWorkspaceRoot.PushReplayTiles`) にしか無い**。この RENDER 半分は Python e2e では証明できないので、Unity AFK で固定する（behavior-to-e2e の「DATA 経路 C#↔Python 跨ぎ＝2 ゲート分割」）。
+
+- **カバレッジ穴の経緯**: #65 の RunResult running→full-stats は `HakoniwaBaseModeProbe` S5/B2 が AFK 化していたが、findings 0060 で `HakoniwaE2ERunner` に集約 → **#99 (commit `77e39c7`)** が Hakoniwa floating-window 化で `HakoniwaE2ERunner`（836 行）を **run_result カバレッジごと wholesale 削除**し「将来 Panel runner へ移送」のまま re-home せず。RunResult タイルの C# AFK カバレッジがゼロになった死角に #100 ① が landed。
+- **新 runner**（`Assets/Tests/E2E/Editor/ReplayRunResultTileE2ERunner.{cs,md}`、Python-FREE = `TestPortfolioJsonOverride`/`TestRunSummaryJsonOverride` 注入・削除された probe と同型）:
+  - RRT-01 portfolio 無→honest-empty、RRT-02 portfolio 有+summary 空→running、RRT-03 summary publish→full-stats（`fills:2`/`total_pnl -410010` 束縛）。
+  - **RRT-04（#100 ① GATE）**: full-stats の後に summary を空へ戻す（run2 開始・portfolio は走行継続）→ RunResult は **running へ戻る**（run1 の `fills:2`/`-410010` が残らない）。pre-#100 は run2 走行中ずっと run1 の full-stats が残った＝そのバグの render 層を踏む。
+  - RRT-05 run2 summary→full-stats（running↔full の反復＝one-shot でない）。
+- **RED litmus（delete-the-production-logic）**: `PushReplayTiles` の `IsNullOrWhiteSpace(summaryJson) ? running : complete` を complete 固定に潰すと RRT-02/RRT-04 が RED。summary を sticky 化（旧 #100 バグ形）でも RRT-04 が RED。
+- 件数を `E2E-INDEX.md`（Surface 13 本）へ登録。
+
 ### code-review (Agent 3) 追補: `test_notebook_replay_afk.py::test_build_failure_after_successful_run_clears_run_summary` +1
 - 監査で発見: `_build_notebook_bt` / `_acquire_step_bt` の **exception path** は prior 成功 run の `last_portfolio` / `last_run_summary` をクリアしない（on_run_begin の clear は build 成功時にしか fire しない）→ build failure 後の poll が **stale full-stats** を露出。
 - fix: `run_cell` の **step / replay 両 exception branch** で `force_stop_replay` 直後に `last_portfolio = None; last_run_summary = None` を明示クリア（on_run_begin の clear を mirror）。

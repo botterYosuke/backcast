@@ -7,7 +7,7 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（13 本・181 行）
+## Surface E2E（13 本・185 行）
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -16,7 +16,7 @@
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..13` | 13 | 11 | 0 | 0 | 1 | 1 |
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
-| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05` | 19 | 16 | 0 | 0 | 2 | 1 |
+| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05,PLANE-01..04` | 23 | 19 | 0 | 0 | 3 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..33` | 33 | 30 | 0 | 0 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
@@ -42,7 +42,7 @@
 
 ## 合計
 
-- **Surface 13 本 ＝ 181 行 ／ Journey 4 本 ＝ 57 行 ／ 総計 238 行**（#100: `ReplayRunResultTileE2ERunner` RRT-01..05 を新規追加＝#99 が `HakoniwaE2ERunner` 削除で落とした RunResult タイル（running↔full-stats）C# AFK カバレッジを Panel surface として復活し、#100 ① の再実行 render 不変条件 RRT-04 を追加・findings 0077。#101: `FloatingWindowE2ERunner` に DOCK-03/04（DockSnapPlacement flush 吸着 / focus-adjacent 固定サイズ chart spawn）を追加・findings 0078。#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075。**#95 E2E 仕上げ**: `NotebookToHakoniwaJourneyE2ERunner`（JOURNEY-NBHAKO-01..14）を新設＝退役 `ReplayToHakoniwa` の縦串の席を新 Hakoniwa モデルで継ぎ「per-cell RUN→実エンジン駆動→base tile 逐次更新→停止」を 1 本の release-gate に。`StrategyEditorNotebookE2ERunner` の最後の `要新規自動化` STRATEGY-11 を Section20 で昇格・findings 0076）。
+- **Surface 13 本 ＝ 185 行 ／ Journey 4 本 ＝ 57 行 ／ 総計 242 行**（#103: `FloatingWindowE2ERunner` に PLANE-01..04（2 深さプレーン分離の parallax 速度差 / またぎ吸着禁止・プレーン内吸着 / 2 controller persist round-trip、＋HITL 目視 PLANE-04）を追加・ADR-0018・findings 0075 §10。#100: `ReplayRunResultTileE2ERunner` RRT-01..05 を新規追加＝#99 が `HakoniwaE2ERunner` 削除で落とした RunResult タイル（running↔full-stats）C# AFK カバレッジを Panel surface として復活し、#100 ① の再実行 render 不変条件 RRT-04 を追加・findings 0077。#101: `FloatingWindowE2ERunner` に DOCK-03/04（DockSnapPlacement flush 吸着 / focus-adjacent 固定サイズ chart spawn）を追加・findings 0078。#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075。**#95 E2E 仕上げ**: `NotebookToHakoniwaJourneyE2ERunner`（JOURNEY-NBHAKO-01..14）を新設＝退役 `ReplayToHakoniwa` の縦串の席を新 Hakoniwa モデルで継ぎ「per-cell RUN→実エンジン駆動→base tile 逐次更新→停止」を 1 本の release-gate に。`StrategyEditorNotebookE2ERunner` の最後の `要新規自動化` STRATEGY-11 を Section20 で昇格・findings 0076）。
 - `ReplayToHakoniwaE2ERunner` が第一波時点の実装済み回帰ゲート（`自動(E2E済)`）。**第二波1本目 = `ScenarioStartupE2ERunner`
   を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。
   **2本目 = `FooterModeE2ERunner`**（`FooterLiveAutoVerify` → 改名・FOOTER-06/07 view section＋FOOTER-10 追加・LiveAuto は

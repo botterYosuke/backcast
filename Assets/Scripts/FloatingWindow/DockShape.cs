@@ -31,4 +31,18 @@ public static class DockShape
     // Recover the instrument id from a "chart:<instrument>" window id. Returns null for a non-chart id.
     public static string InstrumentOfChartId(string id) =>
         IsChartId(id) ? id.Substring(ChartIdPrefix.Length) : null;
+
+    // #103 (ADR-0018 / findings 0075 §10): true iff `kind` belongs to the BACK (dock) plane — the
+    // 6 former Hakoniwa kinds that live on the 1.0× DockLayer (chart family + the 5 base singletons).
+    // strategy_editor / order live on the 1.2× FloatingWindowLayer and return false. The SINGLE
+    // predicate that routes a kind to its depth plane: BackcastWorkspaceRoot uses it on layout
+    // restore, and the AFK gate uses it to prove the round-trip plane routing — so the two cannot
+    // drift. Pure (the catalog consts are compile-time strings) so probes drive it headlessly.
+    public static bool IsDockKind(string kind) =>
+        kind == FloatingWindowCatalog.KIND_CHART ||
+        kind == FloatingWindowCatalog.KIND_STARTUP ||
+        kind == FloatingWindowCatalog.KIND_BUYING_POWER ||
+        kind == FloatingWindowCatalog.KIND_ORDERS ||
+        kind == FloatingWindowCatalog.KIND_POSITIONS ||
+        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
 }

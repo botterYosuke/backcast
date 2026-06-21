@@ -67,14 +67,6 @@ def catalog_path() -> Path:
     return jquants_catalog_path()
 
 
-def instrument_lists_dir() -> Path:
-    return artifacts_root() / "instrument-lists"
-
-
-def listed_symbols_artifact_path(end_date: str) -> Path:
-    return instrument_lists_dir() / f"listed-symbols-{end_date}.json"
-
-
 def jquants_cache_dir() -> Path | None:
     value = os.environ.get("DEV_J_QUANTS_CACHE")
     return Path(value) if value else None
@@ -89,3 +81,17 @@ def jquants_duckdb_root() -> Path | None:
     """
     value = os.environ.get("BACKCAST_JQUANTS_DUCKDB_ROOT")
     return resolve_repo_relative(value) if value else None
+
+
+def jquants_listed_info_path() -> Path | None:
+    """Per-day J-Quants listed-info DuckDB at `<jquants_duckdb_root>/listed_info.duckdb`.
+
+    Source of the Replay-mode instrument universe (sidebar `+Add` picker) — point-in-time
+    snapshots keyed by `Date`. Returns None when the root is unset OR the file is missing,
+    so the caller surfaces a Replay error rather than mis-pointing at a stale fallback.
+    """
+    root = jquants_duckdb_root()
+    if root is None:
+        return None
+    path = root / "listed_info.duckdb"
+    return path if path.exists() else None

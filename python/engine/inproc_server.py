@@ -94,8 +94,8 @@ class InprocLiveServer:
     # Instruments
     # ------------------------------------------------------------------
 
-    def list_instruments(self, source: str) -> dict:
-        return self._svc.list_instruments(source)
+    def list_instruments(self, source: str, end_date: str = "") -> dict:
+        return self._svc.list_instruments(source, end_date)
 
     def list_all_listed_symbols(self, end_date: str) -> dict:
         return self._svc.list_all_listed_symbols(end_date)

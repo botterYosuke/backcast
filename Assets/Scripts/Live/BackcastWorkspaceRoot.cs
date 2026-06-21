@@ -1581,6 +1581,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // disconnected so modeReq is null here and the host is never touched.
         SendModeSideEffect(modeReq);
 
+        // #100 Slice ① (findings 0077): document boundary — drop the prior strategy's Replay tile
+        // state (portfolio AND run-summary) so the 4 base panels render honest-empty after New
+        // instead of carrying the prior doc's last finalized run.  Pairs with File→Open.
+        _host?.ClearReplayRunView();
+
         _currentLayoutPath = "";   // #69: New drops to untitled (TTWR handle_file_new_system: buffer=default)
         _menuBarView?.ShowMessage("New: workspace cleared.");
     }
@@ -1626,6 +1631,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             return;   // fail-soft: the notebook is UNCHANGED, so an in-flight run is still valid — do NOT invalidate
         }
         _notebookRun?.Invalidate();   // #95 Phase 2: notebook replaced — drop any in-flight per-cell run against the old one
+        // #100 Slice ① (findings 0077): document boundary — drop the prior doc's Replay tile state
+        // (portfolio AND run-summary) so the new doc's tiles start honest-empty.  Called AFTER the
+        // successful Open commits (a fail-soft Open path above returned early), so the gesture is
+        // tied to "the document actually changed" — pairs with File→New's identical call.
+        _host?.ClearReplayRunView();
         if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present
         _currentLayoutPath = py;
         PersistResumePointer(py);

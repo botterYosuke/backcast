@@ -58,6 +58,15 @@ class DataEngine:
         self._duckdb_root = duckdb_root
         self._replay_duckdb_root: Optional[str] = None
         self.last_portfolio: Optional[dict] = None
+        # #100 Slice ① (findings 0077): running snapshot of the per-cell bt run's final-stats
+        # tile.  Same lifecycle as last_portfolio — Python is the SINGLE source, poll-symmetric:
+        #   - clear at on_run_begin  (running view in C# shows counts + realized/unrealized)
+        #   - set at _finalize_run   (full-stats view in C# shows fills/sharpe/dd)
+        # C# reads it via the get_run_summary_json poll (LiveRpcLanes.LatestRunSummary).  Was
+        # previously a C#-owned _runSummaryJson field set-at-return — that path had no per-cell
+        # caller after #95 Phase 6 sunset of TryStartRun(RunRequest), so re-runs kept showing
+        # the prior summary; consolidating to the Python side fixes the gap (#100 ①).
+        self.last_run_summary: Optional[dict] = None
         # D9/D24: multi-instrument replay support
         self._replay_providers: dict[str, BaseReplayProvider] = {}
         self._replay_primary_id: str = ""

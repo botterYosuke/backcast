@@ -46,10 +46,12 @@ public class LiveRpcLanes
     volatile bool _pollStop;
     volatile string _latestState;
     volatile string _latestPortfolio;   // #65: Replay portfolio snapshot (latest-wins, like _latestState)
+    volatile string _latestRunSummary;  // #100 Slice ① (findings 0077): Replay run summary snapshot
     PyObject _pyNone;
 
     public string LatestState => _latestState;
     public string LatestPortfolio => _latestPortfolio;   // #65
+    public string LatestRunSummary => _latestRunSummary; // #100 Slice ①
     public long PollCount;   // Interlocked
 
     public LiveRpcLanes(PyObject server, LiveLogoutCoordinator coord, int pollIntervalMs = 50)
@@ -279,14 +281,35 @@ public class LiveRpcLanes
                     // that happened to equal "Replay" can't false-trigger (pydantic dumps with no
                     // spaces, so the exact "execution_mode":"Replay" pair is reliable).
                     if (state != null && state.Contains("\"execution_mode\":\"Replay\""))
+                    {
                         using (PyObject p = _server.InvokeMethod("get_portfolio_json"))
                             _latestPortfolio = p.As<string>();
+                        // #100 Slice ① (findings 0077): poll the run-summary alongside the
+                        // portfolio under the SAME GIL hold so the running view (counts +
+                        // realized/unrealized) and the full-stats view (fills/sharpe/dd) never
+                        // disagree at a bar boundary.  Honest-empty ("" ) until the per-cell bt
+                        // run finalizes — the C# tile decoder treats null/empty as "running view"
+                        // (no full-stats), so a stale prior run never re-renders on a re-press.
+                        using (PyObject rs = _server.InvokeMethod("get_run_summary_json"))
+                            _latestRunSummary = rs.As<string>();
+                    }
                 }
                 Interlocked.Increment(ref PollCount);
             }
             catch (Exception) { /* transient; keep polling until stopped */ }
             Thread.Sleep(_pollIntervalMs);
         }
+    }
+
+    // #100 Slice ① (findings 0077): document-boundary reset for File→New / File→Open.  Clears the
+    // polled snapshots locally so the next 50 ms gap between user gesture and the next poll renders
+    // honest-empty (instead of the prior doc's last polled values).  The backend-side reset is done
+    // by WorkspaceEngineHost.ClearReplayRunView calling the clear_run_view RPC under the GIL —
+    // this method is the lane-side mirror, callable from the UI thread without the GIL.
+    public void ResetReplaySnapshot()
+    {
+        _latestPortfolio = null;
+        _latestRunSummary = null;
     }
 
     // ---- D7 teardown sequence ------------------------------------------------------

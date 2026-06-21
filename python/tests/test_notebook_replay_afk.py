@@ -189,5 +189,110 @@ def test_pacing_makes_a_run_measurably_slower(tmp_path) -> None:
     assert paced > full_speed + 0.5, f"paced={paced:.3f}s not slower than full={full_speed:.3f}s"
 
 
+# ----------------------------------------------------------------------------------------
+# #100 Slice ① (findings 0077): on_run_begin must clear engine.last_run_summary so the
+# running view of a re-run does NOT carry the prior run's full-stats.
+# ----------------------------------------------------------------------------------------
+
+def test_run_summary_cleared_at_run_begin_so_rerun_shows_running_not_stale(tmp_path) -> None:
+    """A bt.replay press must clear ``engine.last_run_summary`` at on_run_begin so a SECOND
+    press's running view (between start_engine and finalize) does NOT show run1's stats.
+
+    RED (#100 issue body): the per-cell path never clears at run start
+    (``TryStartRun(RunRequest)`` had no production caller after #95 Phase 6) — captured value at
+    run2's on_run_begin still carries run1's summary dict.
+
+    GREEN (findings 0077): the per-cell ``on_run_begin`` clears it (mirror of last_portfolio).
+    """
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+
+    # Capture engine.last_run_summary right after start_engine — i.e. inside on_run_begin, after
+    # the LOADED→RUNNING transition. on_run_begin is responsible for the clear.
+    captured: list = []
+    orig_start = backend.engine.start_engine
+
+    def _capturing_start():
+        rv = orig_start()
+        captured.append(backend.engine.last_run_summary)
+        return rv
+
+    backend.engine.start_engine = _capturing_start
+    try:
+        out1 = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+        assert out1["ok"] and out1.get("run_summary"), out1
+        # run1 finalized populates last_run_summary.
+        assert backend.engine.last_run_summary is not None
+
+        out2 = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+        assert out2["ok"] and out2.get("run_summary"), out2
+
+        assert len(captured) == 2, captured
+        assert captured[0] is None, captured[0]
+        assert captured[1] is None, (
+            "run2's on_run_begin did NOT clear engine.last_run_summary; "
+            f"running view would show stale run1 stats: {captured[1]!r}"
+        )
+    finally:
+        backend.engine.start_engine = orig_start
+
+
+def test_build_failure_after_successful_run_clears_run_summary(tmp_path) -> None:
+    """code-review (Agent 3) — build-failure exception path also clears the prior run's
+    snapshots so the tile drops to honest-empty after a failed press (not stale full-stats from
+    the prior successful run).  on_run_begin's clear NEVER fires on a build-failure press
+    (the Backtester isn't constructed), so run_cell's exception handler must mirror it."""
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+
+    out1 = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+    assert out1["ok"] and out1.get("run_summary"), out1
+    assert backend.engine.last_run_summary is not None
+    assert backend.engine.last_portfolio is not None
+
+    # Force a build failure: monkey-patch Backtester.from_scenario so _build_notebook_bt raises
+    # AFTER load_replay_data has succeeded (engine LOADED).  Mirrors the equivalent step-path
+    # test in test_notebook_step_afk.py::test_step_bt_build_failure_resets_engine_to_idle.
+    from engine.strategy_runtime import backtester as backtester_mod
+
+    real_from_scenario = backtester_mod.Backtester.from_scenario
+    backtester_mod.Backtester.from_scenario = staticmethod(
+        lambda *args, **kw: (_ for _ in ()).throw(RuntimeError("simulated build failure"))
+    )
+    try:
+        out_fail = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+        assert out_fail["ok"] is False, out_fail
+        assert "simulated build failure" in (out_fail.get("error") or "")
+        # The prior successful run's snapshots are dropped (honest-empty after failure).
+        assert backend.engine.last_run_summary is None, (
+            "build-failure press did NOT clear stale last_run_summary"
+        )
+        assert backend.engine.last_portfolio is None, (
+            "build-failure press did NOT clear stale last_portfolio"
+        )
+    finally:
+        backtester_mod.Backtester.from_scenario = staticmethod(real_from_scenario)
+
+
+def test_pure_compute_press_does_not_clear_run_summary(tmp_path) -> None:
+    """Contract (findings 0077): a pure-compute press (no bt drive) must NOT touch
+    ``engine.last_run_summary`` — only a bt-driven press's on_run_begin clears and finalize sets.
+    Mirrors the existing pure-compute ``last_portfolio`` contract (#95 P4-1)."""
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+
+    out1 = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+    assert out1["ok"] and out1.get("run_summary"), out1
+    summary_after_run = backend.engine.last_run_summary
+    assert summary_after_run is not None
+
+    out = _run_cell(backend, _source("answer = 6 * 7\nanswer"), _SCENARIO)
+    assert out["ok"], out
+    assert "run_summary" not in out, "pure-compute press should not emit run_summary key"
+    assert backend.engine.last_run_summary is summary_after_run, (
+        "pure-compute press cleared engine.last_run_summary — only bt drive may clear/set"
+    )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

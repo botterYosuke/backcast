@@ -23,14 +23,16 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
     {
         // GIL acquired inside; worker thread. scenarioJson (#95 Phase 4) lets the backend build a bt
         // handle when the notebook drives a backtest.
+        //
+        // #100 Slice ① (findings 0077): the run_summary key returned by run_cell is no longer
+        // surfaced into a C# field — Python's _finalize_run wrote it to engine.last_run_summary
+        // before returning, and LiveRpcLanes is polling get_run_summary_json, so the Hakoniwa
+        // RunResult tile sees the finalize via the SAME poll-symmetric path as portfolio (LatestRunSummary).
+        // Single source = Python; the set-at-return path that previously lived here was the gap
+        // that caused #100 ① (a re-press carried run1's stats through run2's running view because
+        // the C# field was set per-press but never cleared at run start).
         string json = _host.InvokeRunCell(source, pressedIndex, scenarioJson);
-        var result = Parse(json);
-        // A bt-driven run returns a "run_summary" key — set the Hakoniwa run_result tile to it so it
-        // fills like a title-bar Run (the live portfolio/positions already stream via the poll lane).
-        // The value may be null (the run stopped/crashed before finalize): set it anyway so a STALE
-        // prior summary is cleared. A pure-compute press OMITS the key → leave the tile untouched.
-        if (TryGetRunSummary(json, out string summary)) _host.SetReplayRunSummary(summary);
-        return result;
+        return Parse(json);
     }
 
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection. Crosses pythonnet
@@ -74,22 +76,6 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
             }
         }
         return stale.ToArray();
-    }
-
-    // Returns true iff the backend reported a backtest drive (the "run_summary" key is present);
-    // `summary` is its finalized JSON, or null when the driven run produced no summary.
-    static bool TryGetRunSummary(string json, out string summary)
-    {
-        summary = null;
-        if (string.IsNullOrEmpty(json)) return false;
-        try
-        {
-            var token = JObject.Parse(json)["run_summary"];
-            if (token == null) return false;   // key absent: a pure-compute press, not a backtest
-            summary = token.Type == JTokenType.Null ? null : token.ToString(Newtonsoft.Json.Formatting.None);
-            return true;
-        }
-        catch (Exception) { return false; }
     }
 
     // Decode the backend JSON. Defensive: a missing/typed-off field never throws (a per-cell run must

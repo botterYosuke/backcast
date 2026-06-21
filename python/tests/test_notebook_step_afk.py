@@ -66,6 +66,19 @@ def _step_cell() -> str:
     return "bar = bt.step()\nbar"
 
 
+def _replay_cell() -> str:
+    """A B2 replay cell: BUY 100 at bar 3, flatten at bar 40 (kernel golden twin legs)."""
+    return (
+        "i = 0\n"
+        "for bar in bt.replay():\n"
+        "    if i == 3:\n"
+        "        bt.submit_market(100)\n"
+        "    elif i == 40:\n"
+        "        bt.submit_market(-100)\n"
+        "    i += 1\n"
+    )
+
+
 def _source(body: str) -> str:
     return synthesize_json(json.dumps([{"body": body, "name": "_", "config": {}}]))
 
@@ -358,6 +371,66 @@ def test_mixed_replay_and_step_notebook_pressing_step_persists(tmp_path) -> None
 # ----------------------------------------------------------------------------------------
 # carry-over C (findings 0075): step-bt cache key is JSON-key-order insensitive
 # ----------------------------------------------------------------------------------------
+
+# ----------------------------------------------------------------------------------------
+# #100 Slice ② (findings 0077): mid-step replay press = MODE SWITCH — the step session ends
+# cleanly (cache torn down BEFORE the replay bt builds), so the shared `_replay_stop_event`
+# is in its fresh state when replay runs, and a follow-up step press rebuilds.  RED on the
+# pre-fix path: replay press fails (LoadReplayData not from IDLE) → the except's
+# force_stop_replay sets the shared event → the next cached step press sees STOPPED → None →
+# silent partial finalize.  GREEN: the step cache is torn down on a replay press *before*
+# load_replay_data, so replay runs fresh and a subsequent step press rebuilds.
+# ----------------------------------------------------------------------------------------
+
+def test_mixed_notebook_replay_press_ends_step_session_cleanly(tmp_path) -> None:
+    """#100 Slice ② (c) mode switch — step session in progress + replay press → step ends cleanly
+    + replay runs fresh, and a subsequent step press rebuilds a fresh bt.
+
+    findings 0077: ``run_cell`` tears down the step cache when the pressed cell drives bt.replay,
+    BEFORE ``_build_notebook_bt`` calls ``load_replay_data`` (otherwise the engine RUNNING from a
+    cached step session would force the replay path's except branch, which sets the SHARED
+    ``_replay_stop_event`` → next cached step press silently partial-finalizes).
+    """
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+    src = synthesize_json(json.dumps([
+        {"body": "bar = bt.step()\nbar", "name": "_", "config": {}},  # 0: step
+        {"body": _replay_cell(), "name": "_", "config": {}},          # 1: replay (mode switch press)
+    ]))
+    try:
+        # Step session in progress: press the step cell twice → cache alive.
+        _press(backend, src, _SCENARIO_A, idx=0)
+        _press(backend, src, _SCENARIO_A, idx=0)
+        assert backend._step_bt is not None, "step bt cache should be alive after two presses"
+
+        # Press the replay cell — the MODE SWITCH: step is torn down first, replay runs fresh.
+        out_replay = _press(backend, src, _SCENARIO_A, idx=1)
+        assert out_replay["ok"], out_replay
+        # The replay drove a real run and finalized — NOT a silent partial finalize.
+        assert out_replay.get("run_summary"), (
+            f"replay press did not finalize a real run summary (premature/empty finalize): {out_replay}"
+        )
+        # The cell traded BUY+SELL on the real run.
+        pf = backend.engine.last_portfolio
+        assert pf is not None and len(pf.get("orders", [])) == 2, (
+            f"expected BUY+SELL fills from the full replay, got {pf.get('orders') if pf else pf}"
+        )
+        # Step cache is gone (the mode switch tore it down).
+        assert backend._step_bt is None, "step bt cache survived a replay press — mode switch missed"
+        # Engine back to IDLE after the run.
+        assert backend.engine._replay_state == "IDLE"
+
+        # And a subsequent step press rebuilds a fresh bt (NOT a silent partial-finalize None-return).
+        out_step_after = _press(backend, src, _SCENARIO_A, idx=0)
+        assert out_step_after["ok"], out_step_after
+        assert "run_summary" not in out_step_after, (
+            "step press after replay finalized prematurely — shared stop_event leaked"
+        )
+        assert backend._step_bt is not None, "step press after replay did not rebuild a fresh bt"
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
 
 def test_scenario_cache_key_is_order_insensitive(tmp_path) -> None:
     """carry-over C: the cache key normalises JSON key order, so the same committed scenario

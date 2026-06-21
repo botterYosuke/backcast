@@ -99,7 +99,13 @@ public sealed class WorkspaceEngineHost
     bool _closing;                             // teardown started: reject new RPCs + launcher must not start_engine
     bool _teardownComplete;
     string _finalStateJson;
-    string _runSummaryJson;   // #65: start_engine's summary_json (RunResult full-stats at completion)
+    // #100 Slice ① (findings 0077): _runSummaryJson REMOVED.  Was a C#-side set-at-return field
+    // populated by (a) the launcher (title-bar Run path), (b) HostNotebookCellExecutor
+    // (per-cell run_summary key) and cleared by TryStartRun(RunRequest).  After #95 Phase 6
+    // sunset of TryStartRun(RunRequest) the per-cell path had no clear, so a re-press carried
+    // run1's stats through run2's running view.  The single source is now Python's
+    // engine.last_run_summary, polled by LiveRpcLanes (LatestRunSummary), symmetric with
+    // last_portfolio / LatestPortfolio (#65).  RunSummaryJson below reads the poll cache.
     readonly OnceGate _stopGate = new OnceGate();
     readonly object _rpcLock = new object();   // guards the live-RPC single-flight check-and-set
 
@@ -133,10 +139,16 @@ public sealed class WorkspaceEngineHost
         TestPortfolioJsonOverride
         ?? (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestPortfolio : null);
 
-    // #65: the launcher captures start_engine's summary_json once the run completes; the RunResult
-    // panel reads it for full stats (TTWR push_run_complete → RunComplete{summary_json}). Cleared at
-    // run start so a new run doesn't show the prior run's stats during its running view.
-    public string RunSummaryJson => TestRunSummaryJsonOverride ?? Volatile.Read(ref _runSummaryJson);
+    // #65 → #100 Slice ① (findings 0077): the RunResult full-stats source.  Was originally
+    // populated by the launcher / per-cell executor and cleared by TryStartRun(RunRequest); the
+    // per-cell path lost the clear when Phase 6 sunset TryStartRun, so a re-press kept showing
+    // run1's stats during run2's running view.  Single source consolidated to Python's
+    // engine.last_run_summary (cleared at on_run_begin, set at _finalize_run), polled by
+    // LiveRpcLanes.LatestRunSummary — same model as LatestPortfolioJson above.  The probe override
+    // (TestRunSummaryJsonOverride) is preserved so NBHAKO can still inject summaries directly.
+    public string RunSummaryJson =>
+        TestRunSummaryJsonOverride
+        ?? (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestRunSummary : null);
 
     // ---- bring-up: build the PERSISTENT live-configured server ONCE (decision 1) ----
     // The CALLER decides ownership BEFORE calling this (WorkspaceOwnership.ShouldClaim). venue has a
@@ -293,10 +305,27 @@ public sealed class WorkspaceEngineHost
         }
     }
 
-    // #95 Phase 4: a bt-driven notebook run finalizes its own summary (the title-bar Run path sets
-    // _runSummaryJson from start_engine's return; this surfaces the per-cell-RUN equivalent so the
-    // Hakoniwa run_result tile fills the same way). Thread-safe: called on the notebook-run worker.
-    public void SetReplayRunSummary(string summaryJson) => Volatile.Write(ref _runSummaryJson, summaryJson);
+    // #100 Slice ① (findings 0077): document-boundary reset.  Called by BackcastWorkspaceRoot on
+    // File→New / File→Open so the 4 Replay tiles drop to honest-empty when the user switches
+    // strategy documents.  Backend side (clear_run_view RPC) clears engine.last_portfolio +
+    // engine.last_run_summary; lane side (ResetReplaySnapshot) clears the polled snapshots so the
+    // 50 ms gap between gesture and next poll renders honest-empty too.
+    public void ClearReplayRunView()
+    {
+        if (!Volatile.Read(ref _serverReady)) return;
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _server.InvokeMethod("clear_run_view"))
+            using (PyObject ok = res["success"])
+            {
+                if (!ok.As<bool>())
+                    Debug.LogWarning("[WorkspaceEngineHost] clear_run_view rejected");
+            }
+        }
+        catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] clear_run_view error (non-fatal): {e.Message}"); }
+        finally { _lanes?.ResetReplaySnapshot(); }
+    }
 
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----
@@ -321,7 +350,9 @@ public sealed class WorkspaceEngineHost
         _req = req;
         Volatile.Write(ref _startError, null);
         Volatile.Write(ref _runFinished, false);
-        Volatile.Write(ref _runSummaryJson, null);   // #65: drop prior run's stats before this run
+        // #100 Slice ① (findings 0077): the prior run's stats are cleared by Python's
+        // _start_engine_duckdb (engine.last_run_summary = None) before LOADED→RUNNING; the poll
+        // lane picks that up via get_run_summary_json.  No C# field to clear here.
         Volatile.Write(ref _running, true);
         _launcher = new Thread(Launcher) { IsBackground = true, Name = "WorkspaceEngineLauncher" };
         _launcher.Start();
@@ -362,10 +393,10 @@ public sealed class WorkspaceEngineHost
                         using (PyObject ec = res["error_code"])
                         using (PyObject em = res["error_message"])
                             Volatile.Write(ref _startError, $"start_engine: {ec.As<string>()} {em.As<string>()}");
-                    else
-                        // #65: capture summary_json for the RunResult full-stats view (was discarded).
-                        using (PyObject sj = res["summary_json"])
-                            Volatile.Write(ref _runSummaryJson, sj.As<string>());
+                    // #100 Slice ① (findings 0077): the summary_json returned by start_engine is
+                    // ignored here — Python's _finalize_run wrote it to engine.last_run_summary
+                    // before returning, and the lane is already polling get_run_summary_json so
+                    // the C# tile sees it on the next 50 ms poll.  Single source = Python.
                 }
             }
         }

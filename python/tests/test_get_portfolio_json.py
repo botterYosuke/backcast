@@ -91,9 +91,81 @@ def test_get_portfolio_json_empty_when_no_portfolio() -> None:
     assert svc.get_portfolio_json() == ""
 
 
+# ----------------------------------------------------------------------------------------
+# #100 Slice ① (findings 0077): get_run_summary_json is the C# poll source for RunResult
+# full-stats; symmetric with get_portfolio_json (honest-empty when no run yet). clear_run_view
+# resets BOTH last_portfolio and last_run_summary so File→New/Open doesn't strand prior stats.
+# ----------------------------------------------------------------------------------------
+
+
+class _StubEngineRunSummary:
+    def __init__(self, last_portfolio=None, last_run_summary=None) -> None:
+        self.last_portfolio = last_portfolio
+        self.last_run_summary = last_run_summary
+
+
+def _backend_with_summary(last_portfolio=None, last_run_summary=None) -> DataEngineBackend:
+    be = object.__new__(DataEngineBackend)
+    be.engine = _StubEngineRunSummary(last_portfolio=last_portfolio, last_run_summary=last_run_summary)
+    return be
+
+
+_FINAL_SUMMARY = {
+    "fills_count": 2,
+    "equity_points": 50,
+    "total_pnl": 3700.0,
+    "max_drawdown": -125.0,
+    "sharpe": 1.23,
+    "sortino": 1.5,
+}
+
+
+def test_get_run_summary_json_emits_dict_when_set() -> None:
+    """When the engine has a finalized run summary, get_run_summary_json emits its JSON."""
+    svc = object.__new__(BackendService)
+    svc._srv = _backend_with_summary(last_run_summary=_FINAL_SUMMARY)
+    payload = json.loads(svc.get_run_summary_json())
+    assert payload["fills_count"] == 2
+    assert payload["total_pnl"] == 3700.0
+    assert payload["sharpe"] == 1.23
+
+
+def test_get_run_summary_json_empty_when_no_summary() -> None:
+    """Honest-empty (mirrors get_portfolio_json): last_run_summary is None → ``""``.
+
+    C# poll lane reads ``LatestRunSummary``; a null/empty payload is the "running view" trigger
+    (counts + realized/unrealized), so a fresh run that has not yet finalized must NOT carry the
+    prior run's stats. With the per-cell on_run_begin clear (slice ①) this stays "" until finalize.
+    """
+    svc = object.__new__(BackendService)
+    svc._srv = _backend_with_summary(last_run_summary=None)
+    assert svc.get_run_summary_json() == ""
+
+
+def test_clear_run_view_clears_both_last_portfolio_and_last_run_summary() -> None:
+    """File→New/Open call clear_run_view to drop the prior run's tile state (both portfolio AND
+    run summary). Without this, switching documents would leave run1's full-stats on the tile
+    until run2 starts — owner decision: ``honest-empty`` on document boundary."""
+    svc = object.__new__(BackendService)
+    svc._srv = _backend_with_summary(
+        last_portfolio={"buying_power": 100.0, "equity": 100.0, "positions": [], "orders": []},
+        last_run_summary=_FINAL_SUMMARY,
+    )
+    ack = svc.clear_run_view()
+    assert ack["success"] is True
+    assert svc._srv.engine.last_portfolio is None
+    assert svc._srv.engine.last_run_summary is None
+    # After the clear, both poll sources go to honest-empty.
+    assert svc.get_portfolio_json() == ""
+    assert svc.get_run_summary_json() == ""
+
+
 if __name__ == "__main__":
     test_get_portfolio_surfaces_running_realized_and_unrealized()
     test_get_portfolio_defaults_realized_unrealized_for_final_snapshot()
     test_get_portfolio_json_emits_decoder_keys()
     test_get_portfolio_json_empty_when_no_portfolio()
+    test_get_run_summary_json_emits_dict_when_set()
+    test_get_run_summary_json_empty_when_no_summary()
+    test_clear_run_view_clears_both_last_portfolio_and_last_run_summary()
     print("[GET_PORTFOLIO_JSON PASS] read-path + JSON layer carry the #65 running snapshot")

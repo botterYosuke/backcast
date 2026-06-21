@@ -116,6 +116,37 @@ class BackendService:
             return ""
         return json.dumps(self.get_portfolio(), ensure_ascii=False)
 
+    def get_run_summary_json(self) -> str:
+        """#100 Slice ① (findings 0077): JSON string of the finalized run summary, polled by
+        ``LiveRpcLanes`` for the Replay RunResult tile.  Symmetric with ``get_portfolio_json`` —
+        Python is the single source (was previously a C#-owned ``_runSummaryJson`` set-at-return,
+        which had no per-cell caller after the #95 Phase 6 ``TryStartRun(RunRequest)`` sunset).
+
+        Honest-empty: ``engine.last_run_summary is None`` (run-begin clear before finalize, or
+        first-run pre-start) → ``""``.  C# reads this as "running view": counts + realized/unrealized
+        from the portfolio poll, NOT the prior run's fills/sharpe/drawdown.
+        """
+        summary = getattr(self._srv.engine, "last_run_summary", None)
+        if summary is None:
+            return ""
+        return json.dumps(summary, ensure_ascii=False)
+
+    def clear_run_view(self) -> dict:
+        """#100 Slice ① (findings 0077): document-boundary reset for File→New / File→Open.
+
+        Clears BOTH ``last_portfolio`` and ``last_run_summary`` so the 4 Replay tiles (buying_power,
+        positions, orders, run_result) drop to honest-empty when the user switches strategy
+        documents — without this, the prior strategy's last run keeps showing in the new doc's
+        tile until that doc's own bt run starts.  Idempotent (already-None → still-None ack).
+        """
+        try:
+            self._srv.engine.last_portfolio = None
+            self._srv.engine.last_run_summary = None
+            return {"success": True, "error_code": ""}
+        except Exception as exc:
+            logging.exception("[backend_service] clear_run_view failed")
+            return {"success": False, "error_code": "INPROC_ERROR", "detail": str(exc)}
+
     # ------------------------------------------------------------------
     # Venue lifecycle
     # ------------------------------------------------------------------

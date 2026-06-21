@@ -936,11 +936,32 @@ class DataEngineBackend:
                     logging.exception("run_cell: step bt acquire failed")
                     self._teardown_step_bt()
                     self.engine.force_stop_replay()
+                    # #100 Slice ① (findings 0077): the press has already initiated a new run
+                    # gesture — drop the prior run's outputs so the RunResult tile shows
+                    # honest-empty after the build failure, NOT the prior successful run's
+                    # full-stats.  Mirrors on_run_begin's clear (which never fires on this path
+                    # because the bt was never constructed).
+                    self.engine.last_portfolio = None
+                    self.engine.last_run_summary = None
                     return _json.dumps(
                         {"ok": False, "ran": [], "stale": [], "error": f"{type(exc).__name__}: {exc}"}
                     )
             else:
                 # Replay path (or mixed step+replay): Phase 4 behavior — fresh bt per press.
+                # #100 Slice ② (findings 0077) — MODE SWITCH: if a step session is alive (a cached
+                # _step_bt from a prior step press), the engine is RUNNING from that session.  A
+                # replay press here would (a) fail load_replay_data with "is only allowed from
+                # IDLE" → (b) the except branch's force_stop_replay would set the SHARED
+                # _replay_stop_event → (c) the NEXT cached step press would see STOPPED → bt.step
+                # returns None → silent partial-finalize ("step session walked off a cliff").
+                # Tear the step cache down FIRST so this replay press starts from a clean IDLE
+                # engine and a cleared stop event — the step session ends cleanly (mode switch),
+                # and a subsequent step press rebuilds a fresh bt (pointer reset).  Pure-compute
+                # siblings still preserve the step pointer (Phase 6 P6-6 invariant): the teardown
+                # gate is "the pressed cell drives bt.replay", not "any sibling drives replay".
+                # _teardown_step_bt is idempotent (early-returns when _step_bt is None), so no
+                # caller-side guard is needed.
+                self._teardown_step_bt()
                 try:
                     bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
                 except Exception as exc:
@@ -949,6 +970,12 @@ class DataEngineBackend:
                     # is idempotent from any state.
                     logging.exception("run_cell: bt build failed")
                     self.engine.force_stop_replay()
+                    # #100 Slice ① (findings 0077): mirror on_run_begin's drop-prior-outputs so
+                    # the RunResult tile shows honest-empty after the build failure (not the
+                    # prior successful run's full-stats).  on_run_begin never fires on this path
+                    # because the bt was never constructed.
+                    self.engine.last_portfolio = None
+                    self.engine.last_run_summary = None
                     return _json.dumps(
                         {"ok": False, "ran": [], "stale": [], "error": f"{type(exc).__name__}: {exc}"}
                     )
@@ -1177,12 +1204,21 @@ class DataEngineBackend:
         observer = ReplayKernelObserver(engine=self.engine, run_buffer=run_buffer)
 
         def on_run_begin():
+            # #65 / #100 Slice ① (findings 0077): drop the prior run's outputs FIRST so the
+            # window between this press and the first observer event is honest-empty (the C#
+            # poll runs every 50 ms — even one stale poll re-renders run1's full-stats on the
+            # tile).  Clearing BEFORE start_engine also keeps the semantic "the user wants a new
+            # run" tied to the same instant as the LOADED→RUNNING transition.
+            #   - last_portfolio: cleared so "running but pre-first-bar" shows honest-empty;
+            #     the observer republishes from bar 1's on_equity.
+            #   - last_run_summary: cleared so the RunResult tile drops to the running view
+            #     (counts + realized/unrealized), not run1's fills/sharpe/dd.  Re-set by
+            #     _finalize_run on terminal — Python is the SINGLE source (poll-symmetric).
+            self.engine.last_portfolio = None
+            self.engine.last_run_summary = None
             se_ok, se_err = self.engine.start_engine()  # LOADED → RUNNING
             if not se_ok:
                 raise RuntimeError(f"start_engine failed: {se_err}")
-            # #65: clear the prior run's portfolio so "running but pre-first-bar" is honest-empty;
-            # the observer republishes from bar 1's on_equity.
-            self.engine.last_portfolio = None
 
         bt = Backtester.from_scenario(
             scenario,
@@ -1244,17 +1280,18 @@ class DataEngineBackend:
                 success=False, error_code="STRATEGY_LOAD_ERROR", error_message=str(exc)
             )
 
+        # #65 / #100 Slice ① (findings 0077): drop the prior run's outputs BEFORE the
+        # LOADED→RUNNING transition so the poll window between press and first observer event is
+        # honest-empty.  Mirrors the per-cell on_run_begin in _build_notebook_bt — last_portfolio
+        # and last_run_summary share the same lifecycle, Python-owned, symmetric.
+        self.engine.last_portfolio = None
+        self.engine.last_run_summary = None
         # Transition LOADED → RUNNING before the run so PauseReplay works mid-run.
         se_ok, se_err = self.engine.start_engine()
         if not se_ok:
             return BacktestRunResult(
                 success=False, error_code="INVALID_STATE", error_message=se_err or ""
             )
-        # #65: clear the previous run's portfolio so "loaded but not running" is honest-empty
-        # "(no data)". The observer republishes from bar 1's on_equity (initial cash / flat book),
-        # so the gap is only the instant before the first bar. Without this the stale prior-run
-        # snapshot would leak into the new run's pre-first-bar window.
-        self.engine.last_portfolio = None
 
         try:
             from engine.strategy_runtime.run_buffer import (
@@ -1352,6 +1389,9 @@ class DataEngineBackend:
         self.engine.last_portfolio = compute_portfolio(
             reader.fills, reader.equity_points, scenario
         )
+        # #100 Slice ① (findings 0077): poll-symmetric publish — C# reads the finalized summary
+        # via get_run_summary_json (LiveRpcLanes poll), same model as get_portfolio_json.
+        self.engine.last_run_summary = summary
         return summary
 
     def get_portfolio(self):

@@ -344,6 +344,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // change fixes) and mis-anchor dock spawns. A null _dockLayer means the scene was not rebuilt for #103,
         // so fail LOUD: the controller ctor throws ArgumentNullException, forcing a Build Workspace Scene run.
         _dockWindows = new FloatingWindowController(_dockLayer, _catalog, BuildDockWindowFrame);
+        // #104 Slice G (ADR-0019 / findings 0082 §8): one drag-ghost layer per plane. Each lives as a
+        // child of its plane's layer (so ghosts ride the same Content pan/zoom + parallax as the real
+        // windows on that plane), and is bound to that plane's controller via AttachGhostLayer. The
+        // controllers paint ghosts during DragApplyDelta and Clear at ReleaseDrag (commit-on-release).
+        _windows.AttachGhostLayer(NewGhostLayer(_floatingLayer, "FloatGhostLayer"));
+        _dockWindows.AttachGhostLayer(NewGhostLayer(_dockLayer,    "DockGhostLayer"));
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
 
         // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
@@ -514,6 +520,21 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // writeback. The restored ids are not an unsaved edit (#31 D4).
         _sidebarCtrl.PrimeWritebackFromCurrent();
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, EditorFileProvider, _font);   // #78: editor's .py sidecar; #77: uGUI font
+    }
+
+    // #104 Slice G (findings 0082 §8): create a per-plane ghost overlay container as a child of the
+    // plane's layer (so ghosts inherit the plane's parallax) and wrap it in a DragGhostLayer bound to
+    // the catalog. Production ghost factory mints uGUI Image + CanvasGroup (alpha + raycast off);
+    // AFK injects bare RectTransforms via the alternate ctor (covered by Section31).
+    DragGhostLayer NewGhostLayer(RectTransform planeLayer, string name)
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        var rt = (RectTransform)go.transform;
+        rt.SetParent(planeLayer, false);
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = Vector2.zero;   // identity (children position absolutely in plane-local coords)
+        return new DragGhostLayer(rt, _catalog);
     }
 
     // Re-paint the infinite-canvas field (the viewport bg) from the active theme's workspace_background.
@@ -2011,6 +2032,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         var wins = doc.floatingWindows;
         if (wins == null) return;
+
+        // #104 (ADR-0019 D9 / findings 0082 §9): cross-plane group fail-safe — runtime can't form a
+        // cross-plane group (snap母集合 is per-plane, ADR-0018), but a hand-edited doc or an old build
+        // can. Resolve before any spawn so the loser-plane members restore as singletons; the winner's
+        // remnant is dissolved at the tail if it shrunk below 2 visible/live members (shared helper).
+        SplitCrossPlaneGroups(wins);
+
         var sorted = new List<FloatingWindowLayout>(wins);
         sorted.Sort((a, b) => (a?.zOrder ?? 0).CompareTo(b?.zOrder ?? 0));
         foreach (var w in sorted)
@@ -2021,9 +2049,65 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // an untracked duplicate cell window (it would escape the coordinator's region map).
             if (w.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR) continue;
             var ctrl = DockShape.IsDockKind(w.kind) ? _dockWindows : _windows;
-            if (ctrl.Has(w.id)) ctrl.ApplyGeometry(w);
-            else ctrl.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible);
+            if (ctrl.Has(w.id))
+            {
+                ctrl.ApplyGeometry(w);
+                // #104 F1: legacy-null tolerance — null doc value MUST NOT stomp live group (same rule as
+                // FloatingWindowController.Apply existing-entry branch).
+                if (!string.IsNullOrEmpty(w.groupId)) ctrl.SetGroupId(w.id, w.groupId);
+            }
+            else
+            {
+                ctrl.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible, w.groupId);   // #104 Slice A: groupId-aware spawn overload
+            }
             ctrl.BringToFront(w.id);
+        }
+
+        // #104 Slice F (ADR-0019 D9 / findings 0082 §9): for every groupId mentioned in the (post-split)
+        // doc, ask each plane's controller to dissolve if the surviving visible/live count fell below 2.
+        // The split can leave the winner with 1 member when the loser plane had all the others — the
+        // SHARED dissolve helper (Slice D) handles the chain dissolve identically here.
+        var groupsToCheck = new HashSet<string>();
+        foreach (var w in wins)
+            if (w != null && !string.IsNullOrEmpty(w.groupId)) groupsToCheck.Add(w.groupId);
+        foreach (var g in groupsToCheck)
+        {
+            _windows.DissolveIfShrunkTo(g, 2);
+            _dockWindows.DissolveIfShrunkTo(g, 2);
+        }
+    }
+
+    // #104 (ADR-0019 D9 / findings 0082 §9): resolve same-groupId members across the front/back planes.
+    // For each group: count members per plane (kind → plane via DockShape.IsDockKind), pick the majority
+    // plane (tie → DOCK plane, since the core members live there and Hakoniwa identity is protected),
+    // and clear the LOSER plane members' groupId on the doc entries before spawn/restore. The helper
+    // mutates `wins` in place — RestoreFloating then plays back the cleaned doc into the controllers.
+    // `public` so the AFK gate (Section30) pins this pure data transformation directly from the
+    // Editor assembly without needing reflection or InternalsVisibleTo.
+    public static void SplitCrossPlaneGroups(List<FloatingWindowLayout> wins)
+    {
+        var byGroup = new Dictionary<string, List<FloatingWindowLayout>>();
+        foreach (var w in wins)
+        {
+            if (w == null || string.IsNullOrEmpty(w.groupId)) continue;
+            if (!byGroup.TryGetValue(w.groupId, out var list)) byGroup[w.groupId] = list = new List<FloatingWindowLayout>();
+            list.Add(w);
+        }
+        foreach (var kv in byGroup)
+        {
+            int frontCount = 0, backCount = 0;
+            foreach (var w in kv.Value)
+            {
+                if (DockShape.IsDockKind(w.kind)) backCount++;
+                else frontCount++;
+            }
+            if (frontCount == 0 || backCount == 0) continue;   // single-plane group, no split needed
+            bool dockWins = backCount >= frontCount;            // tie ⇒ dock wins (Hakoniwa identity bias)
+            foreach (var w in kv.Value)
+            {
+                bool wIsDock = DockShape.IsDockKind(w.kind);
+                if (wIsDock != dockWins) w.groupId = null;   // loser-plane member becomes a singleton
+            }
         }
     }
 

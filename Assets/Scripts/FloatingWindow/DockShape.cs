@@ -45,4 +45,13 @@ public static class DockShape
         kind == FloatingWindowCatalog.KIND_ORDERS ||
         kind == FloatingWindowCatalog.KIND_POSITIONS ||
         kind == FloatingWindowCatalog.KIND_RUN_RESULT;
+
+    // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kinds. A group containing AT LEAST
+    // ONE visible/live core (startup OR run_result) is promoted to a Hakoniwa group — translate-banned,
+    // swap-only, core members are detach-immune. Hidden cores do not count (visible/live集合 only;
+    // mode-switch hide can demote a Hakoniwa group to a plain group and Replay-restore re-promotes it).
+    // The 2 kinds are FIXED (ADR-0019 §2 / Avoid in CONTEXT.md "core member"): no config / no extension.
+    public static bool IsCoreKind(string kind) =>
+        kind == FloatingWindowCatalog.KIND_STARTUP ||
+        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
 }

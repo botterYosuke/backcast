@@ -212,6 +212,13 @@ public static class LayoutStore
             if (!seen.Add(w.id)) continue;                                             // duplicate id -> keep first
             if (!IsFinite(w.x)) w.x = 0f;
             if (!IsFinite(w.y)) w.y = 0f;
+            // F7 (#104 sanitize): JsonUtility may bind an absent groupId field to empty string "" on
+            // some Unity versions (instead of leaving it null). Downstream code mixes IsNullOrEmpty
+            // checks (safe) with raw equality (`kv.Value.groupId != dragged.groupId` in
+            // FloatingWindowController), so a stray empty-string groupId could phantom-merge across
+            // a null-vs-"" boundary. Coerce blank to null at the persistence boundary so the live
+            // dictionary only ever sees null OR a real group id.
+            if (string.IsNullOrWhiteSpace(w.groupId)) w.groupId = null;
             kept.Add(w);
         }
         doc.floatingWindows = kept;

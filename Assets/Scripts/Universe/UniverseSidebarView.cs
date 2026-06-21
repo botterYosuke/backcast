@@ -331,7 +331,14 @@ public sealed class UniverseSidebarView : MonoBehaviour
             pickerListH = Mathf.Min(naturalListH, roomAfterHeader * 0.5f);
             available -= PICKER_HEADER_H + GAP + pickerListH + GAP;
         }
-        float rowsViewportH = Mathf.Max(0f, available);
+        // Cap the rows viewport to the natural list height (bounded by 余高). The viewport Image is a
+        // raycastTarget (catches the wheel for scroll), so a full-余高 viewport would blanket the visually
+        // EMPTY band below the last instrument and steal canvas pan-drags there. Sizing it to the content
+        // leaves that empty band raycast-free → pan falls through to the InfiniteCanvasInputSurface, while
+        // the list band still captures wheel/scroll/selection ("list priority"). Overflow (content > 余高)
+        // still gets the full 余高 → scroll works unchanged.
+        float naturalRowsH = _rowsContent != null ? _rowsContent.sizeDelta.y : available;
+        float rowsViewportH = Mathf.Clamp(naturalRowsH, 0f, available);
 
         // Title sits at y=0 with height TITLE_H (MakeText). Start below it.
         float y = -(TITLE_H + GAP);

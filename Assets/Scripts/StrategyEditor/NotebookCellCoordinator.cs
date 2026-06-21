@@ -40,7 +40,7 @@ public sealed class NotebookCellCoordinator
     readonly Dictionary<Cell, string> _regionByCell = new Dictionary<Cell, string>();
     bool _region001Dormant;   // region_001 exists but holds no cell (hidden) -> reuse it next
 
-    // #102 findings 0076 §6 D7: fired AFTER every structural mutation of the cell list (AddCell /
+    // #102 findings 0079 §6 D7: fired AFTER every structural mutation of the cell list (AddCell /
     // DeleteCell / SyncWindowsToNotebook).  Wire to NotebookRunController.Invalidate so an in-flight
     // per-cell RUN whose pressed-index frame predates the mutation does NOT paint onto the rebound
     // window (the dormant region_001 reuse race: press cell A → DeleteCell(A) → AddCell(B) reuses
@@ -91,7 +91,7 @@ public sealed class NotebookCellCoordinator
         _viewFor(region)?.Bind(cell);
         _windows.Show(region);   // reveal + raise (front)
         UpdatePlaceholders();
-        ListMutated?.Invoke();   // #102 findings 0076 §6 D7: drop any in-flight run against the prior list
+        ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
         return cell;
     }
 
@@ -116,7 +116,7 @@ public sealed class NotebookCellCoordinator
             _windows.Close(regionId);    // despawn + deregister
         }
         UpdatePlaceholders();
-        ListMutated?.Invoke();   // #102 findings 0076 §6 D7: drop any in-flight run against the prior list
+        ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
         return true;
     }
 
@@ -183,7 +183,7 @@ public sealed class NotebookCellCoordinator
             _viewFor(region)?.Bind(cells[i]);
         }
         UpdatePlaceholders();
-        ListMutated?.Invoke();   // #102 findings 0076 §6 D7: drop any in-flight run against the prior list
+        ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
     }
 
     // Spatial positions in CELL ORDER (position[i] <-> cell[i]), regenerated FROM LIVE — the layout

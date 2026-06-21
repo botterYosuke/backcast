@@ -28,6 +28,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -64,8 +65,9 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section17_BlockPopup(spawned)
                 ?? Section18_DocumentBadge()
                 ?? Section19_RichOutput(spawned)
-                ?? Section20_ConsoleAndDynamicLayout(spawned)
-                ?? Section21_ConsoleAuditGaps(spawned);
+                ?? Section20_PlaceholderHint(spawned)
+                ?? Section21_ConsoleAndDynamicLayout(spawned)
+                ?? Section22_ConsoleAuditGaps(spawned);
         }
         catch (Exception e)
         {
@@ -111,12 +113,14 @@ public static class StrategyEditorNotebookE2ERunner
                       "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage " +
                       "(decode+RawImage-activation HITL-only in headless batch; mimetype passthrough AFK), " +
                       "text/markdown+text/html→rich Text, unsupported→labelled plain fallback) " +
+                      "+ STRATEGY-11 single-cell host-API placeholder hint (HostApiHint shown only when CellCount==1, " +
+                      "cleared at ≥2 cells, restored back at 1, never seeded into Cell.Body — findings 0050) " +
                       "+ #102 console + dynamic output layout (STRATEGY-34..38: per-cell stdout/stderr " +
                       "segments paint into the console block in arrival order with stderr amber-tagged, " +
                       "an empty rich+console body collapses to editor-only — blocks deactivate so the " +
                       "body's VerticalLayoutGroup skips them, populated blocks cap at body * 0.45, " +
                       "cell rebind clears both rich and console panes) " +
-                      "+ #102 audit gaps (STRATEGY-39..46 / findings 0076 §6: '&' literal not entity-" +
+                      "+ #102 audit gaps (STRATEGY-39..46 / findings 0079 §6: '&' literal not entity-" +
                       "escaped, multi-cell index→region routing without bleed, re-press replaces (not " +
                       "appends), re-press with empty hides the block, overflow → real ScrollRect with " +
                       "operable verticalNormalizedPosition, first-frame bodyH==0 still paints visibly, " +
@@ -1660,6 +1664,88 @@ public static class StrategyEditorNotebookE2ERunner
         public int[] Restage(string source) => Array.Empty<int>();
     }
 
+    // ======================================================================
+    // 20. STRATEGY-11 — single-cell host-API placeholder hint (#81 / findings 0050).
+    //     Covers STRATEGY-11 (when the notebook has exactly ONE cell, every cell window shows the
+    //     HostApiHint placeholder; with ≥2 cells the hint clears; the hint is NEVER written into
+    //     Cell.Body — findings 0050 "seed 焼き込み禁止"). Previously the台本's only `要新規自動化` row.
+    //     Python-FREE: a bare FloatingWindowController + REAL StrategyEditorView(s) (the Placeholder
+    //     Text is built by StrategyEditorContentBuilder) + a real NotebookCellCoordinator whose
+    //     UpdatePlaceholders runs on every Sync/Add/Delete.
+    //     RED litmus: NotebookCellCoordinator.UpdatePlaceholders' `single ? HostApiHint : null` — drop
+    //     the CellCount==1 gate (always HostApiHint) → the 2-cell assert goes RED; seed the hint into
+    //     Cell.Body → the "body stays empty" assert goes RED.
+    // ======================================================================
+    static string Section20_PlaceholderHint(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer20", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S20: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());   // 1 empty cell
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S20: precondition — cell0 not bound to region_001";
+
+        // STRATEGY-11a: a single cell shows the host-API hint (placeholder active + text == HostApiHint).
+        if (PlaceholderText(view1) != NotebookCellCoordinator.HostApiHint)
+            return "S20/STRATEGY-11: single-cell placeholder is not the HostApiHint (got [" + PlaceholderText(view1) + "])";
+        if (!PlaceholderActive(view1))
+            return "S20/STRATEGY-11: single-cell placeholder GameObject is not active";
+        // the hint is NEVER written into the cell body (findings 0050: seed 焼き込み禁止).
+        if (!string.IsNullOrEmpty(nb.Cells[0].Body))
+            return "S20/STRATEGY-11: the host-API hint leaked into Cell.Body (got [" + nb.Cells[0].Body + "])";
+
+        // STRATEGY-11b: adding a 2nd cell clears the hint on every window (CellCount==2 → null).
+        coord.AddCell();
+        if (coord.RegionOf(nb.Cells[1]) != R2) return "S20: precondition — 2nd cell not region_002";
+        if (PlaceholderActive(view1))
+            return "S20/STRATEGY-11: placeholder still active with 2 cells (the single-cell gate failed)";
+        if (views.TryGetValue(R2, out var view2) && PlaceholderActive(view2))
+            return "S20/STRATEGY-11: the spawned cell's placeholder is active with 2 cells";
+        if (!string.IsNullOrEmpty(nb.Cells[0].Body) || !string.IsNullOrEmpty(nb.Cells[1].Body))
+            return "S20/STRATEGY-11: a cell body was seeded when the hint cleared";
+
+        // STRATEGY-11c: deleting back to a single cell restores the hint.
+        if (!coord.DeleteCell(R2)) return "S20: DeleteCell(region_002) failed";
+        if (PlaceholderText(view1) != NotebookCellCoordinator.HostApiHint || !PlaceholderActive(view1))
+            return "S20/STRATEGY-11: returning to a single cell did not restore the host-API hint";
+
+        return null;
+    }
+
+    static FieldInfo s_placeholderField;
+    static Text Placeholder(StrategyEditorView v)
+    {
+        s_placeholderField ??= typeof(StrategyEditorView).GetField("_placeholder", BindingFlags.NonPublic | BindingFlags.Instance);
+        return s_placeholderField?.GetValue(v) as Text;
+    }
+    static string PlaceholderText(StrategyEditorView v) { var t = Placeholder(v); return t != null ? t.text : null; }
+    static bool PlaceholderActive(StrategyEditorView v) { var t = Placeholder(v); return t != null && t.gameObject.activeSelf; }
+
     static string GlyphText(UnityEngine.UI.Button runButton)
     {
         var glyph = runButton != null ? runButton.transform.Find("RunGlyph") : null;
@@ -1764,7 +1850,7 @@ public static class StrategyEditorNotebookE2ERunner
 
     static bool Approx(float a, float b) => Mathf.Abs(a - b) <= EPS;
 
-    // ====== Section 20 — #102: console + dynamic output layout (findings 0076) ======
+    // ====== Section 21 — #102: console + dynamic output layout (findings 0079) ======
     //
     // Covers: STRATEGY-34 console paints stdout/stderr segments in arrival order with stderr amber;
     //         STRATEGY-35 empty rich + empty console → both blocks deactivated, editor takes the full body;
@@ -1774,7 +1860,7 @@ public static class StrategyEditorNotebookE2ERunner
     //
     // Python-FREE (the segments are produced by a fake executor); the Python pytest gate
     // (test_notebook_console.py) covers the marimo-side capture.
-    static string Section20_ConsoleAndDynamicLayout(List<GameObject> spawned)
+    static string Section21_ConsoleAndDynamicLayout(List<GameObject> spawned)
     {
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
         var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
@@ -1817,17 +1903,17 @@ public static class StrategyEditorNotebookE2ERunner
         var view = views[R1];
 
         // STRATEGY-35 (initial empty): neither block visible — editor takes the full body.
-        if (view.RichBlockVisible) return "S20/STRATEGY-35: rich block is initially visible (should be hidden)";
-        if (view.ConsoleBlockVisible) return "S20/STRATEGY-35: console block is initially visible (should be hidden)";
+        if (view.RichBlockVisible) return "S21/STRATEGY-35: rich block is initially visible (should be hidden)";
+        if (view.ConsoleBlockVisible) return "S21/STRATEGY-35: console block is initially visible (should be hidden)";
 
         // STRATEGY-34: a single stdout segment paints the console; stderr stays absent.
         exec.SetOutput(string.Empty, string.Empty, string.Empty);
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "a\n" } });
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.ConsoleBlockVisible) return "S20/STRATEGY-34: console block did not become visible after a stdout segment";
+        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-34: console block did not become visible after a stdout segment";
         var ctext = view.CurrentConsoleText ?? string.Empty;
-        if (!ctext.Contains("a")) return "S20/STRATEGY-34: console text missing the stdout payload, got [" + ctext + "]";
-        if (ctext.Contains("<color=")) return "S20/STRATEGY-34: stdout-only payload wrongly wrapped in a colour tag, got [" + ctext + "]";
+        if (!ctext.Contains("a")) return "S21/STRATEGY-34: console text missing the stdout payload, got [" + ctext + "]";
+        if (ctext.Contains("<color=")) return "S21/STRATEGY-34: stdout-only payload wrongly wrapped in a colour tag, got [" + ctext + "]";
 
         // STRATEGY-34 (stderr amber): a stderr segment paints amber via UGUI rich-text colour tags.
         exec.SetConsole(new[] {
@@ -1837,12 +1923,12 @@ public static class StrategyEditorNotebookE2ERunner
         });
         run.RunCell(R1); run.DrainAndRoute();
         ctext = view.CurrentConsoleText ?? string.Empty;
-        if (!ctext.Contains("<color=")) return "S20/STRATEGY-34: a stderr segment did not produce a colour tag, got [" + ctext + "]";
+        if (!ctext.Contains("<color=")) return "S21/STRATEGY-34: a stderr segment did not produce a colour tag, got [" + ctext + "]";
         int oIdx = ctext.IndexOf("o1");
         int eIdx = ctext.IndexOf("e1");
         int o2Idx = ctext.IndexOf("o2");
-        if (oIdx < 0 || eIdx < 0 || o2Idx < 0) return "S20/STRATEGY-34: arrival order not preserved (o1/e1/o2 missing), got [" + ctext + "]";
-        if (!(oIdx < eIdx && eIdx < o2Idx)) return "S20/STRATEGY-34: arrival order broken (expected o1<e1<o2), got [" + ctext + "]";
+        if (oIdx < 0 || eIdx < 0 || o2Idx < 0) return "S21/STRATEGY-34: arrival order not preserved (o1/e1/o2 missing), got [" + ctext + "]";
+        if (!(oIdx < eIdx && eIdx < o2Idx)) return "S21/STRATEGY-34: arrival order broken (expected o1<e1<o2), got [" + ctext + "]";
 
         // STRATEGY-34 (UGUI rich-text escape regression): a stdout segment containing `<EOF>` MUST
         // survive — UGUI Text with supportRichText=true would otherwise treat `<EOF>` as an unknown
@@ -1851,48 +1937,48 @@ public static class StrategyEditorNotebookE2ERunner
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "<EOF>" } });
         run.RunCell(R1); run.DrainAndRoute();
         ctext = view.CurrentConsoleText ?? string.Empty;
-        if (!ctext.Contains("&lt;EOF")) return "S20/STRATEGY-34: literal '<' from stdout was not escaped — UGUI would strip the tag, got [" + ctext + "]";
+        if (!ctext.Contains("&lt;EOF")) return "S21/STRATEGY-34: literal '<' from stdout was not escaped — UGUI would strip the tag, got [" + ctext + "]";
 
         // STRATEGY-37 (both populated): rich block + console block both visible, capped under body * 0.45.
         exec.SetOutput("hello", "text/plain", null);
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "console!\n" } });
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.RichBlockVisible) return "S20/STRATEGY-37: rich block did not become visible after a text/plain payload";
-        if (!view.ConsoleBlockVisible) return "S20/STRATEGY-37: console block did not become visible alongside rich output";
+        if (!view.RichBlockVisible) return "S21/STRATEGY-37: rich block did not become visible after a text/plain payload";
+        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-37: console block did not become visible alongside rich output";
         // Per-block cap: each output block's preferredHeight must not exceed body.height * fraction.
         var richBlockRT = view1.transform.parent.Find("RichOutputBlock") as RectTransform;
         var consoleBlockRT = view1.transform.parent.Find("ConsoleOutputBlock") as RectTransform;
-        if (richBlockRT == null || consoleBlockRT == null) return "S20/STRATEGY-37: rich/console block RectTransform not found under body";
+        if (richBlockRT == null || consoleBlockRT == null) return "S21/STRATEGY-37: rich/console block RectTransform not found under body";
         float bodyH = adoptBody.rect.height;
         float cap = bodyH * StrategyEditorContentBuilder.OutputBlockMaxFractionOfBody + 1f;   // 1px tolerance for rebuild rounding
         var richLE = richBlockRT.GetComponent<LayoutElement>();
         var conLE = consoleBlockRT.GetComponent<LayoutElement>();
-        if (richLE.preferredHeight > cap) return "S20/STRATEGY-37: rich block preferredHeight " + richLE.preferredHeight + " exceeded cap " + cap;
-        if (conLE.preferredHeight > cap) return "S20/STRATEGY-37: console block preferredHeight " + conLE.preferredHeight + " exceeded cap " + cap;
+        if (richLE.preferredHeight > cap) return "S21/STRATEGY-37: rich block preferredHeight " + richLE.preferredHeight + " exceeded cap " + cap;
+        if (conLE.preferredHeight > cap) return "S21/STRATEGY-37: console block preferredHeight " + conLE.preferredHeight + " exceeded cap " + cap;
 
         // STRATEGY-36 (rich only): a press that emits rich but no console keeps the console hidden.
         exec.SetOutput("only", "text/plain", null);
         exec.SetConsole(System.Array.Empty<ConsoleSegment>());
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.RichBlockVisible) return "S20/STRATEGY-36: rich block hidden when a rich-only payload arrived";
-        if (view.ConsoleBlockVisible) return "S20/STRATEGY-36: console block stayed visible after an empty console segment list";
+        if (!view.RichBlockVisible) return "S21/STRATEGY-36: rich block hidden when a rich-only payload arrived";
+        if (view.ConsoleBlockVisible) return "S21/STRATEGY-36: console block stayed visible after an empty console segment list";
 
         // STRATEGY-35 (back to empty): an empty rich + empty console returns to editor-only.
         exec.SetOutput(null, null, null);
         exec.SetConsole(System.Array.Empty<ConsoleSegment>());
         run.RunCell(R1); run.DrainAndRoute();
-        if (view.RichBlockVisible) return "S20/STRATEGY-35: rich block stayed visible after an empty payload";
-        if (view.ConsoleBlockVisible) return "S20/STRATEGY-35: console block stayed visible after an empty payload";
+        if (view.RichBlockVisible) return "S21/STRATEGY-35: rich block stayed visible after an empty payload";
+        if (view.ConsoleBlockVisible) return "S21/STRATEGY-35: console block stayed visible after an empty payload";
 
         // STRATEGY-38 (rebind clears both panes): paint something, then Bind a new cell — both panes clear.
         exec.SetOutput("painted", "text/plain", null);
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "x\n" } });
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.RichBlockVisible || !view.ConsoleBlockVisible) return "S20/STRATEGY-38: precondition — paint did not populate both blocks";
+        if (!view.RichBlockVisible || !view.ConsoleBlockVisible) return "S21/STRATEGY-38: precondition — paint did not populate both blocks";
         var freshCell = new Cell("y = 1");
         view.Bind(freshCell);
-        if (view.RichBlockVisible) return "S20/STRATEGY-38: cell rebind did not clear the rich block";
-        if (view.ConsoleBlockVisible) return "S20/STRATEGY-38: cell rebind did not clear the console block";
+        if (view.RichBlockVisible) return "S21/STRATEGY-38: cell rebind did not clear the rich block";
+        if (view.ConsoleBlockVisible) return "S21/STRATEGY-38: cell rebind did not clear the console block";
 
         lane.Dispose();
         return null;
@@ -1954,7 +2040,7 @@ public static class StrategyEditorNotebookE2ERunner
         return count;
     }
 
-    // ====== Section 21 — #102 audit gaps (findings 0076 §6) ======
+    // ====== Section 22 — #102 audit gaps (findings 0079 §6) ======
     //
     // Covers: STRATEGY-39 `&` literal must NOT be entity-escaped (UGUI does not decode, so
     //         Replace("&","&amp;") would paint `a & b` as `a &amp; b` — pure regression);
@@ -1963,7 +2049,7 @@ public static class StrategyEditorNotebookE2ERunner
     //         STRATEGY-41 re-press of the same cell REPLACES the prior console (does not append);
     //         STRATEGY-42 re-press of the same cell with EMPTY hides the console block;
     //         STRATEGY-43 overflow → real ScrollRect: Content > Viewport, verticalNormalizedPosition
-    //         operable end-to-end (findings 0076 §6 D5 — supersedes RectMask2D-clip);
+    //         operable end-to-end (findings 0079 §6 D5 — supersedes RectMask2D-clip);
     //         STRATEGY-44 first-frame bodyH==0: paint must still produce a visible block with
     //         preferredHeight > 0 (no `ForceRebuildLayoutImmediate` priming);
     //         STRATEGY-45 `</color>` injection-resistance: a stderr segment containing `</color>`
@@ -1974,7 +2060,7 @@ public static class StrategyEditorNotebookE2ERunner
     //
     // Python-FREE.  The Python pytest gate (test_notebook_console.py) already covers the marimo-side
     // capture; this section pins the C# routing, layout, escape, and race guards.
-    static string Section21_ConsoleAuditGaps(List<GameObject> spawned)
+    static string Section22_ConsoleAuditGaps(List<GameObject> spawned)
     {
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
         const string R2 = "strategy_editor:region_002";
@@ -2019,7 +2105,7 @@ public static class StrategyEditorNotebookE2ERunner
         var exec = new _ConsoleExecutor();
         var lane = new NotebookRunLane(exec, startWorker: false);
         var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
-        // #102 findings 0076 §6 D7: production wiring — coord mutations drop in-flight runs.
+        // #102 findings 0079 §6 D7: production wiring — coord mutations drop in-flight runs.
         coord.ListMutated += () => run.Invalidate();
         var view = views[R1];
 
@@ -2029,12 +2115,12 @@ public static class StrategyEditorNotebookE2ERunner
         // no-cap branch (natural drives) and still leave a visible block with preferredHeight > 0.
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "first-frame\n" } });
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-44: console block not visible on first-frame paint (bodyH==0)";
+        if (!view.ConsoleBlockVisible) return "S22/STRATEGY-44: console block not visible on first-frame paint (bodyH==0)";
         var conBlockRT = view.transform.parent.Find("ConsoleOutputBlock") as RectTransform;
-        if (conBlockRT == null) return "S21/STRATEGY-44: console block RT not found under body";
+        if (conBlockRT == null) return "S22/STRATEGY-44: console block RT not found under body";
         var conLE0 = conBlockRT.GetComponent<LayoutElement>();
         if (conLE0 == null || !(conLE0.preferredHeight > 0f))
-            return "S21/STRATEGY-44: preferredHeight stayed 0 on first-frame paint, got " + (conLE0 != null ? conLE0.preferredHeight : 0f);
+            return "S22/STRATEGY-44: preferredHeight stayed 0 on first-frame paint, got " + (conLE0 != null ? conLE0.preferredHeight : 0f);
 
         // Stabilise the body for the remaining assertions.
         adoptRoot.sizeDelta = new Vector2(400f, 400f);
@@ -2046,9 +2132,9 @@ public static class StrategyEditorNotebookE2ERunner
         run.RunCell(R1); run.DrainAndRoute();
         var ctext = view.CurrentConsoleText ?? string.Empty;
         if (!ctext.Contains("a & b"))
-            return "S21/STRATEGY-39: literal '&' missing — payload not preserved verbatim, got [" + ctext + "]";
+            return "S22/STRATEGY-39: literal '&' missing — payload not preserved verbatim, got [" + ctext + "]";
         if (ctext.Contains("&amp;"))
-            return "S21/STRATEGY-39: '&' was double-escaped to '&amp;' — UGUI would paint the entity literally, got [" + ctext + "]";
+            return "S22/STRATEGY-39: '&' was double-escaped to '&amp;' — UGUI would paint the entity literally, got [" + ctext + "]";
 
         // ---- STRATEGY-45: `</color>` in stderr must not close our amber wrapper ----
         exec.SetConsole(new[] {
@@ -2063,15 +2149,15 @@ public static class StrategyEditorNotebookE2ERunner
         // close, and the user's `</color>` cannot leak past escape.  An unescaped `</color>` would
         // close our most recent open prematurely, breaking the balance (more closes than opens).
         if (!ctext.Contains("&lt;/color>"))
-            return "S21/STRATEGY-45: user's '</color>' was not escaped — UGUI would close our amber tag, got [" + ctext + "]";
+            return "S22/STRATEGY-45: user's '</color>' was not escaped — UGUI would close our amber tag, got [" + ctext + "]";
         if (ctext.Contains("</color>middle"))
-            return "S21/STRATEGY-45: user's '</color>middle' rendered literally — escape did not run before paint, got [" + ctext + "]";
+            return "S22/STRATEGY-45: user's '</color>middle' rendered literally — escape did not run before paint, got [" + ctext + "]";
         int opens = CountSubstring(ctext, "<color=#ffa01c>");
         int closes = CountSubstring(ctext, "</color>");
         if (opens != closes)
-            return "S21/STRATEGY-45: amber wrapper unbalanced (opens=" + opens + " closes=" + closes + ") — user's </color> may have leaked, got [" + ctext + "]";
+            return "S22/STRATEGY-45: amber wrapper unbalanced (opens=" + opens + " closes=" + closes + ") — user's </color> may have leaked, got [" + ctext + "]";
         if (opens != 2)
-            return "S21/STRATEGY-45: expected 2 amber wrapper pairs (one per stderr segment), got opens=" + opens;
+            return "S22/STRATEGY-45: expected 2 amber wrapper pairs (one per stderr segment), got opens=" + opens;
 
         // ---- STRATEGY-41: re-press REPLACES (does not append) ----
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "round1\n" } });
@@ -2080,50 +2166,50 @@ public static class StrategyEditorNotebookE2ERunner
         run.RunCell(R1); run.DrainAndRoute();
         ctext = view.CurrentConsoleText ?? string.Empty;
         if (ctext.Contains("round1"))
-            return "S21/STRATEGY-41: re-press did not REPLACE — prior 'round1' leaked, got [" + ctext + "]";
+            return "S22/STRATEGY-41: re-press did not REPLACE — prior 'round1' leaked, got [" + ctext + "]";
         if (!ctext.Contains("round2"))
-            return "S21/STRATEGY-41: re-press did not paint 'round2', got [" + ctext + "]";
+            return "S22/STRATEGY-41: re-press did not paint 'round2', got [" + ctext + "]";
 
         // ---- STRATEGY-42: re-press with EMPTY hides the console block ----
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "transient\n" } });
         run.RunCell(R1); run.DrainAndRoute();
-        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-42: precondition — console did not become visible";
+        if (!view.ConsoleBlockVisible) return "S22/STRATEGY-42: precondition — console did not become visible";
         exec.SetConsole(Array.Empty<ConsoleSegment>());
         run.RunCell(R1); run.DrainAndRoute();
-        if (view.ConsoleBlockVisible) return "S21/STRATEGY-42: re-press with empty segments did not hide the console block";
+        if (view.ConsoleBlockVisible) return "S22/STRATEGY-42: re-press with empty segments did not hide the console block";
 
-        // ---- STRATEGY-43: overflow → real ScrollRect (findings 0076 §6 D5) ----
+        // ---- STRATEGY-43: overflow → real ScrollRect (findings 0079 §6 D5) ----
         var sb = new System.Text.StringBuilder();
         for (int i = 0; i < 40; i++) sb.Append("line ").Append(i).Append('\n');
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = sb.ToString() } });
         run.RunCell(R1); run.DrainAndRoute();
         var scroll = view.ConsoleScrollRect;
-        if (scroll == null) return "S21/STRATEGY-43: ConsoleScrollRect not wired";
-        if (scroll.content == null) return "S21/STRATEGY-43: ScrollRect.content not wired";
-        if (scroll.viewport == null) return "S21/STRATEGY-43: ScrollRect.viewport not wired";
-        if (scroll.verticalScrollbar == null) return "S21/STRATEGY-43: ScrollRect.verticalScrollbar not wired";
+        if (scroll == null) return "S22/STRATEGY-43: ConsoleScrollRect not wired";
+        if (scroll.content == null) return "S22/STRATEGY-43: ScrollRect.content not wired";
+        if (scroll.viewport == null) return "S22/STRATEGY-43: ScrollRect.viewport not wired";
+        if (scroll.verticalScrollbar == null) return "S22/STRATEGY-43: ScrollRect.verticalScrollbar not wired";
         UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(adoptRoot);
         float contentH = scroll.content.rect.height;
         float viewportH = scroll.viewport.rect.height;
         if (!(contentH > viewportH + 1f))
-            return "S21/STRATEGY-43: 40-line payload did not overflow viewport (content=" + contentH + " viewport=" + viewportH + ")";
+            return "S22/STRATEGY-43: 40-line payload did not overflow viewport (content=" + contentH + " viewport=" + viewportH + ")";
         // Setting verticalNormalizedPosition end-to-end (0=bottom, 1=top) must stick — proof the
         // ScrollRect is genuinely controlling content position, not a no-op clip.
         scroll.verticalNormalizedPosition = 0f;
         if (Mathf.Abs(scroll.verticalNormalizedPosition - 0f) > 0.01f)
-            return "S21/STRATEGY-43: setting verticalNormalizedPosition=0 did not stick (got " + scroll.verticalNormalizedPosition + ")";
+            return "S22/STRATEGY-43: setting verticalNormalizedPosition=0 did not stick (got " + scroll.verticalNormalizedPosition + ")";
         scroll.verticalNormalizedPosition = 1f;
         if (Mathf.Abs(scroll.verticalNormalizedPosition - 1f) > 0.01f)
-            return "S21/STRATEGY-43: setting verticalNormalizedPosition=1 did not stick (got " + scroll.verticalNormalizedPosition + ")";
+            return "S22/STRATEGY-43: setting verticalNormalizedPosition=1 did not stick (got " + scroll.verticalNormalizedPosition + ")";
 
         // ---- STRATEGY-40: multi-cell routing (pressed R1 + descendant R2) ----
         // AddCell so coord.RegionOf(cells[1]) resolves to R2 (region_002 spawn).
         var cellB = coord.AddCell();
         if (coord.RegionOf(cellB) != R2)
-            return "S21/STRATEGY-40: precondition — second cell not bound to region_002, got " + coord.RegionOf(cellB);
+            return "S22/STRATEGY-40: precondition — second cell not bound to region_002, got " + coord.RegionOf(cellB);
         StrategyEditorView view2;
         if (!views.TryGetValue(R2, out view2) || view2 == null)
-            return "S21/STRATEGY-40: precondition — region_002 view not built by FW factory";
+            return "S22/STRATEGY-40: precondition — region_002 view not built by FW factory";
         // Reset R1 between sub-tests (re-press with empty hides; we want both blocks clean).
         exec.SetConsole(Array.Empty<ConsoleSegment>());
         run.RunCell(R1); run.DrainAndRoute();
@@ -2136,13 +2222,13 @@ public static class StrategyEditorNotebookE2ERunner
         var t1 = view.CurrentConsoleText ?? string.Empty;
         var t2 = view2.CurrentConsoleText ?? string.Empty;
         if (!t1.Contains("from-cell-0"))
-            return "S21/STRATEGY-40: R1 (pressed) console missing 'from-cell-0', got [" + t1 + "]";
+            return "S22/STRATEGY-40: R1 (pressed) console missing 'from-cell-0', got [" + t1 + "]";
         if (t1.Contains("from-cell-1"))
-            return "S21/STRATEGY-40: descendant text leaked into pressed cell R1, got [" + t1 + "]";
+            return "S22/STRATEGY-40: descendant text leaked into pressed cell R1, got [" + t1 + "]";
         if (!t2.Contains("from-cell-1"))
-            return "S21/STRATEGY-40: R2 (descendant) console missing 'from-cell-1', got [" + t2 + "]";
+            return "S22/STRATEGY-40: R2 (descendant) console missing 'from-cell-1', got [" + t2 + "]";
         if (t2.Contains("from-cell-0"))
-            return "S21/STRATEGY-40: pressed text leaked into descendant cell R2, got [" + t2 + "]";
+            return "S22/STRATEGY-40: pressed text leaked into descendant cell R2, got [" + t2 + "]";
 
         // Reset multi-mode (empty params → _multi=null) and prep both views for STRATEGY-46.
         exec.SetMulti();
@@ -2150,7 +2236,7 @@ public static class StrategyEditorNotebookE2ERunner
         run.RunCell(R1); run.DrainAndRoute();
         run.RunCell(R2); run.DrainAndRoute();
 
-        // ---- STRATEGY-46: dormant-reuse race (findings 0076 §6 D7) ----
+        // ---- STRATEGY-46: dormant-reuse race (findings 0079 §6 D7) ----
         // State here: notebook = [cellA, cellB], R1 = cellA, R2 = cellB (AddCell(cellB) above).
         // Goal: a press queued AGAINST cellA must NOT paint onto a cellC that later reuses dormant
         // R1.  The synchronous lane queues the press result inside RunCell with generation N; the
@@ -2159,23 +2245,23 @@ public static class StrategyEditorNotebookE2ERunner
         // dropped at drain — otherwise cellA's stdout would paint onto cellC's view.
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "stale-from-A\n" } });
         run.RunCell(R1);   // synchronous lane queues result with current generation N
-        if (!coord.DeleteCell(R1)) return "S21/STRATEGY-46: precondition — DeleteCell(R1) failed";
+        if (!coord.DeleteCell(R1)) return "S22/STRATEGY-46: precondition — DeleteCell(R1) failed";
         // After DeleteCell, R1 is hidden+dormant.  AddCell reuses the dormant R1 (the adopted shell
         // is never-Destroy, findings 0050) and binds a fresh cellC to it — same GameObject + same
         // StrategyEditorView, different Cell.
         var cellC = coord.AddCell();
         if (coord.RegionOf(cellC) != R1)
-            return "S21/STRATEGY-46: precondition — AddCell did not reuse dormant R1, got " + coord.RegionOf(cellC);
+            return "S22/STRATEGY-46: precondition — AddCell did not reuse dormant R1, got " + coord.RegionOf(cellC);
         if (!ReferenceEquals(views[R1], view))
-            return "S21/STRATEGY-46: precondition — R1 view recreated (should be same adopted shell)";
+            return "S22/STRATEGY-46: precondition — R1 view recreated (should be same adopted shell)";
         if (view.BoundCell != cellC)
-            return "S21/STRATEGY-46: precondition — R1 view not rebound to cellC";
+            return "S22/STRATEGY-46: precondition — R1 view not rebound to cellC";
         // NOW drain.  The press's result frame predates DeleteCell+AddCell — generation bump must drop it.
         run.DrainAndRoute();
         if (view.ConsoleBlockVisible)
-            return "S21/STRATEGY-46: stale drain painted onto cellC's rebound view — generation guard missing";
+            return "S22/STRATEGY-46: stale drain painted onto cellC's rebound view — generation guard missing";
         if ((view.CurrentConsoleText ?? string.Empty).Contains("stale-from-A"))
-            return "S21/STRATEGY-46: stale stdout 'stale-from-A' leaked into cellC's view";
+            return "S22/STRATEGY-46: stale stdout 'stale-from-A' leaked into cellC's view";
 
         lane.Dispose();
         return null;

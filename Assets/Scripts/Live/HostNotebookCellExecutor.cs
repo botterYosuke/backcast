@@ -61,7 +61,7 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         }
     }
 
-    // #102 Slice 2 (findings 0076): pull the `console` JArray of {stream, text} segments off a ran row.
+    // #102 Slice 2 (findings 0079): pull the `console` JArray of {stream, text} segments off a ran row.
     // Defensive: a missing/typed-off field yields an empty array; a malformed entry is skipped (a stale
     // executor or future-format payload must never crash routing).
     static ConsoleSegment[] ExtractConsole(JToken item)
@@ -119,7 +119,7 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
                         // #95 Phase 6 Slice 2: rich output (absent on a legacy text-only payload → empty).
                         Mimetype = item.Value<string>("mimetype") ?? string.Empty,
                         Data = item.Value<string>("data") ?? string.Empty,
-                        // #102 Slice 2 (findings 0076): per-cell stdout/stderr segments in arrival order
+                        // #102 Slice 2 (findings 0079): per-cell stdout/stderr segments in arrival order
                         // (adjacent same-stream already collapsed on the Python side).
                         Console = ExtractConsole(item),
                     });

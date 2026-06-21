@@ -1,4 +1,4 @@
-# findings 0076 — #102 Strategy Editor `print()` を per-cell console に出す + 出力領域の動的レイアウト（2 スライス）
+# findings 0079 — #102 Strategy Editor `print()` を per-cell console に出す + 出力領域の動的レイアウト（2 スライス）
 
 方針: [ADR-0016](../adr/0016-notebook-equals-backtest-per-cell-run.md)（per-cell RUN を strategy 実行エントリーとし notebook = backtest に一本化）— 本 issue は ADR-0016 D11 / Phase 6（findings 0075）が「rich output（mimetype 契約）」までしか守備範囲に入れなかった結果、**console（stdout/stderr）が穴落ち**して `print('a')` がセル窓のどこにも出ない不具合の修正。**ADR は無改変**（D2/D4/D7 などの decision を一切覆さない）。
 

@@ -198,7 +198,7 @@ public sealed class NotebookRunController
             var view = _viewFor(region);
             if (view == null) continue;
             view.SetOutput(co.Output, co.Mimetype, co.Data);
-            // #102 Slice 2 (findings 0076): a cell that ran this press also has its console replaced
+            // #102 Slice 2 (findings 0079): a cell that ran this press also has its console replaced
             // (an empty segment list hides the console block — auto-collapse).  Cells that did NOT run
             // this press are simply absent from result.Ran, so their console pane is untouched
             // (marimo `clear_console=False on cells that ran` parity is at the Python boundary; here

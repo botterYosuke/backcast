@@ -33,6 +33,11 @@ grill: `grill-with-docs`（2026-06-21・owner HITL）。supersede: findings 0007
 
 ## §3 membership の所有・actuation 付け替え
 
+> **SUPERSEDED（chart の spawn rect のみ・#101 / findings 0078）**: 下記「初回はデフォルト配置（`ComputeRects(N)`）」は
+> chart について **#101 が supersede**。chart は **spec 固定サイズ（520×360・総数 N 非依存）で spawn し、フォーカス窓の辺へ
+> flush 吸着**（`FloatingWindowController.SpawnDockedToFocus` + `DockSnapPlacement`）。§9 実装着地の
+> `SpawnChartWindow(iid, rect)`（rect = `ComputeRects(N)[i]`）も同様に supersede。base 5 枚・既存保存 geometry は不変。
+
 `BackcastWorkspaceRoot` が membership を所有する構造は不変。actuation だけ HakoniwaController → FloatingWindowController へ:
 - **chart universe 同期**: `SyncChartTilesToUniverse` を `_hako.AddTile/RemoveTile` → `_windows.Spawn/Close` に。
   banner: 銘柄 add で chart window spawn（初回はデフォルト配置・以後は保存座標）、remove で Close。membership 正本は
@@ -42,6 +47,10 @@ grill: `grill-with-docs`（2026-06-21・owner HITL）。supersede: findings 0007
   identity 保持（spawn したまま）。
 
 ## §4 デフォルト配置（初回起動・リセット時）
+
+> **SUPERSEDED（chart のみ・#101 / findings 0078）**: 下記グリッド初期配置は **base 5 枚の初回配置にのみ**適用される。
+> chart は `[+Add]`/universe add のたびに **spec 固定サイズ（520×360）＋フォーカス窓への flush 吸着**（`DockSnapPlacement`）で
+> spawn し、`ComputeRects(N)` のグリッドマスを使わない（#99 では総数 N でサイズが変動するバグだった）。base 5 枚は不変。
 
 保存が無い／旧 schema のみのとき、base＋chart を **grid 風の初期タイル配置**で spawn する（いきなり対角カスケードだと
 多窓で乱雑なため）。pure helper（推奨 `DockDefaultPlacement` ＝ headless・AFK 権威）が n 窓の絶対 canvas 論理 rect を返す

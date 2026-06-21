@@ -1051,7 +1051,7 @@ class DataEngineBackend:
                 # Interim plain-text view for the current C# Text renderer (Phase 6 Slice 5 renders
                 # image/markdown/table natively from mimetype+data); also the fallback for any type.
                 "output": text_projection(r["mimetype"], r["data"]),
-                # #102 Slice 1 (findings 0076): per-cell console segments in arrival order
+                # #102 Slice 1 (findings 0079): per-cell console segments in arrival order
                 # ([{stream:"stdout"|"stderr", text}, ...] with adjacent-same-stream collapse).
                 # Absent on a legacy ran row → an empty list (the C# side treats [] as "hide console").
                 "console": r.get("console", []),

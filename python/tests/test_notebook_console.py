@@ -1,4 +1,4 @@
-"""#102 Slice 1 gate: per-cell console (stdout/stderr) capture (findings 0076).
+"""#102 Slice 1 gate: per-cell console (stdout/stderr) capture (findings 0079).
 
 Drives ``IncrementalNotebookSession`` over cells that ``print`` to stdout/stderr and asserts:
 

@@ -16,10 +16,10 @@
 //   * wires undo/redo to EditHistory (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, Ctrl+Y), raising a suppression
 //     flag while it writes InputField.text so the resulting onValueChanged does not re-Record.
 //
-// #102 (findings 0076): SetOutput / SetConsole both drive a dynamic re-layout that auto-collapses
+// #102 (findings 0079): SetOutput / SetConsole both drive a dynamic re-layout that auto-collapses
 // the rich and console blocks to zero height when empty (editor takes the full body) and caps each
 // at ~45% of the body height when populated.  Overflow past the cap is solved by a REAL ScrollRect
-// per block (findings 0076 §6 D5 — supersedes the prior RectMask2D-clip implementation): Block holds
+// per block (findings 0079 §6 D5 — supersedes the prior RectMask2D-clip implementation): Block holds
 // a ScrollRect with Viewport + Content (the Text and optional RawImage are children of Content,
 // which a ContentSizeFitter + VerticalLayoutGroup sizes to the active child's preferredHeight).
 // stderr segments paint amber (marimo `Outputs.css .stderr` parity); stdout paints the default text
@@ -51,14 +51,14 @@ public class StrategyEditorView : MonoBehaviour
     // leaves the RawImage inactive). False for text/markdown/html/plain output and when cleared.
     public bool OutputIsImage => _image != null && _image.gameObject.activeSelf;
 
-    // #102 Slice 2 (findings 0076): the AFK gate (Section20) reads these to assert dynamic layout
+    // #102 Slice 2 (findings 0079): the AFK gate (Section20) reads these to assert dynamic layout
     // — visibility of each output block + the current console text (with amber tags) — without
     // having to walk the GameObject tree from a test.
     public bool RichBlockVisible => _richBlock != null && _richBlock.gameObject.activeSelf;
     public bool ConsoleBlockVisible => _consoleBlock != null && _consoleBlock.gameObject.activeSelf;
     public string CurrentConsoleText => _consoleText != null ? _consoleText.text : null;
 
-    // #102 findings 0076 §6 D5: the per-block ScrollRect — Section21 (audit gaps) reads these to
+    // #102 findings 0079 §6 D5: the per-block ScrollRect — Section21 (audit gaps) reads these to
     // verify overflow becomes scrollable (Content.rect.height > Viewport.rect.height) and that the
     // verticalNormalizedPosition can be moved (proof the user can scroll).
     public ScrollRect RichScrollRect => _richScroll;
@@ -79,7 +79,7 @@ public class StrategyEditorView : MonoBehaviour
     LayoutElement _imageLE;     // image's per-child LayoutElement (drives Content height when active)
     Texture2D _tex;             // #95 Phase 6 Slice 5: the decoded image texture we own (freed on replace/clear/destroy)
 
-    // #102 findings 0076 §6 D5: ScrollRect-based output blocks. Block holds the ScrollRect + LE;
+    // #102 findings 0079 §6 D5: ScrollRect-based output blocks. Block holds the ScrollRect + LE;
     // Viewport masks; Content (with VLG + CSF) sizes to the active child's preferredHeight.  The
     // view caps Block.LE.preferredHeight at body*cap so overflow becomes user-scrollable.
     RectTransform _richBlock;
@@ -236,7 +236,7 @@ public class StrategyEditorView : MonoBehaviour
         ApplyBlockSize(_richLE, _richContent);
     }
 
-    // #102 Slice 2 (findings 0076): render the per-cell stdout/stderr segment list into the console
+    // #102 Slice 2 (findings 0079): render the per-cell stdout/stderr segment list into the console
     // block.  Segments arrive in arrival order with adjacent-same-stream already collapsed (marimo
     // cell.ts:133 / collapseConsoleOutputs.tsx parity).  Empty / null hides the block (dynamic
     // layout collapses it to zero height — the editor reclaims the room).  stderr paints amber via
@@ -299,7 +299,7 @@ public class StrategyEditorView : MonoBehaviour
     // UGUI does NOT decode entities, so the output renders as ``&lt;`` literally — visually
     // distinguishable from a real tag and stable across versions.  ``&`` is NOT escaped: UGUI never
     // decodes ``&amp;`` either, so a Replace("&","&amp;") would paint user's ``print("a & b")`` as
-    // ``a &amp; b`` on screen — a pure regression for any user printing ``&`` (#102 findings 0076 D6).
+    // ``a &amp; b`` on screen — a pure regression for any user printing ``&`` (#102 findings 0079 D6).
     static string EscapeForUguiRichText(string s)
         => s == null ? string.Empty : s.Replace("<", "&lt;");
 

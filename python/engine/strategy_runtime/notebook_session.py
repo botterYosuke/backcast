@@ -150,7 +150,7 @@ def text_projection(mimetype: str, data: str) -> str:
 
 
 class _ConsoleCapture:
-    """Per-press, per-cell stdout/stderr capture (#102 Slice 1, findings 0076).
+    """Per-press, per-cell stdout/stderr capture (#102 Slice 1, findings 0079).
 
     The cell-attribution seam is marimo's own ``ThreadSafeStream.cell_id``: ``redirect_streams``
     sets it to the executing cell's id when entering ``_install_execution_context`` and restores it
@@ -414,7 +414,7 @@ class IncrementalNotebookSession:
         self._codes: dict[str, str] = {}   # cell_id -> last registered code (diff source of truth)
         self._order: list[str] = []          # cell_id order (output ordering + index mapping)
         self._owner_thread: "int | None" = None
-        # #102 Slice 1 (findings 0076): the bridge into the kernel's _SilentStdout/_SilentStderr —
+        # #102 Slice 1 (findings 0079): the bridge into the kernel's _SilentStdout/_SilentStderr —
         # built once with the kernel, bound to a fresh _ConsoleCapture for the duration of each press.
         self._console_hook: "_BridgedConsoleHook | None" = None
 
@@ -548,7 +548,7 @@ class IncrementalNotebookSession:
         def _record(cell: Any, _ctx: Any, run_result: Any) -> None:
             recorded[cell.cell_id] = run_result
 
-        # #102 Slice 1 (findings 0076): per-cell stdout/stderr capture.  A fresh capture per press
+        # #102 Slice 1 (findings 0079): per-cell stdout/stderr capture.  A fresh capture per press
         # gives the AC's "console clears each press" semantics naturally; the bridge routes writes
         # by host.stream.cell_id (pinned by redirect_streams to the executing cell) into the
         # right segment list.  A pre-execution hook resets THIS cell's segments — so a stale

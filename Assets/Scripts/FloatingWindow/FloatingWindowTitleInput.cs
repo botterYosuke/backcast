@@ -38,17 +38,20 @@ public class FloatingWindowTitleInput : MonoBehaviour,
         _windowId = windowId;
     }
 
-    // Press on the title bar -> raise (click-to-front, title-bar only).
+    // Press on the title bar -> raise (click-to-front, title-bar only) AND record USER focus (#101 /
+    // findings 0078): NoteUserFocus raises like BringToFront but ALSO marks this as the focus target so
+    // the next dock spawn snaps adjacent to it. Only a genuine title-bar press records focus — a
+    // programmatic BringToFront/Show (e.g. a layout restore) must not forge a target.
     public void OnPointerDown(PointerEventData eventData)
     {
-        _windows?.BringToFront(_windowId);
+        _windows?.NoteUserFocus(_windowId);
     }
 
-    // Begin-drag also raises (a drag is a press too), then OnDrag moves. Raising here keeps the
+    // Begin-drag also raises+focuses (a drag is a press too), then OnDrag moves. Raising here keeps the
     // window on top while it is being dragged even if OnPointerDown was missed.
     public void OnBeginDrag(PointerEventData eventData)
     {
-        _windows?.BringToFront(_windowId);
+        _windows?.NoteUserFocus(_windowId);
     }
 
     public void OnDrag(PointerEventData eventData)

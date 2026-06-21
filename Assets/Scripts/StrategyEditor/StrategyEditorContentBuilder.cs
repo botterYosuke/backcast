@@ -12,12 +12,12 @@
 // unbound until the coordinator Bind()s one). A placeholder Text carries the single-cell host-API
 // hint (shown by uGUI only while the field is empty; the coordinator toggles it per cell count).
 //
-// #102 / findings 0076 — body layout is DYNAMIC: the body holds three children vertically in a
+// #102 / findings 0079 — body layout is DYNAMIC: the body holds three children vertically in a
 // VerticalLayoutGroup — code editor (top, flex + min-height floor) + rich output (middle, auto)
 // + console output (bottom, auto).  Empty rich/console blocks deactivate so the LayoutGroup
 // skips them (no GameObject, no gap) — an un-run cell shows nothing but the editor at full body
 // height.  Each output block caps its preferredHeight at ~45% of the body so the editor is never
-// crushed below ~10%.  Overflow is solved by a REAL ScrollRect (findings 0076 §6 D5 / AC「ブロック
+// crushed below ~10%.  Overflow is solved by a REAL ScrollRect (findings 0079 §6 D5 / AC「ブロック
 // 内スクロール」), NOT a clip: each block is a ScrollRect with Viewport + Content (the Text and
 // optional RawImage live INSIDE Content, which a ContentSizeFitter + VerticalLayoutGroup sizes to
 // the active child's preferredHeight).  When Content > Viewport (the cap), the user scrolls the
@@ -37,7 +37,7 @@ public static class StrategyEditorContentBuilder
     const float EditorMinFrac = 0.30f;            // editor min = max(EditorMinFloor, body * frac)
     const float OutputMaxPerBlockFrac = 0.45f;    // per-block ceiling — leaves >=10% for the editor
     const float BlockSpacingPx = 4f;              // gap between active blocks (uniform UI scale)
-    const float ScrollbarWidthPx = 6f;            // narrow vertical scrollbar gutter (findings 0076 §6 D5)
+    const float ScrollbarWidthPx = 6f;            // narrow vertical scrollbar gutter (findings 0079 §6 D5)
 
     public static StrategyEditorView Build(
         RectTransform body,
@@ -114,7 +114,7 @@ public static class StrategyEditorContentBuilder
         // visible line window starting at VisibleDrawStart; the effect reads it at mesh-build time.
         effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
 
-        // ---- 2) Rich output block — middle, ScrollRect (findings 0076 §6 D5) ----
+        // ---- 2) Rich output block — middle, ScrollRect (findings 0079 §6 D5) ----
 
         var rich = BuildOutputBlock(body, "RichOutputBlock", font, fontSize: 12, supportRichText: false);
         // Rich Content hosts Text (from BuildOutputBlock) + a RawImage SIBLING for image/png|jpeg.
@@ -148,7 +148,7 @@ public static class StrategyEditorContentBuilder
         return view;
     }
 
-    // Build one collapsible output block (rich or console) as a REAL ScrollRect (findings 0076 §6
+    // Build one collapsible output block (rich or console) as a REAL ScrollRect (findings 0079 §6
     // D5 — supersedes the prior RectMask2D-clip implementation which violated AC「ブロック内スクロール」).
     //
     //   [Block]   RectTransform, transparent Image, LayoutElement (the view caps this at body*0.45),

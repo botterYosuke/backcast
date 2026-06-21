@@ -494,8 +494,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // SelectedSymbol is the SHARED _footerSelected so a sidebar instrument selection reaches the
         // footer's LiveAuto start (#39; else _footerSelected stays empty and LiveAuto always uses
         // universe[0] regardless of what the user picked).
-        // The candidate source is still a mock (real supply = #46 kabu list / #41 prune / DuckDB).
-        var provider = new MockAvailableInstrumentsProvider(new[] { "1301.TSE", "6758.TSE", "7203.TSE", "8918.TSE", "9432.TSE", "9984.TSE" });
+        // The candidate source is the real two-source supply: Replay → listed_info.duckdb
+        // (point-in-time MAX(Date) <= scenario.end, owner decision 2026-06-21), Live →
+        // instruments_store / venue master. The provider hits the in-proc backend on a
+        // background thread so the picker hot path never blocks UI under the GIL
+        // (BackendAvailableInstrumentsProvider). The host is captured by reference, so building
+        // the provider here (BuildWorkspace runs before InitializePython) is safe — Queries that
+        // arrive before _serverReady get a SERVER_NOT_READY response which the provider treats
+        // as TRANSIENT (not cached, re-fired next tick), so the picker self-heals once Initialize
+        // completes (Slice review F1 — earlier versions cached the warmup status and stuck on
+        // Loading forever until the user changed scenario.end).
+        var provider = new BackendAvailableInstrumentsProvider(_host);
         _sidebarCtrl = new UniverseSidebarController(_scenario.Universe, _footerSelected, new UniverseWriteback(), provider);
         // #78: at BuildWorkspace the editor is still UNBOUND (the .py binds later in RestoreEditors), so
         // the universe is EMPTY here — this prime is against the empty set. The REAL writeback prime that

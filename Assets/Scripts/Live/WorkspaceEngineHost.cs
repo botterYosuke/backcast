@@ -118,6 +118,10 @@ public sealed class WorkspaceEngineHost
     public bool LiveRpcInFlight => Volatile.Read(ref _liveRpcInFlight);
     public bool LoginRunning => Volatile.Read(ref _loginRunning);
     public bool TeardownComplete => Volatile.Read(ref _teardownComplete);
+    // #31 Slice review F6: picker provider observes IsClosing so a background fetch that
+    // completes after teardown begins drops its result (avoids writing into a stale cache /
+    // racing the _server PyObject while venue_logout runs under the GIL).
+    public bool IsClosing => Volatile.Read(ref _closing);
     public string FinalStateJson => Volatile.Read(ref _finalStateJson);
 
     // The poll is owned by LiveRpcLanes (get_state_json @ 50 ms). After teardown the lanes are gone,
@@ -302,6 +306,58 @@ public sealed class WorkspaceEngineHost
         {
             Debug.LogWarning("[WorkspaceEngineHost] notebook_restage failed: " + e.Message);
             return null;
+        }
+    }
+
+    // #31 / #46: instrument-picker supply seam. Calls list_instruments on the persistent server
+    // and returns a typed result; `success=false` carries `error_code` (LOCAL_UNIVERSE_UNAVAILABLE
+    // when BACKCAST_JQUANTS_DUCKDB_ROOT is unset / listed_info.duckdb missing, LIVE_VENUE_NOT_LOGGED_IN
+    // / LIVE_UNIVERSE_UNSUPPORTED / LIVE_UNIVERSE_PENDING for the live source). The provider runs
+    // this on a background thread so the picker hot path never blocks UI under the GIL — DuckDB scan
+    // for ~4.4k listed rows takes ~100ms.
+    public struct InstrumentListResult
+    {
+        public bool Success;
+        public string ErrorCode;
+        public string[] InstrumentIds;
+    }
+
+    public InstrumentListResult InvokeListInstruments(string source, string endDate)
+    {
+        if (!Volatile.Read(ref _serverReady))
+            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.ServerNotReady, InstrumentIds = Array.Empty<string>() };
+        try
+        {
+            // Slice review F5: every PyString lives in a `using` so the picker hot path doesn't
+            // leak Python refs on each fetch (matches the codebase-wide PyString hygiene; see
+            // BackcastWorkspaceRoot.cs:184-185 and LiveRpcLanes.cs:116-120).
+            using (Py.GIL())
+            using (PyString pSrc = new PyString(source ?? "local"))
+            using (PyString pDate = new PyString(endDate ?? ""))
+            using (PyObject res = _server.InvokeMethod("list_instruments", pSrc, pDate))
+            {
+                bool success;
+                using (PyObject s = res["success"]) success = s.As<bool>();
+                string errorCode = "";
+                using (PyObject ec = res["error_code"]) errorCode = ec.As<string>() ?? "";
+                var ids = new List<string>();
+                using (PyObject idsObj = res["instrument_ids"])
+                {
+                    foreach (PyObject item in idsObj)
+                        using (item) ids.Add(item.As<string>());
+                }
+                return new InstrumentListResult
+                {
+                    Success = success,
+                    ErrorCode = errorCode,
+                    InstrumentIds = ids.ToArray(),
+                };
+            }
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] list_instruments failed: " + e.Message);
+            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.RpcError, InstrumentIds = Array.Empty<string>() };
         }
     }
 

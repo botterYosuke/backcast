@@ -46,7 +46,8 @@ from dataclasses import dataclass, field
 
 from .replay import BaseReplayProvider
 from .jquants_loader import JQuantsLoader
-from .paths import PYTHON_SRC_ROOT, listed_symbols_artifact_path
+from .paths import PYTHON_SRC_ROOT
+from .jquants_listed_info import read_listed_snapshot
 # normalize_granularity は nautilus 非依存の kernel 側（DuckDB 直読み reader）から取得。
 from engine.kernel.duckdb_bars import normalize_granularity
 
@@ -290,99 +291,6 @@ class _LiveSessionView:
         self.is_logged_in = is_logged_in
 
 
-_INSTRUMENT_ID_RE = re.compile(r"^(.+?)-\d+-[A-Z]")
-
-
-def _artifact_path_for(end_date: str) -> Path:
-    return listed_symbols_artifact_path(end_date)
-
-
-def _read_artifact(end_date: str) -> Optional[list[str]]:
-    path = _artifact_path_for(end_date)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        logging.warning("list_all_listed_symbols: artifact read failed: %s", exc)
-        return None
-    if not isinstance(data, dict):
-        return None
-    if data.get("schema_version") != 1:
-        return None
-    if data.get("end_date") != end_date:
-        return None
-    ids = data.get("instrument_ids")
-    if not isinstance(ids, list) or not all(isinstance(x, str) for x in ids):
-        return None
-    return ids
-
-
-def _write_artifact_atomic(end_date: str, instrument_ids: list[str], catalog_path: Optional[str]) -> None:
-    path = _artifact_path_for(end_date)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "schema_version": 1,
-        "end_date": end_date,
-        "source": "nautilus_catalog",
-        "catalog_path": str(catalog_path) if catalog_path else "",
-        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "instrument_ids": instrument_ids,
-    }
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _resolve_date_bounds_from_catalog(catalog_path: str) -> Optional[tuple[str, str]]:
-    """Return (oldest_date, latest_date) as 'YYYY-MM-DD' from catalog parquet stats."""
-    bar_dir = Path(catalog_path) / "data" / "bar"
-    if not bar_dir.exists():
-        return None
-    oldest_ns: Optional[int] = None
-    latest_ns: Optional[int] = None
-    try:
-        import pyarrow.parquet as pq
-        for entry in bar_dir.iterdir():
-            if not entry.is_dir() or entry.name == "backup":
-                continue
-            for pq_file in entry.glob("*.parquet"):
-                try:
-                    meta = pq.read_metadata(str(pq_file))
-                    schema = meta.schema
-                    for i in range(meta.num_row_groups):
-                        rg = meta.row_group(i)
-                        for c in range(rg.num_columns):
-                            col = rg.column(c)
-                            name = schema.column(c).name
-                            if name in ("ts_event", "ts_init") and col.statistics is not None:
-                                mn = col.statistics.min
-                                mx = col.statistics.max
-                                if isinstance(mn, int):
-                                    if oldest_ns is None or mn < oldest_ns:
-                                        oldest_ns = mn
-                                if isinstance(mx, int):
-                                    if latest_ns is None or mx > latest_ns:
-                                        latest_ns = mx
-                except Exception:
-                    continue
-    except Exception as exc:
-        logging.warning("list_all_listed_symbols: catalog scan stats failed: %s", exc)
-    if oldest_ns is None or latest_ns is None or latest_ns <= 0:
-        return None
-
-    def _to_date(ns: int) -> str:
-        secs = ns / 1_000_000_000
-        return datetime.fromtimestamp(secs, tz=timezone.utc).strftime("%Y-%m-%d")
-
-    return _to_date(oldest_ns), _to_date(latest_ns)
-
-
-def _resolve_latest_end_date_from_catalog(catalog_path: str) -> Optional[str]:
-    bounds = _resolve_date_bounds_from_catalog(catalog_path)
-    return bounds[1] if bounds else None
-
-
 def _sweep_stale_cred_files(max_age_s: float = 60.0) -> None:
     """Delete leftover ttwr_cred_*.json files older than ``max_age_s`` seconds."""
     try:
@@ -396,20 +304,6 @@ def _sweep_stale_cred_files(max_age_s: float = 60.0) -> None:
                 continue
     except OSError:
         pass
-
-
-def _scan_catalog_instruments(catalog_path: str) -> list[str]:
-    bar_dir = Path(catalog_path) / "data" / "bar"
-    if not bar_dir.exists():
-        return []
-    seen: set[str] = set()
-    for entry in bar_dir.iterdir():
-        if not entry.is_dir() or entry.name == "backup":
-            continue
-        m = _INSTRUMENT_ID_RE.match(entry.name)
-        if m:
-            seen.add(m.group(1))
-    return sorted(seen)
 
 
 _ADAPTER_ERROR_CODES = frozenset({
@@ -1436,8 +1330,10 @@ class DataEngineBackend:
             unrealized_pnl=float(p.get("unrealized_pnl", 0.0)),
         )
 
-    def list_instruments(self, source: str):
-        # D1: source dispatch — "local" (default) vs "live"
+    def list_instruments(self, source: str, end_date: str = ""):
+        # D1: source dispatch — "local" (default) vs "live". `end_date` (YYYY-MM-DD) is the
+        # Replay scenario-end snapshot used to pick the listed_info point-in-time row; ignored
+        # for source="live" (the venue master is current-as-of-fetch, not date-scoped).
         source = (source or "local").lower()
         if source not in {"local", "live"}:
             return InstrumentListResult(
@@ -1447,7 +1343,7 @@ class DataEngineBackend:
 
         if source == "live":
             return self._list_instruments_live()
-        return self._list_instruments_local()
+        return self._list_instruments_local(end_date)
 
     def _list_instruments_live(self):
         """D1/D10: Fetch instruments from live adapter (must be logged in).
@@ -1544,151 +1440,79 @@ class DataEngineBackend:
         )
 
 
-    def _list_instruments_local(self):
-        """D1: List instruments from local catalog (existing logic)."""
-        catalog_path = self.engine.last_replay_catalog_path or self.engine._jquants_catalog_path
-        if not catalog_path:
-            return InstrumentListResult(
-                success=False,
-                error_message="No catalog_path available",
-            )
+    def _read_local_snapshot(self, end_date: str, log_label: str):
+        """Shared inner for both Replay universe RPCs (Slice review F8: twin-function fix).
 
+        Returns ``(snapshot, error_message)``: exactly one is non-None. ``error_message`` is the
+        typed code string ("LOCAL_UNIVERSE_UNAVAILABLE" / the raw ValueError text / a logged
+        traceback's exc message) that the two RPCs surface in their respective result types.
+        """
         try:
-            bar_dir = Path(catalog_path) / "data" / "bar"
-            if not bar_dir.exists():
-                return InstrumentListResult(
-                    success=True,
-                    instrument_ids=[],
-                )
-
-            seen: set[str] = set()
-            for entry in bar_dir.iterdir():
-                if not entry.is_dir() or entry.name == "backup":
-                    continue
-                m = re.match(r"^(.+?)-\d+-[A-Z]", entry.name)
-                if m:
-                    seen.add(m.group(1))
-
-            ids = sorted(seen)
-            logging.info("list_instruments: found %d instruments: %s", len(ids), ids)
-            instruments = [
-                InstrumentInfo(id=i, name=i, market="") for i in ids
-            ]
-            return InstrumentListResult(
-                success=True,
-                instrument_ids=ids,
-                instruments=instruments,
-            )
+            snapshot = read_listed_snapshot(end_date)
+        except ValueError as exc:
+            return None, str(exc)
         except Exception as exc:
-            logging.error("list_instruments: error: %s", exc)
-            return InstrumentListResult(
-                success=False,
-                error_message=str(exc),
-            )
-
-    def list_all_listed_symbols(self, end_date: str):
-        end_date = (end_date or "").strip()
-        catalog_path = (
-            self.engine.last_replay_catalog_path or self.engine._jquants_catalog_path
+            logging.exception("%s: listed_info read failed", log_label)
+            return None, str(exc)
+        if snapshot is None:
+            return None, "LOCAL_UNIVERSE_UNAVAILABLE"
+        logging.info(
+            "%s: as_of=%s count=%d",
+            log_label,
+            snapshot.as_of_date or "(none)",
+            len(snapshot.codes),
         )
+        return snapshot, None
 
-        resolved_end_date = end_date
-        if not resolved_end_date:
-            if catalog_path:
-                resolved_end_date = _resolve_latest_end_date_from_catalog(catalog_path) or ""
-            if not resolved_end_date:
-                resolved_end_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        else:
-            try:
-                datetime.strptime(resolved_end_date, "%Y-%m-%d")
-            except ValueError as exc:
-                return ListedSymbolsResult(
-                    success=False,
-                    error_message=f"Invalid end_date '{resolved_end_date}': {exc}",
-                )
+    def _list_instruments_local(self, end_date: str = ""):
+        """Replay universe from `<BACKCAST_JQUANTS_DUCKDB_ROOT>/listed_info.duckdb`.
 
-        # Fast path: if the artifact already exists for the requested end_date,
-        # serve it without scanning catalog parquet metadata. The bounds-resolve
-        # scan walks every per-instrument parquet (~600 files, ~40s on cold cache)
-        # and is only needed to clamp out-of-range end_dates / detect before_oldest;
-        # any artifact on disk was written for a valid in-range end_date, so skipping
-        # the scan is safe here.
-        if end_date:
-            fast_cached = _read_artifact(resolved_end_date)
-            if fast_cached is not None:
-                logging.info(
-                    "list_all_listed_symbols: artifact hit (fast path) end_date=%s count=%d",
-                    resolved_end_date, len(fast_cached),
-                )
-                return ListedSymbolsResult(
-                    success=True,
-                    instrument_ids=fast_cached,
-                    resolved_end_date=resolved_end_date,
-                )
+        Per ADR-0006 (owner decision 2026-06-21): point-in-time `MAX(Date) WHERE Date <= end_date`
+        snapshot, no MarketCode filter. DuckDB unavailable → `LOCAL_UNIVERSE_UNAVAILABLE` (no
+        legacy `data/bar/` fallback; the parquet-catalog scan was retired with this rewrite).
 
-        before_oldest = False
-        if end_date and catalog_path:
-            bounds = _resolve_date_bounds_from_catalog(catalog_path)
-            if bounds is not None:
-                oldest_date, latest_date = bounds
-                if resolved_end_date > latest_date:
-                    resolved_end_date = latest_date
-                if resolved_end_date < oldest_date:
-                    before_oldest = True
-
-        if before_oldest:
-            try:
-                _write_artifact_atomic(resolved_end_date, [], catalog_path)
-            except Exception as exc:
-                logging.warning("list_all_listed_symbols: artifact write failed: %s", exc)
-            logging.info(
-                "list_all_listed_symbols: end_date=%s before catalog oldest -> empty ids",
-                resolved_end_date,
-            )
-            return ListedSymbolsResult(
-                success=True,
-                instrument_ids=[],
-                resolved_end_date=resolved_end_date,
-            )
-
-        cached = _read_artifact(resolved_end_date)
-        if cached is not None:
-            logging.info("list_all_listed_symbols: artifact hit end_date=%s count=%d", resolved_end_date, len(cached))
-            return ListedSymbolsResult(
-                success=True,
-                instrument_ids=cached,
-                resolved_end_date=resolved_end_date,
-            )
-
-        if not catalog_path:
-            return ListedSymbolsResult(
-                success=False,
-                error_message="No catalog_path available",
-                resolved_end_date=resolved_end_date,
-            )
-
-        try:
-            ids = _scan_catalog_instruments(catalog_path)
-        except Exception as exc:
-            logging.error("list_all_listed_symbols: scan failed: %s", exc)
-            return ListedSymbolsResult(
-                success=False,
-                error_message=str(exc),
-                resolved_end_date=resolved_end_date,
-            )
-
-        ids = sorted(set(ids))
-
-        try:
-            _write_artifact_atomic(resolved_end_date, ids, catalog_path)
-        except Exception as exc:
-            logging.warning("list_all_listed_symbols: artifact write failed: %s", exc)
-
-        logging.info("list_all_listed_symbols: miss->write end_date=%s count=%d", resolved_end_date, len(ids))
-        return ListedSymbolsResult(
+        IDs are emitted as ``"<code>.TSE"`` to match the codebase-wide ``code.venue`` instrument-id
+        contract (Slice review F2): every listed_info row is on TSE (MarketCode 0105/0109/0111-3),
+        the Live RPC emits ``f"{code}.{market}"``, and ``engine.kernel.stepper`` derives the venue
+        via ``iid.split(".")[-1]`` — a bare code would be parsed as its own venue and break order
+        routing.
+        """
+        snapshot, error = self._read_local_snapshot(end_date, "list_instruments(local)")
+        if error is not None:
+            return InstrumentListResult(success=False, error_message=error)
+        ids = [f"{code}.TSE" for code in snapshot.codes]
+        instruments = [InstrumentInfo(id=i, name=i, market="TSE") for i in ids]
+        return InstrumentListResult(
             success=True,
             instrument_ids=ids,
-            resolved_end_date=resolved_end_date,
+            instruments=instruments,
+        )
+
+    def list_all_listed_symbols(self, end_date: str):
+        """Listed universe at `end_date` from `listed_info.duckdb` (same source as Replay picker).
+
+        Per ADR-0006 (owner decision 2026-06-21): the legacy parquet `data/bar/` bounds-resolve +
+        artifact-cache path was retired with this rewrite; DuckDB scans the listed_info table
+        directly (point-in-time MAX(Date) <= end_date).
+
+        ``resolved_end_date`` carries the actual snapshot Date returned, or "" when no snapshot
+        exists at-or-before the requested ``end_date`` (Slice review F4: we no longer echo the
+        requested date as if it were resolved). Successful empty-universe (success=True with
+        instrument_ids=[]) implies "no snapshot before this date" — distinct from the error path
+        "DuckDB unavailable" which uses success=False / LOCAL_UNIVERSE_UNAVAILABLE.
+        """
+        end_date = (end_date or "").strip()
+        snapshot, error = self._read_local_snapshot(end_date, "list_all_listed_symbols")
+        if error is not None:
+            return ListedSymbolsResult(
+                success=False,
+                error_message=error,
+                resolved_end_date="",
+            )
+        return ListedSymbolsResult(
+            success=True,
+            instrument_ids=list(snapshot.codes),
+            resolved_end_date=snapshot.as_of_date,
         )
 
 

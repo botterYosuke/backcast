@@ -194,9 +194,9 @@ class BackendService:
     # Instruments
     # ------------------------------------------------------------------
 
-    def list_instruments(self, source: str) -> dict:
+    def list_instruments(self, source: str, end_date: str = "") -> dict:
         try:
-            result = self._srv.list_instruments(source)
+            result = self._srv.list_instruments(source, end_date)
         except RuntimeError as exc:
             return {"success": False, "error_code": "INPROC_ABORT", "instruments": [], "instrument_ids": [], "detail": str(exc)}
         except Exception as exc:

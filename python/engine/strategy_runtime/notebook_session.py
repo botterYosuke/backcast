@@ -149,6 +149,103 @@ def text_projection(mimetype: str, data: str) -> str:
     return data
 
 
+class _ConsoleCapture:
+    """Per-press, per-cell stdout/stderr capture (#102 Slice 1, findings 0076).
+
+    The cell-attribution seam is marimo's own ``ThreadSafeStream.cell_id``: ``redirect_streams``
+    sets it to the executing cell's id when entering ``_install_execution_context`` and restores it
+    on exit (`redirect_streams.py:71`).  Each ``_append(cell_id, stream, text)`` lands in that cell's
+    segment list — adjacent same-stream writes COLLAPSE into one entry (marimo cell.ts:133 /
+    collapseConsoleOutputs.tsx parity — findings 0076 D1), and a stream switch (stdout→stderr or
+    vice versa) opens a new segment so arrival order is preserved.
+
+    The capture itself is plain data — no thread state, no stdout swap.  The wiring that delivers a
+    cell's ``sys.stdout.write`` here is ``_BridgedConsoleHook`` (installed once per kernel), which
+    binds the active capture during a press and unbinds after.
+    """
+
+    def __init__(self) -> None:
+        # cell_id → list of (stream, list[str chunks]).  Same-stream writes append to the chunk
+        # list rather than concatenating strings, so a tight ``for i in range(N): print(i)`` cell
+        # stays O(N) instead of O(N²) (Python strings are immutable; ``buf += chunk`` reallocates).
+        # ``get`` joins each chunk list ONCE when the press finalises.
+        self._cells: dict[str, list[tuple[str, list[str]]]] = {}
+
+    def _append(self, cell_id: "str | None", stream: str, text: str) -> None:
+        if not cell_id or not text:
+            return
+        segments = self._cells.setdefault(str(cell_id), [])
+        if segments and segments[-1][0] == stream:
+            segments[-1][1].append(text)   # marimo-parity collapse: same stream extends the chunk list
+        else:
+            segments.append((stream, [text]))
+
+    def reset_cell(self, cell_id: str) -> None:
+        """Press-scoped clear for one cell: when the runner is about to execute it, drop any
+        segments a stale-ancestor re-run in THIS press already accumulated (other cells untouched)."""
+        self._cells[cell_id] = []
+
+    def get(self, cell_id: str) -> list[dict[str, str]]:
+        """Finalise the cell's segments to ``[{stream, text}, ...]``; joins each chunk list once."""
+        return [
+            {"stream": stream, "text": "".join(chunks)}
+            for stream, chunks in self._cells.get(cell_id, [])
+        ]
+
+
+class _BridgedConsoleHook:
+    """Bridges the HeadlessKernel's ``_SilentStdout``/``_SilentStderr`` into a press-scoped capture.
+
+    The ``HeadlessKernel`` (`thin_drain.py:152`) hands real marimo ``Stdout``/``Stderr`` instances
+    to its ``Kernel`` AND to ``initialize_kernel_context``, so the ``redirect_streams`` taken by
+    ``_install_execution_context`` lands in the EDIT-MODE path (`redirect_streams.py:91`): it swaps
+    ``sys.stdout``/``sys.stderr`` to those kernel-owned instances for the duration of the cell.
+    Hooking at the marimo pre/post boundary would lose the writes — by the time ``pre`` fires, the
+    swap hasn't happened; by the time ``post`` fires, it's already been undone.  The reliable seam
+    is ``Stdout._write_with_mimetype`` on the kernel's stdout itself (the bottom of `Stdout.write`
+    in `marimo/_messaging/types.py:48`); cell ``print`` calls it directly with ``data`` already a
+    ``str``.
+
+    We install ONE bridge per kernel: ``__init__`` replaces the two ``_write_with_mimetype`` methods
+    with bound shims that route to ``self._capture`` when one is bound (i.e. during a press) and are
+    a no-op otherwise.  The originals (``_SilentStdout._write_with_mimetype``) appended to a
+    per-instance ``messages: list[str]`` that no production code reads (only the standalone
+    thin_drain unit tests inspect it) and that would otherwise grow unbounded across a long-lived
+    kernel — a ``for i in range(10_000): print(i)`` cell would leak 10k strings into the silent
+    queue per press for nobody.  We deliberately do NOT forward, both to avoid that growth and so
+    that uninstrumented kernel writes (rare but possible from extension calls) silently drop.
+
+    Cell attribution comes from ``host.stream.cell_id``, which marimo's redirect_streams pins to the
+    cell currently in ``_install_execution_context`` (`redirect_streams.py:71`).
+    """
+
+    def __init__(self, host: "HeadlessKernel") -> None:
+        self._host = host
+        self._capture: "_ConsoleCapture | None" = None
+        host.stdout._write_with_mimetype = self._stdout_write  # type: ignore[method-assign]
+        host.stderr._write_with_mimetype = self._stderr_write  # type: ignore[method-assign]
+
+    def _current_cell_id(self) -> "str | None":
+        cid = getattr(self._host.stream, "cell_id", None)
+        return str(cid) if cid is not None else None
+
+    def _stdout_write(self, data: str, mimetype: Any) -> int:
+        if self._capture is not None and isinstance(data, str):
+            self._capture._append(self._current_cell_id(), "stdout", data)
+        return len(data) if isinstance(data, str) else 0
+
+    def _stderr_write(self, data: str, mimetype: Any) -> int:
+        if self._capture is not None and isinstance(data, str):
+            self._capture._append(self._current_cell_id(), "stderr", data)
+        return len(data) if isinstance(data, str) else 0
+
+    def begin(self, capture: _ConsoleCapture) -> None:
+        self._capture = capture
+
+    def end(self) -> None:
+        self._capture = None
+
+
 class NotebookSession:
     """A persistent in-proc marimo kernel for one notebook, on its owning thread.
 
@@ -317,6 +414,9 @@ class IncrementalNotebookSession:
         self._codes: dict[str, str] = {}   # cell_id -> last registered code (diff source of truth)
         self._order: list[str] = []          # cell_id order (output ordering + index mapping)
         self._owner_thread: "int | None" = None
+        # #102 Slice 1 (findings 0076): the bridge into the kernel's _SilentStdout/_SilentStderr —
+        # built once with the kernel, bound to a fresh _ConsoleCapture for the duration of each press.
+        self._console_hook: "_BridgedConsoleHook | None" = None
 
     @property
     def cell_count(self) -> int:
@@ -326,6 +426,7 @@ class IncrementalNotebookSession:
         if self._host is not None:
             self._host.teardown()
         self._host = None
+        self._console_hook = None  # the bridge holds a reference to the torn-down kernel's streams
         self._codes = {}
         self._order = []
 
@@ -396,6 +497,9 @@ class IncrementalNotebookSession:
     def _ensure_host(self) -> "HeadlessKernel":
         if self._host is None:
             self._host = HeadlessKernel()
+            # #102 Slice 1: install the stdout/stderr bridge once per kernel; presses bind their
+            # own _ConsoleCapture for the duration of _run.
+            self._console_hook = _BridgedConsoleHook(self._host)
         return self._host
 
     def _restage(self, cells: "list[dict[str, Any]]", inject: "dict[str, Any] | None") -> None:
@@ -444,7 +548,21 @@ class IncrementalNotebookSession:
         def _record(cell: Any, _ctx: Any, run_result: Any) -> None:
             recorded[cell.cell_id] = run_result
 
+        # #102 Slice 1 (findings 0076): per-cell stdout/stderr capture.  A fresh capture per press
+        # gives the AC's "console clears each press" semantics naturally; the bridge routes writes
+        # by host.stream.cell_id (pinned by redirect_streams to the executing cell) into the
+        # right segment list.  A pre-execution hook resets THIS cell's segments — so a stale
+        # ancestor that ran earlier in this same press starts the cell run from empty (not from
+        # whatever its prior in-press writes left).
+        console = _ConsoleCapture()
+        assert self._console_hook is not None  # invariant: _ensure_host built it
+        self._console_hook.begin(console)
+
+        def _reset_cell(cell: Any, _ctx: Any) -> None:
+            console.reset_cell(cell.cell_id)
+
         hooks = create_default_hooks()
+        hooks.add_pre_execution(_reset_cell)
         hooks.add_post_execution(_record)
         runner = Runner(
             roots={pressed_cell_id},
@@ -456,7 +574,10 @@ class IncrementalNotebookSession:
             excluded_cells=set(k.errors),
             execution_context=k._install_execution_context,
         )
-        _await(runner.run_all())
+        try:
+            _await(runner.run_all())
+        finally:
+            self._console_hook.end()
 
         # The bare Runner does not clear stale; the host does, so the next press's stale set is
         # exactly the cells STILL needing a run (faithful to marimo's post-run stale clear).
@@ -470,6 +591,14 @@ class IncrementalNotebookSession:
             if cid not in order_of:  # only cells the C# side can map back to a window
                 continue
             mimetype, data = _format_output(rr)
-            ran.append({"cell_id": cid, "mimetype": mimetype, "data": data, "ok": rr.success()})
+            ran.append(
+                {
+                    "cell_id": cid,
+                    "mimetype": mimetype,
+                    "data": data,
+                    "console": console.get(cid),
+                    "ok": rr.success(),
+                }
+            )
         ran.sort(key=lambda r: order_of[r["cell_id"]])
         return {"ok": True, "ran": ran, "stale": self.stale(), "error": None}

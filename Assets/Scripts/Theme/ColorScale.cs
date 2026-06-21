@@ -42,42 +42,47 @@ public sealed class ColorScale
 
     // -- Dark scales (Radix: slate / iris / red / grass / amber / blue) --------------------
 
-    // Deep-space palette (2026-06-20 owner re-skin): cosmos-void base + single primary
-    // (cosmic violet) supported by muted aurora-teal / mars-rust / gold-star / steel-cyan.
-    // Hue diversity is intentionally narrow and saturation dialed back ~40% vs Radix dark, so
-    // the chrome reads "spacecraft instrument" rather than "arcade neon" (replaces the
-    // cyberpunk experiment which was too psychedelic). Linear color space (findings 0020).
+    // Cyan-HUD palette (2026-06-21 owner re-skin — "blue HUD interface" target): near-black
+    // navy void base + a single ELECTRIC-CYAN primary, supported by aurora-teal / mars-rust /
+    // gold-star kept from the prior space theme for trading semantics. The accent shifts from
+    // cosmic violet → glowing cyan so chrome / brackets / focus borders read as a sci-fi heads-
+    // up display (corner-bracket frames + grid field, HudFrameChrome / HudGridBackground). The
+    // neutral floor drops a touch darker (near-black with a cool cyan-navy tint) so cyan glow
+    // and starlight text pop against the void. Linear color space (findings 0020).
 
     public static ColorScale NeutralDark() => new ColorScale(new[]
     {
-        new Color(0.0196f, 0.0314f, 0.0784f), //  1 #050814 app bg (deepest cosmos)
-        new Color(0.0392f, 0.0549f, 0.1216f), //  2 #0a0e1f subtle bg
-        new Color(0.0667f, 0.0863f, 0.1686f), //  3 #11162b ui bg
-        new Color(0.0941f, 0.1216f, 0.2275f), //  4 #181f3a ui hover
-        new Color(0.1216f, 0.1529f, 0.2902f), //  5 #1f274a ui pressed
-        new Color(0.1569f, 0.2000f, 0.3608f), //  6 #28335c subtle border
-        new Color(0.2078f, 0.2588f, 0.4471f), //  7 #354272 ui border
-        new Color(0.2745f, 0.3373f, 0.5451f), //  8 #46568b strong border
-        new Color(0.3725f, 0.4392f, 0.6588f), //  9 #5f70a8 solid
-        new Color(0.4588f, 0.5294f, 0.7412f), // 10 #7587bd solid hover
-        new Color(0.6588f, 0.7059f, 0.8314f), // 11 #a8b4d4 low-contrast text
-        new Color(0.8784f, 0.9059f, 0.9608f), // 12 #e0e7f5 high-contrast text (starlight)
+        new Color(0.0118f, 0.0275f, 0.0510f), //  1 #03070d app bg (near-black cyan-navy void)
+        new Color(0.0235f, 0.0510f, 0.0863f), //  2 #060d16 subtle bg
+        new Color(0.0549f, 0.0863f, 0.1490f), //  3 #0e1626 ui bg
+        new Color(0.0863f, 0.1255f, 0.2078f), //  4 #162035 ui hover
+        new Color(0.1137f, 0.1608f, 0.2706f), //  5 #1d2945 ui pressed
+        new Color(0.1490f, 0.2118f, 0.3412f), //  6 #263657 subtle border
+        new Color(0.1922f, 0.2745f, 0.4235f), //  7 #31466c ui border
+        new Color(0.2549f, 0.3569f, 0.5294f), //  8 #415b87 strong border
+        new Color(0.3490f, 0.4627f, 0.6431f), //  9 #5976a4 solid
+        new Color(0.4471f, 0.5608f, 0.7294f), // 10 #728fba solid hover
+        new Color(0.6471f, 0.7255f, 0.8392f), // 11 #a5b9d6 low-contrast text
+        new Color(0.8706f, 0.9216f, 0.9725f), // 12 #deebf8 high-contrast text (starlight)
     });
 
+    // ACCENT = electric cyan (Radix "cyan"/"sky" inspired). Step9 (#22d3ee) is the brand glow —
+    // it drives accent, focus borders, HUD corner brackets, text/icon accent, PlayerColors[0]
+    // (chart series + window-title accent) and syntax keyword/type.
     public static ColorScale AccentDark() => new ColorScale(new[]
     {
-        new Color(0.0588f, 0.0431f, 0.1333f), //  1 #0f0b22
-        new Color(0.0863f, 0.0627f, 0.1922f), //  2 #161031
-        new Color(0.1333f, 0.0980f, 0.2784f), //  3 #221947
-        new Color(0.1725f, 0.1255f, 0.3490f), //  4 #2c2059
-        new Color(0.2196f, 0.1608f, 0.4275f), //  5 #38296d
-        new Color(0.2745f, 0.2000f, 0.5020f), //  6 #463380
-        new Color(0.3373f, 0.2471f, 0.5922f), //  7 #563f97
-        new Color(0.4157f, 0.3059f, 0.7020f), //  8 #6a4eb3 strong border / Neptune storm
-        new Color(0.5059f, 0.3490f, 0.8118f), //  9 #8159cf brand solid (cosmic violet)
-        new Color(0.5843f, 0.4471f, 0.8627f), // 10 #9572dc
-        new Color(0.7216f, 0.6235f, 0.9098f), // 11 #b89fe8 low-contrast text
-        new Color(0.8667f, 0.8157f, 0.9608f), // 12 #ddd0f5 high-contrast text
+        new Color(0.0157f, 0.0784f, 0.1020f), //  1 #04141a
+        new Color(0.0275f, 0.1255f, 0.1647f), //  2 #07202a
+        new Color(0.0392f, 0.1922f, 0.2510f), //  3 #0a3140
+        new Color(0.0510f, 0.2588f, 0.3294f), //  4 #0d4254
+        new Color(0.0627f, 0.3294f, 0.4078f), //  5 #105468
+        new Color(0.0824f, 0.4157f, 0.5098f), //  6 #156a82 subtle border
+        new Color(0.1098f, 0.5294f, 0.6392f), //  7 #1c87a3 ui border
+        new Color(0.1373f, 0.6549f, 0.7843f), //  8 #23a7c8 strong border
+        new Color(0.1333f, 0.8275f, 0.9333f), //  9 #22d3ee brand solid (electric cyan glow)
+        new Color(0.3059f, 0.8784f, 0.9608f), // 10 #4ee0f5
+        new Color(0.5569f, 0.9176f, 0.9725f), // 11 #8eeaf8 low-contrast text
+        new Color(0.7843f, 0.9647f, 0.9922f), // 12 #c8f6fd high-contrast text
     });
 
     public static ColorScale RedDark() => new ColorScale(new[]

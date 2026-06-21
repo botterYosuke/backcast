@@ -64,7 +64,7 @@ public sealed class ThemeColors
         return new ThemeColors
         {
             background = n.Step1,
-            workspace_background = new Color(0.0118f, 0.0235f, 0.0627f), // #030610 — deep cosmos void around floating panels (owner re-skin 2026-06-20)
+            workspace_background = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a — near-black cyan-navy HUD field behind floating panels (cyan-HUD re-skin 2026-06-21)
             // hakoniwa SPACE palette (2026-06-20 owner re-skin, supersedes farm theme from findings 0054):
             // tile is an instrument panel floating in deep space. Outer field is the darkest void (#030610);
             // tiles sit on Neutral.Step3 so they read as illuminated card on void; steel-blue header frames
@@ -72,12 +72,12 @@ public sealed class ThemeColors
             // contrast. Up/down/LAST use the muted aurora-teal / mars-rust / gold-star scale anchors so
             // candles glow without screaming. Owner literals (raw sRGB) — a future light scale can't
             // silently recolor them; swap + Play to tune.
-            hakoniwa_root_background  = new Color(0.0118f, 0.0235f, 0.0627f), // #030610 — deepest cosmos (ground)
-            hakoniwa_tile_background  = new Color(0.0667f, 0.0863f, 0.1686f), // #11162b — illuminated panel card (Neutral.Step3)
-            hakoniwa_tile_header      = new Color(0.2078f, 0.2588f, 0.4471f), // #354272 — steel-blue header / frame (Neutral.Step7)
-            hakoniwa_chart_background = new Color(0.0314f, 0.0471f, 0.1098f), // #080c1c — near-void chart face for ink contrast
-            hakoniwa_panel_surface    = new Color(0.0667f, 0.0863f, 0.1686f), // #11162b — same panel hue (startup tile)
-            hakoniwa_tile_header_text = new Color(0.7843f, 0.8824f, 0.9608f), // #c8e1f5 — pale stellar text on steel header
+            hakoniwa_root_background  = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a — near-black HUD void (ground)
+            hakoniwa_tile_background  = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 — illuminated panel card (Neutral.Step3)
+            hakoniwa_tile_header      = new Color(0.0824f, 0.3294f, 0.4078f), // #155368 — cyan-steel header / frame (Accent-tinted)
+            hakoniwa_chart_background = new Color(0.0235f, 0.0431f, 0.0824f), // #060b15 — near-void chart face for ink contrast
+            hakoniwa_panel_surface    = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 — same panel hue (startup tile)
+            hakoniwa_tile_header_text = new Color(0.7843f, 0.9647f, 0.9922f), // #c8f6fd — pale cyan text on cyan-steel header
             hakoniwa_text             = new Color(0.8784f, 0.9059f, 0.9608f), // #e0e7f5 — starlight white text
             hakoniwa_text_muted       = new Color(0.6588f, 0.7059f, 0.8314f), // #a8b4d4 — cool grey-blue axes / change% / ladder header
             hakoniwa_up               = new Color(0.2314f, 0.7686f, 0.5961f), // #3bc498 — aurora teal: candle up / change% gain / ladder bid

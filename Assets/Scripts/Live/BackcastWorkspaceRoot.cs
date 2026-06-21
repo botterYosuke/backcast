@@ -330,6 +330,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // theme the infinite-canvas FIELD (the viewport bg) from workspace_background and follow theme
         // switches (parity with ChartView/DepthLadderView self-subscription, #44 AC②). Applied at runtime
         // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
+        // cyan-HUD re-skin: ApplyViewportTheme paints the field fill AND ensures the faint cyan grid
+        // (fixed screen-space, does NOT pan; first sibling of the Viewport → above the fill, behind
+        // Content). Subscribed to theme swaps so both re-tint together.
         ThemeService.Changed += ApplyViewportTheme;
         ApplyViewportTheme();
 
@@ -414,6 +417,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
+        HudFrameChrome.Decorate(_strategyEditorWindow);   // cyan HUD chrome on the adopted editor (no scene rebuild needed)
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
         // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
@@ -428,6 +432,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _orderTicket.Build(_orderWindowBody, _font);
             _orderTicket.PlaceRequested += OnManualPlace;
             _orderTicket.CancelRequested += OnManualCancel;
+            HudFrameChrome.Decorate(_orderWindow);   // cyan HUD chrome on the adopted order ticket
             _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
         }
 
@@ -524,6 +529,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_viewport == null) return;
         var img = _viewport.GetComponent<Image>();
         if (img != null) img.color = ThemeService.Current.colors.workspace_background;
+        HudGridBackground.Ensure(_viewport);   // re-tint the cyan grid field on theme swap (idempotent)
     }
 
     // The FRONT-plane (_windows) factory: order ticket + strategy_editor cell windows. Dispatches on

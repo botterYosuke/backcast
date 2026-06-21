@@ -44,7 +44,12 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
     AvailableInstrumentsResult _cachedResult;
     string _inFlightKey;                    // null when no fetch running; Slice review F3
     string _transientKey;                   // last key that returned a transient status
-    long _transientAtMs;                    // Environment.TickCount64 of last transient result
+    long _transientAtMs;                    // _clock.ElapsedMilliseconds of last transient result
+
+    // Monotonic ms source for the transient-retry cooldown. Was Environment.TickCount64, which the
+    // Unity .NET profile doesn't expose; Stopwatch.ElapsedMilliseconds is the same monotonic-long-ms
+    // contract (only the delta between two reads is used, so a shared static clock is fine).
+    static readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
     public BackendAvailableInstrumentsProvider(WorkspaceEngineHost host)
     {
@@ -70,7 +75,7 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
                 return AvailableInstrumentsResult.Loading;
             // Throttle re-fires after a transient (server-warmup / RPC glitch) result so a
             // permanently broken backend doesn't spawn a thread every BuildList tick.
-            if (_transientKey == key && (Environment.TickCount64 - _transientAtMs) < TRANSIENT_RETRY_COOLDOWN_MS)
+            if (_transientKey == key && (_clock.ElapsedMilliseconds - _transientAtMs) < TRANSIENT_RETRY_COOLDOWN_MS)
                 return AvailableInstrumentsResult.Loading;
             _inFlightKey = key;
         }
@@ -125,7 +130,7 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
             if (isTransient)
             {
                 _transientKey = key;
-                _transientAtMs = Environment.TickCount64;
+                _transientAtMs = _clock.ElapsedMilliseconds;
             }
             else
             {

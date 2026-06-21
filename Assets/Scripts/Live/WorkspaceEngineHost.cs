@@ -343,8 +343,11 @@ public sealed class WorkspaceEngineHost
                 var ids = new List<string>();
                 using (PyObject idsObj = res["instrument_ids"])
                 {
-                    foreach (PyObject item in idsObj)
-                        using (item) ids.Add(item.As<string>());
+                    // pythonnet's PyObject isn't C#-foreach-iterable here, so walk the Python list by
+                    // index (same .Length()+indexer idiom as ExecutorOrphanAbsenceAssert.cs:44).
+                    long count = idsObj.Length();
+                    for (int i = 0; i < count; i++)
+                        using (PyObject item = idsObj[i]) ids.Add(item.As<string>());
                 }
                 return new InstrumentListResult
                 {

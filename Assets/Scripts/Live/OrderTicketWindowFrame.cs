@@ -48,6 +48,7 @@ public static class OrderTicketWindowFrame
         body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
         body.offsetMin = new Vector2(4f, 4f); body.offsetMax = new Vector2(-4f, -(TitleHeight + 2f));
 
+        HudFrameChrome.Decorate(root);   // cyan HUD edge glow + corner brackets (shared chrome)
         return root;
     }
 }

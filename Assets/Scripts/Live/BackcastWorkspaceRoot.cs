@@ -330,9 +330,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // theme the infinite-canvas FIELD (the viewport bg) from workspace_background and follow theme
         // switches (parity with ChartView/DepthLadderView self-subscription, #44 AC②). Applied at runtime
         // so the scene-baked literal is just an editor preview — no scene re-bake needed to change the hue.
-        // cyan-HUD re-skin: ApplyViewportTheme paints the field fill AND ensures the faint cyan grid
-        // (fixed screen-space, does NOT pan; first sibling of the Viewport → above the fill, behind
-        // Content). Subscribed to theme swaps so both re-tint together.
+        // cyan-HUD re-skin: ApplyViewportTheme paints the viewport field fill AND ensures the faint
+        // cyan grid as a back child of CONTENT, so the grid pans + zooms with the canvas exactly like
+        // the dock windows (1.0× plane). Subscribed to theme swaps so both re-tint together.
         ThemeService.Changed += ApplyViewportTheme;
         ApplyViewportTheme();
 
@@ -547,10 +547,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // viewport Image is a no-op.
     void ApplyViewportTheme()
     {
-        if (_viewport == null) return;
-        var img = _viewport.GetComponent<Image>();
-        if (img != null) img.color = ThemeService.Current.colors.workspace_background;
-        HudGridBackground.Ensure(_viewport);   // re-tint the cyan grid field on theme swap (idempotent)
+        if (_viewport != null)
+        {
+            var img = _viewport.GetComponent<Image>();
+            if (img != null) img.color = ThemeService.Current.colors.workspace_background;
+        }
+        // grid lives on CONTENT (pans/zooms with the canvas), not the viewport — ensure/re-tint here
+        // so it tracks theme swaps; null-safe so a probe without a content transform is a no-op.
+        HudGridBackground.Ensure(_content);
     }
 
     // The FRONT-plane (_windows) factory: order ticket + strategy_editor cell windows. Dispatches on

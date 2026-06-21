@@ -1,15 +1,17 @@
 // HudGridBackground.cs — cyan-HUD re-skin 2026-06-21 (workspace grid field)
 //
-// The faint cyan GRID that overlays the infinite-canvas field (the Viewport background), giving the
-// workspace the "HUD screen" backdrop from the owner's reference art. It is a fixed screen-space
-// RawImage child of the Viewport, placed as the FIRST sibling so it sits ABOVE the solid
-// workspace_background fill but BEHIND Content (and every floating window, which live under
-// Content). It does NOT pan with the infinite canvas — the grid is a static instrument-panel field
-// behind the moving windows, matching the reference.
+// The faint cyan GRID that backs the infinite-canvas workspace, giving it the "HUD screen" look
+// from the owner's reference art. It is a child of CONTENT (the infinite-canvas transform), placed
+// as the FIRST sibling so it sits BEHIND the dock layer + every floating window. Because Content
+// owns the pan (anchoredPosition) and zoom (localScale), a grid parented under Content pans AND
+// zooms by EXACTLY the same amount as the dock windows ride it (1.0× plane) — drag the canvas and
+// the grid slides with the windows; zoom and the cells grow/shrink with them. (The earlier build
+// parented it to the Viewport, which pinned it to the screen — owner-rejected 2026-06-21.)
 //
-// The grid texture is generated once (a single tiled cell: 1px cyan lines on two edges, the rest
-// transparent), tinted via RawImage.color and tiled by HudGridTiler so cells stay a fixed pixel
-// size regardless of viewport size. Idempotent (find-or-create by child name) and null-safe.
+// It is a single large quad (GridExtent²) tiled by the texture's Repeat wrap, so the whole
+// "infinite" field is one draw call — only the part inside the Viewport's RectMask2D rasterises.
+// The grid texture is generated once (a single cell: 1px cyan lines on two edges, the rest
+// transparent) and tinted via RawImage.color. Idempotent (find-or-create) and null-safe.
 
 using UnityEngine;
 using UnityEngine.UI;
@@ -17,23 +19,24 @@ using UnityEngine.UI;
 public static class HudGridBackground
 {
     const string GridName = "HudGrid";
-    const int CellPixels = 36;   // grid cell size in screen pixels
+    const int CellPixels = 36;       // grid cell size in CONTENT-local units (scales with zoom)
+    const float GridExtent = 20000f; // quad side — large enough to cover any realistic pan/zoom-out
 
     static Texture2D _cellTex;   // shared, generated once (domain-reload reset between Plays)
 
-    // Ensure a grid field exists on `viewport`, tinted from the active theme accent (faint cyan).
-    public static void Ensure(RectTransform viewport)
+    // Ensure a grid field exists under `content`, tinted from the active theme accent (faint cyan).
+    public static void Ensure(RectTransform content)
     {
-        if (viewport == null) return;
+        if (content == null) return;
         var a = ThemeService.Current.colors.accent;
-        Ensure(viewport, new Color(a.r, a.g, a.b, 0.07f));   // very faint — a backdrop, not a foreground
+        Ensure(content, new Color(a.r, a.g, a.b, 0.07f));   // very faint — a backdrop, not a foreground
     }
 
-    public static void Ensure(RectTransform viewport, Color lineColor)
+    public static void Ensure(RectTransform content, Color lineColor)
     {
-        if (viewport == null) return;
+        if (content == null) return;
 
-        var existing = FindChild(viewport, GridName);
+        var existing = FindChild(content, GridName);
         RawImage raw;
         if (existing != null)
         {
@@ -42,20 +45,22 @@ public static class HudGridBackground
         }
         else
         {
-            var go = new GameObject(GridName, typeof(RectTransform), typeof(RawImage), typeof(HudGridTiler));
+            var go = new GameObject(GridName, typeof(RectTransform), typeof(RawImage));
             var rt = (RectTransform)go.transform;
-            rt.SetParent(viewport, false);
-            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
-            rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
-            rt.SetAsFirstSibling();   // above the viewport fill, behind Content + windows
+            rt.SetParent(content, false);
+            // centered on Content's origin so it pans/zooms with the canvas (Content is pivot-centred).
+            rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = Vector2.zero;
+            rt.localScale = Vector3.one;
+            rt.sizeDelta = new Vector2(GridExtent, GridExtent);
+            rt.SetAsFirstSibling();   // behind the dock layer + floating windows
             raw = go.GetComponent<RawImage>();
             raw.raycastTarget = false;
-            go.GetComponent<HudGridTiler>().cellPixels = CellPixels;
+            raw.uvRect = new Rect(0f, 0f, GridExtent / CellPixels, GridExtent / CellPixels);  // world-fixed tiling
         }
 
         raw.texture = CellTexture();
         raw.color = lineColor;
-        raw.GetComponent<HudGridTiler>()?.Apply();
     }
 
     static Texture2D CellTexture()
@@ -90,28 +95,5 @@ public static class HudGridBackground
             if (c.name == name) return c as RectTransform;
         }
         return null;
-    }
-}
-
-// Keeps the grid cells a FIXED pixel size by re-deriving the RawImage.uvRect tiling from the live
-// rect size whenever the Viewport resizes (window / canvas-scaler changes). Without this the cells
-// would stretch with the viewport.
-[RequireComponent(typeof(RawImage))]
-public sealed class HudGridTiler : MonoBehaviour
-{
-    public int cellPixels = 36;
-    RawImage _raw;
-    RectTransform _rt;
-
-    void OnEnable() { Apply(); }
-    void OnRectTransformDimensionsChange() { Apply(); }
-
-    public void Apply()
-    {
-        if (_raw == null) _raw = GetComponent<RawImage>();
-        if (_rt == null) _rt = (RectTransform)transform;
-        if (_raw == null || _rt == null || cellPixels <= 0) return;
-        var size = _rt.rect.size;
-        _raw.uvRect = new Rect(0f, 0f, size.x / cellPixels, size.y / cellPixels);
     }
 }

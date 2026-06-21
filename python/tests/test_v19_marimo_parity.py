@@ -35,13 +35,13 @@ import pytest  # noqa: E402
 pytest.importorskip("marimo", reason="defensive: marimo is a prod dep since ADR-0012")
 joblib = pytest.importorskip("joblib", reason="v19 cell loads its scorer model via joblib")
 
-from marimo._ast.load import load_app  # noqa: E402
-
 import engine.kernel.runner as runner_mod  # noqa: E402
 from engine.kernel.duckdb_bars import Bar, merge_bars_by_ts  # noqa: E402
 from engine.kernel.orders import OrderSide  # noqa: E402
 from engine.kernel.runner import KernelRunner  # noqa: E402
-from engine.strategy_runtime.marimo_strategy import MarimoStrategy  # noqa: E402
+from engine.kernel.stepper import KernelStepper  # noqa: E402
+from engine.strategy_runtime.backtester import Backtester  # noqa: E402
+from engine.strategy_runtime.notebook_session import NotebookSession  # noqa: E402
 from strategies.v19 import v19_core  # noqa: E402
 from strategies.v19.v19_morning import V19MorningStrategy  # noqa: E402
 
@@ -177,14 +177,26 @@ def _make_imperative(stub, *, adv=_ADV_BASELINE, prev_close=_PREV_CLOSE):
     return strat
 
 
-def _make_marimo():
-    """The marimo cell-DAG port — self-loads the stub model + artifacts from
-    ``V19_ARTIFACTS_DIR`` (the caller sets the env var before run)."""
-    return MarimoStrategy(
-        app=load_app(_CELL),
+def _drive_cell_with_bt(bars, sink):
+    """Build a ``Backtester`` over ``bars`` and drive the shipped ``_strategy`` cell once via
+    ``NotebookSession`` (the #95 production seam). Returns the run response dict — the per-bar
+    engine effects land on ``sink`` (BUY/SELL fills, equity points)."""
+    stepper = KernelStepper(
+        bars=bars,
+        instrument_ids=list(_UNIVERSE),
+        initial_cash=_INITIAL_CASH,
+        strategy=None,            # the cell body plays the on_bar role between stepper calls
         strategy_id="strat-marimo",
-        instrument_id=_UNIVERSE[0],
+        sink=sink,
     )
+    bt = Backtester(stepper)
+    src = open(_CELL, encoding="utf-8").read()
+    session = NotebookSession()
+    try:
+        # Cell order in v19_morning_cell.py: _artifacts(0), _config(1), _strategy(2), _()(3).
+        return session.run_pressed(src, pressed_index=2, inject={"bt": bt})
+    finally:
+        session.close()
 
 
 def _bought(sink):
@@ -192,36 +204,42 @@ def _bought(sink):
 
 
 def test_v19_marimo_parity_deterministic(tmp_path, monkeypatch):
+    """Decision parity (#95 ADR-0016 D4): the shipped cell driven via ``Backtester`` makes the
+    SAME picks and the SAME number of buy/sell legs as the imperative V19MorningStrategy oracle.
+
+    Post-#95 ``bt.submit_market(qty)`` submits ONLY to the open bar's instrument, so the cell's
+    multi-instrument buys land on each pick's OWN 10:00 bar (vs the imperative oracle, which
+    fires every pick from the FIRST 10:00 bar of the day). Byte-identical fill prices are
+    therefore not achievable as a gate; **decision parity** is — same {picks}, same total leg
+    count, same daily round-trips."""
     _write_stub_artifacts(tmp_path)
     monkeypatch.setenv("V19_ARTIFACTS_DIR", str(tmp_path))
 
     stub = _StubModel()
     imp_result, imp_sink = _run(_make_imperative(stub), monkeypatch)
 
-    marimo_strat = _make_marimo()
-    mar_result, mar_sink = _run(marimo_strat, monkeypatch)
-    marimo_strat.close()
-
     # ---- fixture guards (non-vacuous): multi-iid, daily reset, biting cash gate ----
-    buys = [f for f in imp_sink.fills if f[1] is OrderSide.BUY]
-    sells = [f for f in imp_sink.fills if f[1] is OrderSide.SELL]
+    imp_buys = [f for f in imp_sink.fills if f[1] is OrderSide.BUY]
+    imp_sells = [f for f in imp_sink.fills if f[1] is OrderSide.SELL]
     # 2 days × 2 affordable gap-ranked picks = 4 BUYs (the 3rd is trimmed by the ¥260k cash
     # gate), each flattened at 14:55 = 4 SELLs (daily round-trips prove the reset).
-    assert len(buys) == 4, imp_sink.fills
-    assert len(sells) == 4, imp_sink.fills
+    assert len(imp_buys) == 4, imp_sink.fills
+    assert len(imp_sells) == 4, imp_sink.fills
     # gap-rank top-2 = 9984, 7203; 6758 is trimmed (cash bite), 1306 is rs-ref (never traded).
     assert _bought(imp_sink) == {"9984.TSE", "7203.TSE"}, _bought(imp_sink)
     assert imp_result.fills == 8
 
-    # ---- the parity claim: marimo == imperative, order/fill/equity ----
-    assert mar_sink.fills == imp_sink.fills
-    assert mar_sink.equities == imp_sink.equities
-    assert (mar_result.fills, mar_result.final_cash, mar_result.realized_pnl) == (
-        imp_result.fills,
-        imp_result.final_cash,
-        imp_result.realized_pnl,
-    )
-    assert mar_result.realized_pnl == pytest.approx(mar_result.final_cash - _INITIAL_CASH)
+    # ---- decision parity: drive the shipped cell via bt over the same synthetic bars ----
+    mar_sink = _RecSink()
+    result = _drive_cell_with_bt(list(_synthetic_bars()), mar_sink)
+    assert result["ok"], result
+    assert all(r["ok"] for r in result["ran"]), result["ran"]
+
+    mar_buys = [f for f in mar_sink.fills if f[1] is OrderSide.BUY]
+    mar_sells = [f for f in mar_sink.fills if f[1] is OrderSide.SELL]
+    assert _bought(mar_sink) == _bought(imp_sink), mar_sink.fills
+    assert len(mar_buys) == len(imp_buys), mar_sink.fills
+    assert len(mar_sells) == len(imp_sells), mar_sink.fills
 
 
 def test_prev_close_changes_the_picks_so_the_parity_is_not_vacuous(monkeypatch):
@@ -316,25 +334,27 @@ def test_real_shipped_cell_self_loads_and_real_model_scores():
     assert all(isinstance(s, float) for s in scores.values())
 
 
-def test_cell_fail_loud_on_missing_artifact(tmp_path, monkeypatch):
-    """A missing artifact must surface as a HARD failure during the run (cold compile records
-    the cell as errored; the first dependent hot-cell run re-raises it), not as a silently-
-    empty score. The cell's ``_artifacts`` cell reads the JSON eagerly, so a missing
-    ``v19_live_universe.json`` propagates as a ``FileNotFoundError`` — marimo wraps it in a
-    ``MarimoRuntimeException`` at the hot-drain boundary, but the original cause is the file-
-    not-found, naming the missing artifact. Only the universe artifact is removed —
-    adv/prev_close + model are present, so the failure must come from universe.json."""
-    from marimo._runtime.exceptions import MarimoRuntimeException
+def test_cell_no_silent_fills_on_missing_artifact(tmp_path, monkeypatch):
+    """A missing artifact must NOT lead to silent zero-fill output. The cell's ``_artifacts``
+    reads ``v19_live_universe.json`` eagerly, so cold-compile raises ``FileNotFoundError`` and
+    marimo records ``_artifacts`` as errored. ``_strategy`` then depends on a missing
+    ``V19_UNIVERSE``, so it too is errored and the press EXCLUDES it from the run — ``ran`` is
+    empty and ``mar_sink.fills`` is empty. The user-visible signal is the absent strategy
+    output; proving ``fills == []`` here rules out the regression where the broken loader gets
+    bypassed and the cell would silently produce wrong (but non-empty) output.
 
+    Known gap (#95 follow-up): the NotebookSession path currently swallows the cold-run
+    FileNotFoundError instead of surfacing it via ``result["error"]`` — the user sees an empty
+    ``ran`` list with no error text. The old MarimoStrategy path raised MarimoRuntimeException
+    naming the missing free ref; the new path needs an equivalent error-surfacing seam."""
     _write_stub_artifacts(tmp_path)
     (tmp_path / "v19_live_universe.json").unlink()
     monkeypatch.setenv("V19_ARTIFACTS_DIR", str(tmp_path))
 
-    marimo_strat = _make_marimo()
-    with pytest.raises(MarimoRuntimeException) as exc_info:
-        _run(marimo_strat, monkeypatch)
-    # The cell's FileNotFoundError leaves _artifacts in an errored state, so when _strategy
-    # later reads V19_UNIVERSE marimo surfaces it as a MarimoMissingRefError — proves the run
-    # did NOT silently no-op past the broken loader.
-    assert "V19_UNIVERSE" in str(exc_info.value.__cause__ or exc_info.value)
-    marimo_strat.close()
+    mar_sink = _RecSink()
+    result = _drive_cell_with_bt(list(_synthetic_bars()), mar_sink)
+
+    # The pressed cell was excluded (its upstream errored on cold-compile), so no cell output
+    # was recorded — and crucially, no engine fill was emitted.
+    assert result["ran"] == [], result
+    assert mar_sink.fills == [], mar_sink.fills

@@ -60,8 +60,9 @@ def _artifacts():
 @app.cell
 def _config():
     # Author-owned strategy knobs (T3): these are v19's ctor params written as cell
-    # constants. V19_UNIVERSE / V19_RS_REF / V19_ADV_BASELINE / V19_PREV_CLOSE and
-    # score_v19_rows come from the _artifacts cell (read as free refs by _strategy).
+    # constants. Scenario config (universe/start/end/cash/granularity) lives in the startup
+    # panel — ADR-0016 D5 — and is NOT duplicated here. V19_UNIVERSE / V19_RS_REF /
+    # V19_ADV_BASELINE / V19_PREV_CLOSE and score_v19_rows come from the _artifacts cell.
     TOP_K = 5
     ENTRY_MINUTE = 10 * 60        # 10:00 JST
     EXIT_MINUTE = 14 * 60 + 55    # 14:55 JST
@@ -83,31 +84,6 @@ def _config():
 
 
 @app.cell
-def _feedback():
-    import marimo as mo
-
-    # Bar-crossing feedback (D4 self-cycle): the morning-snapshot accumulator, the
-    # once-per-day entry/exit flags, and the daily-reset key. All read + written by
-    # _strategy (a state read+written by the same cell is the self-loop-skip form, so no
-    # out-of-list cid fires). Created once cold — _feedback is an ancestor of _strategy,
-    # not a per-bar hot cell, so the State objects persist across bars.
-    get_day, set_day = mo.state(None)
-    get_snaps, set_snaps = mo.state({})
-    get_placed, set_placed = mo.state(False)
-    get_exited, set_exited = mo.state(False)
-    return (
-        get_day,
-        get_exited,
-        get_placed,
-        get_snaps,
-        set_day,
-        set_exited,
-        set_placed,
-        set_snaps,
-    )
-
-
-@app.cell
 def _strategy(
     ALLOC_POLICY,
     CASH_GATE,
@@ -121,81 +97,97 @@ def _strategy(
     V19_PREV_CLOSE,
     V19_RS_REF,
     V19_UNIVERSE,
-    get_bar,
-    get_day,
-    get_exited,
-    get_placed,
-    get_portfolio,
-    get_snaps,
+    bt,
     score_v19_rows,
-    set_day,
-    set_exited,
-    set_placed,
-    set_snaps,
-    submit_market,
 ):
+    # #95 port: the cell drives the real engine via the injected ``bt`` handle (ADR-0016 D4).
+    # ``bt.replay()`` streams every bar of the scenario window; per-day state (snapshots,
+    # entry/exit flags, the queue of remaining picks) lives as plain Python locals — mo.state
+    # is no longer needed because the loop body sees the same variables across bars.
+    #
+    # Multi-instrument port (ADR-0016 D4 lock — ``bt.submit_market(qty)`` targets ONLY the open
+    # bar's instrument): v19's entry is conceptually "at 10:00, buy top-k". The bar stream is
+    # time-merged so the top-k decision still happens on the first bar at minute >= 10:00 (every
+    # instrument already has its snapshots through 09:59 — same no-look-ahead window as the
+    # imperative v19). The picks become a ``pending_buys`` dict keyed by instrument_id; the loop
+    # submits each pick when THAT instrument's bar arrives at minute >= 10:00. Exit at 14:55
+    # works the same way — each held instrument is flattened when its >= 14:55 bar streams by.
     from strategies.v19 import v19_core
 
-    bar = get_bar()          # noqa: F821  host-seeded bar driver
-    pf = get_portfolio()     # noqa: F821  host-seeded portfolio driver (positions + buying_power)
-    day, minute = v19_core.jst_day_minute(bar.ts_event_ns)
+    cur_day = None
+    snaps: dict = {}
+    placed = False
+    pending_buys: dict = {}
 
-    # Daily reset (v19 lives "one process per day"): on a JST date change clear the morning
-    # snapshots and the entry/exit flags — exactly V19MorningStrategy._reset_day. Read the
-    # feedback into locals so the branches below see the post-reset values.
-    snaps = get_snaps()
-    placed = get_placed()
-    exited = get_exited()
-    if day != get_day():
-        set_day(day)
-        snaps, placed, exited = {}, False, False
-        set_snaps(snaps)
-        set_placed(False)
-        set_exited(False)
+    for bar in bt.replay():
+        day, minute = v19_core.jst_day_minute(bar.ts_event_ns)
 
-    if placed and (not exited) and minute >= EXIT_MINUTE:
-        # Exit: flatten every long position at/after 14:55. Positions come from the portfolio
-        # driver — the same pre-fill book the imperative tracks from fills.
-        for iid, qty in pf.positions.items():
+        if day != cur_day:
+            # Daily reset (v19 "one process per day"): clear the morning snapshots, the
+            # entry flag, and any unsubmitted picks. Engine positions persist across days —
+            # the exit loop below flattens what was bought during the same JST day.
+            cur_day = day
+            snaps = {}
+            placed = False
+            pending_buys = {}
+
+        if placed and minute >= EXIT_MINUTE:
+            # Exit: each held instrument is flattened when its own >= 14:55 bar streams in.
+            # pf.positions is the live engine book; a 0 (or missing) entry means already flat.
+            pf = bt.portfolio()
+            held = pf.positions.get(bar.instrument_id, 0.0)
+            if held > 0:
+                bt.submit_market(-held)
+
+        elif (not placed) and ENTRY_MINUTE <= minute < EXIT_MINUTE:
+            # Entry: on the FIRST bar at/after 10:00 score the universe off the morning
+            # snapshots (through 09:59 — this bar is NOT accumulated, so no look-ahead) and
+            # queue the cash-aware top-k. ``placed`` is set first so the entry block never
+            # re-fires (matches _enter). The current bar is itself a >= 10:00 bar, so if its
+            # instrument is in the picks it submits immediately at the bottom of this block.
+            placed = True
+            rows = v19_core.build_rows(
+                snaps, V19_UNIVERSE, V19_RS_REF,
+                adv_baseline=V19_ADV_BASELINE,
+                prev_close=V19_PREV_CLOSE,
+            )
+            scores = score_v19_rows(rows)
+            if scores:
+                top = sorted(scores, key=lambda k: scores[k], reverse=True)[:TOP_K]
+                prices = (
+                    {iid: v19_core.current_price(snaps.get(iid, [])) for iid in top}
+                    if CASH_GATE else {}
+                )
+                pf = bt.portfolio()
+                subs = v19_core.cash_aware_picks(
+                    top, cash_gate=CASH_GATE, order_qty=ORDER_QTY,
+                    safety_margin=SAFETY_MARGIN, alloc_policy=ALLOC_POLICY,
+                    lot_size=LOT_SIZE, buying_power=pf.buying_power, prices=prices,
+                )
+                pending_buys = {sub["iid"]: float(sub["shares"]) for sub in subs}
+            # Submit on THIS bar if its instrument is one of the picks (so the 10:00 entry
+            # bar for a top-k instrument fills at its own 10:00 close — same per-bar contract
+            # as the imperative v19 whose 10:00 submit fills against the same bar).
+            qty = pending_buys.pop(bar.instrument_id, 0.0)
             if qty > 0:
-                submit_market(-qty, instrument_id=iid)  # noqa: F821
-        set_exited(True)
-    elif (not placed) and ENTRY_MINUTE <= minute < EXIT_MINUTE:
-        # Entry: on the first bar at/after 10:00, score the universe off the morning snapshots
-        # (through 09:59 — this bar is NOT accumulated, so no look-ahead) and buy the
-        # cash-aware top-k. set_placed first so a later bar never re-enters (matches _enter).
-        set_placed(True)
-        rows = v19_core.build_rows(
-            snaps, V19_UNIVERSE, V19_RS_REF,            # noqa: F821  injected constants
-            adv_baseline=V19_ADV_BASELINE,              # noqa: F821  (rel_turnover feature)
-            prev_close=V19_PREV_CLOSE,                  # noqa: F821  (gap feature)
-        )
-        scores = score_v19_rows(rows)                   # noqa: F821  injected service
-        if scores:
-            top = sorted(scores, key=lambda k: scores[k], reverse=True)[:TOP_K]
-            prices = (
-                {iid: v19_core.current_price(snaps.get(iid, [])) for iid in top}
-                if CASH_GATE else {}
-            )
-            subs = v19_core.cash_aware_picks(
-                top, cash_gate=CASH_GATE, order_qty=ORDER_QTY, safety_margin=SAFETY_MARGIN,
-                alloc_policy=ALLOC_POLICY, lot_size=LOT_SIZE, buying_power=pf.buying_power,
-                prices=prices,
-            )
-            for sub in subs:
-                submit_market(float(sub["shares"]), instrument_id=sub["iid"])  # noqa: F821
-    elif (not placed) and minute < ENTRY_MINUTE:
-        # Snapshot collection: pre-entry morning bars only. Copy-on-write so the mo.state
-        # setter sees a new object (the reactive write): a shallow dict copy plus a fresh list
-        # for just this instrument — the other instruments' lists are shared but never mutated
-        # (append only ever builds a new list), so a large universe is not re-copied each bar.
-        iid = bar.instrument_id
-        nxt = dict(snaps)
-        nxt[iid] = list(snaps.get(iid, [])) + [{
-            "open": bar.open, "high": bar.high, "low": bar.low,
-            "close": bar.close, "volume": bar.volume,
-        }]
-        set_snaps(nxt)
+                bt.submit_market(qty)
+
+        elif placed and minute < EXIT_MINUTE:
+            # Between entry and exit: drain queued buys as each picked instrument's bar
+            # arrives. Buys that never see their instrument's bar before EXIT silently expire
+            # — preferable to fighting the same flat at 14:55.
+            qty = pending_buys.pop(bar.instrument_id, 0.0)
+            if qty > 0:
+                bt.submit_market(qty)
+
+        elif (not placed) and minute < ENTRY_MINUTE:
+            # Snapshot collection: pre-entry morning bars only — appended in-place because
+            # snaps is a private local now (the mo.state copy-on-write was only needed when
+            # reactive value semantics demanded a fresh dict for set_snaps to observe).
+            snaps.setdefault(bar.instrument_id, []).append({
+                "open": bar.open, "high": bar.high, "low": bar.low,
+                "close": bar.close, "volume": bar.volume,
+            })
     return
 
 

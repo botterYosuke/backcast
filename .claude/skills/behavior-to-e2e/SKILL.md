@@ -10,6 +10,9 @@ description: >-
   必ず起動する場面: 「この挙動をテスト/ゲートにして」「ユーザーストーリ（台本）をテストに」「台本を書いて」
   「E2E で通したい」「N ステップを通しで確認」「目視の代替」「全行動を網羅したい / 網羅台帳」「テストでカバー
   されているか確認（カバレッジ照会）」「リプレイ/発注/ポートフォリオ/venue ログインの挙動を保証」。
+  **E2E 監査ハンドオフ（「audit existing E2E coverage」「find at least one bug」「bug hunt」「RED bug
+  discovery」「gap-test」「網羅 gap を埋める」「STRATEGY-XX を追加して」「Section21 を作って」**）も同じ
+  起動命令——既存 AFK runner に未網羅の AC や潜在バグを足す依頼は本スキルの中核。
   **不具合修正（「issue #N を修正」「bug を直す」「配線漏れを実装」）・レビュー指摘修正（「review findings を
   fix」「Medium をつぶして」）・stub 実装（「NotImplementedError を解消」）・検証/クローズスライス（「発火する
   test で証明」）・spike の gate 判定**も、挙動が変わる/AC が AFK probe・characterization・HITL gate を要求するなら

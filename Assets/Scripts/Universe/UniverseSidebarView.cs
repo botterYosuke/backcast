@@ -97,7 +97,10 @@ public sealed class UniverseSidebarView : MonoBehaviour
         var t = ThemeService.Current;
         var bgGo = new GameObject("SidebarBg", typeof(RectTransform), typeof(Image));
         var bgRt = (RectTransform)bgGo.transform; bgRt.SetParent(_container, false); Stretch(bgRt);
-        bgGo.GetComponent<Image>().color = t.colors.panel_background;
+        var bgImage = bgGo.GetComponent<Image>();
+        var bgColor = t.colors.panel_background; bgColor.a = 0f; // sidebar 背景は透明（canvas を透かす）
+        bgImage.color = bgColor;
+        bgImage.raycastTarget = false; // 透明背景はクリックを遮らず後ろの canvas へ透過させる
 
         _content = NewRect("Content", _container);
         Stretch(_content);

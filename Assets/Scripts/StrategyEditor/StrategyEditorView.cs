@@ -18,8 +18,12 @@
 //
 // #102 (findings 0076): SetOutput / SetConsole both drive a dynamic re-layout that auto-collapses
 // the rich and console blocks to zero height when empty (editor takes the full body) and caps each
-// at ~45% of the body height when populated (per-block ScrollRect kicks in past the cap).  stderr
-// segments paint amber (marimo `Outputs.css .stderr` parity); stdout paints the default text colour.
+// at ~45% of the body height when populated.  Overflow past the cap is solved by a REAL ScrollRect
+// per block (findings 0076 §6 D5 — supersedes the prior RectMask2D-clip implementation): Block holds
+// a ScrollRect with Viewport + Content (the Text and optional RawImage are children of Content,
+// which a ContentSizeFitter + VerticalLayoutGroup sizes to the active child's preferredHeight).
+// stderr segments paint amber (marimo `Outputs.css .stderr` parity); stdout paints the default text
+// colour.
 //
 // Bind(cell) (re)points the view at a Cell — used on spawn, on dormant region_001 reuse (a new cell
 // in the same GameObject shell), and on Open (the aggregate replaced the cell list). The pure logic
@@ -54,6 +58,12 @@ public class StrategyEditorView : MonoBehaviour
     public bool ConsoleBlockVisible => _consoleBlock != null && _consoleBlock.gameObject.activeSelf;
     public string CurrentConsoleText => _consoleText != null ? _consoleText.text : null;
 
+    // #102 findings 0076 §6 D5: the per-block ScrollRect — Section21 (audit gaps) reads these to
+    // verify overflow becomes scrollable (Content.rect.height > Viewport.rect.height) and that the
+    // verticalNormalizedPosition can be moved (proof the user can scroll).
+    public ScrollRect RichScrollRect => _richScroll;
+    public ScrollRect ConsoleScrollRect => _consoleScroll;
+
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): fired when an edit is COMMITTED (the field loses focus
     // after a change — onEndEdit, which for a MultiLineNewline field is blur, NOT Enter). The root wires
     // this to NotebookRunController.Restage so an edit/blur re-projects the per-cell stale badges. Null
@@ -66,14 +76,23 @@ public class StrategyEditorView : MonoBehaviour
     Text _placeholder;          // host-API hint shown when this is the only cell and it is empty
     Text _output;               // #95 Phase 2 土台: per-cell RUN output text (in the rich block)
     RawImage _image;            // #95 Phase 6 Slice 5: image/png|jpeg sibling inside the rich block
+    LayoutElement _imageLE;     // image's per-child LayoutElement (drives Content height when active)
     Texture2D _tex;             // #95 Phase 6 Slice 5: the decoded image texture we own (freed on replace/clear/destroy)
 
-    // #102 Slice 2: the dynamic layout pieces (findings 0076 D2).
+    // #102 findings 0076 §6 D5: ScrollRect-based output blocks. Block holds the ScrollRect + LE;
+    // Viewport masks; Content (with VLG + CSF) sizes to the active child's preferredHeight.  The
+    // view caps Block.LE.preferredHeight at body*cap so overflow becomes user-scrollable.
     RectTransform _richBlock;
+    RectTransform _richViewport;
+    RectTransform _richContent;
     LayoutElement _richLE;
+    ScrollRect _richScroll;
     RectTransform _consoleBlock;
+    RectTransform _consoleViewport;
+    RectTransform _consoleContent;
     Text _consoleText;
     LayoutElement _consoleLE;
+    ScrollRect _consoleScroll;
     LayoutElement _editorLE;
     RectTransform _body;
 
@@ -88,9 +107,11 @@ public class StrategyEditorView : MonoBehaviour
     public void Initialize(
         InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
         Cell cell, Text placeholder,
-        Text output, RawImage image,
-        RectTransform richBlock, LayoutElement richLE,
-        RectTransform consoleBlock, Text consoleText, LayoutElement consoleLE,
+        Text output, RawImage image, LayoutElement imageLE,
+        RectTransform richBlock, RectTransform richViewport, RectTransform richContent,
+        LayoutElement richLE, ScrollRect richScroll,
+        RectTransform consoleBlock, RectTransform consoleViewport, RectTransform consoleContent,
+        Text consoleText, LayoutElement consoleLE, ScrollRect consoleScroll,
         LayoutElement editorLE)
     {
         _input = input;
@@ -99,11 +120,18 @@ public class StrategyEditorView : MonoBehaviour
         _placeholder = placeholder;
         _output = output;
         _image = image;
+        _imageLE = imageLE;
         _richBlock = richBlock;
+        _richViewport = richViewport;
+        _richContent = richContent;
         _richLE = richLE;
+        _richScroll = richScroll;
         _consoleBlock = consoleBlock;
+        _consoleViewport = consoleViewport;
+        _consoleContent = consoleContent;
         _consoleText = consoleText;
         _consoleLE = consoleLE;
+        _consoleScroll = consoleScroll;
         _editorLE = editorLE;
         // The StrategyCodeInput we live on is a child of the body — the VerticalLayoutGroup is on
         // the body itself, so that is what we mark for rebuild after sizing.
@@ -169,8 +197,12 @@ public class StrategyEditorView : MonoBehaviour
         {
             if (_image != null) _image.gameObject.SetActive(true);
             if (_output != null) _output.gameObject.SetActive(false);
+            // Push texture height into the image's per-child LayoutElement so the rich Content
+            // (VLG+CSF) sizes to the image rather than to the now-inactive Text.
+            if (_imageLE != null && _image != null && _image.texture != null)
+                _imageLE.preferredHeight = _image.texture.height;
             if (_richBlock != null) _richBlock.gameObject.SetActive(true);
-            ApplyBlockSize(_richLE, _output, _image);
+            ApplyBlockSize(_richLE, _richContent);
             return;
         }
 
@@ -185,7 +217,7 @@ public class StrategyEditorView : MonoBehaviour
                 _output.gameObject.SetActive(true);
             }
             if (_richBlock != null) _richBlock.gameObject.SetActive(true);
-            ApplyBlockSize(_richLE, _output, _image);
+            ApplyBlockSize(_richLE, _richContent);
             return;
         }
 
@@ -201,7 +233,7 @@ public class StrategyEditorView : MonoBehaviour
             _output.gameObject.SetActive(true);
         }
         if (_richBlock != null) _richBlock.gameObject.SetActive(true);
-        ApplyBlockSize(_richLE, _output, _image);
+        ApplyBlockSize(_richLE, _richContent);
     }
 
     // #102 Slice 2 (findings 0076): render the per-cell stdout/stderr segment list into the console
@@ -225,7 +257,7 @@ public class StrategyEditorView : MonoBehaviour
             _consoleText.supportRichText = true;
         }
         if (_consoleBlock != null) _consoleBlock.gameObject.SetActive(true);
-        ApplyBlockSize(_consoleLE, _consoleText, null);
+        ApplyBlockSize(_consoleLE, _consoleContent);
     }
 
     // Lightweight body-resize follow-up: when SetOutput/SetConsole take the empty branch (block
@@ -262,35 +294,32 @@ public class StrategyEditorView : MonoBehaviour
     }
 
     // Escape user-supplied text for a UGUI Text with supportRichText=true. UGUI parses ``<...>``
-    // sequences as tags (color/b/i/size/material/quad); the safest neutralisation is to break the
-    // tag open by replacing ``<`` with the entity ``&lt;``.  UGUI does NOT decode entities, so the
-    // output renders as ``&lt;`` literally — visually distinguishable from a real tag and stable
-    // across versions.  ``&`` is escaped too so ``&lt;`` payloads round-trip unambiguously.
+    // sequences as tags (color/b/i/size/material/quad); the only tag-trigger char is ``<``, so the
+    // safest neutralisation is to break the tag open by replacing ``<`` with the entity ``&lt;``.
+    // UGUI does NOT decode entities, so the output renders as ``&lt;`` literally — visually
+    // distinguishable from a real tag and stable across versions.  ``&`` is NOT escaped: UGUI never
+    // decodes ``&amp;`` either, so a Replace("&","&amp;") would paint user's ``print("a & b")`` as
+    // ``a &amp; b`` on screen — a pure regression for any user printing ``&`` (#102 findings 0076 D6).
     static string EscapeForUguiRichText(string s)
-        => s == null ? string.Empty : s.Replace("&", "&amp;").Replace("<", "&lt;");
+        => s == null ? string.Empty : s.Replace("<", "&lt;");
 
-    // Set the rich block's LayoutElement.preferredHeight = clamp(measured content height,
-    // [_editor min preserved], body * OutputBlockMaxFractionOfBody) — the VerticalLayoutGroup on the
-    // body then places the block at that height and the editor gets the residual.  RawImage's
-    // contribution defers to the texture's natural height capped at the same fraction.
-    // One per-block sizing pass; called by SetOutput, SetConsole, and the empty paths so the editor
-    // min is kept consistent with the current body height even when the block deactivates.  The cap
-    // is body.height * OutputBlockMaxFractionOfBody — if the body's rect is not yet resolved
-    // (bodyH==0 on the same frame as the window's first build), the cap collapses to 0 and the block
-    // would pin at 0px; we skip the cap in that case and let the natural height drive (the block's
-    // RectMask2D still clips overflow, and the next layout pass + SetOutput will re-apply the cap).
-    // For the rich block, RawImage's texture.height takes precedence when an image is showing.
-    void ApplyBlockSize(LayoutElement le, Text text, RawImage img)
+    // Set the block's LayoutElement.preferredHeight = clamp(Content.preferredHeight, body * cap).
+    // The ScrollRect's Content (VLG+CSF) reports its preferred height via LayoutUtility — that is
+    // the natural height of whichever active child (Text or RawImage) is driving it.  When the
+    // natural height is below the cap the block sizes to it and no scroll appears; when it exceeds
+    // the cap, the block is pinned at the cap and the ScrollRect makes the residual scrollable.
+    //
+    // bodyH == 0 → layout not yet resolved (the window's first frame); skip the cap so the first
+    // paint is visible at natural size and the ScrollRect's RectMask2D still clips overflow until
+    // the next SetOutput re-runs the cap math against a real bodyH.
+    void ApplyBlockSize(LayoutElement le, RectTransform content)
     {
         if (le == null || _body == null) return;
+        // Force the Content's VerticalLayoutGroup + ContentSizeFitter to settle so we read a
+        // current preferred height (a fresh paint changes Text.text right before this call).
+        if (content != null) LayoutRebuilder.ForceRebuildLayoutImmediate(content);
+        float natural = (content != null ? LayoutUtility.GetPreferredHeight(content) : 0f) + 4f;
         float bodyH = _body.rect.height;
-        float natural;
-        if (img != null && img.gameObject.activeSelf && img.texture != null)
-            natural = img.texture.height + 4f;
-        else
-            natural = MeasureTextPreferredHeight(text) + 4f;
-        // bodyH == 0 → layout not yet resolved; skip the cap so the first paint is visible and the
-        // RectMask2D clips overflow until the next SetOutput re-runs the cap math against a real bodyH.
         float clamped = bodyH > 0f ? Mathf.Min(natural, bodyH * StrategyEditorContentBuilder.OutputBlockMaxFractionOfBody)
                                    : natural;
         le.preferredHeight = Mathf.Max(0f, clamped);
@@ -301,9 +330,6 @@ public class StrategyEditorView : MonoBehaviour
     static float ComputeEditorMin(float bodyH)
         => Mathf.Max(StrategyEditorContentBuilder.EditorMinFloorPx,
                      bodyH * StrategyEditorContentBuilder.EditorMinFractionOfBody);
-
-    static float MeasureTextPreferredHeight(Text t)
-        => t == null ? 0f : t.preferredHeight;
 
     // Show/hide the single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell).
     // The coordinator calls this with the hint text for the only remaining cell, or null otherwise.

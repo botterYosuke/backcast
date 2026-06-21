@@ -158,3 +158,89 @@ body subtree を以下の 3 ブロックに再構成:
 - **console virtual file（`@file/...`）**: marimo の mo.image は `text/html` で `<img src="@file/...">` を出す（findings 0075 P6-2 注記）。これは rich の話で console には来ない。本 issue は console（stdout/stderr）のみ。
 
 これらは ADR-0016 の方針下で別 issue / 将来 finding に委譲（ADR は無改変＝自己保護条項）。
+
+---
+
+## 6. 監査（E2E coverage audit & bug hunt・2026-06-21 second-pass）
+
+Slice 1/2 landing 後の post-merge 監査。owner directive「実装コストは度外視して理想的な完成形を目指せ」を踏まえ、handoff（`handoff-102-e2e-coverage-audit.md`）が列挙した 9 件のバグ候補をコードで裏取りし、本 §6 で **D5–D10** として下位決定を凍結する。ADR-0016 は無改変。
+
+### D5 — 鏡像 RectMask2D を捨て **本物の ScrollRect** へ昇格（Bug 5 = §0 で凍結済み D2 の実装乖離）
+
+owner 決定（Q1・2026-06-21）: §2 D2 が指定する **ScrollRect-by-block** へ実装を整合させる。commit `b789480` の `RectMask2D` クリップは「読めない部分が隠れる」だけで、issue #102 AC「利用可能高を超えたらブロック内スクロール」を満たさない。これは設計の変更ではなく **D2 の実装履行**。
+
+新サブツリー（`StrategyEditorContentBuilder.BuildOutputBlock`）:
+
+```
+[Block]   RectTransform, Image(透明), LayoutElement, ScrollRect
+  ├── [Viewport]   RectTransform(Stretch), Image(マスク), RectMask2D
+  │     └── [Content]   RectTransform(top-pivot), VerticalLayoutGroup, ContentSizeFitter(vertical=PreferredSize)
+  │           ├── Text  (Stretch横; preferredHeight が VLG 経由で Content 高さに反映)
+  │           └── RawImage  (Stretch横; LayoutElement.preferredHeight = texture.height・rich のみ)
+  └── [VerticalScrollbar]   ScrollRect.verticalScrollbar wire
+```
+
+- **Block.LayoutElement.preferredHeight** = `min(Content.preferredHeight, body * OutputBlockMaxFractionOfBody)`。Content が cap 未満なら Block = Content 高さ（編集領域が残余を吸う）／ Content > cap なら Block = cap で Content が viewport を溢れる → ScrollRect が縦スクロール解決。
+- **ScrollRect.verticalScrollbarVisibility = AutoHide**: cap 内に収まるときスクロールバーは出さず視覚クリーン。
+- **rich block の Text↔RawImage 切替**: 非活性側 `SetActive(false)` で VerticalLayoutGroup から除外される（前後どちらが Content 高さを駆動するか曖昧にならない）。
+- **既存 STRATEGY-37 cap assert は不変**: `LayoutElement.preferredHeight ≤ body * 0.45 + 1px` の式は ScrollRect 化後も保持（cap が viewport の上限になる）。
+- **新 assert（STRATEGY-43）**: 大量行 payload（cap 超過確実）で `scrollRect.content.rect.height > scrollRect.viewport.rect.height` ＋ `verticalNormalizedPosition` 操作で値が動く（0↔1）ことを pin。実 mesh 行送りは HITL（findings 0010 §9 と同型）。
+
+`StrategyEditorView` の `ApplyBlockSize` は ScrollRect 化後も「Content の preferredHeight を測って Block.LayoutElement.preferredHeight をクランプする」役割を保つ。ScrollRect 自体が content の高さを管理するため、ApplyBlockSize は viewport の cap を決めるだけ。
+
+### D6 — `EscapeForUguiRichText` から **`&` の二重エスケープを削除**（Bug 1 = HIGH 確定）
+
+owner 決定（暗黙・実コード読解で確定）: UGUI legacy Text は HTML entity を**デコードしない**ので、`s.Replace("&", "&amp;")` は user の `print("a & b")` を `a &amp; b` と**文字どおりに**画面に出す純粋なリグレッション。リテラル `&` がタグ trigger にはならない（タグ trigger は `<` のみ）。
+
+修正方針:
+- `EscapeForUguiRichText` は `s.Replace("<", "&lt;")` のみとする。`&` は無加工で通す。
+- 帰結: user の `print("a & b")` は `a & b` と正しく見える。`print("&lt;")` のような文字列リテラルを書いたユーザーは `&lt;` を見ることになる（UGUI が decode しないため）が、これは「`<` を画面に出すには `<noparse>` か entity を見せる」UGUI legacy Text の根本制約で本 issue のスコープ外。将来 TextMeshPro に migrate するときに同時解消する。
+- **新 assert（STRATEGY-39）**: `print("a & b")` 相当の segment を流し、`CurrentConsoleText` がリテラル `a & b` を含み `a &amp; b` を**含まない**ことを pin。
+
+### D7 — `view.BoundCell` ガードで Bind 中の stale result drain を遮断（Bug 8 = LOW・defensive）
+
+owner 決定（暗黙）: `NotebookRunController._generation` は notebook 置換時のみ bump（File→Open/New）。`AddCell`/`DeleteCell`（dormant region_001 reuse）では generation 不変だが、coordinator が `view.Bind(newCell)` を呼ぶことで view の bound cell が press 時点と乖離するレースが存在する。
+
+修正方針:
+- `NotebookRunController.ApplyResult` の per-ran ループに **`view.BoundCell == cells[co.Index]` 等値ガード**を追加。違っていたら skip（前回 press の出力が新 cell の窓に滲まない）。
+- これは generation の補完で、generation 不要のときも cheap（参照等値比較）に走る。
+- **新 assert（STRATEGY-46）**: 押下→drain 前に `view.Bind(otherCell)`→drain、で `SetConsole` が走らず（view が新 cell の状態を保持）を pin。
+
+### D8 — Section21 を新設して 8 件の網羅 gap を埋める
+
+Section20 は単一 `region_001` のみ駆動するため、`NotebookRunController.ApplyResult` の **multi-cell routing**・**re-press clear semantics**・**bodyH==0 first-frame race**・**injection-resistance**・**Bind race** が未網羅。新 `Section21_ConsoleAuditGaps` を増設し STRATEGY-39..46（**8 leaf**）を採番。
+
+| Action ID | 目的 | 関連バグ候補 |
+|---|---|---|
+| STRATEGY-39 | `&` リテラル非二重エスケープ | Bug 1 |
+| STRATEGY-40 | multi-cell routing（pressed R1 / descendant R2 / 互いに滲まない） | Bug 2 |
+| STRATEGY-41 | 同 cell 再 press（非空→非空・前回 text が混ざらない＝置換セマンティクス） | Bug 3 |
+| STRATEGY-42 | 同 cell 再 press（非空→空・ブロックは隠れる） | Bug 3 |
+| STRATEGY-43 | overflow → ScrollRect が真に縦スクロール可能 | Bug 5 |
+| STRATEGY-44 | bodyH==0 first-frame race（`ForceRebuildLayoutImmediate` をスキップした初期描画） | Bug 6 |
+| STRATEGY-45 | `</color>` 注入耐性（amber wrapper を閉じない） | Bug 7 |
+| STRATEGY-46 | Bind が in-flight press の stale drain を遮断 | Bug 8 |
+
+**棄却**:
+- **Bug 4（multi-print 蓄積）**: STRATEGY-34 の 3 segment `o1<e1<o2` 順序検査が既にこれを assert している。重複 pin はしない。
+- **Bug 9（empty SetConsole で last-text 失う）**: view-level semantics の関心事で、AC でも findings 0076 でも `CurrentConsoleText` を「最後の paint を覚える」性質として要求していない。`ConsoleBlockVisible==false` を pin した既存 assert で十分。
+
+### D9 — Bug 1 修正で削除する `&` ↔ E2E 既存 assert の互換確認
+
+STRATEGY-34 line 1848 は `Contains("&lt;EOF")` を assert していて、`&` 削除と無関係（`<EOF>` → `&lt;EOF>` の鎖は維持）。STRATEGY-34 は不変、STRATEGY-39 が `&` リテラル経路を追加する。
+
+### D10 — STRATEGY-39..46 採番 / Section21 命名 / E2E-INDEX 反映
+
+- Action ID は STRATEGY-39..46（次の空き番号 ＝ 8 連番）。
+- Section 名は `Section21_ConsoleAuditGaps`。
+- `StrategyEditorNotebookE2ERunner.md` の操作一覧表に 8 行追記＋litmus 一覧 8 ブロック。
+- `E2E-INDEX.md` line 20 の `STRATEGY-01..38` → `STRATEGY-01..46` ＋ 行数 38→46 ＋ 自動(E2E済) 34→42。
+- line 43 の集計「12 本 ＝ 182 行 ／ 総計 232 行」→「12 本 ＝ 190 行 ／ 総計 240 行」。
+
+### Done-gate（§4 の延長）
+
+- `pytest python/tests/test_notebook_console.py` 7 GREEN（不退行）
+- Unity AFK S20 不退行 ＋ **S21 GREEN**
+- compile gate 0 CS error
+- `code-review(simplify)` Medium+ 0
+- `post-impl-skill-update` 発動

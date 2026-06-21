@@ -17,10 +17,13 @@
 // + console output (bottom, auto).  Empty rich/console blocks deactivate so the LayoutGroup
 // skips them (no GameObject, no gap) — an un-run cell shows nothing but the editor at full body
 // height.  Each output block caps its preferredHeight at ~45% of the body so the editor is never
-// crushed below ~10%; RectMask2D on each block clips text/image overflow inside the cap so the
-// window itself never grows (touching window size would void the per-window layout persistence
-// schema established by findings 0075).  stderr segments paint amber via UGUI rich-text colour
-// tags (marimo `Outputs.css .stderr { color: var(--amber-12); }` parity).
+// crushed below ~10%.  Overflow is solved by a REAL ScrollRect (findings 0076 §6 D5 / AC「ブロック
+// 内スクロール」), NOT a clip: each block is a ScrollRect with Viewport + Content (the Text and
+// optional RawImage live INSIDE Content, which a ContentSizeFitter + VerticalLayoutGroup sizes to
+// the active child's preferredHeight).  When Content > Viewport (the cap), the user scrolls the
+// block internally — the window itself never grows (which would void the per-window layout
+// persistence schema established by findings 0075).  stderr segments paint amber via UGUI
+// rich-text colour tags (marimo `Outputs.css .stderr { color: var(--amber-12); }` parity).
 
 using UnityEngine;
 using UnityEngine.UI;
@@ -34,6 +37,7 @@ public static class StrategyEditorContentBuilder
     const float EditorMinFrac = 0.30f;            // editor min = max(EditorMinFloor, body * frac)
     const float OutputMaxPerBlockFrac = 0.45f;    // per-block ceiling — leaves >=10% for the editor
     const float BlockSpacingPx = 4f;              // gap between active blocks (uniform UI scale)
+    const float ScrollbarWidthPx = 6f;            // narrow vertical scrollbar gutter (findings 0076 §6 D5)
 
     public static StrategyEditorView Build(
         RectTransform body,
@@ -110,20 +114,26 @@ public static class StrategyEditorContentBuilder
         // visible line window starting at VisibleDrawStart; the effect reads it at mesh-build time.
         effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
 
-        // ---- 2) Rich output block — middle, auto-sized, RectMask2D clipping (findings 0076 D2) ----
+        // ---- 2) Rich output block — middle, ScrollRect (findings 0076 §6 D5) ----
 
         var rich = BuildOutputBlock(body, "RichOutputBlock", font, fontSize: 12, supportRichText: false);
-        // Rich block hosts the Text from BuildOutputBlock + a RawImage sibling for image/png|jpeg.
-        var imgGo = new GameObject("CellOutputImage", typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage));
+        // Rich Content hosts Text (from BuildOutputBlock) + a RawImage SIBLING for image/png|jpeg.
+        // Both children live INSIDE the ScrollRect's Content so the VerticalLayoutGroup +
+        // ContentSizeFitter on Content size it from whichever child is active (the other is
+        // SetActive(false) and excluded from VLG/CSF measurement).
+        var imgGo = new GameObject("CellOutputImage",
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(RawImage), typeof(LayoutElement));
         var imgRt = (RectTransform)imgGo.transform;
-        imgRt.SetParent(rich.Block, false);
+        imgRt.SetParent(rich.Content, false);
         Stretch(imgRt);
         var image = imgGo.GetComponent<RawImage>();
         image.raycastTarget = false;
+        var imgLE = imgGo.GetComponent<LayoutElement>();
+        imgLE.preferredHeight = 0f;              // raised by SetOutput when an image paints (= texture.height)
         imgGo.SetActive(false);                  // hidden until SetOutput paints an image
         rich.Block.gameObject.SetActive(false);  // hidden until a press produces ANY rich output
 
-        // ---- 3) Console output block — bottom, auto-sized, RectMask2D clipping ----
+        // ---- 3) Console output block — bottom, ScrollRect ----
 
         var console = BuildOutputBlock(body, "ConsoleOutputBlock", font, fontSize: 12, supportRichText: true);
         console.Block.gameObject.SetActive(false);  // hidden until a press emits stdout/stderr
@@ -131,23 +141,35 @@ public static class StrategyEditorContentBuilder
         var view = inputGo.AddComponent<StrategyEditorView>();
         view.Initialize(
             input, effect, history, cell, placeholder,
-            rich.Text, image,
-            rich.Block, rich.LayoutElement,
-            console.Block, console.Text, console.LayoutElement,
+            rich.Text, image, imgLE,
+            rich.Block, rich.Viewport, rich.Content, rich.LayoutElement, rich.ScrollRect,
+            console.Block, console.Viewport, console.Content, console.Text, console.LayoutElement, console.ScrollRect,
             inputLE);
         return view;
     }
 
-    // Build one collapsible output block (rich or console): a top-level RectTransform with a
-    // RectMask2D for clipping, a LayoutElement carrying the preferredHeight (set by the view per
-    // SetOutput/SetConsole), and a single child Text that fills the block.  Overflowing content
-    // is hidden by the mask (the window never grows past its persisted size — findings 0075).
-    // Callers add extra children (e.g. RawImage for the rich block) as siblings of Text.
+    // Build one collapsible output block (rich or console) as a REAL ScrollRect (findings 0076 §6
+    // D5 — supersedes the prior RectMask2D-clip implementation which violated AC「ブロック内スクロール」).
+    //
+    //   [Block]   RectTransform, transparent Image, LayoutElement (the view caps this at body*0.45),
+    //             ScrollRect (vertical-only, AutoHide bar)
+    //     ├── [Viewport]   RectTransform stretched to Block, Image (mask graphic), RectMask2D
+    //     │     └── [Content]   top-anchored RectTransform, VerticalLayoutGroup + ContentSizeFitter
+    //     │           (vertical=PreferredSize) — height tracks the active child's preferredHeight
+    //     │           └── Text  (Stretch横; preferredHeight drives Content via VLG)
+    //     │           └── (RawImage sibling added by Build() for the rich block)
+    //     └── [VerticalScrollbar]  ScrollRect.verticalScrollbar — AutoHide hides it when Content
+    //           fits inside Viewport (the cap), shows it when Content overflows.
+    //
+    // The view's ApplyBlockSize sets Block.LayoutElement.preferredHeight = min(Content.preferredHeight,
+    // body*cap). When Content <= cap, Block sized to Content and no scroll is needed; when Content
+    // > cap, Block sized to cap and the ScrollRect makes the residual scrollable.
     static OutputBlock BuildOutputBlock(RectTransform body, string name, Font font, int fontSize, bool supportRichText)
     {
+        // ---- Block: ScrollRect host ----
         var blockGo = new GameObject(name,
             typeof(RectTransform), typeof(CanvasRenderer), typeof(Image),
-            typeof(RectMask2D), typeof(LayoutElement));
+            typeof(LayoutElement), typeof(ScrollRect));
         var blockRt = (RectTransform)blockGo.transform;
         blockRt.SetParent(body, false);
         var bg = blockGo.GetComponent<Image>();
@@ -156,16 +178,53 @@ public static class StrategyEditorContentBuilder
         var blockLE = blockGo.GetComponent<LayoutElement>();
         blockLE.flexibleHeight = 0f;
         blockLE.preferredHeight = 0f;            // raised by SetOutput/SetConsole when populated
+        var scroll = blockGo.GetComponent<ScrollRect>();
+        scroll.horizontal = false;
+        scroll.vertical = true;
+        scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.scrollSensitivity = 14f;
+        scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.AutoHide;
 
-        // Text fills the block (Stretch); horizontal Wrap so long lines do not overflow sideways,
-        // vertical Overflow so the natural text height is what Text.preferredHeight reports — the
-        // view reads that to set the block's preferredHeight, and RectMask2D clips any overflow.
+        // ---- Viewport: stretched inside Block, masked ----
+        var viewportGo = new GameObject("Viewport",
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(RectMask2D));
+        var viewportRt = (RectTransform)viewportGo.transform;
+        viewportRt.SetParent(blockRt, false);
+        Stretch(viewportRt);
+        viewportRt.offsetMin = new Vector2(2f, 2f);
+        viewportRt.offsetMax = new Vector2(-(2f + ScrollbarWidthPx), -2f);   // leave room for the scrollbar gutter
+        var vbg = viewportGo.GetComponent<Image>();
+        vbg.color = new Color(0f, 0f, 0f, 0f);   // transparent mask graphic
+        vbg.raycastTarget = false;
+
+        // ---- Content: top-anchored, sized by VerticalLayoutGroup + ContentSizeFitter ----
+        var contentGo = new GameObject("Content",
+            typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        var contentRt = (RectTransform)contentGo.transform;
+        contentRt.SetParent(viewportRt, false);
+        // anchor top: x-stretches with viewport, y stays at top so vertical growth is downward
+        contentRt.anchorMin = new Vector2(0f, 1f);
+        contentRt.anchorMax = new Vector2(1f, 1f);
+        contentRt.pivot = new Vector2(0.5f, 1f);
+        contentRt.anchoredPosition = Vector2.zero;
+        contentRt.sizeDelta = new Vector2(0f, 0f);
+        var vlg = contentGo.GetComponent<VerticalLayoutGroup>();
+        vlg.padding = new RectOffset(0, 0, 0, 0);
+        vlg.spacing = 0f;
+        vlg.childAlignment = TextAnchor.UpperLeft;
+        vlg.childControlHeight = true;
+        vlg.childControlWidth = true;
+        vlg.childForceExpandHeight = false;
+        vlg.childForceExpandWidth = true;
+        var csf = contentGo.GetComponent<ContentSizeFitter>();
+        csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
+
+        // ---- Text: child of Content ----
         var textGo = new GameObject(name + "Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var textRt = (RectTransform)textGo.transform;
-        textRt.SetParent(blockRt, false);
+        textRt.SetParent(contentRt, false);
         Stretch(textRt);
-        textRt.offsetMin = new Vector2(2f, 2f);
-        textRt.offsetMax = new Vector2(-2f, -2f);
         var text = textGo.GetComponent<Text>();
         text.font = font;
         text.fontSize = fontSize;
@@ -177,11 +236,51 @@ public static class StrategyEditorContentBuilder
         text.supportRichText = supportRichText;
         text.raycastTarget = false;
 
+        // ---- Vertical Scrollbar: gutter on the right edge of Block ----
+        var sbGo = new GameObject("VerticalScrollbar",
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Scrollbar));
+        var sbRt = (RectTransform)sbGo.transform;
+        sbRt.SetParent(blockRt, false);
+        sbRt.anchorMin = new Vector2(1f, 0f);
+        sbRt.anchorMax = new Vector2(1f, 1f);
+        sbRt.pivot = new Vector2(1f, 0.5f);
+        sbRt.sizeDelta = new Vector2(ScrollbarWidthPx, -4f);
+        sbRt.anchoredPosition = new Vector2(-2f, 0f);
+        var sbBg = sbGo.GetComponent<Image>();
+        sbBg.color = new Color(1f, 1f, 1f, 0.06f);
+        sbBg.raycastTarget = true;
+        var scrollbar = sbGo.GetComponent<Scrollbar>();
+        scrollbar.direction = Scrollbar.Direction.BottomToTop;
+        // Sliding area + handle (UGUI Scrollbar needs an explicit handleRect)
+        var slidingGo = new GameObject("SlidingArea", typeof(RectTransform));
+        var slidingRt = (RectTransform)slidingGo.transform;
+        slidingRt.SetParent(sbRt, false);
+        Stretch(slidingRt);
+        slidingRt.offsetMin = new Vector2(0f, 0f);
+        slidingRt.offsetMax = new Vector2(0f, 0f);
+        var handleGo = new GameObject("Handle", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        var handleRt = (RectTransform)handleGo.transform;
+        handleRt.SetParent(slidingRt, false);
+        Stretch(handleRt);
+        var handleImg = handleGo.GetComponent<Image>();
+        handleImg.color = new Color(1f, 1f, 1f, 0.32f);
+        handleImg.raycastTarget = true;
+        scrollbar.handleRect = handleRt;
+        scrollbar.targetGraphic = handleImg;
+
+        // Wire ScrollRect.
+        scroll.content = contentRt;
+        scroll.viewport = viewportRt;
+        scroll.verticalScrollbar = scrollbar;
+
         return new OutputBlock
         {
             Block = blockRt,
+            Viewport = viewportRt,
+            Content = contentRt,
             Text = text,
             LayoutElement = blockLE,
+            ScrollRect = scroll,
         };
     }
 
@@ -201,11 +300,16 @@ public static class StrategyEditorContentBuilder
     }
 
     // The pieces of an output block the StrategyEditorView holds to drive its dynamic layout.
+    // Post-D5 the block is a ScrollRect — the view caps LayoutElement.preferredHeight at body*cap,
+    // and the ScrollRect handles overflow via Viewport + Content (the Text lives in Content).
     public struct OutputBlock
     {
         public RectTransform Block;
+        public RectTransform Viewport;
+        public RectTransform Content;
         public Text Text;
         public LayoutElement LayoutElement;
+        public ScrollRect ScrollRect;
     }
 
     // Fractional constants exposed for the AFK gate so its layout assertions are not magic numbers

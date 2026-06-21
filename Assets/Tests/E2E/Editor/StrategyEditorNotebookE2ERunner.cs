@@ -64,7 +64,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section17_BlockPopup(spawned)
                 ?? Section18_DocumentBadge()
                 ?? Section19_RichOutput(spawned)
-                ?? Section20_ConsoleAndDynamicLayout(spawned);
+                ?? Section20_ConsoleAndDynamicLayout(spawned)
+                ?? Section21_ConsoleAuditGaps(spawned);
         }
         catch (Exception e)
         {
@@ -115,6 +116,11 @@ public static class StrategyEditorNotebookE2ERunner
                       "an empty rich+console body collapses to editor-only — blocks deactivate so the " +
                       "body's VerticalLayoutGroup skips them, populated blocks cap at body * 0.45, " +
                       "cell rebind clears both rich and console panes) " +
+                      "+ #102 audit gaps (STRATEGY-39..46 / findings 0076 §6: '&' literal not entity-" +
+                      "escaped, multi-cell index→region routing without bleed, re-press replaces (not " +
+                      "appends), re-press with empty hides the block, overflow → real ScrollRect with " +
+                      "operable verticalNormalizedPosition, first-frame bodyH==0 still paints visibly, " +
+                      "'</color>' injection escaped, dormant-reuse race dropped via ListMutated → Invalidate) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1893,21 +1899,285 @@ public static class StrategyEditorNotebookE2ERunner
     }
 
     // S20 fake: a settable {rich, console} payload for the pressed cell so the controller's
-    // passthrough (SetOutput + SetConsole) and the view's dynamic layout are both exercised.
+    // passthrough (SetOutput + SetConsole) and the view's dynamic layout are both exercised.  S21
+    // adds a multi-cell mode via SetMulti so STRATEGY-40 can return BOTH the pressed cell's output
+    // AND a reactive descendant's output from one press (verifying index→region routing across cells).
     sealed class _ConsoleExecutor : INotebookCellExecutor
     {
         string _output, _mimetype, _data;
         ConsoleSegment[] _console = System.Array.Empty<ConsoleSegment>();
+        (int idx, string output, string mime, string data, ConsoleSegment[] console)[] _multi;
         public void SetOutput(string output, string mimetype, string data) { _output = output; _mimetype = mimetype; _data = data; }
         public void SetConsole(ConsoleSegment[] console) { _console = console ?? System.Array.Empty<ConsoleSegment>(); }
+        public void SetMulti(params (int idx, string output, string mime, string data, ConsoleSegment[] console)[] multi)
+            => _multi = (multi != null && multi.Length > 0) ? multi : null;
         public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
-            => new NotebookRunResult
+        {
+            if (_multi != null)
+            {
+                var ran = new NotebookCellOutput[_multi.Length];
+                for (int i = 0; i < _multi.Length; i++)
+                {
+                    var m = _multi[i];
+                    ran[i] = new NotebookCellOutput
+                    {
+                        Index = m.idx,
+                        Output = m.output,
+                        Ok = true,
+                        Mimetype = m.mime,
+                        Data = m.data,
+                        Console = m.console,
+                    };
+                }
+                return new NotebookRunResult { Ok = true, Ran = ran };
+            }
+            return new NotebookRunResult
             {
                 Ok = true,
                 Ran = new[] { new NotebookCellOutput {
                     Index = pressedIndex, Output = _output, Ok = true,
                     Mimetype = _mimetype, Data = _data, Console = _console } },
             };
+        }
         public int[] Restage(string source) => System.Array.Empty<int>();
+    }
+
+    static int CountSubstring(string haystack, string needle)
+    {
+        if (string.IsNullOrEmpty(haystack) || string.IsNullOrEmpty(needle)) return 0;
+        int count = 0, i = 0;
+        while ((i = haystack.IndexOf(needle, i, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            i += needle.Length;
+        }
+        return count;
+    }
+
+    // ====== Section 21 — #102 audit gaps (findings 0076 §6) ======
+    //
+    // Covers: STRATEGY-39 `&` literal must NOT be entity-escaped (UGUI does not decode, so
+    //         Replace("&","&amp;") would paint `a & b` as `a &amp; b` — pure regression);
+    //         STRATEGY-40 multi-cell routing: a press that produces output for the pressed cell
+    //         AND a reactive descendant routes each console to ITS OWN region (no bleed);
+    //         STRATEGY-41 re-press of the same cell REPLACES the prior console (does not append);
+    //         STRATEGY-42 re-press of the same cell with EMPTY hides the console block;
+    //         STRATEGY-43 overflow → real ScrollRect: Content > Viewport, verticalNormalizedPosition
+    //         operable end-to-end (findings 0076 §6 D5 — supersedes RectMask2D-clip);
+    //         STRATEGY-44 first-frame bodyH==0: paint must still produce a visible block with
+    //         preferredHeight > 0 (no `ForceRebuildLayoutImmediate` priming);
+    //         STRATEGY-45 `</color>` injection-resistance: a stderr segment containing `</color>`
+    //         must be escaped to `&lt;/color>` so it cannot close our amber wrapper;
+    //         STRATEGY-46 dormant-reuse race: a press → DeleteCell → AddCell that reuses dormant
+    //         R1 must NOT paint the prior cell's stdout onto the rebound view (ListMutated bumps
+    //         the run controller's generation, identical to how Open/New already drops stale).
+    //
+    // Python-FREE.  The Python pytest gate (test_notebook_console.py) already covers the marimo-side
+    // capture; this section pins the C# routing, layout, escape, and race guards.
+    static string Section21_ConsoleAuditGaps(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer21", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                // Spawned region windows also need a resolvable body rect; the production root sizes
+                // them via FloatingWindowController.Spawn args, but the bare-RT controller here just
+                // calls our factory and never sets a sizeDelta — pin it so the dynamic layout works.
+                rt.sizeDelta = new Vector2(400f, 400f);
+                UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        // STRATEGY-44 leans on the adopted window being at default zero size before any
+        // ForceRebuildLayoutImmediate — build the view INSIDE that bodyH==0 frame.  Subsequent tests
+        // resize the root to 400 for stable layout.
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S21: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S21: precondition — cell0 not bound to region_001";
+
+        var exec = new _ConsoleExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
+        // #102 findings 0076 §6 D7: production wiring — coord mutations drop in-flight runs.
+        coord.ListMutated += () => run.Invalidate();
+        var view = views[R1];
+
+        // ---- STRATEGY-44: bodyH==0 first-frame race (no ForceRebuildLayoutImmediate priming) ----
+        // The adopted window's RectTransform has not yet resolved (no parent canvas + no force-rebuild),
+        // so adoptBody.rect.height == 0 on this very first paint.  ApplyBlockSize must take the
+        // no-cap branch (natural drives) and still leave a visible block with preferredHeight > 0.
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "first-frame\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-44: console block not visible on first-frame paint (bodyH==0)";
+        var conBlockRT = view.transform.parent.Find("ConsoleOutputBlock") as RectTransform;
+        if (conBlockRT == null) return "S21/STRATEGY-44: console block RT not found under body";
+        var conLE0 = conBlockRT.GetComponent<LayoutElement>();
+        if (conLE0 == null || !(conLE0.preferredHeight > 0f))
+            return "S21/STRATEGY-44: preferredHeight stayed 0 on first-frame paint, got " + (conLE0 != null ? conLE0.preferredHeight : 0f);
+
+        // Stabilise the body for the remaining assertions.
+        adoptRoot.sizeDelta = new Vector2(400f, 400f);
+        UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(adoptRoot);
+
+        // ---- STRATEGY-39: `&` literal must NOT be entity-escaped ----
+        exec.SetOutput(null, null, null);
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "a & b\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        var ctext = view.CurrentConsoleText ?? string.Empty;
+        if (!ctext.Contains("a & b"))
+            return "S21/STRATEGY-39: literal '&' missing — payload not preserved verbatim, got [" + ctext + "]";
+        if (ctext.Contains("&amp;"))
+            return "S21/STRATEGY-39: '&' was double-escaped to '&amp;' — UGUI would paint the entity literally, got [" + ctext + "]";
+
+        // ---- STRATEGY-45: `</color>` in stderr must not close our amber wrapper ----
+        exec.SetConsole(new[] {
+            new ConsoleSegment { Stream = "stderr", Text = "start" },
+            new ConsoleSegment { Stream = "stderr", Text = "</color>middle" },
+            new ConsoleSegment { Stream = "stdout", Text = "end" },
+        });
+        run.RunCell(R1); run.DrainAndRoute();
+        ctext = view.CurrentConsoleText ?? string.Empty;
+        // BuildConsoleRichText wraps EACH stderr segment in its own <color>...</color> pair, so the
+        // safety property is "wrapper balance" — every <color=#ffa01c> open has its own </color>
+        // close, and the user's `</color>` cannot leak past escape.  An unescaped `</color>` would
+        // close our most recent open prematurely, breaking the balance (more closes than opens).
+        if (!ctext.Contains("&lt;/color>"))
+            return "S21/STRATEGY-45: user's '</color>' was not escaped — UGUI would close our amber tag, got [" + ctext + "]";
+        if (ctext.Contains("</color>middle"))
+            return "S21/STRATEGY-45: user's '</color>middle' rendered literally — escape did not run before paint, got [" + ctext + "]";
+        int opens = CountSubstring(ctext, "<color=#ffa01c>");
+        int closes = CountSubstring(ctext, "</color>");
+        if (opens != closes)
+            return "S21/STRATEGY-45: amber wrapper unbalanced (opens=" + opens + " closes=" + closes + ") — user's </color> may have leaked, got [" + ctext + "]";
+        if (opens != 2)
+            return "S21/STRATEGY-45: expected 2 amber wrapper pairs (one per stderr segment), got opens=" + opens;
+
+        // ---- STRATEGY-41: re-press REPLACES (does not append) ----
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "round1\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "round2\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        ctext = view.CurrentConsoleText ?? string.Empty;
+        if (ctext.Contains("round1"))
+            return "S21/STRATEGY-41: re-press did not REPLACE — prior 'round1' leaked, got [" + ctext + "]";
+        if (!ctext.Contains("round2"))
+            return "S21/STRATEGY-41: re-press did not paint 'round2', got [" + ctext + "]";
+
+        // ---- STRATEGY-42: re-press with EMPTY hides the console block ----
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "transient\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.ConsoleBlockVisible) return "S21/STRATEGY-42: precondition — console did not become visible";
+        exec.SetConsole(Array.Empty<ConsoleSegment>());
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.ConsoleBlockVisible) return "S21/STRATEGY-42: re-press with empty segments did not hide the console block";
+
+        // ---- STRATEGY-43: overflow → real ScrollRect (findings 0076 §6 D5) ----
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < 40; i++) sb.Append("line ").Append(i).Append('\n');
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = sb.ToString() } });
+        run.RunCell(R1); run.DrainAndRoute();
+        var scroll = view.ConsoleScrollRect;
+        if (scroll == null) return "S21/STRATEGY-43: ConsoleScrollRect not wired";
+        if (scroll.content == null) return "S21/STRATEGY-43: ScrollRect.content not wired";
+        if (scroll.viewport == null) return "S21/STRATEGY-43: ScrollRect.viewport not wired";
+        if (scroll.verticalScrollbar == null) return "S21/STRATEGY-43: ScrollRect.verticalScrollbar not wired";
+        UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(adoptRoot);
+        float contentH = scroll.content.rect.height;
+        float viewportH = scroll.viewport.rect.height;
+        if (!(contentH > viewportH + 1f))
+            return "S21/STRATEGY-43: 40-line payload did not overflow viewport (content=" + contentH + " viewport=" + viewportH + ")";
+        // Setting verticalNormalizedPosition end-to-end (0=bottom, 1=top) must stick — proof the
+        // ScrollRect is genuinely controlling content position, not a no-op clip.
+        scroll.verticalNormalizedPosition = 0f;
+        if (Mathf.Abs(scroll.verticalNormalizedPosition - 0f) > 0.01f)
+            return "S21/STRATEGY-43: setting verticalNormalizedPosition=0 did not stick (got " + scroll.verticalNormalizedPosition + ")";
+        scroll.verticalNormalizedPosition = 1f;
+        if (Mathf.Abs(scroll.verticalNormalizedPosition - 1f) > 0.01f)
+            return "S21/STRATEGY-43: setting verticalNormalizedPosition=1 did not stick (got " + scroll.verticalNormalizedPosition + ")";
+
+        // ---- STRATEGY-40: multi-cell routing (pressed R1 + descendant R2) ----
+        // AddCell so coord.RegionOf(cells[1]) resolves to R2 (region_002 spawn).
+        var cellB = coord.AddCell();
+        if (coord.RegionOf(cellB) != R2)
+            return "S21/STRATEGY-40: precondition — second cell not bound to region_002, got " + coord.RegionOf(cellB);
+        StrategyEditorView view2;
+        if (!views.TryGetValue(R2, out view2) || view2 == null)
+            return "S21/STRATEGY-40: precondition — region_002 view not built by FW factory";
+        // Reset R1 between sub-tests (re-press with empty hides; we want both blocks clean).
+        exec.SetConsole(Array.Empty<ConsoleSegment>());
+        run.RunCell(R1); run.DrainAndRoute();
+
+        // Executor returns TWO ran entries: pressed (idx=0 → R1) + descendant (idx=1 → R2).
+        exec.SetMulti(
+            (0, null, null, null, new[] { new ConsoleSegment { Stream = "stdout", Text = "from-cell-0\n" } }),
+            (1, null, null, null, new[] { new ConsoleSegment { Stream = "stdout", Text = "from-cell-1\n" } }));
+        run.RunCell(R1); run.DrainAndRoute();
+        var t1 = view.CurrentConsoleText ?? string.Empty;
+        var t2 = view2.CurrentConsoleText ?? string.Empty;
+        if (!t1.Contains("from-cell-0"))
+            return "S21/STRATEGY-40: R1 (pressed) console missing 'from-cell-0', got [" + t1 + "]";
+        if (t1.Contains("from-cell-1"))
+            return "S21/STRATEGY-40: descendant text leaked into pressed cell R1, got [" + t1 + "]";
+        if (!t2.Contains("from-cell-1"))
+            return "S21/STRATEGY-40: R2 (descendant) console missing 'from-cell-1', got [" + t2 + "]";
+        if (t2.Contains("from-cell-0"))
+            return "S21/STRATEGY-40: pressed text leaked into descendant cell R2, got [" + t2 + "]";
+
+        // Reset multi-mode (empty params → _multi=null) and prep both views for STRATEGY-46.
+        exec.SetMulti();
+        exec.SetConsole(Array.Empty<ConsoleSegment>());
+        run.RunCell(R1); run.DrainAndRoute();
+        run.RunCell(R2); run.DrainAndRoute();
+
+        // ---- STRATEGY-46: dormant-reuse race (findings 0076 §6 D7) ----
+        // State here: notebook = [cellA, cellB], R1 = cellA, R2 = cellB (AddCell(cellB) above).
+        // Goal: a press queued AGAINST cellA must NOT paint onto a cellC that later reuses dormant
+        // R1.  The synchronous lane queues the press result inside RunCell with generation N; the
+        // subsequent DeleteCell(R1) → AddCell() reuses dormant R1 and binds it to a fresh cellC.
+        // ListMutated bumps the controller's generation each mutation, so the queued result is
+        // dropped at drain — otherwise cellA's stdout would paint onto cellC's view.
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "stale-from-A\n" } });
+        run.RunCell(R1);   // synchronous lane queues result with current generation N
+        if (!coord.DeleteCell(R1)) return "S21/STRATEGY-46: precondition — DeleteCell(R1) failed";
+        // After DeleteCell, R1 is hidden+dormant.  AddCell reuses the dormant R1 (the adopted shell
+        // is never-Destroy, findings 0050) and binds a fresh cellC to it — same GameObject + same
+        // StrategyEditorView, different Cell.
+        var cellC = coord.AddCell();
+        if (coord.RegionOf(cellC) != R1)
+            return "S21/STRATEGY-46: precondition — AddCell did not reuse dormant R1, got " + coord.RegionOf(cellC);
+        if (!ReferenceEquals(views[R1], view))
+            return "S21/STRATEGY-46: precondition — R1 view recreated (should be same adopted shell)";
+        if (view.BoundCell != cellC)
+            return "S21/STRATEGY-46: precondition — R1 view not rebound to cellC";
+        // NOW drain.  The press's result frame predates DeleteCell+AddCell — generation bump must drop it.
+        run.DrainAndRoute();
+        if (view.ConsoleBlockVisible)
+            return "S21/STRATEGY-46: stale drain painted onto cellC's rebound view — generation guard missing";
+        if ((view.CurrentConsoleText ?? string.Empty).Contains("stale-from-A"))
+            return "S21/STRATEGY-46: stale stdout 'stale-from-A' leaked into cellC's view";
+
+        lane.Dispose();
+        return null;
     }
 }

@@ -17,7 +17,7 @@
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..10,SNAP-01,02,DOCK-01,02` | 14 | 12 | 0 | 0 | 1 | 1 |
-| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..38` | 38 | 34 | 0 | 1 | 2 | 1 |
+| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..46` | 46 | 42 | 0 | 1 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
@@ -40,7 +40,7 @@
 
 ## 合計
 
-- **Surface 12 本 ＝ 182 行 ／ Journey 4 本 ＝ 50 行 ／ 総計 232 行**（#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075。#102: STRATEGY-34..38（per-cell console stdout/stderr セグメント表示 + 動的出力レイアウト・S20）を追加・findings 0076）。
+- **Surface 12 本 ＝ 190 行 ／ Journey 4 本 ＝ 50 行 ／ 総計 240 行**（#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075。#102: STRATEGY-34..38（per-cell console stdout/stderr セグメント表示 + 動的出力レイアウト・S20）を追加・findings 0076。#102 audit gaps: STRATEGY-39..46（`&` escape regression / multi-cell routing / re-press replace+empty / overflow ScrollRect / bodyH==0 first-frame / `</color>` 注入耐性 / dormant-reuse race・S21）を追加・findings 0076 §6）。
 - `ReplayToHakoniwaE2ERunner` が第一波時点の実装済み回帰ゲート（`自動(E2E済)`）。**第二波1本目 = `ScenarioStartupE2ERunner`
   を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。
   **2本目 = `FooterModeE2ERunner`**（`FooterLiveAutoVerify` → 改名・FOOTER-06/07 view section＋FOOTER-10 追加・LiveAuto は

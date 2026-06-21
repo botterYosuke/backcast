@@ -17,20 +17,21 @@
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05` | 19 | 16 | 0 | 0 | 2 | 1 |
-| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..33` | 33 | 29 | 0 | 1 | 2 | 1 |
+| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..33` | 33 | 30 | 0 | 0 | 2 | 1 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) ✅ | `DEPTH-01..11` | 11 | 9 | 1 | 0 | 1 | 0 |
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
 
-## Journey E2E（3 本＋既存 1 本・50 行）
+## Journey E2E（4 本・57 行）
 
 `自動(E2E済)` 列は `自動(E2E済・<別Runner>)`（別 Runner が正本のもの）も合算する。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
-| ~~ReplayToHakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
+| ~~ReplayToHakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017**（縦串の席は ↓ が継承） | — | — | — | — | — | — | — |
+| [NotebookToHakoniwaJourneyE2ERunner](./NotebookToHakoniwaJourneyE2ERunner.md) ✅ | `JOURNEY-NBHAKO-01..14` | 14 | 12 | 0 | 0 | 1 | 1 |
 | [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) ✅ | `JOURNEY-LAYOUT-01..15` | 15 | 15 | 0 | 0 | 0 | 0 |
 | [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) ✅ | `JOURNEY-AUTHOR-01..13` | 13 | 13 | 0 | 0 | 0 | 0 |
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) ✅ | `JOURNEY-LIVE-01..15` | 15 | 14 | 0 | 0 | 1 | 0 |
@@ -40,7 +41,7 @@
 
 ## 合計
 
-- **Surface 12 本 ＝ 177 行 ／ Journey 4 本 ＝ 50 行 ／ 総計 227 行**（#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075）。
+- **Surface 12 本 ＝ 177 行 ／ Journey 4 本 ＝ 57 行 ／ 総計 234 行**（#95 Phase 2: `StrategyEditorNotebookE2ERunner` に STRATEGY-19/20 per-cell RUN を追加・findings 0071。#95 Phase 4: STRATEGY-21/22/23 bt.replay() control を追加・findings 0073。#95 Phase 5: STRATEGY-24/25/26 bt.step() persistence + NoScenarioBacktester を追加・findings 0074。#95 Phase 6: STRATEGY-27..33（per-cell stale badge / block popup / document badge #90 / rich output routing・S16–S19）を追加・findings 0075。**#95 E2E 仕上げ**: `NotebookToHakoniwaJourneyE2ERunner`（JOURNEY-NBHAKO-01..14）を新設＝退役 `ReplayToHakoniwa` の縦串の席を新 Hakoniwa モデルで継ぎ「per-cell RUN→実エンジン駆動→base tile 逐次更新→停止」を 1 本の release-gate に。`StrategyEditorNotebookE2ERunner` の最後の `要新規自動化` STRATEGY-11 を Section20 で昇格・findings 0076）。
 - `ReplayToHakoniwaE2ERunner` が第一波時点の実装済み回帰ゲート（`自動(E2E済)`）。**第二波1本目 = `ScenarioStartupE2ERunner`
   を昇格済み**（throwaway `ScenarioStartupProbe` → 改名＋SCENARIO-12 追加・AFK RED→GREEN、findings 0054）。
   **2本目 = `FooterModeE2ERunner`**（`FooterLiveAutoVerify` → 改名・FOOTER-06/07 view section＋FOOTER-10 追加・LiveAuto は

@@ -292,18 +292,50 @@ infinite canvas の Content 座標系の座標。**画面ピクセルでも zoom
 フィールド**として載る（capability surface 追加・findings 0004 §10 の予約項目）。
 _Avoid_: pan/zoom 状態を panel `LayoutRect`（正規化 0..1 表示矩形）に混ぜること（別次元・別フィールド）
 
-**Hakoniwa（ドッキング window クラスタ）** ※2026-06-21 **再定義**・方針 [[ADR-0017]]（findings 0075）:
+**Hakoniwa（ドッキング window クラスタ）** ※2026-06-21 **再々定義**・方針 [[ADR-0017]]＋[[ADR-0018]]＋**[[ADR-0019]]**（findings 0075／**0080**）:
 infinite canvas の Content 上で、**独立した floating window**（`chart` / `positions` / `orders` / `run_result` /
-`buying_power` / `startup`）が **磁石スナップでくっついた集合**を指す概念ラベル。専用の bounded サーフェス
-GameObject（HakoniwaRoot）は持たず、全 window は [[floating window / FloatingWindowLayer / z-order]] の
-`FloatingWindowLayer` の子（pan/zoom 追従）。くっつき方は drag リリース時の**辺の磁石スナップ**（flush 隣接＋同辺整列）で、
-結合・群一体移動・detach 状態は無い（各 window 常に独立・隙間/重なり許容）。
+`buying_power` / `startup`）が **同一 [[window group / groupId]] を共有してくっついた集合**を指す概念ラベル。
+専用の bounded サーフェス GameObject（HakoniwaRoot）は持たず、全 window は奥プレーン `DockLayer`（ADR-0018・1.0倍）の子。
+くっつき方は drag リリース時の**磁石スナップ → flush 隣接判定で `groupId` 付与/merge**（ADR-0019）。
+**[[Hakoniwa group]] = visible/live ≥ 2 ∧ core（`startup` ∨ `run_result`）含む group** に昇格し、group 一体移動を**禁止**して内部 swap に切り替わる
+（仕様反転＝ADR-0017 の「結合なし」を ADR-0019 が supersede）。それ以外（非 core クラスタ）は通常 group で一体移動可能、core は **detach 不可**。
 ~~旧定義（SUPERSEDED・findings 0007・TTWR `src/ui/hakoniwa.rs`/ADR 0011/0014 parity）: `ceil(√n)` split-grid に tile を
 並べ swap で並べ替える単一サーフェス~~——ADR-0017 で TTWR split-grid parity から意図的逸脱し退役（grid/box-grow/swap/per-mode を全廃）。
+~~ADR-0017 直後の中間定義「磁石スナップでくっついた集合・結合なし・各 window 常に独立」~~——ADR-0019 で「結合あり・groupId による group lifecycle」へ反転。
 _Avoid_: 「Hakoniwa = 固有の GameObject/bounded box」と捉えること（クラスタの概念ラベル・実体は floating window 群）／
-タイリング強制・resize 連動・group 一体移動を持ち込むこと（磁石スナップは結合なし）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）
+タイリング強制・resize 連動を持ち込むこと（group 一体移動は ADR-0019 で許可、ただし core 含み時は swap）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）／「結合なし・各 window 独立」を不変条件と扱うこと（ADR-0019 で反転＝group 関係を `groupId` で持つ）
 
-**tile / slot / tile swap** ※**SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）で退役。
+**window group / groupId** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+floating window の **永続的な集合関係**。`FloatingWindowLayout.groupId: string?`（nullable・GUID `grp_<hex32>`）に保存され、同一 `groupId` を共有する **visible/live 集合が 2 個以上** のとき "group" とみなす（singleton は group 不成立）。group の attach は **flush 隣接判定**（`|dragged.edge - other.opposite_edge| ≤ 1px` ∧ 直交軸 overlap > 0）が release commit / dock spawn の後にトリガ。same-edge 整列だけ（離れて並んだ状態）では attach しない。merge 衝突は **[[Hakoniwa group]] 単独 > size 最大 > 辞書順最小 > 新規 GUID** の cascade で生き残る ID を決定。detach commit で dragged の `groupId=null`、残 visible/live が 1 なら連鎖 dissolve（残 1 も null）。**hide は groupId 温存**（Replay/Live mode 切替で復活）、**close（universe sync 削除等）は連鎖 dissolve**、**spawn は groupId=null**（attach はユーザ drag-release だけ）。**cross-plane group は禁止**（ADR-0018 plane 分離と整合）＝restore 時に多数派 plane 残し・同数なら dock plane 優先で分割。group 関係は座標から再導出せず `groupId` が唯一の真実源。
+_Avoid_: same-edge 整列だけで attach すると期待すること（flush 必須）／groupId を doc 外で再導出すること（persist が SoT）／singleton を group と扱うこと（≥2 必須）／cross-plane で同一 `groupId` を許可すること（restore で分割される）／spawn 時に自動 attach すること（ユーザ drag-release だけが attach 元）
+
+**Hakoniwa group** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+[[window group / groupId]] の特殊形態。判定: **visible/live 集合 ≥ 2 ∧ core（`startup` ∨ `run_result`）を visible で含む**（drag 開始時点で動的再評価＝Replay/Live で mode-switch のたびに昇格/降格しうる）。挙動: ① group **全体 translate 禁止**（dragged window 含む group が動かない）／② 内部 drag は **swap drop target** との `(x,y,w,h)` 4 値交換（group footprint 不変）／③ **core は detach 不可**（`D_DETACH` 超でも rest snap-back ghost 固定）／④ 非 core は detach 可（`D_DETACH=64f` 超で release commit）。Hakoniwa group merge 時は ID 優先生存（identity 保護）。例: `(startup, run_result, positions)` から positions detach → 残 2＋core → Hakoniwa 維持・`(run_result, orders)` から orders detach → 残 1 → 連鎖 dissolve で run_result.groupId=null。
+_Avoid_: Hakoniwa group を「dock plane クラスタ」と同一視すること（plane ではなく内容＝core 含み判定）／core を含まない dock クラスタを Hakoniwa group と呼ぶこと（普通の group・translate 可）／core を Live で hidden の時 Hakoniwa として扱うこと（visible/live ベース判定なので降格）／swap で kind/content を交換すると解釈すること（`(x,y,w,h)` だけ）
+
+**core member** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+[[Hakoniwa group]] の判定に使う kind 集合 = **`startup` / `run_result`** の 2 つ。これらが visible で group に居れば Hakoniwa group へ昇格する。**detach 不可**（D_DETACH 超え drag でも rest にゴースト固定で戻る）＝Hakoniwa の "核" identity を user 操作で壊さない。hidden 時（Live mode で startup hidden）は core としてカウントされず（visible/live ベース判定）、結果として group が普通の group へ降格しうる（mode 復帰で再昇格）。
+_Avoid_: core を kind 設定 / config として可変にすること（`startup` / `run_result` 固定）／hidden core を Hakoniwa 判定に含めること（visible/live のみ）
+
+**D_DETACH（detach 閾値）** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+group drag 中の detach 判定閾値 = **`64f` canvas-logical px**（`FloatingWindowMath` 側 pure 定数）。判定 = `|cursor - rest| > D_DETACH`。**rest** = 通常 group なら drag 開始時の当該 window 位置 ＋ group_translation、Hakoniwa group なら swap 判定後の "離したら置かれる" 位置。閾値内 → group 操作（normal は translate / Hakoniwa は swap target hover）。閾値超 → detach 状態 ghost（非 core）／rest snap-back ghost（core）。commit は release 一括（drag 中は groupId・geometry 不変・通常 group translate のみ実描画）。zoom 非依存（canvas-logical px）。
+_Avoid_: D_DETACH を screen pixel にすること（zoom 非依存性が壊れる）／drag 中の閾値 cross で即 commit すること（release commit 規律違反）／速度や修飾キーで detach 判定を補強すること（距離一本＝pure 算術で AFK 可能）
+
+**swap drop target** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+[[Hakoniwa group]] 内 drag 中、**カーソル直下にある同 `groupId` の他メンバー**（dragged 除く・hidden 除く・複数重なりは最前面 sibling 優先）。release 時に dragged ↔ target の **`(x, y, w, h)` 4 値を交換**（kind/id/content 不変・group footprint 不変）。target が無く `< D_DETACH` なら snap-back（dragged は元 rest へ戻す）。ghost: dragged ghost は target rect / target ghost は dragged 元 rect の 2 枚同時表示で「入れ替わり後」を可視化。
+_Avoid_: drop target を中心距離最小で選ぶこと（カーソル直下＝意図に直結）／(x,y) だけ交換すること（w/h 違いで overlap・footprint 崩壊）／kind/id を交換すること（identity を壊す＝content rehome は射程外）
+
+**drag ghost** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
+drag 中の **post-release 状態の半透明プレビュー**（alpha **0.45**・kind accent border・dragged ghost は solid border・target ghost は dashed border）。drag 中だけ実 window より前面 sibling に描画される一時 UI（drag 終了で破棄）。操作タイプ別:
+- 単独 window: ghost なし（実 window がカーソル追従＝現 #15 のまま）
+- 通常 group・`< D_DETACH`: ghost なし（実 group 全員が平行移動＝post-release と同じ）
+- 通常 group・`≥ D_DETACH`: dragged 1 枚 ghost をカーソル位置に
+- Hakoniwa group・`< D_DETACH`・target あり: dragged ghost を target rect / target ghost を dragged 元 rect（2 枚）
+- Hakoniwa group・`< D_DETACH`・target なし: dragged ghost を元 rest 位置（snap-back プレビュー）
+- Hakoniwa group・`≥ D_DETACH`・非 core: dragged 1 枚 ghost をカーソル位置に（detach プレビュー）
+- Hakoniwa group・`≥ D_DETACH`・core: dragged 1 枚 ghost を rest 位置（detach 不可フィードバック）
+**commit-on-release**: drag 中は groupId・geometry 不変、ghost はあくまで preview。release で初めて detach/swap/snap-back/translate を確定（ADR-0017 §1 snap-on-release 精神と整合）。
+_Avoid_: ghost を drag 中に commit と扱うこと（preview のみ・release で commit）／通常 group の translate に ghost を被せること（実描画で十分・冗長）／単独 window drag に ghost を入れること（#15 AFK と挙動互換を壊す）
 パネルは独立 floating window（canvas 論理座標の position+size）になり、slot 順序の正本・swap・`ceil(√n)` 派生 rect は廃止。
 くっつきは磁石スナップ。以下は履歴:
 **tile** = Hakoniwa の 1 区画（安定 `id` で同定）。**slot** = tile が占める grid スロット番号（row-major・
@@ -332,20 +364,19 @@ mode 差は `startup` の show/hide のみ。以下は履歴:
 **Replay と Live が各々の Hakoniwa tile 並び順を別の profile として覚え**、mode 切替で当該 profile を復元する（TTWR `HakoniwaLayoutProfiles { replay, live }` の capability parity・`from_mode`: Replay→replay／LiveManual・LiveAuto→**同一 live profile**）。per-mode 化の対象は **Hakoniwa の tile 並び順（`_hako.Capture().panels`）だけ**で、infinite-canvas の pan/zoom・floating window・Strategy Editor の開きファイルは **mode 横断で単一共有**（doc 直下に flat 保持。TTWR `restore.rs` も camera/windows は flat 復元）。disk スキーマは `LayoutDocument.hakoniwaProfiles { replay, live }`（nested・**additive**・version bump 無し）を**正本**とし、`panels` は active mode の互換ミラー＆旧 doc の **forward-compat seed** 用（read は常に profiles 優先で drift しない）。mode 切替は TTWR `reconcile_hakoniwa_tiles` 準拠＝**旧 profile に現 layout 退避 → current 切替 → 新 profile を検証 load**。検証（`is_valid_for` parity）= 保存 profile の **非 chart（base）id 集合が当該 mode の `HakoniwaBaseTiles.Kinds` と一致するか**で、一致なら user の base 並び順を honor・不一致/無は canonical `Kinds(mode)` に落とす（[[backcast-layout-default-id-collision]] の #61 衝突安全を strict superset で包含）。chart の並び順はどの場合も honor し membership は universe 再導出（#60 不変）。ロジックは pure class `HakoniwaLayoutProfiles`（UnityEngine-free・AFK 権威）に集約し、`HakoniwaController` が actuation・`BackcastWorkspaceRoot` が membership/box-grow。box 位置/サイズ・cols/rows（divider）の per-mode 化は後続 additive slice（同コンテナ `HakoniwaProfile` へ拡張）。
 _Avoid_: per-mode 化対象を tile 順以外（canvas/window/editor）へ広げること（TTWR は flat 共有）／`panels` を per-mode の正本にすること（正本は `hakoniwaProfiles`・panels はミラー/seed）／検証なしで legacy/衝突 doc の base 順を honor すること（集合不一致は canonical へ＝#61 衝突安全）／LiveManual と LiveAuto を別 profile にすること（同一 live profile を共有）
 
-**floating window / FloatingWindowLayer / z-order** ※2026-06-21 拡張・[[ADR-0017]]（findings 0075）:
+**floating window / FloatingWindowLayer / z-order** ※2026-06-21 **再拡張**・[[ADR-0017]]＋[[ADR-0018]]＋**[[ADR-0019]]**（findings 0075／**0080**）:
 infinite canvas の Content 上を **自由配置（free placement）**で漂う window。**ADR-0017 以降、Hakoniwa のパネル
 （`chart` / `positions` / `orders` / `run_result` / `buying_power` / `startup`）も floating window**＝旧「chart は
-floating window ではない」は**反転**（chart は multi-instance kind `chart:<id>`・universe 同期）。**ドッキング = 磁石スナップ**：
-drag リリース時に近接 window の辺が閾値内なら揃う（`FloatingWindowMath.SnapOffset`・pure/AFK 権威・結合なし）。
-**FloatingWindowLayer** = Content 直下の単一コンテナで、全 floating window はその子。
-HakoniwaRoot と sibling order（z-order）を混在させないための層（Content の子なので pan/zoom には追従する）。**z-order** =
-window の前後関係。live は **FloatingWindowLayer 内の sibling index**（後の sibling ほど前面）、persist は **`zOrder` int**
-（#12 `PanelLayout.slot` とは同一視しない＝findings 0004 §3 が「zOrder は別 field」と予約済み）。**click-to-front** =
+floating window ではない」は**反転**（chart は multi-instance kind `chart:<id>`・universe 同期）。
+**ドッキング = 磁石スナップ＋group 関係（ADR-0019）**: drag リリース時に近接 window の辺が閾値内なら揃い
+（`FloatingWindowMath.SnapOffset`・pure/AFK 権威）、その後の **flush 隣接判定**（ε=1px ∧ 直交軸 overlap > 0）で **[[window group / groupId]]** を付与/merge。group 内 window は drag で**一体移動**するが、core（`startup` / `run_result`）含み時は [[Hakoniwa group]] へ昇格し**移動禁止・内部 swap・core 不抜**。`D_DETACH=64f` canvas-logical px を超える drag で detach commit。
+**FloatingWindowLayer** = ADR-0018 §10 で「手前 1.2倍プレーン」用に縮退（`strategy_editor` cell ＋ `order` のみ）。元箱庭 6 種は **`DockLayer`（1.0倍・奥・背面 sibling）** に居る。各プレーンに独立 `FloatingWindowController` が居り、snap/group 母集合はプレーンに閉じる（cross-plane snap・cross-plane group とも禁止＝ADR-0018／ADR-0019）。**z-order** =
+window の前後関係。live は **各 plane 内の sibling index**（後の sibling ほど前面）、persist は **`zOrder` int**（plane-relative）。**click-to-front** =
 window をクリック/drag したとき最前面へ（TTWR `WindowManager.max_z` bump の capability parity・形式非互換）。**move** =
-title bar drag で position を移動（screen delta / zoom → canvas 論理 delta）。実装は #15。
-_Avoid_: ~~chart を floating window と呼ぶこと~~（ADR-0017 で反転＝**chart は floating window**）／磁石スナップに resize 連動・group 一体移動・detach 状態を持ち込むこと（結合なし）／zOrder を `slot` に相乗りさせること（別 field）／
+title bar drag で position を移動（screen delta / zoom → canvas 論理 delta・group 所属時は一体移動 or swap）。**[[drag ghost]]** = drag 中の post-release 状態半透明プレビュー。実装は #15＋#99＋#103＋#104（ADR-0019）。
+_Avoid_: ~~chart を floating window と呼ぶこと~~（ADR-0017 で反転＝**chart は floating window**）／~~磁石スナップに group 一体移動・detach 状態を持ち込むこと~~（ADR-0019 で反転＝group 関係を `groupId` で持つ）／zOrder を `slot` に相乗りさせること（別 field）／
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
-resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）
+resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）／元箱庭 6 種を `FloatingWindowLayer` に置くこと（ADR-0018 で `DockLayer` 行き）／cross-plane group を許可すること（ADR-0019 で禁止＝restore 時に分割）
 
 **chrome z-order 前面順序（画面固定 chrome のレイヤリング契約）**:
 [[infinite canvas]] の外に置く画面固定 chrome（menu bar / その dropdown / sidebar / footer / secret modal）の

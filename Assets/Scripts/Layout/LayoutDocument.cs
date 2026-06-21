@@ -154,10 +154,21 @@ public class FloatingWindowLayout
     public float h;
     public int zOrder;
     public bool visible;
+    // #104 (ADR-0019 / findings 0082 §1, §11): persistent window-group membership. A nullable GUID-shaped
+    // string ("grp_<hex32>") shared by every member of the same group; null = singleton (no group). It is
+    // the SOLE source of group truth — never re-derived from coordinates, never re-derived from edge
+    // adjacency at read time. ADDITIVE schema field (ADR-0017 §6 "schema-add 0" is supersede only here, by
+    // ONE field): an old sidecar lacking groupId loads as null on every window (forward-evolution
+    // tolerance, findings 0008 §3); not a version bump. Spawn paths leave it null — attach happens ONLY at
+    // the user's drag-release in SnapOnRelease (findings 0082 §10), never on programmatic Spawn / restore.
+    public string groupId;
 
     public FloatingWindowLayout() { }
 
     public FloatingWindowLayout(string id, string kind, float x, float y, float w, float h, int zOrder, bool visible)
+        : this(id, kind, x, y, w, h, zOrder, visible, null) { }
+
+    public FloatingWindowLayout(string id, string kind, float x, float y, float w, float h, int zOrder, bool visible, string groupId)
     {
         this.id = id;
         this.kind = kind;
@@ -167,9 +178,10 @@ public class FloatingWindowLayout
         this.h = h;
         this.zOrder = zOrder;
         this.visible = visible;
+        this.groupId = groupId;
     }
 
-    public FloatingWindowLayout Clone() => new FloatingWindowLayout(id, kind, x, y, w, h, zOrder, visible);
+    public FloatingWindowLayout Clone() => new FloatingWindowLayout(id, kind, x, y, w, h, zOrder, visible, groupId);
 
     public static bool Approx(FloatingWindowLayout a, FloatingWindowLayout b, float eps)
     {
@@ -177,7 +189,8 @@ public class FloatingWindowLayout
         return a.id == b.id && a.kind == b.kind
             && Math.Abs(a.x - b.x) <= eps && Math.Abs(a.y - b.y) <= eps
             && Math.Abs(a.w - b.w) <= eps && Math.Abs(a.h - b.h) <= eps
-            && a.zOrder == b.zOrder && a.visible == b.visible;
+            && a.zOrder == b.zOrder && a.visible == b.visible
+            && a.groupId == b.groupId;
     }
 }
 

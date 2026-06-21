@@ -30,6 +30,14 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     RectTransform _viewport;            // screen -> viewport-local conversion space (CanvasScaler-safe)
     string _windowId;
 
+    // #104 (ADR-0019 / findings 0082 §6): the canvas-LOGICAL drag-start anchor and running cursor.
+    // restAtDragStart is the dragged top-left at OnBeginDrag; cursor is restAtDragStart plus the
+    // accumulated frameDelta over the drag. The controller's DragApplyDelta uses |cursor - rest| as
+    // the detach-threshold metric (NOT a re-derive from rectangles each frame — a window that snaps
+    // mid-drag does not corrupt the metric this way).
+    Vector2 _restAtDragStart;
+    Vector2 _cursorLogical;
+
     public void Initialize(FloatingWindowController windows, InfiniteCanvasController canvas, RectTransform viewport, string windowId)
     {
         _windows = windows;
@@ -48,10 +56,19 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     }
 
     // Begin-drag also raises+focuses (a drag is a press too), then OnDrag moves. Raising here keeps the
-    // window on top while it is being dragged even if OnPointerDown was missed.
+    // window on top while it is being dragged even if OnPointerDown was missed. #104: snapshot the
+    // dragged's logical rest position so subsequent OnDrag frames can evaluate |cursor - rest| against
+    // D_DETACH without re-reading anchoredPosition each frame (which may have been snapped or, in
+    // NormalGroupTranslate mode, mutated by the controller — both would break the metric).
     public void OnBeginDrag(PointerEventData eventData)
     {
         _windows?.NoteUserFocus(_windowId);
+        var rt = _windows?.RectOf(_windowId);
+        if (rt != null)
+        {
+            _restAtDragStart = rt.anchoredPosition;
+            _cursorLogical = _restAtDragStart;
+        }
     }
 
     public void OnDrag(PointerEventData eventData)
@@ -60,18 +77,25 @@ public class FloatingWindowTitleInput : MonoBehaviour,
 
         Vector2 viewportDelta = ScreenDeltaToViewportLocal(eventData);
         float zoom = _canvas.CaptureView().zoom;
-        _windows.MoveByLogical(_windowId, FloatingWindowMath.ViewportDeltaToLogical(viewportDelta, zoom));
+        Vector2 frameDelta = FloatingWindowMath.ViewportDeltaToLogical(viewportDelta, zoom);
+        _cursorLogical += frameDelta;
+        // #104: DragApplyDelta classifies the 7-mode drag state and applies live geometry per mode
+        // (SoloDrag = dragged tracks cursor, NormalGroupTranslate = every group member tracks cursor,
+        // all other modes = geometry frozen; Slice G ghost-previews them). MoveByLogical is no longer
+        // called from production — Section3/Section11 still drive it directly for the pure solo-move test.
+        _windows.DragApplyDelta(_windowId, _restAtDragStart, _cursorLogical, frameDelta);
     }
 
-    // #99 Slice 1 (ADR-0017 / findings 0075 §1, owner-locked): magnet snap on release. The drag
-    // streamed through OnDrag.MoveByLogical at the cursor verbatim — we only align WHEN THE
-    // USER LETS GO. The controller reads every OTHER live window, asks FloatingWindowMath for
-    // the snap Δ, and applies it via the same anchoredPosition write path. Group concept does
-    // NOT exist (each window stays independent — findings 0075 §0/§1), so the released window
-    // is the ONLY one moved by this call. No re-render / re-layout / re-z-order side effects.
+    // #104 (ADR-0019 / findings 0082 §5, §6, §7, §8): release commit. ReleaseDrag classifies the
+    // final drag mode using the dragged's drag-start rest position + the running cursor, and commits
+    // the variant outcome — magnet snap + flush-attach commit for solo / normal-translate, jump-to-
+    // cursor + detach + dissolve for the detach modes, snap-back to rest for Hakoniwa core-lock /
+    // snap-back, swap (x,y,w,h) for Hakoniwa swap (Slice E2). Replaces the bare SnapOnRelease call —
+    // SnapOnRelease still runs INSIDE ReleaseDrag for the solo/translate/detach branches so the
+    // existing magnet snap + Slice B flush-attach commit semantics are preserved unchanged.
     public void OnEndDrag(PointerEventData eventData)
     {
-        _windows?.SnapOnRelease(_windowId);
+        _windows?.ReleaseDrag(_windowId, _restAtDragStart, _cursorLogical);
     }
 
     // Screen-pixel drag delta -> viewport-local delta (same mechanism #13's pan uses, so a

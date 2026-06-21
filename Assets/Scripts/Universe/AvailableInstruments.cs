@@ -54,7 +54,9 @@ public struct AvailableInstrumentsResult
 public interface IAvailableInstrumentsProvider
 {
     // `replayEndDate` is the scenario.end snapshot (YYYY-MM-DD) the picker captured on open;
-    // null/empty in Live mode (and the provider returns EndUnset in Replay when it is empty).
+    // null/empty in Live mode. Empty-in-Replay handling is provider-specific: the Mock returns
+    // EndUnset ("Set scenario.end first"); the production Backend falls back to the latest universe
+    // (findings 0084, owner request 2026-06-22).
     AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate);
 }
 

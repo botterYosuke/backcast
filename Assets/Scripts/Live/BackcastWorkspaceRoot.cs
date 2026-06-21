@@ -1029,8 +1029,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveFooter();
+        DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
         DrivePrune();          // #41: after DriveFooter (fresh DisplayMode); before depth so a pruned chart tile propagates first
         DriveDepthLadders();   // #57: after DriveFooter so _footerMode.DisplayMode is the fresh mode
+    }
+
+    // findings 0084: push the sidebar [+ Add] picker's universe scope (mode + scenario.end) so it
+    // queries the LIVE universe instead of the Bind-time defaults (Replay + "2024-12-31"). Re-resolved
+    // on-demand each tick (mirrors DrivePrune below, same mode/end derivation) — the picker captures
+    // end at open time, so this just keeps the scope it WILL capture current.
+    void DriveSidebarContext()
+    {
+        if (_sidebarView == null) return;
+        var mode = DockShape.IsLiveShape(_footerMode.DisplayMode)
+            ? UniverseSourceMode.Live : UniverseSourceMode.Replay;
+        string end = _scenario.Params != null ? _scenario.Params.End : null;
+        _sidebarView.SetContext(mode, end);
     }
 
     // #41 instruments universe prune: assemble the gate inputs fresh from the current mode + prune

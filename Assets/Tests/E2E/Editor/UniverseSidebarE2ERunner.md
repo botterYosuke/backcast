@@ -43,6 +43,9 @@ text editor が**同じ SoT に差し込む**。picker は `InstrumentPickerCont
 | SIDEBAR-12 | 検索フィールドのキーボード編集（focus 保持） | `UniverseSidebarView.cs:154`-`168`（field を open 毎に 1 回だけ生成） | per-keystroke の list 再構築で field を破棄せず focus を奪わない。brain は `AppendChar`/`Backspace`/`Escape`（`InstrumentPickerController.cs:75`-`77`） | brain の query 編集のみ自動化可。実 `InputField` の focus 保持は実 EventSystem 依存 | HITL専用（実 EventSystem の focus 保持・GPU/実ウィンドウ前提） | `UniverseSidebarHitlMenu` |
 | SIDEBAR-13 | dropdown z-order / sidebar 前面描画（視覚） | `UniverseSidebarView.cs:28,66`-`67`（`SIDEBAR_SORT` ＜ `MENU_SORT`） | sidebar が menu dropdown の背面、windows の前面、クリック取りこぼし無し（findings 0045） | — | HITL専用（実ピクセル＋EventSystem raycaster・GPU/実ウィンドウ前提） | `UniverseSidebarHitlMenu` |
 | SIDEBAR-14 | 空ユニバースの "No instruments" 表示 | `UniverseSidebarView.cs:110`-`111` | `registry.Count==0` で空ラベル、1 行ぶんの高さを確保（rows 高さ計算） | rows 描画（uGUI）を反射確認＝`Section10` で実装済み（空→非空→空で gate を非空虚化） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
+| SIDEBAR-15 | [+ Add] が現在の mode + scenario.end で候補を引く（root push） | `BackcastWorkspaceRoot.cs:DriveSidebarContext`→`UniverseSidebarView.SetContext`→`UniverseSidebarView.cs:113` | `SetContext(mode, end)` で `_mode`/`_replayEnd` を更新 → 次回 open の `provider.Query(mode, endSnapshot)` がその値（Replay=与えた end / Live=null）になる。**未 push なら Bind 既定 `2024-12-31` 固定で空一覧（findings 0084 の不具合）** | `Section11`：実 `_addBtn.onClick` を叩き `RecordingProvider` が引いた (mode,end) を assert（(a) 未 push=2024-12-31 / (b) push 後=2025-12-04 / (c) Live=null / (d) null end→"" 正規化）。空 end の最新フォールバックは Python 側（findings 0084・test_replay_instrument_picker_supply.py）で gate | 自動(E2E済) | `UniverseSidebarE2ERunner` |
+| SIDEBAR-16 | [+ Add] の供給結果が picker リストとして uGUI 描画される（候補行／placeholder） | `UniverseSidebarView.cs:270`（`PopulatePickerListContent`）→`_pickerListContent` | Ready ids → `cand:<id>` GameObject ＋ `+ <id>` ラベルを描画。status（Empty 等）→ placeholder Text を描画。開く前は不在・Empty に flip で候補消滅＝非空虚 | `Section12`：`_pickerListContent` の子を反射（開く前不在→Ready で `cand:7203.TSE`/`cand:1301.TSE`＋`+ 1301.TSE`→Empty で消滅し `No instruments for this date`）。RED 実証済み（候補描画を skip すると `did not render candidate rows` で FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
+| SIDEBAR-17 | 非同期供給が open 後に解決したら picker が自動再描画（初回 "Loading..." 固着の解消） | `UniverseSidebarView.cs:Update`→`PollOpenPickerForAsyncSupply`→`RebuildPickerList` | `BackendAvailableInstrumentsProvider` は背景 fetch 中 `Loading` を返す。view は open 中毎フレーム poll し、署名（`PickerSignature`）が変わったら repaint＝fetch 着地で再オープン無しに一覧表示 | `Section13`：StubProvider を Loading→Ready に flip し `Update()` を 1 tick 駆動（reflection）。open 直後は Loading・候補不在 → Ready 化 → `Update()` で `cand:7203.TSE` 出現・Loading 消滅。RED 実証済み（`PollOpenPickerForAsyncSupply()` を消すと `did not auto-refresh` で FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
 
 > focus→depth ラベル・行ハイライト（`▶`/`element_selected`）・ボタンラベルは入力のない**表示**なので独立行にせず、
 > SIDEBAR-01/05 の観測点として併せて確認する（`UniverseSidebarView.Rebuild` の合成）。
@@ -81,6 +84,8 @@ text editor が**同じ SoT に差し込む**。picker は `InstrumentPickerCont
   - `UniverseWriteback` の Replay ゲートを外すと SIDEBAR-03/07 の Live-no-flush assert が落ちる。
   - `UniverseSidebarView.Bind` の `Registry.Changed += Rebuild` を消すと SIDEBAR-11（`Section9`）が落ちる。
   - `UniverseSidebarView.Rebuild` の `if (Registry.Count == 0) MakeText(...)` を消すと SIDEBAR-14（`Section10`）が落ちる。
+  - `UniverseSidebarView.SetContext` の `_replayEnd = replayEnd ?? ""` を消す（push を無視）と SIDEBAR-15（`Section11` (b)）が
+    `(Replay,2024-12-31)` のまま落ちる＝findings 0084 の不具合そのもの。AFK 実証済み（RED→GREEN）。
 
 ## カバー状態の語彙
 

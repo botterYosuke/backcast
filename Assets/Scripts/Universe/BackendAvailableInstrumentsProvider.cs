@@ -58,13 +58,14 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
 
     public AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate)
     {
-        // Replay needs scenario.end to date-scope listed_info; without it the picker shows
-        // "Set scenario.end first" (parity with MockAvailableInstrumentsProvider).
-        if (mode == UniverseSourceMode.Replay && string.IsNullOrEmpty(replayEndDate))
-            return AvailableInstrumentsResult.EndUnset;
-
+        // Replay no longer blocks on an unset scenario.end (owner request 2026-06-22, findings 0084):
+        // an empty end is sent to the backend as "", which serves the LATEST listed_info snapshot so
+        // the picker shows the current universe instead of "Set scenario.end first". A set end that
+        // predates every snapshot likewise falls back to latest (engine `_list_instruments_local`).
+        // A set, in-range end still scopes point-in-time. (The prune gate keeps its OWN EndUnset→no-prune
+        // guard — UniversePruneGate — so this is picker-only and does not widen any destructive prune.)
         string source = mode == UniverseSourceMode.Replay ? "local" : "live";
-        string endDate = mode == UniverseSourceMode.Replay ? replayEndDate : "";
+        string endDate = mode == UniverseSourceMode.Replay ? (replayEndDate ?? "") : "";
         string key = source + "|" + endDate;
 
         lock (_lock)

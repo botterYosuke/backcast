@@ -72,6 +72,12 @@ public sealed class UniverseSidebarView : MonoBehaviour
     RectTransform _pickerListScrollContainer, _pickerListContent;
     ScrollRect _pickerListScroll;
     InputField _searchInput;
+    // signature of the candidate list currently painted into _pickerListContent. The picker supply is
+    // ASYNC (BackendAvailableInstrumentsProvider fetches on a background thread and returns Loading until
+    // the cache fills), and the provider is designed to be polled every tick while visible. Update()
+    // re-polls the open picker and repaints only when this signature changes — so a fetch that lands
+    // after the open frame appears without the user re-opening (findings 0084: stuck "Loading..." on 1st open).
+    string _pickerSig;
 
     public void Bind(UniverseSidebarController ctrl, IStrategyFileProvider strategyProvider, Font font, string replayEnd = null)
     {
@@ -84,6 +90,21 @@ public sealed class UniverseSidebarView : MonoBehaviour
         _ctrl.Registry.Changed += Rebuild;
         _ctrl.Selected.Changed += OnSelectedChanged;
         Rebuild();
+    }
+
+    // The picker's universe scope (mode + Replay scenario.end) is OWNED by the workspace root and
+    // changes at runtime — the footer flips Replay⇄Live and the user edits scenario.end. The root
+    // pushes the current context every Drive tick (mirrors DrivePrune's on-demand re-resolve), so the
+    // NEXT [+ Add] press queries the live universe. Without this the picker stayed pinned to the
+    // Bind-time defaults (Replay + "2024-12-31") and `list_instruments("local","2024-12-31")` returned
+    // an empty list for any other scenario.end (findings 0084). The picker captures end at OPEN time
+    // (TTWR R1: a later edit must not re-scope an open dropdown), so updating here scopes the next
+    // open — not a dropdown already on screen. Empty/null end is passed through verbatim so the picker
+    // can honestly show "Set scenario.end first" instead of masking it behind a stale default.
+    public void SetContext(UniverseSourceMode mode, string replayEnd)
+    {
+        _mode = mode;
+        _replayEnd = replayEnd ?? "";
     }
 
     void Build()
@@ -256,9 +277,12 @@ public sealed class UniverseSidebarView : MonoBehaviour
     {
         ClearChildren(_pickerListContent);
         var t = ThemeService.Current;
+        // Build the async-poll change signature inline as we render (one PickerList enumeration, not two).
+        var sig = new System.Text.StringBuilder();
         int i = 0;
         foreach (PickerRow pr in _ctrl.PickerList(_mode))
         {
+            AppendRowSig(sig, pr);
             if (pr.IsPlaceholder)
             {
                 MakeText(_pickerListContent, "  " + pr.Label, 11, t.colors.text_muted, TextAnchor.MiddleLeft, -i * ROW_H, ROW_H);
@@ -281,6 +305,30 @@ public sealed class UniverseSidebarView : MonoBehaviour
             i++;
         }
         _pickerListContent.sizeDelta = new Vector2(0f, i * ROW_H);
+        _pickerSig = sig.ToString();   // remember what we just painted (async-poll change gate)
+    }
+
+    // Append a row's signature directly into `sb` (no intermediate strings) — placeholder vs candidate,
+    // the label/id, and the already-added flag, terminated by '|' so adjacent rows can't merge ambiguously.
+    static void AppendRowSig(System.Text.StringBuilder sb, PickerRow pr) =>
+        sb.Append(pr.IsPlaceholder ? 'P' : 'C').Append(pr.Label).Append(pr.AlreadyAdded ? '+' : '-').Append('|');
+
+    // Cheap signature of the current candidate list. Enumerating PickerList re-runs the provider's Query
+    // (cached per its per-tick design), so this is safe to call every frame while the picker is open.
+    string PickerSignature()
+    {
+        var sb = new System.Text.StringBuilder();
+        foreach (PickerRow pr in _ctrl.PickerList(_mode)) AppendRowSig(sb, pr);
+        return sb.ToString();
+    }
+
+    // Re-poll the open picker so an ASYNC supply that resolves after the open frame (Loading→Ready) is
+    // repainted without the user re-opening. Rebuilds ONLY when the live signature differs from what is
+    // painted, so a stable list costs one cached Query enumeration per frame (no GameObject churn).
+    void PollOpenPickerForAsyncSupply()
+    {
+        if (!_built || _ctrl == null || !_ctrl.Picker.Visible) return;
+        if (PickerSignature() != _pickerSig) RebuildPickerList();
     }
 
     // F4 (#84 review): NaN guard. ScrollRect.verticalNormalizedPosition returns NaN when content fits
@@ -369,12 +417,14 @@ public sealed class UniverseSidebarView : MonoBehaviour
     // the rect resolves, Relayout once so the sidebar isn't empty for the first user-action delay.
     void Update()
     {
-        if (_laidOutOnce || !_built || _content == null) return;
-        if (_content.rect.height > 0f)
+        // F2: one-time Relayout once the Canvas rect resolves (Awake-time rect is 0).
+        if (!_laidOutOnce && _built && _content != null && _content.rect.height > 0f)
         {
             _laidOutOnce = true;
             Relayout();
         }
+        // findings 0084: poll the open picker so an async supply resolving after the open frame repaints.
+        PollOpenPickerForAsyncSupply();
     }
 
     // ── uGUI builders ──

@@ -42,6 +42,21 @@ public static class UniverseSidebarE2ERunner
         public AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate) => Next;
     }
 
+    // Records the (mode, endDate) the picker queried with, so Section11 can prove the view honors the
+    // root's SetContext push instead of the Bind-time default (findings 0084). Returns a non-empty
+    // Ready so BuildList takes the real-rows path (not a placeholder).
+    sealed class RecordingProvider : IAvailableInstrumentsProvider
+    {
+        public bool Queried;
+        public UniverseSourceMode LastMode;
+        public string LastEnd = "<never>";
+        public AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate)
+        {
+            Queried = true; LastMode = mode; LastEnd = replayEndDate;
+            return AvailableInstrumentsResult.Ready(new[] { "7203.TSE" });
+        }
+    }
+
     sealed class StubStrategyProvider : IStrategyFileProvider
     {
         public string Path;  // null/empty = not supplyable (no saved strategy)
@@ -65,7 +80,10 @@ public static class UniverseSidebarE2ERunner
                 ?? Section7_Writeback()
                 ?? Section8_DepthFollowsSelection()
                 ?? Section9_ViewReflectsExternalRegistryChange()
-                ?? Section10_ViewEmptyUniverseLabel();
+                ?? Section10_ViewEmptyUniverseLabel()
+                ?? Section11_PickerContextDrivenByScenarioEnd()
+                ?? Section12_PickerListGuiRendersCandidatesAndPlaceholder()
+                ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves();
         }
         catch (Exception e)
         {
@@ -74,7 +92,7 @@ public static class UniverseSidebarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect verified");
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh verified");
             EditorApplication.Exit(0);
         }
         else
@@ -401,6 +419,44 @@ public static class UniverseSidebarE2ERunner
         return f?.GetValue(view) as RectTransform;
     }
 
+    static Button AddButton(UniverseSidebarView view)
+    {
+        var f = typeof(UniverseSidebarView).GetField("_addBtn", BindingFlags.NonPublic | BindingFlags.Instance);
+        return f?.GetValue(view) as Button;
+    }
+
+    static RectTransform PickerListContent(UniverseSidebarView view)
+    {
+        var f = typeof(UniverseSidebarView).GetField("_pickerListContent", BindingFlags.NonPublic | BindingFlags.Instance);
+        return f?.GetValue(view) as RectTransform;
+    }
+
+    // true iff _pickerListContent has a direct child GameObject named "cand:<id>" (PopulatePickerListContent
+    // names each rendered candidate row that way).
+    static bool HasCandRow(RectTransform pickerContent, string id)
+    {
+        if (pickerContent == null) return false;
+        for (int i = 0; i < pickerContent.childCount; i++)
+            if (pickerContent.GetChild(i).name == "cand:" + id) return true;
+        return false;
+    }
+
+    // true iff any Text under _pickerListContent (candidate label or placeholder) contains `substr`.
+    static bool PickerHasText(RectTransform pickerContent, string substr)
+    {
+        if (pickerContent == null) return false;
+        foreach (var txt in pickerContent.GetComponentsInChildren<Text>(true))
+            if (txt != null && txt.text != null && txt.text.Contains(substr)) return true;
+        return false;
+    }
+
+    // Drive one frame tick (the private MonoBehaviour Update) so the open-picker async poll runs headless.
+    static void InvokeUpdate(UniverseSidebarView view)
+    {
+        var m = typeof(UniverseSidebarView).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance);
+        m?.Invoke(view, null);
+    }
+
     // true iff _rowsContent has a child GameObject named "row:<id>" (BuildRow names each row that way).
     static bool HasRowFor(RectTransform rowsContent, string id)
     {
@@ -482,6 +538,160 @@ public static class UniverseSidebarE2ERunner
             // emptying again brings the placeholder back.
             reg.Remove("1301.TSE");
             if (!HasLabel(rows, "No instruments")) return "view: 'No instruments' label not restored after universe emptied";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 11. [+ Add] queries the picker supply with the ROOT-PUSHED scenario.end + mode, not the
+    // Bind-time default. The report "sidebar の [+ Add] で銘柄一覧が出てこない" was this: the view kept
+    // _mode=Replay / _replayEnd="2024-12-31" forever (BackcastWorkspaceRoot.Bind never passed the real
+    // scenario.end and nothing pushed it after), so the picker queried list_instruments("local",
+    // "2024-12-31") — a date BEFORE every listed_info snapshot (the owner's DB only has 2025-12 rows) →
+    // empty list. Fix: DriveSidebarContext() pushes (mode, scenario.end) each tick via SetContext.
+    // We drive the REAL [+ Add] button handler (reflected _addBtn.onClick) so the view's own
+    // _mode/_replayEnd fields are exercised, and a RecordingProvider captures what was queried.
+    // Non-vacuous RED→GREEN: part (a) pins the OLD stale-default behavior; part (b) proves SetContext
+    // re-scopes the next open (delete the `_replayEnd = replayEnd` line in SetContext → (b) FAILs).
+    // Covers: SIDEBAR-05 (＋Add open scopes to scenario.end), SIDEBAR-15 (picker context driven by root mode/end)
+    static string Section11_PickerContextDrivenByScenarioEnd()
+    {
+        var provider = new RecordingProvider();
+        var go = new GameObject("universe_sidebar_ctx_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        var reg = new InstrumentRegistry();
+        var ctrl = new UniverseSidebarController(reg, new SelectedSymbol(), new UniverseWriteback(), provider);
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        try
+        {
+            // Bind WITHOUT a replayEnd arg, exactly as BackcastWorkspaceRoot did → the Bind default.
+            view.Bind(ctrl, new StubStrategyProvider { Path = null }, font);
+            var addBtn = AddButton(view);
+            if (addBtn == null) return "view: _addBtn not reflectable (renamed?)";
+
+            // (a) characterize the BUG: a context-less view opens the picker against the stale Bind
+            // default "2024-12-31" — the exact query that returned the empty list.
+            addBtn.onClick.Invoke();   // open
+            if (!provider.Queried) return "view: opening [+ Add] did not query the supply at all";
+            if (provider.LastEnd != "2024-12-31")
+                return $"view: pre-context open queried end '{provider.LastEnd}', expected stale Bind default 2024-12-31";
+            addBtn.onClick.Invoke();   // close
+
+            // (b) the fix: root pushes the live scenario.end → the NEXT open scopes to THAT date.
+            view.SetContext(UniverseSourceMode.Replay, "2025-12-04");
+            addBtn.onClick.Invoke();   // open
+            if (provider.LastMode != UniverseSourceMode.Replay || provider.LastEnd != "2025-12-04")
+                return $"view: post-SetContext open queried ({provider.LastMode},{provider.LastEnd}), expected (Replay,2025-12-04)";
+            addBtn.onClick.Invoke();   // close
+
+            // (c) Live context → mode flips to Live and the Replay end is dropped (the live universe is
+            // current-as-of-fetch, not date-scoped: Picker.Toggle snapshots null for Live).
+            view.SetContext(UniverseSourceMode.Live, "2025-12-04");
+            addBtn.onClick.Invoke();   // open
+            if (provider.LastMode != UniverseSourceMode.Live || provider.LastEnd != null)
+                return $"view: Live context queried ({provider.LastMode},{provider.LastEnd}), expected (Live,null)";
+            addBtn.onClick.Invoke();   // close
+
+            // (d) NULL Replay end — the root pushes `_scenario.Params?.End`, which is null before a
+            // scenario is populated — must normalize to "" so the provider takes the empty-end →
+            // latest-fallback path (findings 0084), never a null end. Litmus: drop the `?? ""` in
+            // SetContext → this queries (Replay,null) and FAILs.
+            view.SetContext(UniverseSourceMode.Replay, null);
+            addBtn.onClick.Invoke();   // open
+            if (provider.LastMode != UniverseSourceMode.Replay || provider.LastEnd != "")
+                return $"view: null Replay end queried ({provider.LastMode},'{provider.LastEnd}'), expected (Replay,\"\")";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 12. the GUI itself: opening [+ Add] RENDERS the supplied candidates as uGUI rows in the
+    // picker list (cand:<id> GameObjects + "+ <id>" labels), and a status result renders its placeholder
+    // text instead. Section11 proves the picker QUERIES with the right (mode,end); this proves the
+    // RESULT actually paints into _pickerListContent — the display the user looks at. Python-FREE: the
+    // StubProvider drives the supply status directly (the real DuckDB/fallback is gated by pytest).
+    // Non-vacuous: rows are ABSENT before open, PRESENT for Ready ids, and GONE (replaced by the
+    // placeholder) when the status flips to Empty — so a dead PopulatePickerListContent can't false-green.
+    // Covers: SIDEBAR-06 (候補行の uGUI 描画), SIDEBAR-09 (placeholder の uGUI 描画), SIDEBAR-16 (picker list GUI 反映)
+    static string Section12_PickerListGuiRendersCandidatesAndPlaceholder()
+    {
+        var provider = new StubProvider();
+        var go = new GameObject("universe_sidebar_pickergui_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        var reg = new InstrumentRegistry();
+        var ctrl = new UniverseSidebarController(reg, new SelectedSymbol(), new UniverseWriteback(), provider);
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        try
+        {
+            view.Bind(ctrl, new StubStrategyProvider { Path = null }, font);
+            view.SetContext(UniverseSourceMode.Replay, "2025-12-04");
+            var addBtn = AddButton(view);
+            var pickerContent = PickerListContent(view);
+            if (addBtn == null) return "view: _addBtn not reflectable (renamed?)";
+            if (pickerContent == null) return "view: _pickerListContent not reflectable (renamed?)";
+
+            // presence guard: nothing rendered before the picker is opened (vacuous-negative kill).
+            if (HasCandRow(pickerContent, "7203.TSE")) return "view: candidate row rendered before picker opened";
+
+            // Ready ids → the uGUI list paints one clickable row per id, with the "+ <id>" label.
+            provider.Next = AvailableInstrumentsResult.Ready(new[] { "7203.TSE", "1301.TSE" });
+            addBtn.onClick.Invoke();   // open → PopulatePickerListContent
+            if (!HasCandRow(pickerContent, "7203.TSE") || !HasCandRow(pickerContent, "1301.TSE"))
+                return "view: picker list did not render candidate rows for Ready ids";
+            if (!PickerHasText(pickerContent, "+ 1301.TSE")) return "view: candidate row label text missing/incorrect";
+            if (PickerHasText(pickerContent, "No instruments")) return "view: placeholder text rendered alongside real rows";
+
+            // flip the status to Empty (close+reopen re-queries) → rows are gone, placeholder painted.
+            addBtn.onClick.Invoke();   // close
+            provider.Next = AvailableInstrumentsResult.Empty;
+            addBtn.onClick.Invoke();   // open
+            if (HasCandRow(pickerContent, "7203.TSE")) return "view: stale candidate row survived a placeholder status";
+            if (!PickerHasText(pickerContent, "No instruments for this date"))
+                return "view: picker list did not render the Empty placeholder text";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 13. ASYNC supply auto-refresh: the production BackendAvailableInstrumentsProvider fetches on a
+    // background thread and returns Loading until the cache fills, so the FIRST [+ Add] open shows
+    // "Loading..." — and nothing repaints it when the fetch lands (only discrete Rebuild events query the
+    // supply). The user saw a stuck "Loading..." on 1st open, list only on 2nd open (findings 0084). Fix:
+    // UniverseSidebarView.Update() polls the open picker each frame and repaints when the supply resolves.
+    // We model the async fetch with a StubProvider flipped Loading→Ready and drive one Update() tick.
+    // Non-vacuous RED→GREEN: remove the Update() poll → InvokeUpdate does nothing → the row never appears
+    // (FAIL "did not auto-refresh"). The placeholder→rows transition also kills a vacuous always-green.
+    // Covers: SIDEBAR-17 (async supply resolve → picker auto-refresh without re-open)
+    static string Section13_PickerAutoRefreshesWhenAsyncSupplyResolves()
+    {
+        var provider = new StubProvider { Next = AvailableInstrumentsResult.Loading };
+        var go = new GameObject("universe_sidebar_async_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        var reg = new InstrumentRegistry();
+        var ctrl = new UniverseSidebarController(reg, new SelectedSymbol(), new UniverseWriteback(), provider);
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        try
+        {
+            view.Bind(ctrl, new StubStrategyProvider { Path = null }, font);
+            view.SetContext(UniverseSourceMode.Replay, "2025-12-04");
+            var addBtn = AddButton(view);
+            var pickerContent = PickerListContent(view);
+            if (addBtn == null || pickerContent == null) return "view: _addBtn/_pickerListContent not reflectable";
+
+            // first open while the backend is still fetching → Loading placeholder, no candidate rows.
+            addBtn.onClick.Invoke();
+            if (!PickerHasText(pickerContent, "Loading")) return "view: first open did not show the Loading placeholder";
+            if (HasCandRow(pickerContent, "7203.TSE")) return "view: candidate row rendered during Loading";
+
+            // the background fetch lands (provider now Ready) — but nothing has rebuilt the list yet.
+            provider.Next = AvailableInstrumentsResult.Ready(new[] { "7203.TSE" });
+            if (HasCandRow(pickerContent, "7203.TSE")) return "view: list appeared before any poll (test setup invalid)";
+
+            // a single frame tick must auto-refresh the OPEN picker — without the user re-opening it.
+            InvokeUpdate(view);
+            if (!HasCandRow(pickerContent, "7203.TSE"))
+                return "view: picker did not auto-refresh when async supply resolved (stuck on Loading — findings 0084)";
+            if (PickerHasText(pickerContent, "Loading")) return "view: stale Loading placeholder survived the resolve";
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }

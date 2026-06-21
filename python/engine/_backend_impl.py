@@ -1480,6 +1480,19 @@ class DataEngineBackend:
         snapshot, error = self._read_local_snapshot(end_date, "list_instruments(local)")
         if error is not None:
             return InstrumentListResult(success=False, error_message=error)
+        # Fallback to the latest universe (owner request 2026-06-22, findings 0084): when the
+        # point-in-time snapshot is empty — `end_date` predates every listed_info snapshot — serve
+        # the overall-latest snapshot so the picker shows instruments instead of an empty list.
+        # (Empty `end_date` already resolves to the overall MAX in `read_listed_snapshot`, so this
+        # only fires for a set-but-too-early end.) Scoped to the PICKER RPC only: the shared
+        # `_read_local_snapshot` and `list_all_listed_symbols` keep honest point-in-time semantics.
+        # The DuckDB-unavailable error path above is unaffected (a typed failure, never masked).
+        if not snapshot.codes and end_date:
+            snapshot, error = self._read_local_snapshot(
+                "", "list_instruments(local→latest fallback)"
+            )
+            if error is not None:
+                return InstrumentListResult(success=False, error_message=error)
         ids = [f"{code}.TSE" for code in snapshot.codes]
         instruments = [InstrumentInfo(id=i, name=i, market="TSE") for i in ids]
         return InstrumentListResult(

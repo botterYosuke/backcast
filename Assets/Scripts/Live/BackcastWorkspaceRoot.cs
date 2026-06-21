@@ -72,9 +72,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _content;
     [SerializeField] InfiniteCanvasInputSurface _inputSurface;
     [SerializeField] RectTransform _floatingLayer;
-    // Parallax depth cue retained for forward compat (the workspace previously rode the floating
-    // layer above HakoniwaRoot at this factor); under #99 every window is on the floating layer
-    // so the value is just the layer-vs-Content parallax. 1 = coplanar; >1 = foreground.
+    // #103 (ADR-0018 / findings 0075 §10): the BACK depth plane — a Content child that rides Content
+    // at 1.0× (NO parallax offset) and is the EARLIER sibling of _floatingLayer, so it always draws
+    // BEHIND it. The 6 former Hakoniwa kinds (chart / orders / positions / run_result / buying_power /
+    // startup) live here; strategy_editor + order stay on _floatingLayer (1.2×, front). The pan
+    // SPEED difference between the two planes (1.0 vs 1.2) is the restored depth cue (#99 regression).
+    [SerializeField] RectTransform _dockLayer;
+    // Parallax depth cue: _floatingLayer rides Content PLUS this extra factor, so it travels 1.2× per
+    // unit pan and feels IN FRONT of the 1.0× _dockLayer. 1 = coplanar; >1 = foreground (findings 0006 §2).
     [SerializeField] float _floatingParallaxFactor = 1.2f;
 
     [Header("Strategy Editor floating window (scene-authored, adopted)")]
@@ -115,10 +120,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ── built widgets ──
     InfiniteCanvasController _canvas;
     FloatingWindowController _windows;
+    // #103 (ADR-0018 / findings 0075 §10): the BACK-plane controller. Owns ONLY the 6 dock kinds on
+    // _dockLayer (1.0×). Separate from _windows so snap/focus母集合 is per-plane — a dock window can
+    // never snap to the editor/order on the front plane (cross-plane snap ban is structural, not coded).
+    FloatingWindowController _dockWindows;
     // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating window + ChartView per universe
     // instrument (id "chart:<id>"), membership-synced from _scenario.Universe via InstrumentRegistry.Changed.
-    // Replaces the #60 Hakoniwa chart tile family — `_windows.Spawn(KIND_CHART, "chart:<id>", …)` is the
-    // ONLY chart spawn path. _chartRendered dedups the per-id render by series length.
+    // Replaces the #60 Hakoniwa chart tile family — `_dockWindows.SpawnDockedToFocus(KIND_CHART, …)` (#103:
+    // the back plane) is the ONLY chart spawn path. _chartRendered dedups the per-id render by series length.
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
     // #57 → #99: each chart WINDOW's body is split into a mode-resized chartArea (left) + a
@@ -311,7 +320,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
     void BuildWorkspace()
     {
-        // center workspace: infinite canvas (Content) hosts HakoniwaRoot + FloatingWindowLayer (P-all).
+        // center workspace: infinite canvas (Content) hosts the BACK DockLayer (1.0×) + the FRONT
+        // FloatingWindowLayer (1.2× parallax). Only the front layer gets the parallax depth cue; the
+        // dock layer is a plain Content child (factor 1.0 ⇒ zero offset), so it rides Content at 1.0×
+        // and the pan SPEED difference between the planes is the restored depth (#103 / ADR-0018).
         _canvas = new InfiniteCanvasController(_content, _floatingLayer, _floatingParallaxFactor);
         if (_inputSurface != null) _inputSurface.Initialize(_canvas, _viewport);
 
@@ -322,7 +334,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ApplyViewportTheme();
 
         _catalog = FloatingWindowCatalog.Default();
-        _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildWindowFrame);
+        // #103 (ADR-0018): two controllers share the catalog but own SEPARATE layers/planes. _windows
+        // = the FRONT plane (strategy_editor + order on _floatingLayer, 1.2×); _dockWindows = the BACK
+        // plane (the 6 dock kinds on _dockLayer, 1.0×). Each factory wires its windows' title input to
+        // ITS OWN controller, so a drag-release snap / dock-focus only sees same-plane neighbours.
+        _windows = new FloatingWindowController(_floatingLayer, _catalog, BuildFloatingWindowFrame);
+        // #103 (ADR-0018): the back plane MUST be its own layer. Do NOT silently fall back to _floatingLayer
+        // when _dockLayer is unwired — that would collapse both planes onto one layer (the #99 regression this
+        // change fixes) and mis-anchor dock spawns. A null _dockLayer means the scene was not rebuilt for #103,
+        // so fail LOUD: the controller ctor throws ArgumentNullException, forcing a Build Workspace Scene run.
+        _dockWindows = new FloatingWindowController(_dockLayer, _catalog, BuildDockWindowFrame);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
 
         // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
@@ -496,16 +517,26 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (img != null) img.color = ThemeService.Current.colors.workspace_background;
     }
 
-    // The SINGLE factory the FloatingWindowController calls to spawn a window. Dispatches on
+    // The FRONT-plane (_windows) factory: order ticket + strategy_editor cell windows. Dispatches on
     // spec.kind so adopted / scene-authored windows and runtime-spawned windows of the same kind
-    // can't diverge (the shared frame builders enforce identity of chrome). Also handles content
-    // injection for the kinds whose content the root owns (cell editor / chart / dock panels);
-    // adopted windows (region_001 / Order ticket) get their content from the scene + the root's
-    // BuildWorkspace, NOT this path. Unknown kinds fall through to the cell-window frame (a
-    // forward-evolution courtesy; the controller's Spawn pre-filter via TryGet already rejects
+    // can't diverge (the shared frame builders enforce identity of chrome). Title inputs bind to
+    // _windows, so a snap-on-release / dock-focus only sees FRONT-plane neighbours (#103 / ADR-0018:
+    // cross-plane snap ban is structural). Dock kinds never reach here — they route to _dockWindows
+    // and BuildDockWindowFrame on restore (RestoreFloating) and at spawn. Unknown kinds fall through
+    // to the cell-window frame (a forward-evolution courtesy; Spawn's TryGet pre-filter rejects
     // unknown kinds before this factory runs).
-    RectTransform BuildWindowFrame(FloatingWindowSpec spec, string id)
+    RectTransform BuildFloatingWindowFrame(FloatingWindowSpec spec, string id)
     {
+        // #103 (ADR-0018): a dock kind must NEVER reach the front controller (RestoreFloating / the spawn
+        // paths route by DockShape.IsDockKind). If one does, the old single-factory dock branch is gone, so it
+        // would silently fall through to a BLANK cell frame (no dock content) — fail loud instead of shipping
+        // an empty window, so a future mis-route is caught at this single chokepoint.
+        if (DockShape.IsDockKind(spec.kind))
+        {
+            Debug.LogError($"[BackcastWorkspaceRoot] dock kind '{spec.kind}' (id {id}) routed to the FRONT controller — must use _dockWindows");
+            return null;
+        }
+
         // #23 re-home: an Order window restored from a saved doc uses the Order frame (the singleton
         // ticket is adopted, not spawned, so this only fires for a stray/legacy id — frame only).
         if (spec.kind == FloatingWindowCatalog.KIND_ORDER)
@@ -513,18 +544,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             var orderRoot = OrderTicketWindowFrame.Build(id, out var orderTitle, out _);
             orderTitle.Initialize(_windows, _canvas, _viewport, id);
             return orderRoot;
-        }
-
-        // #99 dock kinds (ADR-0017 / findings 0075 §7): chart / startup / buying_power / orders /
-        // positions / run_result. Frame chrome comes from DockWindowFrame (spec accent → title bar);
-        // content (ChartView+DepthLadderView for chart, ScenarioStartupTile for startup,
-        // LivePanelTileView for the 4 base panels) is injected here so the spawn flow is ONE call.
-        if (IsDockKind(spec.kind))
-        {
-            var dockRoot = DockWindowFrame.Build(id, spec.title, spec.accent, _font, out var dockTitle, out var dockBody);
-            dockTitle.Initialize(_windows, _canvas, _viewport, id);
-            BuildDockContent(spec.kind, id, dockBody);
-            return dockRoot;
         }
 
         var root = StrategyEditorWindowFrame.Build(id, out var titleInput, out var body);
@@ -545,14 +564,27 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return root;
     }
 
-    // Whether a catalog kind belongs to the #99 dock cluster (chart family + 5 base singletons).
-    static bool IsDockKind(string kind) =>
-        kind == FloatingWindowCatalog.KIND_CHART ||
-        kind == FloatingWindowCatalog.KIND_STARTUP ||
-        kind == FloatingWindowCatalog.KIND_BUYING_POWER ||
-        kind == FloatingWindowCatalog.KIND_ORDERS ||
-        kind == FloatingWindowCatalog.KIND_POSITIONS ||
-        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
+    // The BACK-plane (_dockWindows) factory: the 6 #99 dock kinds (ADR-0017 / findings 0075 §7) —
+    // chart / startup / buying_power / orders / positions / run_result. Frame chrome comes from
+    // DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView for chart,
+    // ScenarioStartupTile for startup, LivePanelTileView for the 4 base panels) is injected here so
+    // the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
+    // snap/focus stays WITHIN the back plane (a dock window never snaps to the front-plane editor).
+    RectTransform BuildDockWindowFrame(FloatingWindowSpec spec, string id)
+    {
+        // #103 (ADR-0018): symmetric guard — a front kind (order / strategy_editor) must never reach the back
+        // controller. Fail loud rather than build a dock frame around editor/order content.
+        if (!DockShape.IsDockKind(spec.kind))
+        {
+            Debug.LogError($"[BackcastWorkspaceRoot] front kind '{spec.kind}' (id {id}) routed to the BACK controller — must use _windows");
+            return null;
+        }
+
+        var dockRoot = DockWindowFrame.Build(id, spec.title, spec.accent, _font, out var dockTitle, out var dockBody);
+        dockTitle.Initialize(_dockWindows, _canvas, _viewport, id);
+        BuildDockContent(spec.kind, id, dockBody);
+        return dockRoot;
+    }
 
     // Build the per-kind content INSIDE a dock window's body. The dock kinds are SINGLETONS
     // except `chart`, which is multi-instance with id = "chart:<instrument>" — the instrument
@@ -639,7 +671,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         for (int i = 0; i < ids.Length; i++)
         {
             var r = rects[i];
-            _windows.Spawn(ids[i], ids[i], r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
+            // #103 (ADR-0018): base dock windows spawn on the BACK plane (_dockWindows / _dockLayer, 1.0×).
+            _dockWindows.Spawn(ids[i], ids[i], r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
         }
     }
 
@@ -650,16 +683,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     StrategyEditorView ViewFor(string regionId)
         => _editors.TryGetValue(regionId, out var v) && v != null ? v : null;
 
-    // The viewport-centre canvas-LOGICAL point = the next spawn anchor (used verbatim as a top-left;
-    // SpawnPlacement cascades off it). CanvasView.panX/panY is exactly that point (findings 0006 §2).
-    Vector2 SpawnAnchorTopLeft()
+    // The viewport-centre canvas-LOGICAL point = the next spawn anchor for the FRONT plane (used by the
+    // cell coordinator). CanvasView.panX/panY is exactly that point (findings 0006 §2).
+    Vector2 SpawnAnchorTopLeft() => SpawnAnchorTopLeftIn(_floatingLayer);
+
+    // The viewport-centre anchor expressed in a SPECIFIC layer's local coords. A parallax-shifted layer
+    // (_floatingLayer, 1.2×) has a non-zero anchoredPosition when panned, so its layer-local top-left
+    // differs from the Content-logical viewport-centre by that offset — subtract it so a new window still
+    // lands at the viewport centre regardless of the depth cue. The 1.0× _dockLayer rides Content with a
+    // zero offset, so this reduces to (panX, panY) there (#103 / ADR-0018). One helper, both planes.
+    Vector2 SpawnAnchorTopLeftIn(RectTransform layer)
     {
         var v = _canvas != null ? _canvas.CaptureView() : null;
         Vector2 anchor = v != null ? new Vector2(v.panX, v.panY) : Vector2.zero;
-        // The floating layer is parallax-shifted off Content (anchoredPosition != 0 when panned), so a
-        // window's layer-LOCAL top-left differs from the Content-logical viewport-centre by that offset.
-        // Subtract it so a new cell still lands at the viewport centre regardless of the depth cue.
-        if (_floatingLayer != null) anchor -= _floatingLayer.anchoredPosition;
+        if (layer != null) anchor -= layer.anchoredPosition;
         return anchor;
     }
 
@@ -811,8 +848,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // Reconcile the live chart windows to _scenario.Universe (the membership SoT): close windows
     // whose instrument left the universe, spawn one for each newly-present instrument. Bound to
     // InstrumentRegistry.Changed so a sidebar/picker/tile edit reflects immediately (no Run wait).
-    // Replaces #60 SyncChartTilesToUniverse — `_windows.Spawn/Close(KIND_CHART, "chart:<iid>", …)`
-    // is the only chart spawn/close path. No box-grow (the dock cluster is not bounded by any box).
+    // Replaces #60 SyncChartTilesToUniverse — `_dockWindows.Spawn/Close(KIND_CHART, "chart:<iid>", …)`
+    // (#103: the back plane) is the only chart spawn/close path. No box-grow (the dock cluster is not bounded).
     void SyncChartWindowsToUniverse()
     {
         var ids = _scenario.Universe.Ids;
@@ -845,7 +882,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
         string windowId = DockShape.ChartId(instrumentId);
-        _windows.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, windowId, SpawnAnchorTopLeft(), true);
+        // #103 (ADR-0018): chart windows live on the BACK plane (_dockWindows / _dockLayer, 1.0×). The
+        // anchor is taken in DOCK-layer coords (the 1.0× layer has zero parallax offset, so it is just
+        // the viewport centre). The #101 spec-fixed size + focus-adjacent snap is unchanged — it now
+        // resolves the focus target WITHIN the back plane, so a chart snaps to a dock window, never the
+        // front-plane editor (cross-plane snap ban).
+        _dockWindows.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, windowId, SpawnAnchorTopLeftIn(_dockLayer), true);
     }
 
     // Despawn one chart window and clear its render bookkeeping. The GameObject is destroyed by
@@ -854,7 +896,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void DespawnChartWindow(string instrumentId)
     {
         if (string.IsNullOrEmpty(instrumentId)) return;
-        _windows.Close(DockShape.ChartId(instrumentId));
+        _dockWindows.Close(DockShape.ChartId(instrumentId));   // #103: chart lives on the back plane
         _chartViews.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
         _chartAreas.Remove(instrumentId);
@@ -869,8 +911,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // set on every flip); under the dock model nothing else is mode-conditional.
     void SyncStartupVisibilityToMode(bool live)
     {
-        if (live) _windows.Hide(WINDOW_ID_STARTUP);
-        else _windows.Show(WINDOW_ID_STARTUP);
+        if (live) _dockWindows.Hide(WINDOW_ID_STARTUP);   // #103: startup lives on the back plane
+        else _dockWindows.Show(WINDOW_ID_STARTUP);
         _lastLiveShape = live;
         ForceRefreshLiveTiles();   // shape flip: repaint the base panels now (#23 wiring)
     }
@@ -1889,10 +1931,21 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // position is the cell-order-parallel cellPositions, regenerated FROM LIVE by the
         // coordinator, findings 0050 trap 1). #99: ALL OTHER live windows (base + chart + Order
         // + adopted editor shell) DO ride floatingWindows verbatim — that is the dock cluster's
-        // single source of truth (ADR-0017 §6).
+        // single source of truth (ADR-0017 §6). #103 (ADR-0018 / findings 0075 §10): the windows
+        // now live on TWO planes (front _windows = order/editor; back _dockWindows = the 6 dock
+        // kinds), so capture is the UNION of both controllers into the one floatingWindows list.
+        // kind disambiguates the plane on restore (RestoreFloating routes by DockShape.IsDockKind),
+        // so no schema field is added (ADR-0017 §6 unchanged).
+        // NOTE: zOrder in the unioned list is PER-PLANE-RELATIVE (each Capture() re-ranks its own windows
+        // 0..n-1), so front and back z ranges overlap. That is harmless: the planes are separate Content
+        // siblings (DockLayer always draws behind regardless of z), and RestoreFloating routes by kind and
+        // BringToFronts within each controller, so same-plane relative order is preserved. Do NOT treat this
+        // list as a single global z-stack.
         var nonCell = new List<FloatingWindowLayout>();
         foreach (var w in _windows.Capture().floatingWindows)
             if (w != null && w.kind != FloatingWindowCatalog.KIND_STRATEGY_EDITOR) nonCell.Add(w);
+        foreach (var w in _dockWindows.Capture().floatingWindows)
+            if (w != null) nonCell.Add(w);
 
         var doc = new LayoutDocument
         {
@@ -1941,6 +1994,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // floating: adopted/existing windows repositioned IN PLACE (never destroyed); only additional
     // saved windows are spawned; ascending zOrder → BringToFront yields contiguous front order.
+    // #103 (ADR-0018 / findings 0075 §10): each saved window is ROUTED to its plane by kind —
+    // DockShape.IsDockKind → the back-plane _dockWindows, else the front-plane _windows. So a chart
+    // saved on disk restores onto _dockLayer (1.0×) and the Order ticket onto _floatingLayer (1.2×),
+    // round-tripping the depth. The two controllers re-rank z independently within their own plane.
     void RestoreFloating(LayoutDocument doc)
     {
         var wins = doc.floatingWindows;
@@ -1954,9 +2011,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // here. A legacy sidecar that still lists strategy_editor in floatingWindows must not spawn
             // an untracked duplicate cell window (it would escape the coordinator's region map).
             if (w.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR) continue;
-            if (_windows.Has(w.id)) _windows.ApplyGeometry(w);
-            else _windows.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible);
-            _windows.BringToFront(w.id);
+            var ctrl = DockShape.IsDockKind(w.kind) ? _dockWindows : _windows;
+            if (ctrl.Has(w.id)) ctrl.ApplyGeometry(w);
+            else ctrl.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible);
+            ctrl.BringToFront(w.id);
         }
     }
 

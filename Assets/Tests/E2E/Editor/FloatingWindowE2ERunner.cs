@@ -4,7 +4,9 @@
 // 実証済み Probe の S1〜S6 を assert 1 行も削らず移送し（各 section の `Covers:` 参照）、台本の `要新規自動化`
 // 行（WINDOW-04 cascade / WINDOW-05 single Close / WINDOW-08 reveal cycle）を S7〜S9 として追加した。
 // Python-FREE・render-FREE・実 root 不要（headless な Viewport→Content→FloatingWindowLayer の RectTransform
-// ツリーを反射合成し `FloatingWindowController` を pure に駆動）。
+// ツリーを反射合成し `FloatingWindowController` を pure に駆動）。**例外は S19 のみ**＝実シーン
+// `BackcastWorkspace.unity` を editmode で開き #103 の DockLayer 背面 sibling／serialized 参照を構造検証する
+// （PlayMode 不要・Python 不要・他 section の合成スタックには触れない＝最後に走る）。
 //
 //   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
 //           -executeMethod FloatingWindowE2ERunner.Run -logFile <log>
@@ -39,12 +41,22 @@
 //  13. #99 DockDefaultPlacement grid arithmetic (base-5 first-launch placement)                    [DOCK-02]
 //  14. #101 DockSnapPlacement flush adjacency (right→down→left→up, overflow cascade, size verbatim) [DOCK-03]
 //  15. #101 focus-adjacent dock spawn (spec-fixed count-independent size, focus/nearest target)    [DOCK-04]
+//  16. #103 two depth planes: back DockLayer 1.0× vs front FloatingWindowLayer 1.2× (parallax speed
+//      gap = restored #99 depth, back sibling, engine==math composition)                            [PLANE-01]
+//  17. #103 cross-plane snap BAN (per-controller母集合 — dock never snaps to front; same-plane snap
+//      unchanged; dock focus within plane; DockShape.IsDockKind routing parity)                     [PLANE-02]
+//  18. #103 two-controller persist round-trip (capture UNION → disk → restore routes by kind to the
+//      correct plane/layer, hidden startup preserved, no cross-plane leak, schema-add 0)            [PLANE-03]
+//  19. #103 REAL scene wiring (loads BackcastWorkspace.unity: DockLayer is the backmost Content sibling
+//      of FloatingWindowLayer + _dockLayer/_floatingLayer serialized refs — pins the scene-builder output) [PLANE-01]
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 public static class FloatingWindowE2ERunner
 {
@@ -75,7 +87,11 @@ public static class FloatingWindowE2ERunner
                 ?? Section12_DockCatalogKinds()
                 ?? Section13_DockDefaultPlacementArithmetic()
                 ?? Section14_DockSnapPlacementArithmetic()
-                ?? Section15_FocusAdjacentDockSpawn(spawned);
+                ?? Section15_FocusAdjacentDockSpawn(spawned)
+                ?? Section16_TwoPlaneParallaxDepth(spawned)
+                ?? Section17_CrossPlaneSnapBan(spawned)
+                ?? Section18_TwoControllerPersistRoundTrip(spawned)
+                ?? Section19_SceneWiringBackPlane();   // LAST: loads the real scene (root-free sections run first)
         }
         catch (Exception e)
         {
@@ -107,8 +123,17 @@ public static class FloatingWindowE2ERunner
                       "left→up, perpendicular-edge align, strict no-overlap selection, gap=0 flush, size verbatim, " +
                       "overflow diagonal cascade) + #101 focus-adjacent dock spawn (spec-fixed size count-INDEPENDENT, " +
                       "snap to USER-focused window, programmatic BringToFront does NOT record focus, no-focus/closed→" +
-                      "nearest-visible fallback, dup/unknown guards) (Unity-owned versioned schema, additive capability " +
-                      "surface, ADR-0003 capability parity, under Unity Mono) [WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04]");
+                      "nearest-visible fallback, dup/unknown guards) + #103 two depth planes (back DockLayer 1.0× vs " +
+                      "front FloatingWindowLayer 1.2× — parallax speed gap = restored depth, back sibling, engine==math " +
+                      "composition) + cross-plane snap BAN (per-controller snap母集合 — dock window never snaps to a " +
+                      "front window; same-plane snap unchanged; dock focus resolves WITHIN the back plane; " +
+                      "DockShape.IsDockKind routing parity) + two-controller persist round-trip (capture UNION → disk → " +
+                      "restore routes by kind to the correct plane/layer, hidden startup preserved, no cross-plane leak, " +
+                      "schema-add 0) + #103 REAL scene wiring (authored DockLayer is the backmost Content sibling of " +
+                      "FloatingWindowLayer + _dockLayer/_floatingLayer serialized refs point to them — binds depth " +
+                      "ordering to the scene-builder output, not the test's setup) (Unity-owned versioned schema, " +
+                      "additive capability surface, ADR-0003 capability parity, under Unity Mono) " +
+                      "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03]");
             EditorApplication.Exit(0);
         }
         else
@@ -894,6 +919,218 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
+    // ---- 16. two depth planes: parallax speed difference (1.0× back vs 1.2× front) + back sibling ----
+    // Covers: PLANE-01 — #103 / ADR-0018 / findings 0075 §10 (the dock plane rides Content at 1.0× while the
+    // floating plane rides it at the 1.2× parallax factor, so a pan opens a SPEED gap = the restored #99
+    // depth; DockLayer is the earlier/backmost sibling so it always draws behind). Mirrors S3's child-follow
+    // engine==math cross-check, now across BOTH planes.
+    static string Section16_TwoPlaneParallaxDepth(List<GameObject> spawned)
+    {
+        const float FRONT = 1.2f;
+        BuildTwoPlaneStack(spawned, FRONT, out RectTransform viewport, out _,
+                           out RectTransform dockLayer, out RectTransform floatingLayer, out InfiniteCanvasController canvas);
+
+        // (a) back sibling: DockLayer draws BEHIND FloatingWindowLayer (earlier sibling index under Content).
+        if (dockLayer.GetSiblingIndex() >= floatingLayer.GetSiblingIndex())
+            return $"S16a: DockLayer sibling {dockLayer.GetSiblingIndex()} not behind FloatingWindowLayer {floatingLayer.GetSiblingIndex()}";
+
+        // (b) unit parallax math: the back plane (factor 1.0) gets ZERO offset (rides Content 1×); the front
+        // plane (1.2) gets a NON-zero offset = (1-1.2)·pan. Equal factors would collapse the gap (the #99 bug).
+        var view = new CanvasView(60f, -40f, 1.5f);
+        if (CanvasViewMath.ParallaxLayerOffset(view, 1.0f) != Vector2.zero)
+            return "S16b: back plane (factor 1.0) must have ZERO parallax offset";
+        Vector2 frontOffset = CanvasViewMath.ParallaxLayerOffset(view, FRONT);
+        Vector2 expectedFront = new Vector2((1f - FRONT) * view.panX, (1f - FRONT) * view.panY);
+        if (!Approx2(frontOffset, expectedFront)) return $"S16b: front offset {frontOffset} != {expectedFront}";
+        if (frontOffset == Vector2.zero) return "S16b: front plane offset is zero — planes coplanar, no depth";
+
+        // (c) rendered composition: a window at the SAME logical top-left on each plane renders at DIFFERENT
+        // viewport positions once panned — the dock window tracks pan 1×, the floating window 1.2×.
+        var dockCtrl = MakeController(spawned, dockLayer);
+        var floatCtrl = MakeController(spawned, floatingLayer);
+        Vector2 L = new Vector2(50f, -30f);
+        RectTransform dockWin = dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:x", L.x, L.y, 520, 360, true);
+        RectTransform floatWin = floatCtrl.Spawn(FloatingWindowCatalog.KIND_ORDER, "order", L.x, L.y, 360, 300, true);
+        if (dockWin == null || floatWin == null) return "S16c: precondition spawn returned null";
+
+        canvas.ApplyView(view);
+
+        // dock window: rides Content at 1× (no layer offset) → viewport == pure logical-to-viewport of L.
+        Vector2 dockMeasured = viewport.InverseTransformPoint(dockWin.position);
+        Vector2 dockPredicted = CanvasViewMath.LogicalToViewport(L, view);
+        if (!Approx2(dockMeasured, dockPredicted))
+            return $"S16c: dock window not 1× (engine {dockMeasured}, math {dockPredicted})";
+
+        // floating window: rides Content PLUS the 1.2× parallax offset → shifted by zoom·offset from the dock.
+        Vector2 floatMeasured = viewport.InverseTransformPoint(floatWin.position);
+        Vector2 floatPredicted = dockPredicted + view.zoom * frontOffset;
+        if (!Approx2(floatMeasured, floatPredicted))
+            return $"S16c: floating window not 1.2× (engine {floatMeasured}, math {floatPredicted})";
+
+        // the depth gap is REAL and non-zero (delete-the-production-logic litmus: equal factors → gap 0).
+        if (Approx2(dockMeasured, floatMeasured))
+            return "S16c: dock and floating windows render at the SAME position — depth gap vanished";
+        return null;
+    }
+
+    // ---- 17. cross-plane snap ban + same-plane snap + dock focus stays in plane ----
+    // Covers: PLANE-02 — #103 / ADR-0018 / findings 0075 §10 (snap母集合 is per-controller, so a back-plane
+    // window never snaps to a front-plane window; same-plane snap is unchanged; a dock spawn's focus target
+    // resolves WITHIN the back plane). The kind→plane routing predicate (DockShape.IsDockKind) is the same one
+    // RestoreFloating uses, so the two test controllers mirror production's plane assignment.
+    static string Section17_CrossPlaneSnapBan(List<GameObject> spawned)
+    {
+        // routing-predicate parity (mirrors RestoreFloating: IsDockKind ? _dockWindows : _windows).
+        if (!DockShape.IsDockKind(FloatingWindowCatalog.KIND_CHART)) return "S17: chart must route to the dock plane";
+        if (!DockShape.IsDockKind(FloatingWindowCatalog.KIND_STARTUP)) return "S17: startup must route to the dock plane";
+        if (DockShape.IsDockKind(FloatingWindowCatalog.KIND_ORDER)) return "S17: order must route to the front plane";
+        if (DockShape.IsDockKind(FloatingWindowCatalog.KIND_STRATEGY_EDITOR)) return "S17: strategy_editor must route to the front plane";
+
+        BuildTwoPlaneStack(spawned, 1.2f, out _, out _, out RectTransform dockLayer, out RectTransform floatLayer, out _);
+        var dockCtrl = MakeController(spawned, dockLayer);
+        var floatCtrl = MakeController(spawned, floatLayer);
+
+        // (a) CROSS-PLANE BAN: a dock window 5px shy of flush-right of a FRONT-plane window. Snapping the dock
+        // window must NOT move it — the front window is in the OTHER controller, invisible to the dock snap母集合.
+        // (If the two planes shared one controller — the #99 collapse — the dock window would snap 5px here.)
+        RectTransform dockWin = dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:1", 100, 0, 280, 180, true);
+        RectTransform frontWin = floatCtrl.Spawn(FloatingWindowCatalog.KIND_ORDER, "order", 385, 0, 280, 180, true);
+        if (dockWin == null || frontWin == null) return "S17a: precondition spawn returned null";
+        Vector2 applied = dockCtrl.SnapOnRelease("chart:1");
+        if (applied != Vector2.zero) return $"S17a: dock window snapped across planes (offset {applied}) — cross-plane snap must be banned";
+        if (!Approx2(dockWin.anchoredPosition, new Vector2(100f, 0f))) return "S17a: dock window moved despite the neighbour being on another plane";
+
+        // (b) SAME-PLANE SNAP still works: add a SECOND dock window within threshold on the SAME controller.
+        RectTransform dockNbr = dockCtrl.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", 385, 0, 280, 180, true);
+        if (dockNbr == null) return "S17b: precondition spawn returned null";
+        Vector2 sameApplied = dockCtrl.SnapOnRelease("chart:1");
+        if (!Approx(sameApplied.x, 5f) || !Approx(sameApplied.y, 0f)) return $"S17b: same-plane snap offset {sameApplied} expected (5,0)";
+        if (!Approx2(dockWin.anchoredPosition, new Vector2(105f, 0f))) return "S17b: same-plane snap did not apply";
+
+        // (c) DOCK FOCUS STAYS IN PLANE: focus a front-plane window AND a back-plane window. A dock
+        // SpawnDockedToFocus must snap to the BACK-plane focus target, never the front one (separate focus
+        // registries). buying_power top-left (385,0) size 280×180 → flush-right slot top-left (665,0).
+        floatCtrl.NoteUserFocus("order");          // front-plane focus — must be invisible to the dock spawn
+        dockCtrl.NoteUserFocus("buying_power");     // back-plane focus target
+        RectTransform chart2 = dockCtrl.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:2", new Vector2(99999, 99999), true);
+        if (chart2 == null) return "S17c: dock spawn returned null";
+        if (!Approx2(chart2.anchoredPosition, new Vector2(665f, 0f)))
+            return $"S17c: dock spawn did not snap WITHIN the back plane (got {chart2.anchoredPosition}, expected (665,0))";
+        return null;
+    }
+
+    // ---- 18. two-controller persist round-trip with kind→plane routing ----
+    // Covers: PLANE-03 — #103 / ADR-0018 / findings 0075 §10 (CaptureLayout unions BOTH controllers into one
+    // floatingWindows list; RestoreFloating routes each window back to its plane by DockShape.IsDockKind, so a
+    // chart restores onto the back plane and the order onto the front plane — the depth survives a disk
+    // round-trip with NO schema field added). Non-vacuous: a broken predicate parents a window on the wrong layer.
+    static string Section18_TwoControllerPersistRoundTrip(List<GameObject> spawned)
+    {
+        // --- live: dock kinds on the back controller + order on the front controller ---
+        BuildTwoPlaneStack(spawned, 1.2f, out _, out _, out RectTransform dockLayer, out RectTransform floatLayer, out _);
+        var dockCtrl = MakeController(spawned, dockLayer);
+        var floatCtrl = MakeController(spawned, floatLayer);
+        dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:7203", 10.5f, -20.5f, 520.5f, 360.5f, true);
+        dockCtrl.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", -100.5f, 50.5f, 340.5f, 140.5f, true);
+        dockCtrl.Spawn(FloatingWindowCatalog.KIND_STARTUP, "startup", -300.5f, 200.5f, 380.5f, 260.5f, false);   // hidden (Live shape)
+        floatCtrl.Spawn(FloatingWindowCatalog.KIND_ORDER, "order", 40.5f, -40.5f, 360.5f, 300.5f, true);
+
+        // --- capture: UNION both controllers into one list (mirrors CaptureLayout) ---
+        var union = new List<FloatingWindowLayout>();
+        foreach (var w in floatCtrl.Capture().floatingWindows)
+            if (w != null && w.kind != FloatingWindowCatalog.KIND_STRATEGY_EDITOR) union.Add(w);
+        foreach (var w in dockCtrl.Capture().floatingWindows)
+            if (w != null) union.Add(w);
+        if (union.Count != 4) return $"S18: captured {union.Count} windows, expected 4 (3 dock + 1 front)";
+
+        // --- disk round-trip (prove it survives serialize/deserialize verbatim, single floatingWindows list) ---
+        LayoutStore.Save(DocOf(union.ToArray()), TempPath);
+        LayoutDocument loaded = LayoutStore.Load(TempPath);
+        if (loaded?.floatingWindows == null || loaded.floatingWindows.Count != 4) return "S18: disk round-trip lost windows";
+
+        // --- restore: route each window to its plane by DockShape.IsDockKind (mirrors RestoreFloating) ---
+        BuildTwoPlaneStack(spawned, 1.2f, out _, out _, out RectTransform dockLayer2, out RectTransform floatLayer2, out _);
+        var dockCtrl2 = MakeController(spawned, dockLayer2);
+        var floatCtrl2 = MakeController(spawned, floatLayer2);
+        foreach (var w in loaded.floatingWindows)
+        {
+            if (w == null || string.IsNullOrEmpty(w.id)) continue;
+            if (w.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR) continue;
+            var ctrl = DockShape.IsDockKind(w.kind) ? dockCtrl2 : floatCtrl2;
+            if (ctrl.Has(w.id)) ctrl.ApplyGeometry(w);
+            else ctrl.Spawn(w.kind, w.id, w.x, w.y, w.w, w.h, w.visible);
+            ctrl.BringToFront(w.id);
+        }
+
+        // --- assert each window landed on the CORRECT plane (parented under the right layer) ---
+        if (dockCtrl2.Count != 3) return $"S18: back plane restored {dockCtrl2.Count} windows, expected 3";
+        if (floatCtrl2.Count != 1) return $"S18: front plane restored {floatCtrl2.Count} windows, expected 1";
+
+        RectTransform chart = dockCtrl2.RectOf("chart:7203");
+        if (chart == null || chart.parent != dockLayer2) return "S18: chart did not restore onto the BACK plane";
+        if (!Approx2(chart.anchoredPosition, new Vector2(10.5f, -20.5f))) return $"S18: chart geometry lost ({chart.anchoredPosition})";
+        if (dockCtrl2.RectOf("buying_power")?.parent != dockLayer2) return "S18: buying_power did not restore onto the BACK plane";
+        RectTransform startup = dockCtrl2.RectOf("startup");
+        if (startup == null || startup.parent != dockLayer2) return "S18: startup did not restore onto the BACK plane";
+        if (startup.gameObject.activeSelf) return "S18: hidden startup (visible=false) restored as active";
+
+        RectTransform order = floatCtrl2.RectOf("order");
+        if (order == null || order.parent != floatLayer2) return "S18: order did not restore onto the FRONT plane";
+        // non-vacuous: routing must NOT cross — a broken IsDockKind would leak a window onto the wrong plane.
+        if (dockCtrl2.Has("order")) return "S18: order leaked onto the BACK plane (routing broke)";
+        if (floatCtrl2.Has("chart:7203")) return "S18: chart leaked onto the FRONT plane (routing broke)";
+        return null;
+    }
+
+    // ---- 19. PRODUCTION scene wiring: DockLayer is the back sibling + serialized refs point to the planes ----
+    // Covers: PLANE-01 (production half) — #103 / ADR-0018 / findings 0075 §10. S16a's back-sibling check is a
+    // tautology over the TEST's own layer-creation order; this section loads the REAL authored scene and pins
+    // the scene-builder output: DockLayer and FloatingWindowLayer are both Content children, DockLayer is the
+    // EARLIER (backmost) sibling, and BackcastWorkspaceRoot's _dockLayer/_floatingLayer serialized refs point to
+    // them. This is the ONE section that loads the real scene (the rest are root-free) — it runs LAST so its
+    // OpenScene(Single) does not disturb the synthetic-stack sections (their GameObjects fake-null on unload and
+    // the finally's null-guard skips them). No PlayMode / no Python: editmode scene load reads authored structure.
+    static string Section19_SceneWiringBackPlane()
+    {
+        Scene scene = EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        if (!scene.IsValid()) return "S19: failed to open the workspace scene";
+
+        RectTransform content = null, dockLayer = null, floatingLayer = null;
+        foreach (var go in scene.GetRootGameObjects())
+            foreach (var rt in go.GetComponentsInChildren<RectTransform>(true))
+            {
+                if (rt.name == "Content") content = rt;
+                else if (rt.name == "DockLayer") dockLayer = rt;
+                else if (rt.name == "FloatingWindowLayer") floatingLayer = rt;
+            }
+        if (content == null) return "S19: Content not found in scene";
+        if (dockLayer == null) return "S19: DockLayer not found in scene (scene not rebuilt for #103?)";
+        if (floatingLayer == null) return "S19: FloatingWindowLayer not found in scene";
+
+        if (dockLayer.parent != content) return "S19: DockLayer is not a child of Content";
+        if (floatingLayer.parent != content) return "S19: FloatingWindowLayer is not a child of Content";
+        // earlier sibling = drawn behind (uGUI draws child 0 first). This is the REAL depth ordering.
+        if (dockLayer.GetSiblingIndex() >= floatingLayer.GetSiblingIndex())
+            return $"S19: DockLayer sibling {dockLayer.GetSiblingIndex()} is not BEHIND FloatingWindowLayer {floatingLayer.GetSiblingIndex()}";
+
+        BackcastWorkspaceRoot root = null;
+        foreach (var go in scene.GetRootGameObjects())
+        {
+            root = go.GetComponentInChildren<BackcastWorkspaceRoot>(true);
+            if (root != null) break;
+        }
+        if (root == null) return "S19: BackcastWorkspaceRoot not found in scene";
+
+        var so = new SerializedObject(root);
+        var dockRef = so.FindProperty("_dockLayer");
+        var floatRef = so.FindProperty("_floatingLayer");
+        if (dockRef == null) return "S19: _dockLayer serialized field missing on BackcastWorkspaceRoot";
+        if (dockRef.objectReferenceValue != dockLayer) return "S19: _dockLayer ref does not point to the scene DockLayer";
+        if (floatRef == null || floatRef.objectReferenceValue != floatingLayer)
+            return "S19: _floatingLayer ref does not point to the scene FloatingWindowLayer";
+        return null;
+    }
+
     // ---- helpers ----
 
     // Build Viewport(identity) -> Content(centre anchor/pivot, controller-driven) ->
@@ -922,6 +1159,46 @@ public static class FloatingWindowE2ERunner
         layer.sizeDelta = Vector2.zero;   // identity under Content
 
         canvas = new InfiniteCanvasController(content);
+    }
+
+    // #103 (ADR-0018): build Viewport -> Content -> [DockLayer(back, sibling 0), FloatingWindowLayer(front,
+    // sibling 1)], mirroring the production scene (BackcastWorkspaceSceneBuilder creates DockLayer FIRST).
+    // The InfiniteCanvasController parallax-drives ONLY the floating layer at `floatingFactor`; the dock
+    // layer is a plain Content child (1.0×, zero offset). One controller per layer is wired by the caller.
+    static void BuildTwoPlaneStack(List<GameObject> spawned, float floatingFactor,
+                                   out RectTransform viewport, out RectTransform content,
+                                   out RectTransform dockLayer, out RectTransform floatingLayer,
+                                   out InfiniteCanvasController canvas)
+    {
+        var viewportGo = new GameObject("ProbeViewport", typeof(RectTransform));
+        spawned.Add(viewportGo);
+        viewport = viewportGo.GetComponent<RectTransform>();
+        viewport.anchorMin = viewport.anchorMax = viewport.pivot = new Vector2(0.5f, 0.5f);
+        viewport.sizeDelta = new Vector2(1000f, 800f);
+
+        var contentGo = new GameObject("ProbeContent", typeof(RectTransform));
+        content = contentGo.GetComponent<RectTransform>();
+        content.SetParent(viewport, false);
+        content.anchorMin = content.anchorMax = content.pivot = new Vector2(0.5f, 0.5f);
+        content.sizeDelta = Vector2.zero;
+
+        dockLayer = NewIdentityLayer("DockLayer", content);            // sibling 0 = backmost (created first)
+        floatingLayer = NewIdentityLayer("FloatingWindowLayer", content);  // sibling 1 = front
+
+        canvas = new InfiniteCanvasController(content, floatingLayer, floatingFactor);
+    }
+
+    // An identity (centre anchor/pivot, zero offset) RectTransform layer under `parent`. The child created
+    // earlier gets the lower sibling index (= drawn behind), so call order encodes back-to-front.
+    static RectTransform NewIdentityLayer(string name, RectTransform parent)
+    {
+        var go = new GameObject(name, typeof(RectTransform));
+        var rt = go.GetComponent<RectTransform>();
+        rt.SetParent(parent, false);
+        rt.anchorMin = rt.anchorMax = rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = Vector2.zero;
+        return rt;
     }
 
     // A controller whose factory mints BARE RectTransforms (no title bar / body — the AFK gate

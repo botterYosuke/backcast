@@ -65,7 +65,10 @@ public static class BackcastWorkspaceSceneBuilder
         Stretch(center);
         center.SetAsFirstSibling();
 
-        // ── center workspace: Viewport → Content → FloatingWindowLayer (#99: no HakoniwaRoot) ──
+        // ── center workspace: Viewport → Content → [DockLayer(back,1.0×), FloatingWindowLayer(front,1.2×)] ──
+        // #103 (ADR-0018): two depth planes restore the #99 regression. DockLayer is created FIRST so it is
+        // the EARLIER (backmost) sibling — the 6 former Hakoniwa kinds ride it at 1.0×; FloatingWindowLayer
+        // (the adopted editor + order) rides Content PLUS the parallax factor (1.2×) so it floats in front.
         var viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(Image), typeof(RectMask2D), typeof(InfiniteCanvasInputSurface));
         var viewport = (RectTransform)viewportGo.transform;
         viewport.SetParent(center, false);
@@ -78,6 +81,10 @@ public static class BackcastWorkspaceSceneBuilder
 
         var content = NewRect("Content", viewport);
         Identity(content);
+
+        // BACK plane first → sibling index 0 → drawn behind everything else under Content (#103 / ADR-0018).
+        var dockLayer = NewRect("DockLayer", content);
+        Identity(dockLayer);
 
         var floatingLayer = NewRect("FloatingWindowLayer", content);
         Identity(floatingLayer);
@@ -111,6 +118,7 @@ public static class BackcastWorkspaceSceneBuilder
         SetRef(so, "_viewport", viewport);
         SetRef(so, "_content", content);
         SetRef(so, "_inputSurface", inputSurface);
+        SetRef(so, "_dockLayer", dockLayer);
         SetRef(so, "_floatingLayer", floatingLayer);
         SetRef(so, "_strategyEditorWindow", window);
         SetRef(so, "_strategyEditorBody", body);

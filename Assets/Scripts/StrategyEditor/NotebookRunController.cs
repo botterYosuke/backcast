@@ -195,7 +195,15 @@ public sealed class NotebookRunController
             if (co.Index < 0 || co.Index >= cells.Count) continue;   // stale index (cell deleted) — skip
             string region = _coordinator.RegionOf(cells[co.Index]);
             if (region == null) continue;
-            _viewFor(region)?.SetOutput(co.Output, co.Mimetype, co.Data);
+            var view = _viewFor(region);
+            if (view == null) continue;
+            view.SetOutput(co.Output, co.Mimetype, co.Data);
+            // #102 Slice 2 (findings 0079): a cell that ran this press also has its console replaced
+            // (an empty segment list hides the console block — auto-collapse).  Cells that did NOT run
+            // this press are simply absent from result.Ran, so their console pane is untouched
+            // (marimo `clear_console=False on cells that ran` parity is at the Python boundary; here
+            // we just paint what each ran cell carried back).
+            view.SetConsole(co.Console);
         }
     }
 }

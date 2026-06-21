@@ -43,6 +43,16 @@ public struct NotebookRunRequest
     public bool IsRestage;
 }
 
+// One ordered console segment carried back from a cell's stdout/stderr (#102 Slice 2, findings 0079).
+// Adjacent same-stream writes are already collapsed on the Python side (marimo cell.ts:133 /
+// collapseConsoleOutputs.tsx parity), so the array reflects arrival order with stream switches as
+// segment boundaries.  C# concatenates with per-stream colour to paint the console pane.
+public struct ConsoleSegment
+{
+    public string Stream;   // "stdout" | "stderr"
+    public string Text;
+}
+
 // One ran cell's result (pressed cell or a reactive descendant), by cell-order index.
 public struct NotebookCellOutput
 {
@@ -55,6 +65,9 @@ public struct NotebookCellOutput
     // table natively from these. Absent on a legacy/text-only payload → empty (backward compatible).
     public string Mimetype;
     public string Data;
+    // #102 Slice 2 (findings 0079): the cell's stdout/stderr in arrival order. Null/empty for a cell
+    // that produced no console output OR for a legacy/test fake that did not populate it.
+    public ConsoleSegment[] Console;
 }
 
 // The result of one RUN: the cells that ran (pressed + reactive downstream) + a run-level error.

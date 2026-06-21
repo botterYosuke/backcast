@@ -385,6 +385,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             () => _host.ForceStop(),
             SetCellRunButtonState,
             SetCellStaleRegions);
+        // #102 findings 0079 §6 D7: every AddCell/DeleteCell/SyncWindowsToNotebook bumps the run
+        // controller's generation so an in-flight per-cell RUN whose pressed-index frame predates the
+        // mutation is dropped at drain time (the dormant region_001 reuse race — pressing A, deleting A,
+        // adding B that reuses R1, would otherwise paint A's stdout onto B's window).
+        _coordinator.ListMutated += () => _notebookRun.Invalidate();
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();

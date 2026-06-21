@@ -63,7 +63,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section16_PerCellStale(spawned)
                 ?? Section17_BlockPopup(spawned)
                 ?? Section18_DocumentBadge()
-                ?? Section19_RichOutput(spawned);
+                ?? Section19_RichOutput(spawned)
+                ?? Section20_ConsoleAndDynamicLayout(spawned);
         }
         catch (Exception e)
         {
@@ -109,6 +110,11 @@ public static class StrategyEditorNotebookE2ERunner
                       "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage " +
                       "(decode+RawImage-activation HITL-only in headless batch; mimetype passthrough AFK), " +
                       "text/markdown+text/html→rich Text, unsupported→labelled plain fallback) " +
+                      "+ #102 console + dynamic output layout (STRATEGY-34..38: per-cell stdout/stderr " +
+                      "segments paint into the console block in arrival order with stderr amber-tagged, " +
+                      "an empty rich+console body collapses to editor-only — blocks deactivate so the " +
+                      "body's VerticalLayoutGroup skips them, populated blocks cap at body * 0.45, " +
+                      "cell rebind clears both rich and console panes) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1751,4 +1757,157 @@ public static class StrategyEditorNotebookE2ERunner
     }
 
     static bool Approx(float a, float b) => Mathf.Abs(a - b) <= EPS;
+
+    // ====== Section 20 — #102: console + dynamic output layout (findings 0076) ======
+    //
+    // Covers: STRATEGY-34 console paints stdout/stderr segments in arrival order with stderr amber;
+    //         STRATEGY-35 empty rich + empty console → both blocks deactivated, editor takes the full body;
+    //         STRATEGY-36 rich populated + console empty → console block hidden;
+    //         STRATEGY-37 rich populated + console populated → both blocks visible, capped at body * 0.45;
+    //         STRATEGY-38 cell rebind clears both rich and console panes.
+    //
+    // Python-FREE (the segments are produced by a fake executor); the Python pytest gate
+    // (test_notebook_console.py) covers the marimo-side capture.
+    static string Section20_ConsoleAndDynamicLayout(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer20", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        // Give the root a fixed size so body.rect.height resolves to a meaningful value — the view's
+        // dynamic layout reads body.rect.height to compute editor-min and per-block-max.
+        adoptRoot.sizeDelta = new Vector2(400f, 400f);
+        UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(adoptRoot);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S20: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S20: precondition — cell0 not bound to region_001";
+
+        var exec = new _ConsoleExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
+        var view = views[R1];
+
+        // STRATEGY-35 (initial empty): neither block visible — editor takes the full body.
+        if (view.RichBlockVisible) return "S20/STRATEGY-35: rich block is initially visible (should be hidden)";
+        if (view.ConsoleBlockVisible) return "S20/STRATEGY-35: console block is initially visible (should be hidden)";
+
+        // STRATEGY-34: a single stdout segment paints the console; stderr stays absent.
+        exec.SetOutput(string.Empty, string.Empty, string.Empty);
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "a\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.ConsoleBlockVisible) return "S20/STRATEGY-34: console block did not become visible after a stdout segment";
+        var ctext = view.CurrentConsoleText ?? string.Empty;
+        if (!ctext.Contains("a")) return "S20/STRATEGY-34: console text missing the stdout payload, got [" + ctext + "]";
+        if (ctext.Contains("<color=")) return "S20/STRATEGY-34: stdout-only payload wrongly wrapped in a colour tag, got [" + ctext + "]";
+
+        // STRATEGY-34 (stderr amber): a stderr segment paints amber via UGUI rich-text colour tags.
+        exec.SetConsole(new[] {
+            new ConsoleSegment { Stream = "stdout", Text = "o1\n" },
+            new ConsoleSegment { Stream = "stderr", Text = "e1\n" },
+            new ConsoleSegment { Stream = "stdout", Text = "o2\n" },
+        });
+        run.RunCell(R1); run.DrainAndRoute();
+        ctext = view.CurrentConsoleText ?? string.Empty;
+        if (!ctext.Contains("<color=")) return "S20/STRATEGY-34: a stderr segment did not produce a colour tag, got [" + ctext + "]";
+        int oIdx = ctext.IndexOf("o1");
+        int eIdx = ctext.IndexOf("e1");
+        int o2Idx = ctext.IndexOf("o2");
+        if (oIdx < 0 || eIdx < 0 || o2Idx < 0) return "S20/STRATEGY-34: arrival order not preserved (o1/e1/o2 missing), got [" + ctext + "]";
+        if (!(oIdx < eIdx && eIdx < o2Idx)) return "S20/STRATEGY-34: arrival order broken (expected o1<e1<o2), got [" + ctext + "]";
+
+        // STRATEGY-34 (UGUI rich-text escape regression): a stdout segment containing `<EOF>` MUST
+        // survive — UGUI Text with supportRichText=true would otherwise treat `<EOF>` as an unknown
+        // tag and strip it (`print("<EOF>")` would silently vanish). BuildConsoleRichText escapes `<`
+        // to `&lt;` BEFORE concatenating with the color tag, so the user sees the literal characters.
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "<EOF>" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        ctext = view.CurrentConsoleText ?? string.Empty;
+        if (!ctext.Contains("&lt;EOF")) return "S20/STRATEGY-34: literal '<' from stdout was not escaped — UGUI would strip the tag, got [" + ctext + "]";
+
+        // STRATEGY-37 (both populated): rich block + console block both visible, capped under body * 0.45.
+        exec.SetOutput("hello", "text/plain", null);
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "console!\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.RichBlockVisible) return "S20/STRATEGY-37: rich block did not become visible after a text/plain payload";
+        if (!view.ConsoleBlockVisible) return "S20/STRATEGY-37: console block did not become visible alongside rich output";
+        // Per-block cap: each output block's preferredHeight must not exceed body.height * fraction.
+        var richBlockRT = view1.transform.parent.Find("RichOutputBlock") as RectTransform;
+        var consoleBlockRT = view1.transform.parent.Find("ConsoleOutputBlock") as RectTransform;
+        if (richBlockRT == null || consoleBlockRT == null) return "S20/STRATEGY-37: rich/console block RectTransform not found under body";
+        float bodyH = adoptBody.rect.height;
+        float cap = bodyH * StrategyEditorContentBuilder.OutputBlockMaxFractionOfBody + 1f;   // 1px tolerance for rebuild rounding
+        var richLE = richBlockRT.GetComponent<LayoutElement>();
+        var conLE = consoleBlockRT.GetComponent<LayoutElement>();
+        if (richLE.preferredHeight > cap) return "S20/STRATEGY-37: rich block preferredHeight " + richLE.preferredHeight + " exceeded cap " + cap;
+        if (conLE.preferredHeight > cap) return "S20/STRATEGY-37: console block preferredHeight " + conLE.preferredHeight + " exceeded cap " + cap;
+
+        // STRATEGY-36 (rich only): a press that emits rich but no console keeps the console hidden.
+        exec.SetOutput("only", "text/plain", null);
+        exec.SetConsole(System.Array.Empty<ConsoleSegment>());
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.RichBlockVisible) return "S20/STRATEGY-36: rich block hidden when a rich-only payload arrived";
+        if (view.ConsoleBlockVisible) return "S20/STRATEGY-36: console block stayed visible after an empty console segment list";
+
+        // STRATEGY-35 (back to empty): an empty rich + empty console returns to editor-only.
+        exec.SetOutput(null, null, null);
+        exec.SetConsole(System.Array.Empty<ConsoleSegment>());
+        run.RunCell(R1); run.DrainAndRoute();
+        if (view.RichBlockVisible) return "S20/STRATEGY-35: rich block stayed visible after an empty payload";
+        if (view.ConsoleBlockVisible) return "S20/STRATEGY-35: console block stayed visible after an empty payload";
+
+        // STRATEGY-38 (rebind clears both panes): paint something, then Bind a new cell — both panes clear.
+        exec.SetOutput("painted", "text/plain", null);
+        exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "x\n" } });
+        run.RunCell(R1); run.DrainAndRoute();
+        if (!view.RichBlockVisible || !view.ConsoleBlockVisible) return "S20/STRATEGY-38: precondition — paint did not populate both blocks";
+        var freshCell = new Cell("y = 1");
+        view.Bind(freshCell);
+        if (view.RichBlockVisible) return "S20/STRATEGY-38: cell rebind did not clear the rich block";
+        if (view.ConsoleBlockVisible) return "S20/STRATEGY-38: cell rebind did not clear the console block";
+
+        lane.Dispose();
+        return null;
+    }
+
+    // S20 fake: a settable {rich, console} payload for the pressed cell so the controller's
+    // passthrough (SetOutput + SetConsole) and the view's dynamic layout are both exercised.
+    sealed class _ConsoleExecutor : INotebookCellExecutor
+    {
+        string _output, _mimetype, _data;
+        ConsoleSegment[] _console = System.Array.Empty<ConsoleSegment>();
+        public void SetOutput(string output, string mimetype, string data) { _output = output; _mimetype = mimetype; _data = data; }
+        public void SetConsole(ConsoleSegment[] console) { _console = console ?? System.Array.Empty<ConsoleSegment>(); }
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+            => new NotebookRunResult
+            {
+                Ok = true,
+                Ran = new[] { new NotebookCellOutput {
+                    Index = pressedIndex, Output = _output, Ok = true,
+                    Mimetype = _mimetype, Data = _data, Console = _console } },
+            };
+        public int[] Restage(string source) => System.Array.Empty<int>();
+    }
 }

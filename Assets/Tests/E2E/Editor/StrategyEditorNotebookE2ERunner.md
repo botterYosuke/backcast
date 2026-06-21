@@ -65,6 +65,11 @@ notebook 効果なので参照行として載せる。
 | STRATEGY-31 | document badge: 編集→`* name.py` / Save→`*` 消える | 同上（`IsDirty` が `* ` prefix を駆動・`DocumentBadgeText` `cs:1542-1543`） | 未保存編集で `* ` prefix・Save で dirty クリア→`* ` が消える | Section18: body 編集後 `* doc18.py`・Save 後 `doc18.py` | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S18) |
 | STRATEGY-32 | rich output routing: plain / markdown / html table | `NotebookRunController.cs:198`→`SetOutput(Output,Mimetype,Data)`→`StrategyEditorView.cs:117`→per-mimetype 分岐（`:123-141`） | text/plain→verbatim Text・text/markdown→rich-text subset（`<b>`）・text/html `<table>`→pipe rows。marimo `FormattedOutput(mimetype,data)` 生成（matplotlib→image/png・mo.md→markdown・df→html）は pytest `test_notebook_rich_output.py` が正本 | Section19: 各 mimetype で `OutputIsImage==false` ＆ pane 内容（`hello` / `<b>` 含む / `\|` 含む）を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S19) |
 | STRATEGY-33 | rich output routing: image/png→RawImage / 未対応→labelled fallback | `StrategyEditorView.cs:169`→`TryDecodeImage`（image/png→`Texture2D.LoadImage`→RawImage・`StrategyEditorContentBuilder.cs:116` が RawImage 兄弟を配線） | image/png は RawImage へ routing（decode 可時 active）、未対応 mimetype は `[mime]` labelled plain fallback。**image decode 能力 probe で分岐**: decode 可（HITL/GPU）＝RawImage active／decode 不可（headless batch）＝mimetype 伝播のみ AFK 確認（`[image/png]` ラベルが routing 非 collapse を証明）＋RawImage active は HITL 降格（S3/S8 と同型） | Section19: decode probe で分岐 assert・unsupported→`[application/json]` label | 自動(E2E済)（image decode active は HITL 降格） | `StrategyEditorNotebookE2ERunner`(S19) |
+| STRATEGY-34 | console: stdout/stderr セグメント表示 / stderr amber / arrival 順保持 | `NotebookRunController.cs:198`→`SetConsole(ConsoleSegment[])`→`StrategyEditorView.SetConsole`→`BuildConsoleRichText`（stderr を `<color=#ffa01c>` でラップ） | `print('a')` で console 表示・`print(file=sys.stderr)` で amber `<color=...>` タグ付き・arrival 順は Python `_BridgedConsoleHook` が `host.stream.cell_id` で per-cell に保ち隣接 same-stream を collapse（marimo `collapseConsoleOutputs.tsx` parity） | Section20: stdout-only でカラータグなし / 混在で `<color=` 含む / `o1<e1<o2` の index 順保持 | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) ＋ `test_notebook_console.py` |
+| STRATEGY-35 | dynamic layout: 出力 0 → 出力ブロック非表示 / editor が body 全高 | `StrategyEditorContentBuilder.cs`：body の `VerticalLayoutGroup` ＋ 各 block の `LayoutElement`（editor: flex=1 / 出力: pref=0 deactivated） | rich + console いずれも空 → 両ブロックの GameObject deactivate → LayoutGroup が skip → editor が body 全高を占有 | Section20: 初期＝両 visible=false / paint 後の空 SetOutput+SetConsole で再び両 visible=false | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) |
+| STRATEGY-36 | dynamic layout: rich のみ populated → console 非表示 | `SetOutput` で rich block active / `SetConsole(null)` で console block deactivate（独立駆動） | rich-only 出力で console 不表示・互いに独立 | Section20: rich populated＋console 空で `RichBlockVisible==true && ConsoleBlockVisible==false` | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) |
+| STRATEGY-37 | dynamic layout: 両ブロック populated / 各ブロック cap=body*0.45 | `ApplyRichBlockSize` / `ApplyConsoleBlockSize` が `LayoutElement.preferredHeight = min(natural, body*OutputBlockMaxFractionOfBody)`、RectMask2D が overflow をクリップ → window 不伸長 | rich + console 両方表示・各 preferredHeight ≤ body * 0.45 + 1px（rebuild rounding tolerance） | Section20: 両 populated で両 visible=true ＋ `richLE.preferredHeight ≤ cap && conLE.preferredHeight ≤ cap` | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) |
+| STRATEGY-38 | cell rebind: 別 cell に bind 直し時に rich+console 両方クリア | `StrategyEditorView.Bind(cell)` が `SetOutput(null) + SetConsole(null) + SyncFromCell()` を順に呼ぶ | Bind 前は両 populated・Bind 後は両 visible=false（前回 cell の出力は新 cell に滲まない） | Section20: paint→`view.Bind(new Cell("y=1"))` で `RichBlockVisible==false && ConsoleBlockVisible==false` | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) |
 
 > 物理窓 ≠ 論理セル（ADR-0013 Decision4）: region_001 は never-Destroy の adopted shell。**notebook は常に ≥1 セル**
 > （aggregate の ≥1 guard）。1 ノート = 1 `.py`（合成/分解は marimo 純正）。供給可能 = path バインド済 ∧ not dirty ∧
@@ -122,6 +127,14 @@ notebook 効果なので参照行として載せる。
 - **STRATEGY-32/33（rich output routing）litmus**: controller `ApplyResult` の Mimetype passthrough を外すと `[image/png]` ラベルが消え
   STRATEGY-33（AFK leaf）が落ちる／全 mimetype を Text へ collapse すると RawImage 非 active で STRATEGY-33（HITL leaf）が落ちる。real
   `FormattedOutput` 生成は Python pytest 側（`test_notebook_rich_output.py`）。
+- **STRATEGY-34（console interleave + stderr amber）litmus**: `BuildConsoleRichText` の stderr 分岐（`<color=#ffa01c>` ラップ）を外すと
+  amber が無くなり S20 の `<color=` 含有 assert が落ちる。`_BridgedConsoleHook._append` の adjacent-same-stream collapse を外しても
+  arrival 順は保たれる（stream switch で必ず新セグメント）。real per-cell capture の正本は Python pytest 側（`test_notebook_console.py`）。
+- **STRATEGY-35/36/37（dynamic layout）litmus**: 出力ブロックの `gameObject.SetActive(false)` を消すと空状態でも visible=true が残り
+  STRATEGY-35 が落ちる／`ApplyRichBlockSize` / `ApplyConsoleBlockSize` の cap を外すと preferredHeight が natural 値そのままになり
+  body の 0.45 を超えて STRATEGY-37 が落ちる／rich/console を片方の SetActive で連動させると STRATEGY-36 が落ちる。
+- **STRATEGY-38（rebind clear）litmus**: `StrategyEditorView.Bind` の `SetConsole(null)` 呼び出しを消すと、前 cell の console が
+  新 cell へ滲み出して S20 の post-Bind visibility=false assert が落ちる（`SetOutput(null)` 単体は既存テストでカバー）。
 
 ## カバー状態の語彙
 

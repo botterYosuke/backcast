@@ -1,4 +1,5 @@
 // StrategyEditorView.cs — issue #16 "Strategy Editor" / #81 cell-as-floating-window (Unity boundary)
+//                       + #95 Phase 6 (rich output mimetype routing) / #102 (console + dynamic layout)
 //
 // The thin MonoBehaviour that wires the legacy InputField editing surface to the pure cores. Since
 // #81 (ADR-0013) it is a FRAGMENT VIEW over ONE Cell (marimo `cell-flow-node.tsx` reads
@@ -15,11 +16,17 @@
 //   * wires undo/redo to EditHistory (Cmd/Ctrl+Z, Cmd/Ctrl+Shift+Z, Ctrl+Y), raising a suppression
 //     flag while it writes InputField.text so the resulting onValueChanged does not re-Record.
 //
+// #102 (findings 0076): SetOutput / SetConsole both drive a dynamic re-layout that auto-collapses
+// the rich and console blocks to zero height when empty (editor takes the full body) and caps each
+// at ~45% of the body height when populated (per-block ScrollRect kicks in past the cap).  stderr
+// segments paint amber (marimo `Outputs.css .stderr` parity); stdout paints the default text colour.
+//
 // Bind(cell) (re)points the view at a Cell — used on spawn, on dormant region_001 reuse (a new cell
 // in the same GameObject shell), and on Open (the aggregate replaced the cell list). The pure logic
 // (highlight, history) is AFK-authoritative; THIS boundary (InputField sync, keys, IME) is HITL.
 
 using System;
+using System.Text;
 using System.Text.RegularExpressions;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -40,6 +47,13 @@ public class StrategyEditorView : MonoBehaviour
     // leaves the RawImage inactive). False for text/markdown/html/plain output and when cleared.
     public bool OutputIsImage => _image != null && _image.gameObject.activeSelf;
 
+    // #102 Slice 2 (findings 0076): the AFK gate (Section20) reads these to assert dynamic layout
+    // — visibility of each output block + the current console text (with amber tags) — without
+    // having to walk the GameObject tree from a test.
+    public bool RichBlockVisible => _richBlock != null && _richBlock.gameObject.activeSelf;
+    public bool ConsoleBlockVisible => _consoleBlock != null && _consoleBlock.gameObject.activeSelf;
+    public string CurrentConsoleText => _consoleText != null ? _consoleText.text : null;
+
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): fired when an edit is COMMITTED (the field loses focus
     // after a change — onEndEdit, which for a MultiLineNewline field is blur, NOT Enter). The root wires
     // this to NotebookRunController.Restage so an edit/blur re-projects the per-cell stale badges. Null
@@ -50,9 +64,18 @@ public class StrategyEditorView : MonoBehaviour
     PythonSyntaxMeshEffect _effect;
     EditHistory _history;
     Text _placeholder;          // host-API hint shown when this is the only cell and it is empty
-    Text _output;               // #95 Phase 2 土台: per-cell RUN output text (below the editor)
-    RawImage _image;            // #95 Phase 6 Slice 5: sibling pane for image/png|jpeg rich output (hidden until an image arrives)
+    Text _output;               // #95 Phase 2 土台: per-cell RUN output text (in the rich block)
+    RawImage _image;            // #95 Phase 6 Slice 5: image/png|jpeg sibling inside the rich block
     Texture2D _tex;             // #95 Phase 6 Slice 5: the decoded image texture we own (freed on replace/clear/destroy)
+
+    // #102 Slice 2: the dynamic layout pieces (findings 0076 D2).
+    RectTransform _richBlock;
+    LayoutElement _richLE;
+    RectTransform _consoleBlock;
+    Text _consoleText;
+    LayoutElement _consoleLE;
+    LayoutElement _editorLE;
+    RectTransform _body;
 
     // Snapshot of the InputField state BEFORE the change currently being recorded.
     string _prevText = string.Empty;
@@ -62,9 +85,13 @@ public class StrategyEditorView : MonoBehaviour
     // Wire the view to its surface + cores. Call once after the subtree is built. `cell` may be null
     // (an unbound shell — e.g. the adopted region_001 before the notebook binds cell 0); Bind() points
     // it at a real cell later. `placeholder` is optional (the single-cell host-API hint).
-    public void Initialize(InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
-                           Cell cell = null, Text placeholder = null, Text output = null,
-                           RawImage image = null)
+    public void Initialize(
+        InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
+        Cell cell, Text placeholder,
+        Text output, RawImage image,
+        RectTransform richBlock, LayoutElement richLE,
+        RectTransform consoleBlock, Text consoleText, LayoutElement consoleLE,
+        LayoutElement editorLE)
     {
         _input = input;
         _effect = effect;
@@ -72,6 +99,15 @@ public class StrategyEditorView : MonoBehaviour
         _placeholder = placeholder;
         _output = output;
         _image = image;
+        _richBlock = richBlock;
+        _richLE = richLE;
+        _consoleBlock = consoleBlock;
+        _consoleText = consoleText;
+        _consoleLE = consoleLE;
+        _editorLE = editorLE;
+        // The StrategyCodeInput we live on is a child of the body — the VerticalLayoutGroup is on
+        // the body itself, so that is what we mark for rebuild after sizing.
+        _body = transform.parent as RectTransform;
         BoundCell = cell;
 
         _input.onValueChanged.AddListener(OnValueChanged);
@@ -100,7 +136,8 @@ public class StrategyEditorView : MonoBehaviour
     {
         BoundCell = cell;
         _history.Clear();
-        SetOutput(null);   // a different cell's run output is not this cell's — clear on rebind
+        SetOutput(null);              // a different cell's run output is not this cell's — clear on rebind
+        SetConsole(null);             // ditto for console (#102 AC: cell rebind clears console)
         SyncFromCell();
     }
 
@@ -111,38 +148,50 @@ public class StrategyEditorView : MonoBehaviour
     //     markdown subset (headings/bold/italic/bullets, <table>→pipe rows) to Unity rich-text tags.
     //   * text/plain | unsupported | no mimetype → the plain `text` projection (tag-stripped by the
     //     backend), with an unsupported mimetype labelled for debug visibility.
-    // `text` is the backend's plain-text projection (the fallback); `data` carries the rich payload.
-    // Null/empty content hides BOTH panes (an un-run cell shows no stale box). Cheap, idempotent.
-    // Back-compat: SetOutput(null) clears (the old single-arg call site on Bind still compiles).
+    // Null/empty content hides the RICH block (#102: the dynamic layout collapses it to zero height).
+    // Cheap, idempotent.  Back-compat: SetOutput(null) clears (the old single-arg call site on Bind
+    // still compiles).
     public void SetOutput(string text, string mimetype = null, string data = null)
     {
         string mt = mimetype ?? string.Empty;
         bool empty = string.IsNullOrEmpty(text) && string.IsNullOrEmpty(data);
-        if (empty) { ShowText(false); ShowImage(false); FreeTexture(); return; }
+        if (empty)
+        {
+            FreeTexture();
+            if (_image != null) _image.gameObject.SetActive(false);
+            if (_output != null) _output.gameObject.SetActive(false);
+            if (_richBlock != null) _richBlock.gameObject.SetActive(false);
+            RefreshEditorMin();   // the body may have resized since the last paint — keep editor min current
+            return;
+        }
 
         if ((mt == "image/png" || mt == "image/jpeg") && TryDecodeImage(data))
         {
-            ShowImage(true);
-            ShowText(false);
+            if (_image != null) _image.gameObject.SetActive(true);
+            if (_output != null) _output.gameObject.SetActive(false);
+            if (_richBlock != null) _richBlock.gameObject.SetActive(true);
+            ApplyBlockSize(_richLE, _output, _image);
             return;
         }
 
         if (mt == "text/markdown" || mt == "text/html")
         {
             FreeTexture();
-            ShowImage(false);
+            if (_image != null) _image.gameObject.SetActive(false);
             if (_output != null)
             {
                 _output.supportRichText = true;
                 _output.text = RichToUnity(mt, string.IsNullOrEmpty(data) ? text : data);
                 _output.gameObject.SetActive(true);
             }
+            if (_richBlock != null) _richBlock.gameObject.SetActive(true);
+            ApplyBlockSize(_richLE, _output, _image);
             return;
         }
 
         // text/plain, no mimetype, or an unsupported type → plain fallback (debug-label the unknown).
         FreeTexture();
-        ShowImage(false);
+        if (_image != null) _image.gameObject.SetActive(false);
         if (_output != null)
         {
             _output.supportRichText = false;
@@ -151,38 +200,110 @@ public class StrategyEditorView : MonoBehaviour
             _output.text = unknown ? "[" + mt + "]\n" + body : body;
             _output.gameObject.SetActive(true);
         }
+        if (_richBlock != null) _richBlock.gameObject.SetActive(true);
+        ApplyBlockSize(_richLE, _output, _image);
     }
 
-    void ShowText(bool on) { if (_output != null) _output.gameObject.SetActive(on); }
-    void ShowImage(bool on) { if (_image != null) _image.gameObject.SetActive(on); }
-    void FreeTexture()
+    // #102 Slice 2 (findings 0076): render the per-cell stdout/stderr segment list into the console
+    // block.  Segments arrive in arrival order with adjacent-same-stream already collapsed (marimo
+    // cell.ts:133 / collapseConsoleOutputs.tsx parity).  Empty / null hides the block (dynamic
+    // layout collapses it to zero height — the editor reclaims the room).  stderr paints amber via
+    // UGUI rich-text colour tags (marimo `.stderr { color: var(--amber-12); }`); stdout uses the
+    // default text colour.  Cheap, idempotent.
+    public void SetConsole(ConsoleSegment[] segments)
     {
-        if (_tex == null) return;
-        if (_image != null) _image.texture = null;
-        if (Application.isPlaying) Destroy(_tex); else DestroyImmediate(_tex);
-        _tex = null;
+        if (segments == null || segments.Length == 0)
+        {
+            if (_consoleText != null) _consoleText.text = string.Empty;
+            if (_consoleBlock != null) _consoleBlock.gameObject.SetActive(false);
+            RefreshEditorMin();   // body may have resized — keep editor min current on the empty path too
+            return;
+        }
+        if (_consoleText != null)
+        {
+            _consoleText.text = BuildConsoleRichText(segments);
+            _consoleText.supportRichText = true;
+        }
+        if (_consoleBlock != null) _consoleBlock.gameObject.SetActive(true);
+        ApplyBlockSize(_consoleLE, _consoleText, null);
     }
 
-    // Decode a base64 PNG/JPEG (a `data:<mime>;base64,XXXX` URL — matplotlib/mo.image — or raw
-    // base64) into the owned Texture2D and bind it to the RawImage. Returns false on a malformed
-    // payload or a missing RawImage so SetOutput falls back to the text pane (never throws).
-    bool TryDecodeImage(string data)
+    // Lightweight body-resize follow-up: when SetOutput/SetConsole take the empty branch (block
+    // deactivated, no preferredHeight to clamp), the editor minHeight is still derived from
+    // body.rect.height, so a window resize between presses must not leave a stale value pinning
+    // the editor at the pre-resize floor.  Called from both empty paths.
+    void RefreshEditorMin()
     {
-        if (_image == null || string.IsNullOrEmpty(data)) return false;
-        string b64 = data;
-        int comma = b64.IndexOf("base64,", StringComparison.Ordinal);
-        if (comma >= 0) b64 = b64.Substring(comma + "base64,".Length);
-        else if (b64.StartsWith("data:", StringComparison.Ordinal)) return false;   // a non-base64 data URL
-        byte[] bytes;
-        try { bytes = Convert.FromBase64String(b64.Trim()); }
-        catch (FormatException) { return false; }
-        FreeTexture();
-        var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-        if (!tex.LoadImage(bytes)) { Destroy(tex); return false; }
-        _tex = tex;
-        _image.texture = _tex;
-        return true;
+        if (_editorLE == null || _body == null) return;
+        float bodyH = _body.rect.height;
+        if (bodyH > 0f) _editorLE.minHeight = ComputeEditorMin(bodyH);
+        LayoutRebuilder.MarkLayoutForRebuild(_body);
     }
+
+    // Build the console pane's rich-text string: per-stream colour tags + arrival order preserved.
+    // amber-12 ≈ #ffa01c per Radix (marimo Outputs.css references the var directly); we hardcode the
+    // hex so the console paints amber even when ThemeService has not loaded an amber-typed palette.
+    // ``supportRichText=true`` on the Text means a raw ``<`` from the user's stdout would be parsed
+    // as a tag (``print("<EOF>")`` would vanish entirely or open an unbalanced tag that swallows the
+    // rest of the buffer), so each segment's payload is escaped first — only OUR colour tag survives.
+    static string BuildConsoleRichText(ConsoleSegment[] segments)
+    {
+        var sb = new StringBuilder();
+        for (int i = 0; i < segments.Length; i++)
+        {
+            var s = segments[i];
+            string body = s.Text ?? string.Empty;
+            if (body.Length == 0) continue;
+            string safe = EscapeForUguiRichText(body);
+            if (s.Stream == "stderr") { sb.Append("<color=#ffa01c>"); sb.Append(safe); sb.Append("</color>"); }
+            else { sb.Append(safe); }
+        }
+        return sb.ToString();
+    }
+
+    // Escape user-supplied text for a UGUI Text with supportRichText=true. UGUI parses ``<...>``
+    // sequences as tags (color/b/i/size/material/quad); the safest neutralisation is to break the
+    // tag open by replacing ``<`` with the entity ``&lt;``.  UGUI does NOT decode entities, so the
+    // output renders as ``&lt;`` literally — visually distinguishable from a real tag and stable
+    // across versions.  ``&`` is escaped too so ``&lt;`` payloads round-trip unambiguously.
+    static string EscapeForUguiRichText(string s)
+        => s == null ? string.Empty : s.Replace("&", "&amp;").Replace("<", "&lt;");
+
+    // Set the rich block's LayoutElement.preferredHeight = clamp(measured content height,
+    // [_editor min preserved], body * OutputBlockMaxFractionOfBody) — the VerticalLayoutGroup on the
+    // body then places the block at that height and the editor gets the residual.  RawImage's
+    // contribution defers to the texture's natural height capped at the same fraction.
+    // One per-block sizing pass; called by SetOutput, SetConsole, and the empty paths so the editor
+    // min is kept consistent with the current body height even when the block deactivates.  The cap
+    // is body.height * OutputBlockMaxFractionOfBody — if the body's rect is not yet resolved
+    // (bodyH==0 on the same frame as the window's first build), the cap collapses to 0 and the block
+    // would pin at 0px; we skip the cap in that case and let the natural height drive (the block's
+    // RectMask2D still clips overflow, and the next layout pass + SetOutput will re-apply the cap).
+    // For the rich block, RawImage's texture.height takes precedence when an image is showing.
+    void ApplyBlockSize(LayoutElement le, Text text, RawImage img)
+    {
+        if (le == null || _body == null) return;
+        float bodyH = _body.rect.height;
+        float natural;
+        if (img != null && img.gameObject.activeSelf && img.texture != null)
+            natural = img.texture.height + 4f;
+        else
+            natural = MeasureTextPreferredHeight(text) + 4f;
+        // bodyH == 0 → layout not yet resolved; skip the cap so the first paint is visible and the
+        // RectMask2D clips overflow until the next SetOutput re-runs the cap math against a real bodyH.
+        float clamped = bodyH > 0f ? Mathf.Min(natural, bodyH * StrategyEditorContentBuilder.OutputBlockMaxFractionOfBody)
+                                   : natural;
+        le.preferredHeight = Mathf.Max(0f, clamped);
+        if (_editorLE != null && bodyH > 0f) _editorLE.minHeight = ComputeEditorMin(bodyH);
+        LayoutRebuilder.MarkLayoutForRebuild(_body);
+    }
+
+    static float ComputeEditorMin(float bodyH)
+        => Mathf.Max(StrategyEditorContentBuilder.EditorMinFloorPx,
+                     bodyH * StrategyEditorContentBuilder.EditorMinFractionOfBody);
+
+    static float MeasureTextPreferredHeight(Text t)
+        => t == null ? 0f : t.preferredHeight;
 
     // Show/hide the single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell).
     // The coordinator calls this with the hint text for the only remaining cell, or null otherwise.
@@ -350,6 +471,35 @@ public class StrategyEditorView : MonoBehaviour
         s = Regex.Replace(s, @"^\s*[-*]\s+", "• ", RegexOptions.Multiline);
         s = s.Replace("`", string.Empty);   // inline code: the pane is already monospace
         return s.Trim();
+    }
+
+    void FreeTexture()
+    {
+        if (_tex == null) return;
+        if (_image != null) _image.texture = null;
+        if (Application.isPlaying) Destroy(_tex); else DestroyImmediate(_tex);
+        _tex = null;
+    }
+
+    // Decode a base64 PNG/JPEG (a `data:<mime>;base64,XXXX` URL — matplotlib/mo.image — or raw
+    // base64) into the owned Texture2D and bind it to the RawImage. Returns false on a malformed
+    // payload or a missing RawImage so SetOutput falls back to the text pane (never throws).
+    bool TryDecodeImage(string data)
+    {
+        if (_image == null || string.IsNullOrEmpty(data)) return false;
+        string b64 = data;
+        int comma = b64.IndexOf("base64,", StringComparison.Ordinal);
+        if (comma >= 0) b64 = b64.Substring(comma + "base64,".Length);
+        else if (b64.StartsWith("data:", StringComparison.Ordinal)) return false;   // a non-base64 data URL
+        byte[] bytes;
+        try { bytes = Convert.FromBase64String(b64.Trim()); }
+        catch (FormatException) { return false; }
+        FreeTexture();
+        var tex = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        if (!tex.LoadImage(bytes)) { Destroy(tex); return false; }
+        _tex = tex;
+        _image.texture = _tex;
+        return true;
     }
 
     static string Unescape(string s) =>

@@ -819,26 +819,28 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         foreach (var iid in _chartViews.Keys) if (!desired.Contains(iid)) stale.Add(iid);
         foreach (var iid in stale) DespawnChartWindow(iid);
 
-        // Spawn the missing ones. Each new chart gets the next DockDefaultPlacement slot — n is
-        // recomputed each call so removing+adding stays deterministic (the helper is pure).
-        var rects = DockDefaultPlacement.ComputeRects(ids.Count);
+        // Spawn the missing ones. #101 (fix #99 regression; findings 0078): NO DockDefaultPlacement.
+        // ComputeRects(N) here — a count-scaled grid cell made each new chart a different SIZE as the
+        // universe grew. Each chart now spawns at the spec-fixed KIND_CHART size and snaps flush to the
+        // focused (or nearest) window via SpawnDockedToFocus.
         for (int i = 0; i < ids.Count; i++)
         {
             string iid = ids[i];
             if (_chartViews.ContainsKey(iid)) continue;
-            SpawnChartWindow(iid, rects[i]);
+            SpawnChartWindow(iid);
         }
     }
 
-    // Spawn one chart window (id = "chart:<iid>") at the given canvas-logical rect. Content
-    // (ChartView + DepthLadderView) is injected by the factory's BuildDockContent path during
-    // `_windows.Spawn` — by the time Spawn returns, `_chartViews[iid]` is populated.
-    void SpawnChartWindow(string instrumentId, FloatingWindowMath.DockRect rect)
+    // Spawn one chart window (id = "chart:<iid>") at the spec-fixed KIND_CHART size, snapped flush to the
+    // user's focused window (or, with no focus history, the window nearest the viewport centre) — #101 /
+    // findings 0078. Size is INDEPENDENT of the chart count (the #99 bug). Content (ChartView +
+    // DepthLadderView) is injected by the factory's BuildDockContent path during the spawn — by the time
+    // it returns, `_chartViews[iid]` is populated.
+    void SpawnChartWindow(string instrumentId)
     {
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
         string windowId = DockShape.ChartId(instrumentId);
-        _windows.Spawn(FloatingWindowCatalog.KIND_CHART, windowId,
-                       rect.topLeft.x, rect.topLeft.y, rect.size.x, rect.size.y, true);
+        _windows.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, windowId, SpawnAnchorTopLeft(), true);
     }
 
     // Despawn one chart window and clear its render bookkeeping. The GameObject is destroyed by

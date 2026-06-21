@@ -941,6 +941,22 @@ class DataEngineBackend:
                     )
             else:
                 # Replay path (or mixed step+replay): Phase 4 behavior — fresh bt per press.
+                #
+                # #100 slice② (owner decision (c) / findings 0077): pressing a replay-driving cell
+                # while a STEP session is live ENDS the step session (a mode switch), instead of
+                # failing the IDLE guard and poisoning the shared stop_event.  A live step bt holds
+                # the engine RUNNING, so without this _build_notebook_bt → load_replay_data would
+                # raise "LoadReplayData is only allowed from IDLE" → except → force_stop_replay()
+                # SETS the engine-shared replay_stop_event.  Phase 6's notebook_uses_step gate keeps
+                # the step cache, so the next step press is a cache HIT (on_run_begin does not
+                # re-fire to clear the event) → KernelStepper sees is_set() → STOPPED → bt.step()
+                # returns None → the partial run is finalized as if it completed.  Tearing the step
+                # bt down here takes the engine back to IDLE (force_stop_replay) + resets providers
+                # so load_replay_data succeeds and the replay runs cleanly; the fresh replay bt's
+                # on_run_begin clears the event before it drives.  A PURE-compute sibling press never
+                # reaches this branch (uses_bt is False), so it still preserves the pointer (P6-6).
+                if self._step_bt is not None:
+                    self._teardown_step_bt()
                 try:
                     bt, run_buffer, scenario = self._build_notebook_bt(scenario_json)
                 except Exception as exc:
@@ -1183,6 +1199,11 @@ class DataEngineBackend:
             # #65: clear the prior run's portfolio so "running but pre-first-bar" is honest-empty;
             # the observer republishes from bar 1's on_equity.
             self.engine.last_portfolio = None
+            # #100 slice① (findings 0077): clear the prior run's completion summary too, so a re-run's
+            # running view (counts + realized/unrealized) is not masked by the previous run's
+            # full-stats. _finalize_run republishes it when THIS run completes. Symmetric with
+            # last_portfolio: both running-snapshot fields reset together at run-begin.
+            self.engine.last_run_summary = None
 
         bt = Backtester.from_scenario(
             scenario,
@@ -1352,6 +1373,10 @@ class DataEngineBackend:
         self.engine.last_portfolio = compute_portfolio(
             reader.fills, reader.equity_points, scenario
         )
+        # #100 slice① (findings 0077): publish the completion summary for the poll lane, symmetric
+        # with last_portfolio above. The C# run_result tile flips from running → full-stats when the
+        # poll observes this become non-None; on_run_begin clears it back to None at the next run.
+        self.engine.last_run_summary = summary
         return summary
 
     def get_portfolio(self):

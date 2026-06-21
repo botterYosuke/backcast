@@ -227,6 +227,16 @@ class InprocLiveServer:
         # #65: Replay poll lane (LiveRpcLanes) reads this; C# DecodePortfolio wants a JSON string.
         return self._svc.get_portfolio_json()
 
+    def get_run_summary_json(self) -> str:
+        # #100 slice①: Replay poll lane reads this alongside get_portfolio_json; C# DecodeRunResult
+        # wants a JSON string ("" = running / no completed run → run_result shows the running view).
+        return self._svc.get_run_summary_json()
+
+    def clear_run_view(self) -> None:
+        # #100 slice①: File→New / File→Open drops the prior run's running snapshot + completion
+        # summary so a fresh document opens with honest-empty tiles (not the previous run's stats).
+        self._svc.clear_run_view()
+
     # ------------------------------------------------------------------
     # Replay transport — RETIRED (#76 S6b-β); only force_stop (teardown) survives
     # ------------------------------------------------------------------

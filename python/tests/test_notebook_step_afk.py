@@ -356,6 +356,68 @@ def test_mixed_replay_and_step_notebook_pressing_step_persists(tmp_path) -> None
 
 
 # ----------------------------------------------------------------------------------------
+# #100 slice② (findings 0077): pressing the REPLAY cell mid-step-session ENDS the step session
+# cleanly (owner decision (c): mode switch) — it must NOT silently finalize a partial step run.
+# ----------------------------------------------------------------------------------------
+
+def test_mixed_notebook_replay_press_ends_step_session_cleanly(tmp_path) -> None:
+    """#100 slice② RED→GREEN: in a mixed replay+step notebook, pressing the REPLAY cell while a
+    step session is live must cleanly END the step session, not silently finalize a PARTIAL step
+    run as if it completed.
+
+    Bug (before fix): all bt share ``engine.replay_stop_event``.  A step session holds the engine
+    RUNNING; pressing replay → ``load_replay_data`` fails the IDLE guard → ``except`` →
+    ``force_stop_replay()`` SETS the shared event.  Phase 6's ``notebook_uses_step`` gate PRESERVES
+    the step cache, so the next step press is a cache HIT (``on_run_begin`` does NOT re-fire, so the
+    event stays SET) → ``KernelStepper.open_next_bar`` sees ``is_set()`` → STOPPED → ``bt.step()``
+    returns ``None`` → ``run_cell`` finalizes the partial run as a "complete" summary.  The user
+    thinks the step session ran to the end; a sibling cell killed it.
+
+    Fix (c): a replay-driving press tears down any live step bt FIRST (IDLE the engine + reset
+    providers), so replay loads & runs cleanly AND the step session is explicitly ended.  A
+    subsequent step press REBUILDS a fresh bt (pointer reset) — a real bar, not a silent finalize.
+    """
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+    src = synthesize_json(json.dumps([
+        {"body": "for _bar in bt.replay():\n    pass", "name": "_", "config": {}},  # 0: replay
+        {"body": "bar = bt.step()\nbar", "name": "_", "config": {}},                # 1: step
+    ]))
+    try:
+        # Advance the step session a few bars (< total) — pointer mid-stream, engine RUNNING.
+        for _ in range(3):
+            out_step = _press(backend, src, _SCENARIO_A, idx=1)
+            assert out_step["ok"], out_step
+        assert backend._step_bt is not None
+        assert len(backend.engine._rs.ohlc_points) == 3, "step did not advance 3 bars"
+
+        # Press the REPLAY cell mid-step-session. (c): END the step session, then run replay.
+        out_replay = _press(backend, src, _SCENARIO_A, idx=0)
+        assert out_replay["ok"], out_replay
+        # Replay actually loaded from IDLE and ran to completion (the step teardown freed the engine).
+        assert "run_summary" in out_replay and out_replay["run_summary"], out_replay
+        # The step session was ended by the replay press (cache dropped, not left poisoned).
+        assert backend._step_bt is None, "replay press did not end the live step session"
+
+        # Re-press the step cell: a FRESH step session (pointer reset) returns a real bar — NOT a
+        # silent finalize of the partial run the shared stop_event would have killed.
+        out_restep = _press(backend, src, _SCENARIO_A, idx=1)
+        assert out_restep["ok"], out_restep
+        assert "run_summary" not in out_restep, (
+            "the re-step press silently finalized a partial run — the shared stop_event poisoned "
+            f"the step session (got run_summary={out_restep.get('run_summary')!r})"
+        )
+        assert backend._step_bt is not None, "re-pressing step did not rebuild a fresh session"
+        step_output = out_restep["ran"][0]["output"]
+        assert step_output and step_output != "None", (
+            f"step returned None right after a sibling replay press (silent terminal): {step_output!r}"
+        )
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
+
+# ----------------------------------------------------------------------------------------
 # carry-over C (findings 0075): step-bt cache key is JSON-key-order insensitive
 # ----------------------------------------------------------------------------------------
 

@@ -22,8 +22,9 @@ from engine.backend_service import BackendService  # noqa: E402
 
 
 class _StubEngine:
-    def __init__(self, last_portfolio) -> None:
+    def __init__(self, last_portfolio, last_run_summary=None) -> None:
         self.last_portfolio = last_portfolio
+        self.last_run_summary = last_run_summary  # #100 slice①
 
 
 def _backend(last_portfolio) -> DataEngineBackend:
@@ -91,9 +92,54 @@ def test_get_portfolio_json_empty_when_no_portfolio() -> None:
     assert svc.get_portfolio_json() == ""
 
 
+# ----------------------------------------------------------------------------------------
+# #100 slice① (findings 0077): get_run_summary_json poll endpoint + clear_run_view, symmetric
+# with the portfolio poll above.
+# ----------------------------------------------------------------------------------------
+
+_RUN_SUMMARY = {
+    "total_pnl": 3_700.0, "max_drawdown": 0.0, "trade_count": 1, "win_rate": 1.0,
+    "fee_total": 0, "equity_points": 50, "fills_count": 2, "sharpe": 27.87, "sortino": 0.0,
+}
+
+
+def _svc(last_portfolio, last_run_summary) -> BackendService:
+    svc = object.__new__(BackendService)
+    be = object.__new__(DataEngineBackend)
+    be.engine = _StubEngine(last_portfolio, last_run_summary)
+    svc._srv = be
+    return svc
+
+
+def test_get_run_summary_json_empty_when_no_completed_run() -> None:
+    # honest-empty: last_run_summary is None (never run, or just-cleared at run-begin) → "" so the
+    # C# run_result tile shows the RUNNING view, NOT stale full-stats (the #100 slice① bug).
+    assert _svc(None, None).get_run_summary_json() == ""
+
+
+def test_get_run_summary_json_emits_summary_when_run_finalized() -> None:
+    payload = json.loads(_svc(None, _RUN_SUMMARY).get_run_summary_json())
+    # keys DecodeRunResult reads for the full-stats view.
+    assert payload["total_pnl"] == 3_700.0
+    assert payload["fills_count"] == 2
+    assert payload["sharpe"] == 27.87
+
+
+def test_clear_run_view_drops_both_snapshot_fields() -> None:
+    # File→New / File→Open: a fresh document opens with honest-empty tiles, not the prior run's.
+    svc = _svc(_RUNNING_SNAPSHOT, _RUN_SUMMARY)
+    assert svc.get_portfolio_json() != "" and svc.get_run_summary_json() != ""
+    svc.clear_run_view()
+    assert svc.get_portfolio_json() == ""
+    assert svc.get_run_summary_json() == ""
+
+
 if __name__ == "__main__":
     test_get_portfolio_surfaces_running_realized_and_unrealized()
     test_get_portfolio_defaults_realized_unrealized_for_final_snapshot()
     test_get_portfolio_json_emits_decoder_keys()
     test_get_portfolio_json_empty_when_no_portfolio()
-    print("[GET_PORTFOLIO_JSON PASS] read-path + JSON layer carry the #65 running snapshot")
+    test_get_run_summary_json_empty_when_no_completed_run()
+    test_get_run_summary_json_emits_summary_when_run_finalized()
+    test_clear_run_view_drops_both_snapshot_fields()
+    print("[GET_PORTFOLIO_JSON PASS] read-path + JSON layer carry the #65 running snapshot + #100 run_summary")

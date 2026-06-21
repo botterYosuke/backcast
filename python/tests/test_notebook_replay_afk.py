@@ -189,5 +189,76 @@ def test_pacing_makes_a_run_measurably_slower(tmp_path) -> None:
     assert paced > full_speed + 0.5, f"paced={paced:.3f}s not slower than full={full_speed:.3f}s"
 
 
+# ----------------------------------------------------------------------------------------
+# #100 slice① (findings 0077): run_result follows the SAME poll-symmetric lifecycle as the
+# running portfolio snapshot — cleared at run-begin, set at finalize — so a SECOND bt.replay run
+# shows the running view (not the prior run's stale full-stats) while it streams.
+# ----------------------------------------------------------------------------------------
+
+def test_run_summary_cleared_at_run_begin_so_rerun_shows_running_not_stale(tmp_path) -> None:
+    """#100 slice① RED→GREEN: the run_result tile must show the RUNNING view (not run1's full
+    stats) while run2 streams.  The C# poll lane reads ``engine.last_run_summary``; the bug was
+    that nothing cleared it at run-begin (the only clear lived on the sunset title-bar Run path),
+    so run2's running view showed run1's stale summary until run2 finalized.
+
+    ``engine.last_portfolio`` is already cleared at ``on_run_begin`` (the proven #65 snapshot seam);
+    ``last_run_summary`` must follow the SAME lifecycle.  Driving the FIRST ``bt.replay()`` step of
+    run2 fires ``on_run_begin`` — at that instant, BEFORE any bar streams or any finalize, the
+    stale summary must already be gone.
+    """
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+
+    # Run 1 to completion (close the marimo session after — thread-local isolation).
+    out1 = _run_cell(backend, _source(_bt_cell()), _SCENARIO)
+    assert out1["ok"] and out1.get("run_summary"), out1
+    assert backend.engine.last_run_summary is not None, (
+        "run1 did not publish a run_summary snapshot for the poll lane"
+    )
+
+    # Start run 2: build the bt + drive the first replay step → on_run_begin must clear the stale
+    # run1 summary BEFORE the first bar (so the poll lane renders the running view, not full-stats).
+    bt2, _rb, _sc = backend._build_notebook_bt(json.dumps(_SCENARIO))
+    it = bt2.replay()
+    try:
+        next(it)  # fire on_run_begin (LOADED→RUNNING + clear last_portfolio + clear last_run_summary)
+        assert backend.engine.last_run_summary is None, (
+            "run2's on_run_begin did not clear the prior run's summary — the run_result tile shows "
+            f"run1's stale full-stats while run2 streams (got {backend.engine.last_run_summary!r})"
+        )
+        # Sanity: the portfolio snapshot is cleared at run-begin too (the proven sibling behavior).
+        assert backend.engine.last_portfolio is None
+    finally:
+        it.close()
+        backend.engine.force_stop_replay()
+
+
+def test_pure_compute_press_does_not_clear_run_summary(tmp_path) -> None:
+    """#100 slice①: after a bt run completes, a PURE-COMPUTE press must NOT clear the run_result
+    snapshot — the tile keeps the last run's full stats until the NEXT bt run begins.  This is the
+    natural consequence of clearing only at ``on_run_begin`` (which fires solely for a bt-driven
+    press): a press that builds no bt leaves ``last_run_summary`` untouched, mirroring the existing
+    "pure-compute omits the run_summary key" contract on the C# side."""
+    _build_synthetic_duckdb(tmp_path)
+    backend = _backend(tmp_path)
+
+    out1 = json.loads(backend.run_cell(_source(_bt_cell()), 0, json.dumps(_SCENARIO)))
+    assert out1["ok"] and out1.get("run_summary"), out1
+    summary1 = backend.engine.last_run_summary
+    assert summary1 is not None
+    try:
+        # A 土台 cell: no bt drive → no on_run_begin → the run_result snapshot persists.
+        out2 = json.loads(backend.run_cell(_source("answer = 42\nanswer"), 0, json.dumps(_SCENARIO)))
+        assert out2["ok"], out2
+        assert "run_summary" not in out2, out2
+        assert backend.engine.last_run_summary is summary1, (
+            "a pure-compute press cleared the run_result snapshot — it must persist the last run's "
+            "full stats until the next bt run begins"
+        )
+    finally:
+        if backend._notebook_session is not None:
+            backend._notebook_session.close()
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))

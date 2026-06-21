@@ -1572,6 +1572,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // (2026-06-19): a no-resume boot lands in this SAME File→New blank state (OpenFileNewDefault →
         // _coordinator.New()); strategies are opened via File→Open, not auto-opened at boot.
         _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
+        _host.ClearReplayRunView();   // #100 slice①: a fresh document opens with honest-empty run tiles, not the prior run's
         _coordinator.New();
 
         // scenario buffer + universe (the in-memory clear the host owns).
@@ -1628,6 +1629,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             return;   // fail-soft: the notebook is UNCHANGED, so an in-flight run is still valid — do NOT invalidate
         }
         _notebookRun?.Invalidate();   // #95 Phase 2: notebook replaced — drop any in-flight per-cell run against the old one
+        _host.ClearReplayRunView();   // #100 slice①: opening a document clears the prior run's stale run tiles
         if (layoutOk) ApplyLayout(doc);   // restore geometry ONLY when a valid layout is present
         _currentLayoutPath = py;
         PersistResumePointer(py);

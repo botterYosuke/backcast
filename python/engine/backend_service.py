@@ -116,6 +116,28 @@ class BackendService:
             return ""
         return json.dumps(self.get_portfolio(), ensure_ascii=False)
 
+    def get_run_summary_json(self) -> str:
+        """#100 slice① (findings 0077): JSON string of the run_result completion summary for the
+        Replay poll lane (symmetric with get_portfolio_json).
+
+        Honest-empty: when no run has FINALIZED a summary (``last_run_summary is None`` — never run,
+        or just-cleared at run-begin), return "" so the C# run_result tile shows the RUNNING view
+        (counts + realized/unrealized from the portfolio poll) instead of stale full-stats. Once a
+        run finalizes, return the summary dict as JSON — C#'s ReplayPanelDecoder.DecodeRunResult
+        parses it for the full-stats view (same shape the per-cell run_summary key carried before)."""
+        summary = getattr(self._srv.engine, "last_run_summary", None)
+        if summary is None:
+            return ""
+        return json.dumps(summary, ensure_ascii=False)
+
+    def clear_run_view(self) -> None:
+        """#100 slice① (findings 0077): drop BOTH running-snapshot fields so the base panels +
+        run_result tile show honest-empty. Called on File→New / File→Open (owner decision: a fresh
+        document starts with empty tiles, not the previous strategy's run). The next poll returns ""
+        for both, so the tiles clear; a subsequent run republishes them via on_run_begin/_finalize."""
+        self._srv.engine.last_portfolio = None
+        self._srv.engine.last_run_summary = None
+
     # ------------------------------------------------------------------
     # Venue lifecycle
     # ------------------------------------------------------------------

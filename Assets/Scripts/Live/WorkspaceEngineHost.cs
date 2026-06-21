@@ -99,7 +99,6 @@ public sealed class WorkspaceEngineHost
     bool _closing;                             // teardown started: reject new RPCs + launcher must not start_engine
     bool _teardownComplete;
     string _finalStateJson;
-    string _runSummaryJson;   // #65: start_engine's summary_json (RunResult full-stats at completion)
     readonly OnceGate _stopGate = new OnceGate();
     readonly object _rpcLock = new object();   // guards the live-RPC single-flight check-and-set
 
@@ -133,10 +132,15 @@ public sealed class WorkspaceEngineHost
         TestPortfolioJsonOverride
         ?? (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestPortfolio : null);
 
-    // #65: the launcher captures start_engine's summary_json once the run completes; the RunResult
-    // panel reads it for full stats (TTWR push_run_complete → RunComplete{summary_json}). Cleared at
-    // run start so a new run doesn't show the prior run's stats during its running view.
-    public string RunSummaryJson => TestRunSummaryJsonOverride ?? Volatile.Read(ref _runSummaryJson);
+    // #100 slice①: the run_result completion summary is POLLED from engine.last_run_summary
+    // (get_run_summary_json @ 50 ms, Replay-only), symmetric with LatestPortfolioJson. The engine
+    // clears it at run-begin (on_run_begin) and sets it at finalize, so a re-run's running view is
+    // never masked by the prior run's full-stats. This replaces the prior set-at-return
+    // _runSummaryJson, which had no run-begin clear and so the per-cell re-run showed stale stats
+    // until run2 finalized (#100 slice① bug; the sunset title-bar Run path was its only clear).
+    public string RunSummaryJson =>
+        TestRunSummaryJsonOverride
+        ?? (Volatile.Read(ref _serverReady) && _lanes != null ? _lanes.LatestRunSummary : null);
 
     // ---- bring-up: build the PERSISTENT live-configured server ONCE (decision 1) ----
     // The CALLER decides ownership BEFORE calling this (WorkspaceOwnership.ShouldClaim). venue has a
@@ -293,10 +297,25 @@ public sealed class WorkspaceEngineHost
         }
     }
 
-    // #95 Phase 4: a bt-driven notebook run finalizes its own summary (the title-bar Run path sets
-    // _runSummaryJson from start_engine's return; this surfaces the per-cell-RUN equivalent so the
-    // Hakoniwa run_result tile fills the same way). Thread-safe: called on the notebook-run worker.
-    public void SetReplayRunSummary(string summaryJson) => Volatile.Write(ref _runSummaryJson, summaryJson);
+    // #100 slice①: File→New / File→Open drops the prior run's running snapshot + completion summary
+    // (engine.last_portfolio / last_run_summary) so a fresh document opens with honest-empty tiles
+    // instead of the previous strategy's run. Mirrors ForceStop's synchronous GIL idiom; the next
+    // poll then returns "" for both, and the local poll cache is reset for an immediate clear (so the
+    // tiles don't show stale data for up to one 50 ms poll interval). No-op before the server is up.
+    public void ClearReplayRunView()
+    {
+        if (!Volatile.Read(ref _serverReady)) return;
+        try
+        {
+            using (Py.GIL())
+                _server.InvokeMethod("clear_run_view").Dispose();
+            _lanes?.ResetReplaySnapshot();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] clear_run_view failed: " + e.Message);
+        }
+    }
 
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----
@@ -321,7 +340,6 @@ public sealed class WorkspaceEngineHost
         _req = req;
         Volatile.Write(ref _startError, null);
         Volatile.Write(ref _runFinished, false);
-        Volatile.Write(ref _runSummaryJson, null);   // #65: drop prior run's stats before this run
         Volatile.Write(ref _running, true);
         _launcher = new Thread(Launcher) { IsBackground = true, Name = "WorkspaceEngineLauncher" };
         _launcher.Start();
@@ -358,14 +376,14 @@ public sealed class WorkspaceEngineHost
                 using (PyObject res = _server.InvokeMethod("start_engine", cfg))
                 using (PyObject success = res["success"])
                 {
+                    // #100 slice①: the RunResult summary is now POLLED from engine.last_run_summary
+                    // (get_run_summary_json), not captured from start_engine's return here — so this
+                    // sunset title-bar Run path no longer needs to surface summary_json. start_engine
+                    // already published it into engine.last_run_summary via _finalize_run.
                     if (!success.As<bool>())
                         using (PyObject ec = res["error_code"])
                         using (PyObject em = res["error_message"])
                             Volatile.Write(ref _startError, $"start_engine: {ec.As<string>()} {em.As<string>()}");
-                    else
-                        // #65: capture summary_json for the RunResult full-stats view (was discarded).
-                        using (PyObject sj = res["summary_json"])
-                            Volatile.Write(ref _runSummaryJson, sj.As<string>());
                 }
             }
         }

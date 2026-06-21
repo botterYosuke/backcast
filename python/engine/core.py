@@ -58,6 +58,11 @@ class DataEngine:
         self._duckdb_root = duckdb_root
         self._replay_duckdb_root: Optional[str] = None
         self.last_portfolio: Optional[dict] = None
+        # #100 slice① (findings 0077): the run_result completion summary, polled by the C# poll lane
+        # (get_run_summary_json) symmetric with last_portfolio. Cleared at on_run_begin so a re-run's
+        # running view never shows the prior run's full-stats; set at _finalize_run; None = honest
+        # "running / no completed run yet" (the poll returns "" → tile shows the running view).
+        self.last_run_summary: Optional[dict] = None
         # D9/D24: multi-instrument replay support
         self._replay_providers: dict[str, BaseReplayProvider] = {}
         self._replay_primary_id: str = ""

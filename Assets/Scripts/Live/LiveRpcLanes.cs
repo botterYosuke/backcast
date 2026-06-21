@@ -46,10 +46,21 @@ public class LiveRpcLanes
     volatile bool _pollStop;
     volatile string _latestState;
     volatile string _latestPortfolio;   // #65: Replay portfolio snapshot (latest-wins, like _latestState)
+    volatile string _latestRunSummary;  // #100 slice①: Replay run_result completion summary (latest-wins)
     PyObject _pyNone;
 
     public string LatestState => _latestState;
     public string LatestPortfolio => _latestPortfolio;   // #65
+    public string LatestRunSummary => _latestRunSummary;  // #100 slice①
+
+    // #100 slice①: clear the Replay snapshot cache so the base panels + run_result tile show
+    // honest-empty IMMEDIATELY (File→New / File→Open), instead of waiting up to one poll interval
+    // for the engine-cleared "" to arrive. The next poll re-reads the (cleared) engine state.
+    public void ResetReplaySnapshot()
+    {
+        _latestPortfolio = null;
+        _latestRunSummary = null;
+    }
     public long PollCount;   // Interlocked
 
     public LiveRpcLanes(PyObject server, LiveLogoutCoordinator coord, int pollIntervalMs = 50)
@@ -279,8 +290,19 @@ public class LiveRpcLanes
                     // that happened to equal "Replay" can't false-trigger (pydantic dumps with no
                     // spaces, so the exact "execution_mode":"Replay" pair is reliable).
                     if (state != null && state.Contains("\"execution_mode\":\"Replay\""))
+                    {
                         using (PyObject p = _server.InvokeMethod("get_portfolio_json"))
                             _latestPortfolio = p.As<string>();
+                        // #100 slice①: the run_result completion summary follows the SAME poll-symmetric
+                        // lifecycle as the portfolio snapshot (engine.last_run_summary, cleared at
+                        // run-begin / set at finalize). Polled under the same GIL hold so a bar never
+                        // advances mid-pair — "" while running (→ tile shows the running view), the
+                        // summary JSON once a run finalizes (→ full-stats). Replaces the prior
+                        // set-at-return _runSummaryJson, which had no run-begin clear and so showed the
+                        // PREVIOUS run's stats during a re-run (#100 slice① bug).
+                        using (PyObject rs = _server.InvokeMethod("get_run_summary_json"))
+                            _latestRunSummary = rs.As<string>();
+                    }
                 }
                 Interlocked.Increment(ref PollCount);
             }

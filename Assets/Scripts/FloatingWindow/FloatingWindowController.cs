@@ -52,6 +52,13 @@ public class FloatingWindowController
     readonly Action<GameObject> _destroy;
     readonly Dictionary<string, Entry> _windows = new Dictionary<string, Entry>();
 
+    // #101 (fix #99 regression; findings 0078): the window the USER last focused via a title-bar
+    // press (NoteUserFocus). The dock-spawn path (SpawnDockedToFocus) snaps a new window flush to it.
+    // Set ONLY by NoteUserFocus — programmatic Show / BringToFront / Spawn never write it (a layout
+    // restore BringToFronts every window and must NOT forge a focus target). May go stale when the
+    // focused window is closed/hidden; the resolver re-validates liveness, so staleness is harmless.
+    string _lastUserFocusedId;
+
     public FloatingWindowController(
         RectTransform layer,
         FloatingWindowCatalog catalog,
@@ -101,6 +108,89 @@ public class FloatingWindowController
     {
         Vector2 p = SpawnPlacement.Next(CaptureTopLefts(), anchorTopLeft, SpawnPlacement.DefaultOffset);
         return Spawn(kind, id, p.x, p.y, w, h, visible);
+    }
+
+    // #101 (fix #99 regression; findings 0078): spawn a dock window at its SPEC-DEFAULT size — so the
+    // size is INDEPENDENT of how many windows already exist (the #99 bug sized each chart to a
+    // DockDefaultPlacement.ComputeRects(N) grid cell, so it shrank as N grew) — and SNAP it flush to a
+    // target window's edge (DockSnapPlacement, right→down→left→up, non-overlapping). The target is the
+    // last USER-focused window when still live+visible, else the visible window nearest the
+    // `anchorTopLeft` gaze point (TryResolveDockTarget). With no other window at all, the anchor is used
+    // verbatim. Size = the catalog spec default (Spawn clamps UP to minSize — a no-op since default ≥ min).
+    public RectTransform SpawnDockedToFocus(string kind, string id, Vector2 anchorTopLeft, bool visible)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (_windows.ContainsKey(id)) return _windows[id].rt;               // duplicate id -> keep first
+        if (!_catalog.TryGet(kind, out FloatingWindowSpec spec)) return null;  // unknown kind -> skip
+
+        Vector2 size = spec.defaultSize;
+        Vector2 topLeft;
+        if (TryResolveDockTarget(anchorTopLeft, id, out var target))
+        {
+            var others = CaptureVisibleRects(id);
+            topLeft = DockSnapPlacement.PlaceAdjacent(target, size, others, 0f);   // flush (gap 0)
+        }
+        else
+        {
+            topLeft = anchorTopLeft;   // nothing to snap to (empty cluster) -> land at the gaze point
+        }
+        return Spawn(kind, id, topLeft.x, topLeft.y, size.x, size.y, visible);
+    }
+
+    // #101 (findings 0078): resolve the window a new dock window should snap to:
+    //   1. the last USER-focused window (NoteUserFocus = a title-bar press, NOT a programmatic
+    //      BringToFront/Show), IF still registered, live, visible, and not `excludeId`; else
+    //   2. the visible window whose CENTRE is nearest the `anchorTopLeft` gaze point (viewport centre),
+    //      ties broken by id ordinal so the pick is deterministic regardless of dictionary order.
+    // Returns false ONLY when no other visible window exists (the caller then uses the anchor verbatim).
+    public bool TryResolveDockTarget(Vector2 anchorTopLeft, string excludeId, out FloatingWindowMath.DockRect target)
+    {
+        target = default;
+
+        // 1. last user-focused, if it still qualifies (the resolver re-validates liveness, so a stale
+        //    _lastUserFocusedId from a closed/hidden window simply falls through to the nearest pick).
+        if (!string.IsNullOrEmpty(_lastUserFocusedId) && _lastUserFocusedId != excludeId
+            && _windows.TryGetValue(_lastUserFocusedId, out var fe)
+            && fe.rt != null && fe.rt.gameObject.activeInHierarchy)
+        {
+            target = new FloatingWindowMath.DockRect(fe.rt.anchoredPosition, fe.rt.sizeDelta);
+            return true;
+        }
+
+        // 2. nearest visible window centre to the anchor.
+        string bestId = null;
+        float bestSqr = float.PositiveInfinity;
+        foreach (var kv in _windows)
+        {
+            if (kv.Key == excludeId) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            Vector2 centre = rt.anchoredPosition + new Vector2(rt.sizeDelta.x * 0.5f, -rt.sizeDelta.y * 0.5f);
+            float d = (centre - anchorTopLeft).sqrMagnitude;
+            bool better = d < bestSqr - 1e-4f
+                       || (Mathf.Abs(d - bestSqr) <= 1e-4f && (bestId == null || string.CompareOrdinal(kv.Key, bestId) < 0));
+            if (better) { bestSqr = d; bestId = kv.Key; }
+        }
+        if (bestId == null) return false;
+        var best = _windows[bestId].rt;
+        target = new FloatingWindowMath.DockRect(best.anchoredPosition, best.sizeDelta);
+        return true;
+    }
+
+    // #101 (findings 0078): every VISIBLE window's (top-left, size) as a DockRect, excluding `excludeId`
+    // — the non-overlap 母集合 for DockSnapPlacement (the dock analogue of CaptureTopLefts, but carrying
+    // SIZE for full-rect overlap tests, and skipping hidden/dormant windows so they don't block a slot).
+    public List<FloatingWindowMath.DockRect> CaptureVisibleRects(string excludeId)
+    {
+        var rects = new List<FloatingWindowMath.DockRect>(_windows.Count);
+        foreach (var kv in _windows)
+        {
+            if (kv.Key == excludeId) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            rects.Add(new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta));
+        }
+        return rects;
     }
 
     // Every live window's top-left (anchoredPosition), the collision母集合 for SpawnPlacement —
@@ -172,6 +262,7 @@ public class FloatingWindowController
     {
         if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var e)) return false;
         _windows.Remove(id);
+        if (_lastUserFocusedId == id) _lastUserFocusedId = null;   // #101: drop a vanished focus target
         if (e.rt != null) _destroy(e.rt.gameObject);
         return true;
     }
@@ -218,11 +309,25 @@ public class FloatingWindowController
     // Convenience: production path (the title-bar input) snaps with the default threshold.
     public Vector2 SnapOnRelease(string id) => SnapOnRelease(id, DEFAULT_SNAP_THRESHOLD);
 
-    // Raise a window to the front (last sibling = topmost draw). No-op for an unknown id.
+    // Raise a window to the front (last sibling = topmost draw). No-op for an unknown id. Deliberately
+    // does NOT record user focus (see NoteUserFocus): a layout restore BringToFronts every window.
     public void BringToFront(string id)
     {
         if (_windows.TryGetValue(id, out var e) && e.rt != null)
             e.rt.SetAsLastSibling();
+    }
+
+    // #101 (fix #99 regression; findings 0078): record that the USER focused this window via a title-bar
+    // press/drag (FloatingWindowTitleInput), so the next dock spawn snaps flush to it (SpawnDockedToFocus).
+    // This is the ONLY writer of the focus target — programmatic Show / BringToFront / Spawn never record
+    // focus, so a layout restore (which BringToFronts every restored window) cannot forge a target. Also
+    // raises the window (a press raises), keeping the SetAsLastSibling semantics in BringToFront. No-op for
+    // an unknown id (the focus target is left as-is rather than cleared to a vanished window).
+    public void NoteUserFocus(string id)
+    {
+        if (string.IsNullOrEmpty(id) || !_windows.ContainsKey(id)) return;
+        _lastUserFocusedId = id;
+        BringToFront(id);
     }
 
     // Reveal a hidden window AND raise it to the front (#81 reveal-on-insert). BringToFront only

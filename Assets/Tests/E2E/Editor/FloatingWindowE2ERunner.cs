@@ -33,6 +33,12 @@
 //   8. close(X): single Close despawns ONLY the target, leaves the sibling untouched              [WINDOW-05]
 //   9. dormant hide + reveal-on-insert: Hide(SetActive false, still registered) -> Show(SetActive
 //      true + BringToFront)                                                                       [WINDOW-08]
+//  10. #99 magnet snap pure arithmetic (flush/edge-align, x/y independent, threshold guards)       [SNAP-01]
+//  11. #99 snap controller wiring (excludes self/hidden, dragged-only, no group propagation)       [SNAP-02]
+//  12. #99 dock catalog kinds (chart multi-instance + 5 base singletons, unknown tolerance)        [DOCK-01]
+//  13. #99 DockDefaultPlacement grid arithmetic (base-5 first-launch placement)                    [DOCK-02]
+//  14. #101 DockSnapPlacement flush adjacency (right→down→left→up, overflow cascade, size verbatim) [DOCK-03]
+//  15. #101 focus-adjacent dock spawn (spec-fixed count-independent size, focus/nearest target)    [DOCK-04]
 
 using System;
 using System.Collections.Generic;
@@ -67,7 +73,9 @@ public static class FloatingWindowE2ERunner
                 ?? Section10_SnapPureArithmetic()
                 ?? Section11_SnapOnReleaseControllerWiring(spawned)
                 ?? Section12_DockCatalogKinds()
-                ?? Section13_DockDefaultPlacementArithmetic();
+                ?? Section13_DockDefaultPlacementArithmetic()
+                ?? Section14_DockSnapPlacementArithmetic()
+                ?? Section15_FocusAdjacentDockSpawn(spawned);
         }
         catch (Exception e)
         {
@@ -95,8 +103,12 @@ public static class FloatingWindowE2ERunner
                       "applies via anchoredPosition, dragged-only — no group propagation) + #99 dock catalog kinds (chart " +
                       "multi-instance + 5 base singletons, accents from PlayerColors, unknown-kind tolerance preserved) + " +
                       "DockDefaultPlacement (ceil(√n) grid in absolute canvas-logical coords, row-major slot 0=top-left, " +
-                      "y up-positive rows, no overlap, n=0 empty) (Unity-owned versioned schema, additive capability " +
-                      "surface, ADR-0003 capability parity, under Unity Mono) [WINDOW-01..10,SNAP-01,02,DOCK-01,02]");
+                      "y up-positive rows, no overlap, n=0 empty) + #101 DockSnapPlacement (flush adjacency right→down→" +
+                      "left→up, perpendicular-edge align, strict no-overlap selection, gap=0 flush, size verbatim, " +
+                      "overflow diagonal cascade) + #101 focus-adjacent dock spawn (spec-fixed size count-INDEPENDENT, " +
+                      "snap to USER-focused window, programmatic BringToFront does NOT record focus, no-focus/closed→" +
+                      "nearest-visible fallback, dup/unknown guards) (Unity-owned versioned schema, additive capability " +
+                      "surface, ADR-0003 capability parity, under Unity Mono) [WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04]");
             EditorApplication.Exit(0);
         }
         else
@@ -535,12 +547,20 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var controller = MakeController(spawned, layer);
 
-        // Two equal windows; dragged 5px shy of flush-right against an anchored neighbour.
+        // Two equal windows; dragged 5px shy of flush-right against an anchored neighbour. The size is
+        // EXACTLY strategy_editor minSize (280×180) so Spawn's spec-min clamp leaves it unchanged — a
+        // sub-min size (e.g. 200×100) would be clamped UP and silently shift the right edge, breaking the
+        // intended 5px gap (the cause of S11's pre-existing false RED, fixed with #101). dragged right
+        // edge = 100+280 = 380; nbr left = 385 → a 5px flush-right gap.
         RectTransform dragged = controller.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR,
-                                                 "drag", 100, 0, 200, 100, true);
+                                                 "drag", 100, 0, 280, 180, true);
         RectTransform nbr = controller.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR,
-                                              "nbr", 305, 0, 200, 100, true);
+                                              "nbr", 385, 0, 280, 180, true);
         if (dragged == null || nbr == null) return "S11: precondition spawn returned null";
+        // Guard the clamp assumption directly (vacuous-green kill): if a spec change ever pushes minSize
+        // past these dims, the 5px geometry below is meaningless — fail loudly instead of false-greening.
+        if (!Approx2(dragged.sizeDelta, new Vector2(280f, 180f)) || !Approx2(nbr.sizeDelta, new Vector2(280f, 180f)))
+            return $"S11: precondition windows clamped off the intended size (drag {dragged.sizeDelta}, nbr {nbr.sizeDelta})";
 
         Vector2 draggedBefore = dragged.anchoredPosition;
         Vector2 nbrBefore = nbr.anchoredPosition;
@@ -664,6 +684,213 @@ public static class FloatingWindowE2ERunner
         var one = DockDefaultPlacement.ComputeRects(1, anchor, box, gap);
         if (one.Count != 1) return $"S13d: n=1 yielded {one.Count}";
         if (!Approx2(one[0].size, box)) return $"S13d: n=1 cell did not span the whole box (got {one[0].size})";
+        return null;
+    }
+
+    // ---- 14. DockSnapPlacement pure arithmetic (flush adjacency + overflow cascade) ----
+    // Covers: DOCK-03 — #101 Slice 1 / findings 0078 §1 (flush-adjacent placement: search order
+    // right→down→left→up, perpendicular-edge alignment, STRICT non-overlap selection, size verbatim,
+    // gap=0 flush, all-edges-blocked → deterministic diagonal cascade). PURE — no controller / root.
+    static string Section14_DockSnapPlacementArithmetic()
+    {
+        // A 200×100 target at the origin (top-left pivot, y up-positive). Edges: Left=0, Right=200,
+        // Top=0, Bottom=-100. A new window is 50×40 unless noted.
+        var target = new FloatingWindowMath.DockRect(0, 0, 200, 100);
+        Vector2 sz = new Vector2(50, 40);
+        var empty = new List<FloatingWindowMath.DockRect>();
+
+        // (a) FLUSH RIGHT into empty space: first edge in the search order (right) is free → land flush
+        // right (left edge = target.Right = 200) and ALIGNED on the top edge (y = target.Top = 0).
+        Vector2 pRight = DockSnapPlacement.PlaceAdjacent(target, sz, empty, 0f);
+        if (!Approx2(pRight, new Vector2(200f, 0f))) return $"S14a: flush-right expected (200,0), got {pRight}";
+
+        // (b) LARGE-WINDOW CASCADE escapes (guards the cascade BOUND, not just its direction): four
+        // chart-sized (520×360) blockers flush on all edges of a 520×360 target. The overflow cascade must
+        // step until genuinely clear — a guard of others.Count(=4) × 30px would stop at (640,-120), still
+        // deep inside the 520-wide right blocker, so assert the returned rect overlaps NONE of them.
+        var bigTarget = new FloatingWindowMath.DockRect(0, 0, 520, 360);
+        Vector2 bigSize = new Vector2(520, 360);
+        var bigBlockers = new[]
+        {
+            new FloatingWindowMath.DockRect(520, 0, 520, 360),     // right
+            new FloatingWindowMath.DockRect(0, -360, 520, 360),    // down
+            new FloatingWindowMath.DockRect(-520, 0, 520, 360),    // left
+            new FloatingWindowMath.DockRect(0, 360, 520, 360),     // up
+        };
+        Vector2 pBig = DockSnapPlacement.PlaceAdjacent(bigTarget, bigSize, bigBlockers, 0f);
+        foreach (var b in bigBlockers)
+        {
+            var r = new FloatingWindowMath.DockRect(pBig, bigSize);
+            if (r.Left < b.Right && b.Left < r.Right && r.Bottom < b.Top && b.Bottom < r.Top)
+                return $"S14b: large-window cascade did not escape — overlaps a 520-wide blocker (got {pBig})";
+        }
+
+        // (c) RIGHT BLOCKED → DOWN: a blocker covering the right slot forces the 2nd edge (down). Down =
+        // flush below (top = target.Bottom = -100) ALIGNED on the left edge (x = target.Left = 0).
+        var blockRight = new FloatingWindowMath.DockRect(200, 0, 50, 40);   // exactly the right candidate
+        Vector2 pDown = DockSnapPlacement.PlaceAdjacent(target, sz, new[] { blockRight }, 0f);
+        if (!Approx2(pDown, new Vector2(0f, -100f))) return $"S14c: right-blocked should fall to DOWN (0,-100), got {pDown}";
+
+        // (d) RIGHT + DOWN BLOCKED → LEFT: right candidate occupied AND down candidate occupied. Left =
+        // right edge flush to target.Left (top-left.x = target.Left - newSize.x = -50), aligned top (y=0).
+        var blockDown = new FloatingWindowMath.DockRect(0, -100, 50, 40);   // exactly the down candidate
+        Vector2 pLeft = DockSnapPlacement.PlaceAdjacent(target, sz, new[] { blockRight, blockDown }, 0f);
+        if (!Approx2(pLeft, new Vector2(-50f, 0f))) return $"S14d: right+down blocked should fall to LEFT (-50,0), got {pLeft}";
+
+        // (e) RIGHT + DOWN + LEFT BLOCKED → UP: only the up edge remains. Up = bottom edge flush to
+        // target.Top (top-left.y = target.Top + newSize.y = 40), aligned left (x = target.Left = 0).
+        var blockLeft = new FloatingWindowMath.DockRect(-50, 0, 50, 40);   // exactly the left candidate
+        Vector2 pUp = DockSnapPlacement.PlaceAdjacent(target, sz, new[] { blockRight, blockDown, blockLeft }, 0f);
+        if (!Approx2(pUp, new Vector2(0f, 40f))) return $"S14e: right+down+left blocked should fall to UP (0,40), got {pUp}";
+
+        // (f) ALL FOUR EDGES BLOCKED → diagonal CASCADE off the right candidate. With all four flush
+        // slots filled, step (+CascadeStep, -CascadeStep) until clear. The right blocker spans x∈[200,250],
+        // y∈[0,-40], so the 1st step (230,-30) still clips it (a 50×40 window only half-clears in one 30px
+        // diagonal) — two steps to (260,-60) are needed. The exact count is incidental; the contract is
+        // "deterministic and non-overlapping", asserted both by the value and the overlap sweep below.
+        var blockUp = new FloatingWindowMath.DockRect(0, 40, 50, 40);   // exactly the up candidate
+        Vector2 pCascade = DockSnapPlacement.PlaceAdjacent(
+            target, sz, new[] { blockRight, blockDown, blockLeft, blockUp }, 0f);
+        float step = DockSnapPlacement.CascadeStep;
+        if (!Approx2(pCascade, new Vector2(200f + 2f * step, -2f * step)))
+            return $"S14f: all-blocked cascade expected ({200f + 2f * step},{-2f * step}), got {pCascade}";
+        // …and the cascaded result must itself be non-overlapping against every blocker (determinism +
+        // the cascade actually escapes, not just "returns something").
+        foreach (var b in new[] { blockRight, blockDown, blockLeft, blockUp })
+        {
+            var r = new FloatingWindowMath.DockRect(pCascade, sz);
+            bool xo = r.Left < b.Right && b.Left < r.Right;
+            bool yo = r.Bottom < b.Top && b.Bottom < r.Top;
+            if (xo && yo) return "S14f: cascaded placement still overlaps a blocker";
+        }
+
+        // (g) STRICT non-overlap (touching is NOT overlap): a blocker whose LEFT edge sits exactly at the
+        // right candidate's RIGHT edge merely KISSES it → the right edge is still considered FREE, so the
+        // right candidate wins (no spurious fall-through to DOWN). target.Right=200, newSize.x=50 → right
+        // candidate spans x∈[200,250]; a blocker at x=250 touches but does not overlap.
+        var kissRight = new FloatingWindowMath.DockRect(250, 0, 50, 40);
+        Vector2 pKiss = DockSnapPlacement.PlaceAdjacent(target, sz, new[] { kissRight }, 0f);
+        if (!Approx2(pKiss, new Vector2(200f, 0f))) return $"S14g: touching edge wrongly treated as overlap (got {pKiss})";
+
+        // (h) GAP applied at the seam: a non-zero gap separates the flush edge by exactly `gap` (the
+        // production caller passes 0, but the helper must honour a positive gap for reuse/HITL tuning).
+        Vector2 pGap = DockSnapPlacement.PlaceAdjacent(target, sz, empty, 12f);
+        if (!Approx2(pGap, new Vector2(212f, 0f))) return $"S14h: gap=12 flush-right expected (212,0), got {pGap}";
+
+        return null;
+    }
+
+    // ---- 15. focus-adjacent fixed-size dock spawn (SpawnDockedToFocus + NoteUserFocus wiring) ----
+    // Covers: DOCK-04 — #101 Slice 2 / findings 0078 §2/§3 (a new dock window spawns at the SPEC-FIXED
+    // size — INDEPENDENT of the live count, the #99 bug — and snaps flush to the USER-focused window;
+    // programmatic BringToFront does NOT record focus; no focus / closed focus → nearest-visible
+    // fallback; self/dup/unknown guards). Drives the controller root-free (no Python, no BackcastRoot).
+    static string Section15_FocusAdjacentDockSpawn(List<GameObject> spawned)
+    {
+        // The chart spec size is the single source of truth (catalog default) — assert against it rather
+        // than a literal so a spec tuning doesn't silently make this section lie.
+        var catalog = FloatingWindowCatalog.Default();
+        if (!catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out var chartSpec)) return "S15: catalog missing chart kind";
+        Vector2 chartSize = chartSpec.defaultSize;
+        if (chartSize.x <= 0f || chartSize.y <= 0f) return $"S15: chart defaultSize non-positive ({chartSize})";
+
+        // (a) FOCUS WINS over NEAREST: 'A' is focused; 'B' is placed so its centre is NEARER the anchor
+        // than A's (B centre (1140,910) dist² 31.6M < A centre (140,-90) dist² 49.5M to anchor (5000,5000)).
+        // So if the focus branch were removed, the nearest-fallback would pick B — the chart snapping FLUSH
+        // to A instead proves focus beats nearest. A.Right=280, A.Top=0 → chart top-left (280,0), size fixed.
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            RectTransform a = c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 0, 0, 280, 180, true);
+            RectTransform b = c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "B", 1000, 1000, 280, 180, true);
+            if (a == null || b == null) return "S15a: precondition spawn returned null";
+            c.NoteUserFocus("A");
+            RectTransform chart = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:1", new Vector2(5000, 5000), true);
+            if (chart == null) return "S15a: SpawnDockedToFocus returned null for a known kind";
+            if (!Approx2(chart.sizeDelta, chartSize)) return $"S15a: chart size {chart.sizeDelta} != spec-fixed {chartSize}";
+            if (!Approx2(chart.anchoredPosition, new Vector2(280f, 0f)))
+                return $"S15a: chart not flush-right of the FOCUSED window (got {chart.anchoredPosition}, expected (280,0))";
+        }
+
+        // (b) SIZE IS COUNT-INDEPENDENT (the #99 regression): spawn THREE charts against the same focused
+        // window; every one is the spec-fixed size regardless of how many already exist. (The #99 bug
+        // sized each to ComputeRects(N) so chart 2/3 would shrink — here all three stay chartSize.)
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 0, 0, 280, 180, true);
+            c.NoteUserFocus("A");
+            for (int i = 1; i <= 3; i++)
+            {
+                RectTransform chart = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, $"chart:{i}", new Vector2(0, 0), true);
+                if (chart == null) return $"S15b: chart {i} spawn returned null";
+                if (!Approx2(chart.sizeDelta, chartSize))
+                    return $"S15b: chart {i} size {chart.sizeDelta} != {chartSize} — size DEPENDS on count (the #99 bug)";
+            }
+        }
+
+        // (c) PROGRAMMATIC BringToFront does NOT record focus: focus 'A', then BringToFront('B')
+        // programmatically (a non-user raise, e.g. a layout restore). The chart must STILL snap to A —
+        // if BringToFront had forged focus, the chart would snap to B at (2280,0) instead.
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 0, 0, 280, 180, true);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "B", 2000, 0, 280, 180, true);
+            c.NoteUserFocus("A");
+            c.BringToFront("B");   // programmatic raise — must NOT change the focus target
+            RectTransform chart = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:c", new Vector2(9000, 9000), true);
+            if (chart == null) return "S15c: spawn returned null";
+            if (!Approx2(chart.anchoredPosition, new Vector2(280f, 0f)))
+                return $"S15c: programmatic BringToFront forged focus (chart at {chart.anchoredPosition}, expected flush to A (280,0))";
+        }
+
+        // (d) NO FOCUS → NEAREST-VISIBLE fallback: no NoteUserFocus at all. 'A' is far, 'B' is centred on
+        // the anchor → the chart snaps to B. B top-left (-140,90), size 280×180 → centre (0,0) = anchor;
+        // B.Right=140, B.Top=90 → flush-right slot (140,90).
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 5000, 5000, 280, 180, true);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "B", -140, 90, 280, 180, true);
+            c.NoteUserFocus("ghost");   // unknown id → MUST NOT poison the focus target (no-op)
+            RectTransform chart = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:d", new Vector2(0, 0), true);
+            if (chart == null) return "S15d: spawn returned null";
+            if (!Approx2(chart.anchoredPosition, new Vector2(140f, 90f)))
+                return $"S15d: no-focus fallback did not pick the nearest window B (chart at {chart.anchoredPosition}, expected (140,90))";
+        }
+
+        // (e) CLOSED focus target → fallback: focus 'A', then Close('A'). The next chart must fall back to
+        // the nearest visible window (B), proving a stale focus target is dropped, not snapped to a ghost.
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 0, 0, 280, 180, true);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "B", -140, 90, 280, 180, true);
+            c.NoteUserFocus("A");
+            if (!c.Close("A")) return "S15e: precondition Close(A) returned false";
+            RectTransform chart = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:e", new Vector2(0, 0), true);
+            if (chart == null) return "S15e: spawn returned null";
+            if (!Approx2(chart.anchoredPosition, new Vector2(140f, 90f)))
+                return $"S15e: closed focus target not dropped (chart at {chart.anchoredPosition}, expected fallback to B (140,90))";
+        }
+
+        // (f) GUARDS: duplicate id → returns the existing window (no second spawn); unknown kind → null.
+        {
+            BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+            var c = MakeController(spawned, layer);
+            c.Spawn(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, "A", 0, 0, 280, 180, true);
+            RectTransform first = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:f", new Vector2(0, 0), true);
+            if (first == null) return "S15f: first chart spawn returned null";
+            int before = c.Count;
+            RectTransform dup = c.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:f", new Vector2(0, 0), true);
+            if (dup != first) return "S15f: duplicate id did not return the first window";
+            if (c.Count != before) return $"S15f: duplicate id spawned a second window (count {before}→{c.Count})";
+            if (c.SpawnDockedToFocus("ghost_kind", "ghostwin", new Vector2(0, 0), true) != null)
+                return "S15f: unknown kind did not return null";
+            if (c.Has("ghostwin")) return "S15f: unknown kind leaked a registered window";
+        }
+
         return null;
     }
 

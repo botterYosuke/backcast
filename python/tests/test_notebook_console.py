@@ -128,3 +128,71 @@ def test_console_and_rich_output_coexist_on_the_same_cell():
     # marimo wraps the bare int repr in <pre> as text/html (same as test_notebook_rich_output.py).
     assert r["mimetype"] == "text/html", r
     assert "42" in r["data"], r
+
+
+def test_run_reasserts_marimo_context_absent_on_the_run_thread():
+    """#102 実機回帰の真因ゲート (findings 0080): marimo の RuntimeContext は OS-thread-local
+    (`_ThreadLocalContext(threading.local)`)。埋め込み pythonnet+asyncio.run のレーンでは、kernel を
+    建てたスレッドと cell を走らせるスレッドが食い違い、駆動スレッドの thread-local が空になる。すると
+    kernel を触る全操作 —— `_restage` のセル（再）登録 ＆ `_run` の `run_all`（冒頭の
+    `_should_broadcast_data()`→`get_context()`）—— が `ContextNotInitializedError` を投げ、press 全体
+    （console も rich も）が落ちる。
+
+    「**run スレッドに context が無い**」状態を、kernel を建てた後に `teardown_context()` で*決定論的に*
+    再現する —— スレッド juggling 不要・**leak 無し**（context を建てたスレッドで建て・clear・close するので
+    marimo の per-thread RuntimeContext を他テストへ漏らさない。複数 backend で "RuntimeContext already
+    initialized" になる既知の汚染を避ける）。press 2 回（fresh → **編集後**）で、`_run` だけでなく
+    `_restage` の再登録経路も context を要することを突く（#102 実機: run 1 の `print('a')` は出たが
+    編集後 run 2 が落ちた、の正体）。
+
+      RED  (fix 前): press が `ContextNotInitializedError`（press 2 は `_restage` 経由・run_pressed が
+                     内部捕捉して error dict を返すので "run_cell failed" ログには出ない）。
+      GREEN (fix 後): run_pressed が `_restage`+`_run` を 1 つの `RuntimeContext.install()` スコープで
+                     包み、host の context を run スレッドへ再アサート → 両 press とも console を捕捉。
+
+    delete-the-production-logic litmus: `run_pressed` の `with self._kernel_context()` を外すと即 RED。
+    """
+    from marimo._runtime.context.types import safe_get_context, teardown_context
+
+    s = IncrementalNotebookSession()
+    try:
+        s._ensure_host()      # builds the kernel and installs its RuntimeContext on THIS thread
+        teardown_context()    # simulate the real lane: the RUN thread has NO marimo context
+        assert safe_get_context() is None  # precondition: the context is absent where the run reads it
+
+        # Press 1: a fresh cell.  Press 2: the SAME cell with EDITED code (re-registration in _restage).
+        for code, payload in (("print('a')", "a\n"), ("print('CHANGED')", "CHANGED\n")):
+            res = s.run_pressed([{"cell_id": "c", "code": code}], "c")
+            assert res["error"] is None, res
+            assert _ran_by_id(res, "c")["console"] == [{"stream": "stdout", "text": payload}], res
+    finally:
+        s.close()
+
+
+def test_uncompilable_cell_surfaces_its_error_to_the_console():
+    """#102 follow-up (findings 0081): a cell that does NOT compile (e.g. an unterminated string —
+    ``print('1234)``) never enters marimo's dataflow graph, so pressing it used to KeyError in the
+    runner (footer ``Run cell: KeyError: 'c0'``) and the error message was lost.  Now the registration
+    error is surfaced to the cell's console (stderr), exactly where a RUNTIME traceback already lands.
+
+      RED  (fix 前): `run_pressed` raises `KeyError` (graph.parents[cid] in compute_cells_to_run).
+      GREEN (fix 後): top-level error is None, the row is ok=False, and the SyntaxError text rides stderr.
+    """
+    s = IncrementalNotebookSession()
+    try:
+        # A valid cell first (proves the session is healthy), then the SAME cell edited to a SyntaxError.
+        ok = s.run_pressed([{"cell_id": "c0", "code": "print('1234')"}], "c0")
+        assert _ran_by_id(ok, "c0")["console"] == [{"stream": "stdout", "text": "1234\n"}], ok
+
+        broken = s.run_pressed([{"cell_id": "c0", "code": "print('1234)"}], "c0")
+        assert broken["error"] is None, broken  # not a driver crash — the error belongs to the cell
+        row = _ran_by_id(broken, "c0")
+        assert row["ok"] is False, row
+        assert len(row["console"]) == 1 and row["console"][0]["stream"] == "stderr", row
+        assert "SyntaxError" in row["console"][0]["text"], row
+
+        # Editing back to valid code clears the registration error and the cell runs again.
+        fixed = s.run_pressed([{"cell_id": "c0", "code": "print('recovered')"}], "c0")
+        assert _ran_by_id(fixed, "c0")["console"] == [{"stream": "stdout", "text": "recovered\n"}], fixed
+    finally:
+        s.close()

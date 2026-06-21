@@ -417,6 +417,11 @@ class IncrementalNotebookSession:
         # #102 Slice 1 (findings 0079): the bridge into the kernel's _SilentStdout/_SilentStderr —
         # built once with the kernel, bound to a fresh _ConsoleCapture for the duration of each press.
         self._console_hook: "_BridgedConsoleHook | None" = None
+        # findings 0081: cell_id -> marimo registration Error (MarimoSyntaxError/…) for cells that did
+        # NOT compile.  An un-compilable cell never enters the dataflow graph, so pressing it must NOT
+        # reach _run (the runner KeyErrors on a root outside the graph) — we surface this error to the
+        # cell's console instead, mirroring how a RUNTIME error already flows back through marimo.
+        self._cell_errors: dict[str, Any] = {}
 
     @property
     def cell_count(self) -> int:
@@ -429,6 +434,7 @@ class IncrementalNotebookSession:
         self._console_hook = None  # the bridge holds a reference to the torn-down kernel's streams
         self._codes = {}
         self._order = []
+        self._cell_errors = {}
 
     def stale(self) -> list[str]:
         """The current stale set (cells needing a press), in cell order — empty when no kernel."""
@@ -450,7 +456,8 @@ class IncrementalNotebookSession:
         if guard is not None:
             return {"stale": [], "error": guard}
         try:
-            self._restage(cells, inject)
+            with self._kernel_context():  # findings 0080: re-assert context on THIS thread for registration
+                self._restage(cells, inject)
         except Exception as exc:  # malformed registration → fail-soft, surface to the notice line
             return {"stale": self.stale(), "error": f"{type(exc).__name__}: {exc}"}
         return {"stale": self.stale(), "error": None}
@@ -470,18 +477,26 @@ class IncrementalNotebookSession:
         guard = self._thread_guard()
         if guard is not None:
             return {"ok": False, "ran": [], "stale": [], "error": guard}
-        try:
-            self._restage(cells, inject)
-        except Exception as exc:
-            return {"ok": False, "ran": [], "stale": self.stale(), "error": f"{type(exc).__name__}: {exc}"}
-        if pressed_cell_id not in self._codes:
-            return {
-                "ok": False,
-                "ran": [],
-                "stale": self.stale(),
-                "error": f"pressed cell {pressed_cell_id!r} is not registered",
-            }
-        return self._run(pressed_cell_id, inject)
+        # findings 0080: registration (_restage) AND the run (_run) share ONE context-install scope so
+        # marimo's get_context() resolves on this run thread even when the kernel was built on another.
+        with self._kernel_context():
+            try:
+                self._restage(cells, inject)
+            except Exception as exc:
+                return {"ok": False, "ran": [], "stale": self.stale(), "error": f"{type(exc).__name__}: {exc}"}
+            if pressed_cell_id not in self._codes:
+                return {
+                    "ok": False,
+                    "ran": [],
+                    "stale": self.stale(),
+                    "error": f"pressed cell {pressed_cell_id!r} is not registered",
+                }
+            if pressed_cell_id in self._cell_errors:
+                # The cell did not compile (e.g. SyntaxError): it is absent from the dataflow graph, so
+                # running it would KeyError in the runner.  Surface the error to ITS console instead
+                # (findings 0081) — same destination a runtime traceback already reaches.
+                return self._compile_error_result(pressed_cell_id)
+            return self._run(pressed_cell_id, inject)
 
     # ---- internals (all on the owning thread) ----
 
@@ -501,6 +516,22 @@ class IncrementalNotebookSession:
             # own _ConsoleCapture for the duration of _run.
             self._console_hook = _BridgedConsoleHook(self._host)
         return self._host
+
+    def _kernel_context(self):
+        """Pin THIS session's marimo RuntimeContext on the CURRENT thread for the duration (findings 0080).
+
+        marimo's RuntimeContext is OS-thread-local (`_ThreadLocalContext(threading.local)`); the kernel
+        may be BUILT on one thread (`_ensure_host` → `initialize_kernel_context`) yet DRIVEN on another —
+        the embedded pythonnet + `asyncio.run` notebook lane does not guarantee build-thread == run-thread.
+        EVERY operation that touches the kernel must re-assert the context on the run thread, or marimo's
+        `get_context()` raises `ContextNotInitializedError`:
+          * `_restage` re-registers/compiles cells (marimo publishes through the context) — a CHANGED cell
+            on a later press is where this bit (#102: run 1 fresh OK, run 2 after an edit failed); and
+          * `_run` drives `run_all`, which reads the context at its prologue via `_should_broadcast_data`.
+        `RuntimeContext.install()` is marimo's own re-entrant guard (save/install/restore), used by its
+        AppKernelRunner — a no-op for state when build-thread == run-thread (saved and restored to itself).
+        """
+        return self._ensure_host().runtime_context.install()
 
     def _restage(self, cells: "list[dict[str, Any]]", inject: "dict[str, Any] | None") -> None:
         host = self._ensure_host()
@@ -526,15 +557,23 @@ class IncrementalNotebookSession:
                 if children:
                     k.graph.set_stale(children, prune_imports=True)
             self._codes.pop(cid, None)
+            self._cell_errors.pop(cid, None)
 
         # Registrations: new or code-changed cells become stale (+ downstream via set_stale).
         for cid in new_ids:
             code = new_codes[cid]
             if self._codes.get(cid) == code and cid in k.graph.cells:
                 continue  # unchanged — keep its current (clean or stale) state
-            k._maybe_register_cell(cid, code, stale=True)
-            if cid in k.graph.cells:
-                k.graph.set_stale({cid}, prune_imports=True)
+            # _maybe_register_cell returns (old_children, error); error is non-None when the cell does
+            # NOT compile (SyntaxError → MarimoSyntaxError).  Such a cell is absent from the graph, so we
+            # remember the error here and short-circuit the press in run_pressed (findings 0081).
+            _, err = k._maybe_register_cell(cid, code, stale=True)
+            if err is not None:
+                self._cell_errors[cid] = err
+            else:
+                self._cell_errors.pop(cid, None)
+                if cid in k.graph.cells:
+                    k.graph.set_stale({cid}, prune_imports=True)
             self._codes[cid] = code
 
         self._order = new_ids
@@ -574,6 +613,9 @@ class IncrementalNotebookSession:
             excluded_cells=set(k.errors),
             execution_context=k._install_execution_context,
         )
+        # The marimo RuntimeContext this `run_all` reads (via `_should_broadcast_data`) is pinned on the
+        # CURRENT thread by the `_kernel_context()` guard in `run_pressed` — _restage AND this run share
+        # one install scope (findings 0080).
         try:
             _await(runner.run_all())
         finally:
@@ -602,3 +644,30 @@ class IncrementalNotebookSession:
             )
         ran.sort(key=lambda r: order_of[r["cell_id"]])
         return {"ok": True, "ran": ran, "stale": self.stale(), "error": None}
+
+    def _compile_error_result(self, cell_id: str) -> dict[str, Any]:
+        """Hand back a single ran row that surfaces an un-compilable cell's error to its console.
+
+        The cell is absent from the dataflow graph (it never compiled), so it cannot be run — but the
+        press must still produce visible feedback.  We mirror the shape ``_run`` returns for a cell that
+        FAILED: top-level ``ok``/``error`` stay clean (this is not a driver failure), the row's ``ok`` is
+        ``False``, and the marimo error message rides the ``stderr`` console stream — the SAME place a
+        runtime traceback lands, so the editor paints it amber instead of the press dying with a KeyError
+        (findings 0081).
+        """
+        err = self._cell_errors[cell_id]
+        msg = getattr(err, "msg", None) or str(err)
+        return {
+            "ok": True,
+            "ran": [
+                {
+                    "cell_id": cell_id,
+                    "mimetype": "text/plain",
+                    "data": "",
+                    "console": [{"stream": "stderr", "text": msg}],
+                    "ok": False,
+                }
+            ],
+            "stale": self.stale(),
+            "error": None,
+        }

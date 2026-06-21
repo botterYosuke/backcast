@@ -188,7 +188,12 @@ class HeadlessKernel:
             module=module,
             hooks=create_default_hooks(),
         )
-        initialize_kernel_context(
+        # Keep the returned KernelRuntimeContext: marimo's context is OS-thread-local
+        # (`_ThreadLocalContext(threading.local)`), and `initialize_kernel_context` installs it ONLY
+        # on the thread that runs THIS constructor. A consumer that drives the kernel from a different
+        # thread (the embedded notebook lane can build here on one thread and run on another) must
+        # re-assert this exact context on the run thread — so we hold onto it (findings 0080).
+        self.runtime_context = initialize_kernel_context(
             kernel=self.k,
             stream=self.stream,  # type: ignore[arg-type]
             stdout=self.stdout,  # type: ignore[arg-type]

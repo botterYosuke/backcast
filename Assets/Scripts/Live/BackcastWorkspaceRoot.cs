@@ -57,6 +57,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     const string WINDOW_ID_POSITIONS = "positions";
     const string WINDOW_ID_RUN_RESULT = "run_result";
 
+    // #105: the base dock cluster's id list — the single source for BOTH the first-launch spawn
+    // (SpawnBaseDockWindows) and the factory grouping (FormFactoryBaseGroup). Order = findings 0075 §4.
+    static readonly string[] BaseDockWindowIds = {
+        WINDOW_ID_STARTUP, WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS,
+        WINDOW_ID_POSITIONS, WINDOW_ID_RUN_RESULT,
+    };
+
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
 
@@ -703,18 +710,27 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // restore runs, so it gets repositioned in place — never destroyed+respawned).
     void SpawnBaseDockWindows()
     {
-        string[] ids = {
-            WINDOW_ID_STARTUP, WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS,
-            WINDOW_ID_POSITIONS, WINDOW_ID_RUN_RESULT,
-        };
-        var rects = DockDefaultPlacement.ComputeRects(ids.Length);
-        for (int i = 0; i < ids.Length; i++)
+        // #105: FLUSH placement (gap = 0) so the factory Hakoniwa group looks docked (touching), not
+        // scattered. Shared with the AFK gate via DockDefaultPlacement.ComputeFlushRects (one source).
+        var rects = DockDefaultPlacement.ComputeFlushRects(BaseDockWindowIds.Length);
+        for (int i = 0; i < BaseDockWindowIds.Length; i++)
         {
             var r = rects[i];
+            string id = BaseDockWindowIds[i];
             // #103 (ADR-0018): base dock windows spawn on the BACK plane (_dockWindows / _dockLayer, 1.0×).
-            _dockWindows.Spawn(ids[i], ids[i], r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
+            _dockWindows.Spawn(id, id, r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
         }
     }
+
+    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083): factory-default grouping.
+    // On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 5 base dock
+    // windows into ONE Hakoniwa group. The cluster includes startup + run_result cores
+    // (DockShape.IsCoreKind) so the group is automatically a HAKONIWA group: tile-fixed swap, core-
+    // locked, no whole-cluster free translate (findings 0082 §2). This is the ONLY first-launch
+    // grouping path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the
+    // doc's persisted groupId instead (工場出荷値のみ＝owner decision). The base windows are already
+    // spawned ungrouped (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
+    void FormFactoryBaseGroup() => _dockWindows?.FormGroup(BaseDockWindowIds);
 
     // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----
 
@@ -1896,12 +1912,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void ResumeLastDocumentOrDefault()
     {
         string py = PlayerPrefs.GetString(ResumeKey, "");
+        bool restoredSavedLayout = false;   // #105: a saved layout's persisted groupId was applied — DON'T factory-group
         if (!string.IsNullOrEmpty(py) && File.Exists(py) && LayoutSidecarStore.TryReadLayout(py, out var doc))
         {
             // #81: restore geometry, then decompose the document `.py` into N cell windows at the saved
             // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
             // the File→New blank state rather than leaving a half-restored state.
             ApplyLayout(doc);
+            restoredSavedLayout = true;   // #105: ApplyLayout(doc) honored the doc's groupId (RestoreFloating) — first-launch grouping must NOT clobber it
             _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
             if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
             {
@@ -1911,6 +1929,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
         ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace
+        // #105: factory-group ONLY when no saved layout was applied. A resume whose layout READ but whose
+        // _coordinator.Open FAILED already restored the doc's persisted groupId via ApplyLayout(doc) above;
+        // re-minting here would clobber it (工場出荷値のみ＝saved layout を尊重・ADR-0020 D2).
+        if (!restoredSavedLayout) FormFactoryBaseGroup();
         _currentLayoutPath = "";                 // untitled document
         OpenFileNewDefault();                    // #76: boot to the File→New blank state (no canonical auto-open)
     }

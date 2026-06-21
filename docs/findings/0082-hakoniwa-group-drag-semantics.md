@@ -293,3 +293,14 @@ merge 対象には dragged の隣接相手だけでなく、それらの**既存
   - F8: `HakoniwaSwap` 対象 id を DragApplyDelta が `_lastSwapTargetId` にキャッシュし `CommitHakoniwaSwap` がそれを採用、ReleaseDrag 末尾で必ずクリア（findings §7: 最後の ghost が見せた相手と commit 対象を identity 一致させる）。
   - F9 (partial): `CountLiveGroupMembers(groupId, out hasCore)` helper を新設し `BuildDragContext` / `AddCandidateFor` の同一 scalar projection を 1 経路へ統合。**他 5 site（DragApplyDelta NormalGroupTranslate / ResolveHakoniwaSwapTarget / ReleaseDrag F4 offset propagation / DissolveIfShrunkTo / CommitFlushAttachOnRelease winners 展開）は inline 維持** — それぞれが heterogeneous projection（mutation / struct 構築 / id collection）で、callback or IEnumerable 経由にすると DragApplyDelta の 60Hz hot path で per-frame allocation を生む。
   - F10 (defer): `DragApplyDelta` / `ReleaseDrag` / `ComposeDragGhosts` の DragMode 3-switch fan-out は table-dispatch 化せず維持。3 switch は live-geometry mutation / release commit / pure GhostSpec composition と **本質的に異なる仕事**をしており、enum 以外の制御フローを共有しない。table 化すると 1 mode の挙動が 3 表に散逸し、変更頻度の低い stable enum（§6 で closed）の write-cost saving より read-cost regression が大きい。
+
+## §12 — 工場出荷 first-launch grouping（#105 / [[ADR-0020]]）
+
+owner 依頼（2026-06-22）「初回から base cluster を 1 group に束ねたい・Hakoniwa・工場出荷値のみ」を受けた group birth path の拡張。§10 の「`groupId` 非 null は user drag-release だけ」に **第 3 の birth path** を足す（ADR-0020 D1–D3）。下位事実:
+
+- **`FloatingWindowController.FormGroup(IReadOnlyList<string> ids)`**: 1 つの `MintGroupId()`（§1 GUID 形式 `grp_<hex32>`）を生成し、live な named member 全員に `SetGroupId`。**live member < 2 なら null を返し何も stamp しない**（group は ≥2 が前提＝`DissolveIfShrunkTo` 閾値）。未知 id は無視（エラーではない）。座標は見ない＝restore 同型の非座標 birth（ADR-0020 D3）。`Spawn` は引き続き mint しない（§10 不変維持）。
+- **呼び出し位置**: `BackcastWorkspaceRoot.FormFactoryBaseGroup()` → `ResumeLastDocumentOrDefault` の **no-resume 分岐のみ**（`ApplyLayout(LayoutDocument.Default())` 直後・base 窓は `BuildWorkspace`→`SpawnBaseDockWindows` で既に ungrouped spawn 済みなので groupId stamp だけ）。saved layout を復元/開いた経路（`ApplyLayout(doc)` → return）は **本経路を通らない**＝doc の `groupId`（解散していれば null）を尊重（ADR-0020 D2）。
+- **「工場出荷値のみ」が autosave で自然成立**: no-resume boot は `_currentLayoutPath=""`（untitled）で `AutosaveCurrentDocument` が書かない（findings 0048 D7）。保存しない限り毎回 factory group 再形成、Save/Save As すれば live な `groupId` が sidecar に乗り次回 restore が尊重する。
+- **base cluster = Hakoniwa group**: `BaseDockWindowIds` は startup + run_result（`DockShape.IsCoreKind`）を含むので §2 より自動的に Hakoniwa group（translate 禁止・swap・core ロック）。Live で startup hidden でも run_result core + visible≥2 で維持、窓を閉じて visible<2 で既存 `DissolveIfShrunkTo(2)` が解散。
+- **FLUSH 配置（くっついている）**: group のメンバーは flush-adjacent が前提（group は flush-snap で生まれる）。なので factory cluster は `DockDefaultPlacement.ComputeFlushRects`（gap=0）で隙間なく配置する＝groupId だけ付けて 12px gap のままだと「grouped だが見た目は隙間あり」＝user drag では生まれない不整合状態になる（owner feedback 2026-06-22「くっついてない」で発覚）。
+- **AFK**: `FloatingWindowE2ERunner` S32（GROUP-14・root-free）。RED→GREEN litmus と再走は findings 0083。

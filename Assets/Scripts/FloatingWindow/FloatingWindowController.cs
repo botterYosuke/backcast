@@ -36,9 +36,11 @@ public class FloatingWindowController
 {
     // #104 (ADR-0019 / findings 0082 §1): each registered window carries its current group membership
     // as a nullable groupId. NEVER re-derived from coordinates — the field IS the source of truth and is
-    // round-tripped through Capture/Apply verbatim. Spawn paths leave it null; attach happens ONLY at
-    // user drag-release (SnapOnRelease, Slice B) — programmatic Spawn / restore / cell coordinator never
-    // mint a group, so "user-asked-for-it" is the only way groupId becomes non-null.
+    // round-tripped through Capture/Apply verbatim. Spawn paths leave it null; attach happens at
+    // user drag-release (SnapOnRelease, Slice B). groupId becomes non-null in exactly THREE ways, none
+    // of them coordinate-derived: (a) user drag-release, (b) restore of a persisted groupId (Apply /
+    // RestoreFloating), and (c) #105 the FACTORY first-launch default (FormGroup, owner-requested —
+    // see ADR-0019 D8 amendment / findings 0082 §12, findings 0083). The cell coordinator never mints.
     class Entry { public RectTransform rt; public string kind; public string id; public string groupId; }
 
     static readonly Vector2 CENTER = new Vector2(0.5f, 0.5f);
@@ -863,6 +865,29 @@ public class FloatingWindowController
     // (hex32, no hyphens). Called only when ResolveMergeWinner returns null AND there is at least one
     // flush partner ⇒ all-singleton attach (the SINGLE GUID-mint trigger).
     static string MintGroupId() => "grp_" + Guid.NewGuid().ToString("N");
+
+    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083): the FACTORY-GROUP birth path.
+    // The owner-requested first-launch default bundles the base dock cluster into ONE group
+    // (BackcastWorkspaceRoot.FormFactoryBaseGroup — no-resume boot only). This is the THIRD and only
+    // other way a groupId becomes non-null besides (a) user drag-release and (b) restore of a persisted
+    // groupId; like restore it is NOT coordinate-derived — the caller names the member ids explicitly.
+    // Mints ONE fresh groupId and stamps it on every named id that is CURRENTLY registered (hidden ones
+    // INCLUDED — a hidden base window should still join the factory cluster, mirroring the Hide-preserves-
+    // groupId rule §5), then returns it. Returns null (and stamps nothing) when fewer than 2 of the ids
+    // are registered: a group needs ≥2 members (cf. DissolveIfShrunkTo's threshold, though that helper
+    // counts VISIBLE/live members — here we count registered), so a 0/1-member "group" is meaningless.
+    public string FormGroup(IReadOnlyList<string> ids)
+    {
+        if (ids == null) return null;
+        int live = 0;
+        for (int i = 0; i < ids.Count; i++)
+            if (!string.IsNullOrEmpty(ids[i]) && _windows.ContainsKey(ids[i])) live++;
+        if (live < 2) return null;
+        string g = MintGroupId();
+        for (int i = 0; i < ids.Count; i++)
+            if (!string.IsNullOrEmpty(ids[i]) && _windows.ContainsKey(ids[i])) SetGroupId(ids[i], g);
+        return g;
+    }
 
     // #104 (ADR-0019 / findings 0082 §3): default flush-adjacency epsilon — 1 px in canvas-LOGICAL
     // coordinates (zoom-independent like DEFAULT_SNAP_THRESHOLD). After SnapOnRelease has aligned edges

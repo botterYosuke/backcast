@@ -62,6 +62,7 @@
 //  29. #104 Slice E2: Hakoniwa swap commit ((x,y,w,h) exchange, kind/id/groupId untouched) + snap-back     [GROUP-10]
 //  30. #104 Slice F: cross-plane group restore split (majority / tie → dock / loser=null) + shared dissolve [GROUP-11]
 //  31. #104 Slice G: drag-ghost preview composition (7 modes, count/rect/style/sibling/commit-on-release)  [GROUP-12]
+//  32. #105: factory first-launch grouping — FormGroup bundles base cluster into ONE Hakoniwa group     [GROUP-14]
 
 using System;
 using System.Collections.Generic;
@@ -116,6 +117,7 @@ public static class FloatingWindowE2ERunner
                 ?? Section29_HakoniwaSwapWiring(spawned)
                 ?? Section30_CrossPlaneGroupRestoreSplit(spawned)
                 ?? Section31_GhostPreviewStructure(spawned)
+                ?? Section32_FactoryBaseGroupFormsHakoniwa(spawned)
                 ?? Section19_SceneWiringBackPlane();   // LAST: loads the real scene (root-free sections run first)
         }
         catch (Exception e)
@@ -172,10 +174,12 @@ public static class FloatingWindowE2ERunner
                       "4-value exchange; kind/id/groupId untouched) + target-less Hakoniwa snap-back + cross-plane " +
                       "group restore split (majority plane wins / tie → dock / loser groupId=null / shared dissolve " +
                       "after split) + drag-ghost preview composition (7 modes, count/rect/style flag/" +
-                      "GhostWindow_Solid|Dashed names/alpha=0.45/last-sibling front/commit-on-release clear) " +
+                      "GhostWindow_Solid|Dashed names/alpha=0.45/last-sibling front/commit-on-release clear) + " +
+                      "factory first-launch grouping (FormGroup mints ONE shared groupId across the base cluster, " +
+                      "<2 live → no group, startup+run_result cores ⇒ Hakoniwa semantics, FLUSH/docked placement) " +
                       "(Unity-owned versioned schema, additive capability surface, ADR-0003 capability parity, " +
                       "under Unity Mono) " +
-                      "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03,GROUP-01..12]");
+                      "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03,GROUP-01..14]");
             EditorApplication.Exit(0);
         }
         else
@@ -2079,6 +2083,81 @@ public static class FloatingWindowE2ERunner
         if (ghostLayer.ActiveCount != 1) return "S31j: precondition ghost not painted";
         c.ReleaseDrag("orders", orest, detachCursor);
         if (ghostLayer.ActiveCount != 0) return "S31j: ReleaseDrag did not clear ghosts (commit-on-release rule)";
+        return null;
+    }
+
+    // ---- 32. #105: factory first-launch grouping — FormFactoryBaseGroup bundles the base dock cluster
+    //      into ONE Hakoniwa group on a no-resume boot (saved layout 無し). Covers GROUP-14:
+    //      FormGroup mints ONE shared non-null groupId across every named member; a programmatic Spawn
+    //      still mints nothing (S20 invariant holds); the cluster carries startup + run_result cores so
+    //      it is a HAKONIWA group (translate banned, core-locked); <2 live members ⇒ no group; and the
+    //      first-launch placement is FLUSH (touching, "docked"), not gapped (e).
+    //      RED→GREEN litmus: no-op FormGroup's body ⇒ (b)/(c) FAIL; restore a non-zero placement gap ⇒ (e) FAIL.
+    static string Section32_FactoryBaseGroupFormsHakoniwa(List<GameObject> spawned)
+    {
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+
+        // Spawn the 5 base dock windows ungrouped — mirrors BuildWorkspace.SpawnBaseDockWindows (the
+        // factory grouping runs AFTER spawn, stamping the shared groupId onto already-live windows).
+        c.Spawn(FloatingWindowCatalog.KIND_STARTUP,      "startup",      0,    0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", 280,  0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,       "orders",       0,   -180,  280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS,    "positions",    280, -180,  280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT,   "run_result",   0,   -360,  280, 180, true);
+
+        var ids = new[] { "startup", "buying_power", "orders", "positions", "run_result" };
+
+        // (a) Pre: every base window is ungrouped — Spawn never mints a group (ADR-0019 D8, S20 invariant).
+        foreach (var id in ids)
+            if (c.GroupIdOf(id) != null)
+                return $"S32a: {id} spawned with a groupId ({c.GroupIdOf(id)}) — Spawn must not mint";
+
+        // (b) FormGroup mints ONE shared non-null groupId across every member.
+        string g = c.FormGroup(ids);
+        if (string.IsNullOrEmpty(g)) return "S32b: FormGroup returned null for 5 live members";
+        foreach (var id in ids)
+            if (c.GroupIdOf(id) != g)
+                return $"S32b: {id} not in the factory group (got {c.GroupIdOf(id)}, expected {g})";
+
+        // (c) The cluster carries startup + run_result cores ⇒ it is a HAKONIWA group: dragging a core
+        //     member beyond D_DETACH is HakoniwaCoreLock and the geometry FREEZES (no free translate).
+        Vector2 s0 = c.RectOf("startup").anchoredPosition;
+        var mode = c.DragApplyDelta("startup", s0, s0 + new Vector2(120f, 0f), new Vector2(120f, 0f));
+        if (mode != FloatingWindowMath.DragMode.HakoniwaCoreLock)
+            return $"S32c: factory group is not Hakoniwa (core drag mode {mode}, expected HakoniwaCoreLock)";
+        if (!Approx2(c.RectOf("startup").anchoredPosition, s0))
+            return "S32c: factory Hakoniwa core moved (whole-cluster translate must be banned)";
+
+        // (d) <2 live members ⇒ FormGroup forms NO group (a 1-member group is meaningless). Unknown ids
+        //     are ignored, not errors.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
+        var c2 = MakeController(spawned, layer2);
+        c2.Spawn(FloatingWindowCatalog.KIND_STARTUP, "only", 0, 0, 280, 180, true);
+        if (!c2.Has("only")) return "S32d: precondition — lone member did not spawn (the <2 path would be vacuous)";
+        if (c2.FormGroup(new[] { "only", "missing" }) != null)
+            return "S32d: FormGroup grouped fewer than 2 live members (1 live + 1 unknown id)";
+        if (c2.GroupIdOf("only") != null)
+            return $"S32d: lone member got a groupId ({c2.GroupIdOf("only")})";
+        if (c2.FormGroup(null) != null) return "S32d: FormGroup(null) did not return null";
+
+        // (e) The factory cluster must be DOCKED (flush, touching) — not just grouped. SpawnBaseDockWindows
+        //     uses DockDefaultPlacement.ComputeFlushRects (the SAME call), so assert its 3×2 grid for n=5
+        //     has flush-adjacent neighbours. Grid (row-major, y up-positive): [0][1][2] / [3][4]. Flush
+        //     pairs: 0-1, 1-2 (horizontal) and 0-3, 1-4 (vertical). RED→GREEN: if the placement gap is
+        //     restored to non-zero (DefaultGap), these go NOT-flush — proven by the negative check below.
+        var flush = DockDefaultPlacement.ComputeFlushRects(5);
+        if (flush.Count != 5) return $"S32e: ComputeFlushRects(5) returned {flush.Count} rects";
+        const float eps = FloatingWindowController.DEFAULT_FLUSH_EPS;
+        (int, int)[] adj = { (0, 1), (1, 2), (0, 3), (1, 4) };
+        foreach (var (a, b) in adj)
+            if (!FloatingWindowMath.IsFlushAdjacent(flush[a], flush[b], eps))
+                return $"S32e: factory cluster tiles {a},{b} are NOT flush (windows look ungrouped / 隙間あり)";
+        // Negative control: the gapped placement (DefaultGap) is NOT flush — proves flushness comes from
+        // the gap=0 choice, not from any pair always testing flush (non-vacuous).
+        var gapped = DockDefaultPlacement.ComputeRects(5);
+        if (FloatingWindowMath.IsFlushAdjacent(gapped[0], gapped[1], eps))
+            return "S32e: gapped placement reported flush — the flush assertion is vacuous (gap not honored)";
         return null;
     }
 

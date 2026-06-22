@@ -56,8 +56,8 @@ class AuthUrl(_BaseUrl):
     """`{BASE_URL}` — pre-login auth endpoint base."""
 
 
-BASE_URL_PROD: AuthUrl = AuthUrl("https://kabuka.e-shiten.jp/e_api_v4r8/")
-BASE_URL_DEMO: AuthUrl = AuthUrl("https://demo-kabuka.e-shiten.jp/e_api_v4r8/")
+BASE_URL_PROD: AuthUrl = AuthUrl("https://kabuka.e-shiten.jp/e_api_v4r9/")
+BASE_URL_DEMO: AuthUrl = AuthUrl("https://demo-kabuka.e-shiten.jp/e_api_v4r9/")
 
 
 MASTER_CLMIDS: frozenset[str] = frozenset({

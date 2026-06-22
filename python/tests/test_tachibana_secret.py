@@ -31,8 +31,8 @@ def test_login_form_ignores_second_password_env() -> None:
     init = build_form_init(
         "demo",
         env_dict={
-            "DEV_TACHIBANA_USER_ID": "user1",
-            "DEV_TACHIBANA_PASSWORD": "pass1",
+            "DEV_TACHIBANA_AUTH_ID_DEMO": "authid1",
+            "DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO": "/tmp/key.pem",
             "DEV_TACHIBANA_SECOND_PASSWORD": SENTINEL,
             "DEV_TACHIBANA_SECRET": SENTINEL,
         },
@@ -111,13 +111,13 @@ async def test_submit_order_does_not_log_second_password(
     # 仮想 URL は session-secret (ND= token を埋め込む)。漏洩したら検知できるよう
     # 識別可能な marker を path に入れておく。
     url_secret = "ND_SESSION_SECRET_9f3a"
-    base = f"https://demo-kabuka.e-shiten.jp/e_api_v4r8/{url_secret}"
+    base = f"https://demo-kabuka.e-shiten.jp/e_api_v4r9/{url_secret}"
     session = TachibanaSession(
         url_request=RequestUrl(f"{base}/request/"),
         url_master=MasterUrl(f"{base}/master/"),
         url_price=PriceUrl(f"{base}/price/"),
         url_event=EventUrl(f"{base}/event/"),
-        url_event_ws=f"wss://demo-kabuka.e-shiten.jp/e_api_v4r8/event/ws",
+        url_event_ws=f"wss://demo-kabuka.e-shiten.jp/e_api_v4r9/event/ws",
         zyoutoeki_kazei_c="1",
     )
 
@@ -159,14 +159,16 @@ async def test_auth_login_does_not_log_credentials_without_adapter(
     httpx_mock, caplog: pytest.LogCaptureFixture
 ) -> None:
     """adapter を経由しない直接 login (login dialog subprocess 経路) でも creds を
-    ログに出さない。R2 により sUserId/sPassword は URL に乗るため、httpx INFO の
-    request ログ抑制が login() 自身でも効いている必要がある (#19 Finding 1)。"""
+    ログに出さない。v4r9: R2 により sAuthId は URL に乗るため、httpx INFO の request
+    ログ抑制が login() 自身でも効いている必要がある (#19 Finding 1 / ADR-0023)。"""
+    from Cryptodome.PublicKey import RSA
+
     from engine.exchanges.tachibana_auth import ApiError, PNoCounter, login
 
-    leak_user = "LEAK_USER_7e1c"
-    leak_pw = "LEAK_PW_7e1c"
-    # ログイン失敗 (p_errno != "0") を SJIS で返す → LoginError。POST は実行され URL に
-    # creds が乗るので、抑制が無ければここで漏洩する。
+    leak_auth_id = "LEAK_AUTHID_7e1c"
+    test_key = RSA.generate(2048)  # 復号前に check_response で弾かれるので未使用だが型は要る
+    # ログイン失敗 (p_errno != "0") を SJIS で返す → ApiError。POST は実行され URL に
+    # sAuthId が乗るので、抑制が無ければここで漏洩する。
     httpx_mock.add_response(
         content=json.dumps({"p_errno": "1", "sResultCode": "1"}).encode("shift_jis")
     )
@@ -174,12 +176,11 @@ async def test_auth_login_does_not_log_credentials_without_adapter(
     with caplog.at_level(logging.DEBUG):
         with pytest.raises(ApiError):  # p_errno != "0" → 業務エラー (型は本題でない)
             await login(
-                leak_user, leak_pw, is_demo=True, p_no_counter=PNoCounter()
+                leak_auth_id, test_key, is_demo=True, p_no_counter=PNoCounter()
             )
 
-    assert leak_user not in caplog.text
-    assert leak_pw not in caplog.text
+    assert leak_auth_id not in caplog.text
     assert "HTTP Request" not in caplog.text  # httpx INFO request ログが沈黙
-    # creds は wire 上には乗っている (ログ非保持だけ)。
+    # sAuthId は wire 上には乗っている (ログ非保持だけ)。
     sent = httpx_mock.get_requests()
-    assert sent and leak_user in str(sent[0].url)
+    assert sent and leak_auth_id in str(sent[0].url)

@@ -32,13 +32,13 @@ from engine.live.adapter import VenueCredentials
 
 
 def _today_jst_cache() -> dict:
-    base = "https://demo-kabuka.e-shiten.jp/e_api_v4r8/ND_TESTSESSION"
+    base = "https://demo-kabuka.e-shiten.jp/e_api_v4r9/ND_TESTSESSION"
     return {
         "url_request": f"{base}/request/",
         "url_master": f"{base}/master/",
         "url_price": f"{base}/price/",
         "url_event": f"{base}/event/",
-        "url_event_ws": "wss://demo-kabuka.e-shiten.jp/e_api_v4r8/event/ws",
+        "url_event_ws": "wss://demo-kabuka.e-shiten.jp/e_api_v4r9/event/ws",
         "zyoutoeki_kazei_c": "1",
         "last_p_no": 100,
         "issued_jst_date": datetime.now(ZoneInfo("Asia/Tokyo")).date().isoformat(),

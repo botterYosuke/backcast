@@ -6,7 +6,6 @@ import asyncio
 import dataclasses
 import json
 import logging
-import os
 import uuid
 from dataclasses import dataclass
 from typing import AsyncIterator, Literal
@@ -103,10 +102,8 @@ class _TachibanaOrderRef:
     issue_code: str
     qty: float  # 発注数量。EC の残数量から累計約定数量を導出するのに使う。
 
-# Phase 8 §3.2: env-based credential keys (tachibana skill §S2).
-# 第二暗証番号 (s_second_password) は env に置かない (handoff 制約)。
-_ENV_USER_ID = "DEV_TACHIBANA_USER_ID"
-_ENV_PASSWORD = "DEV_TACHIBANA_PASSWORD"
+# v4r9 公開鍵認証 (ADR-0023): 認証ID + RSA 秘密鍵の解決は tachibana_credentials に集約。
+# 第二暗証番号 (s_second_password) は env に置かない (handoff 制約 / R10)。
 
 # Master DL (CLMEventDownload) returns the entire instrument universe — for
 # kabu master this is multi-MB and can stream for several minutes on a slow
@@ -265,28 +262,33 @@ class TachibanaAdapter:
         if source != "env":
             raise ValueError(f"unknown credentials_source: {source!r}")
 
-        user_id = os.environ.get(_ENV_USER_ID)
-        password = os.environ.get(_ENV_PASSWORD)
-        if not user_id or not password:
-            # R10: do NOT include the values themselves (only the key names).
-            missing = [
-                k for k, v in ((_ENV_USER_ID, user_id), (_ENV_PASSWORD, password))
-                if not v
-            ]
-            raise ValueError(
-                f"missing env credentials: {', '.join(missing)} "
-                f"(credentials_source='env')"
-            )
-
         is_demo = self._env == "demo"
         if not is_demo:
             # Production double-guard (R1 / spec). require_prod_env raises
             # RuntimeError if TACHIBANA_ALLOW_PROD != '1'.
             require_prod_env("TACHIBANA_ALLOW_PROD")
 
+        # v4r9 公開鍵認証 (ADR-0023): 認証ID + RSA 秘密鍵を Fernet/dev-env から解決する。
+        # demo/prod は別セットなので is_demo で読む env を切り替える。鍵素材を含まない
+        # エラーに翻訳して伝播する (R10)。
+        from engine.exchanges.tachibana_credentials import (
+            CredentialsError,
+            resolve_credentials,
+        )
+        from engine.exchanges.tachibana_pubkey import PubkeyCryptoError
+        from engine.live._build_mode import IS_DEBUG_BUILD
+
+        try:
+            creds = resolve_credentials(
+                is_demo=is_demo, is_debug_build=IS_DEBUG_BUILD
+            )
+        except (CredentialsError, PubkeyCryptoError) as exc:
+            # メッセージは key 名 / パスのみ (値・鍵素材は含まない)。
+            raise ValueError(f"missing or invalid env credentials: {exc}") from exc
+
         self._session = await _auth_login(
-            user_id,
-            password,
+            creds.auth_id,
+            creds.private_key,
             is_demo=is_demo,
             p_no_counter=self._p_no_counter,
         )

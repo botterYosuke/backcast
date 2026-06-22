@@ -29,6 +29,7 @@ __all__ = [
     "LoginError",
     "UnreadNoticesError",
     "SessionExpiredError",
+    "ServiceOutOfHoursError",
     "current_p_sd_date",
     "check_response",
     "login",
@@ -62,11 +63,16 @@ class LoginError(TachibanaError):
 
 
 class UnreadNoticesError(TachibanaError):
-    """Raised when the API reports unread notices (sKinsyouhouMidokuFlg=1)."""
+    """Raised when the API blocks usage on unread pre-contract notices.
+
+    v4r9 では旧 `sKinsyouhouMidokuFlg=="1"` フラグが廃止され、`p_errno=0 &&
+    sResultCode=0` でも **`sUrlRequest` が空文字**なら契約締結前書面 未読＝API 利用不可。
+    ブラウザの標準 web 画面で書面確認が必要（references/pubkey_auth.md §未読書面判定）。
+    """
 
     def __init__(
         self,
-        message: str = "unread notices flag set",
+        message: str = "unread pre-contract notices (sUrlRequest empty)",
         *,
         code: str = "UNREAD_NOTICES",
     ) -> None:
@@ -77,6 +83,13 @@ class UnreadNoticesError(TachibanaError):
 
 class SessionExpiredError(ApiError):
     """Raised when the session has expired (p_errno=2)."""
+
+
+class ServiceOutOfHoursError(ApiError):
+    """Raised when the service is stopped / out of hours (p_errno=9, v4r9〜).
+
+    デモ環境の利用時間はデモ案内ページ参照（R6 / references/pubkey_auth.md）。
+    """
 
 
 _JST = timezone(timedelta(hours=9))
@@ -92,16 +105,15 @@ def check_response(payload: Mapping[str, Any]) -> None:
     p_errno = payload.get("p_errno", "")
     if p_errno == "2":
         raise SessionExpiredError("2", "session expired")
+    if p_errno == "9":
+        # v4r9: システム・サービス停止中（利用時間外）。R6 / pubkey_auth.md。
+        raise ServiceOutOfHoursError("9", "service stopped / out of hours")
     if p_errno not in ("", "0"):
         raise ApiError(p_errno, f"p_errno={p_errno}")
 
     s_result_code = payload.get("sResultCode", "0")
     if s_result_code != "0":
         raise ApiError(s_result_code, f"sResultCode={s_result_code}")
-
-    midoku = payload.get("sKinsyouhouMidokuFlg", "0")
-    if midoku == "1":
-        raise UnreadNoticesError("unread notices flag set")
 
 
 # ---------------------------------------------------------------------------
@@ -227,30 +239,59 @@ async def _safe_get(client: httpx.AsyncClient, url: str) -> bytes:
     return resp.content
 
 
+# v4r9 ログイン応答で暗号化されて返る 5 本の仮想 URL（復号対象）。
+_ENCRYPTED_URL_KEYS = (
+    "sUrlRequest",
+    "sUrlMaster",
+    "sUrlPrice",
+    "sUrlEvent",
+    "sUrlEventWebSocket",
+)
+
+
+def _decrypt_virtual_urls(data: dict[str, Any], private_key: Any) -> None:
+    """Decrypt the 5 RSA-encrypted virtual URLs in `data` in place (v4r9).
+
+    Each non-empty value is replaced with its decrypted plaintext. Empty values
+    are left as-is so the unread-notices check (`sUrlRequest` empty) still fires.
+    """
+    from .tachibana_pubkey import decrypt_s_url
+
+    for key in _ENCRYPTED_URL_KEYS:
+        enc = data.get(key)
+        if isinstance(enc, str) and enc:
+            data[key] = decrypt_s_url(enc, private_key)
+
+
 async def login(
-    user_id: str,
-    password: str,
+    auth_id: str,
+    private_key: Any,
     *,
     is_demo: bool,
     p_no_counter: PNoCounter,
     http_client: Optional[httpx.AsyncClient] = None,
 ) -> TachibanaSession:
-    """Issue CLMAuthLoginRequest and return a TachibanaSession.
+    """Issue CLMAuthLoginRequest (v4r9 public-key auth) and return a TachibanaSession.
+
+    v4r9: ログインは認証ID（`sAuthId`）単独で、パスワードは送らない。応答の仮想 URL 5 本は
+    RSA 暗号化されて返り、`private_key`（RSA 鍵オブジェクト）で復号する（ADR-0023 / R3）。
 
     p_no_counter is required so retries / startup re-login never reuse a
-    p_no already accepted by the server (R4 monotonic contract).
+    p_no already accepted by the server (R4 monotonic contract). ※サンプルは login 時
+    p_no=1 固定だが、backcast は単一プロセス内で複数リクエストが連番を共有するため
+    PNoCounter の単調増加を維持する（D8）。
 
     Raises:
-        UnreadNoticesError: sKinsyouhouMidokuFlg=='1' (code='unread_notices').
-        SessionExpiredError: p_errno=='2' (code='session_expired').
-        LoginError: any other auth-time failure. code is one of
-            the upstream p_errno / sResultCode string, '-62'
-            (service hours), 'transport_error', or 'login_failed'.
+        UnreadNoticesError: sUrlRequest 空文字（契約締結前書面 未読、v4r9）。
+        SessionExpiredError: p_errno=='2'.
+        ServiceOutOfHoursError: p_errno=='9'（利用時間外）。
+        LoginError: any other auth-time failure. code is one of the upstream
+            p_errno / sResultCode string, 'transport_error', or 'login_failed'.
     """
     # R10 / INV-T3-SECRET: この auth login は adapter を経由しない経路 (login dialog
-    # subprocess の tachibana_login_flow._run_auth) からも直接呼ばれる。sUserId/sPassword
-    # は R2 により URL に乗るため、request を投げる前に httpx/httpcore の request ログを
-    # 沈黙させる。adapter.__init__ の抑制だけでは dialog 経路を覆えない (#19 / findings 0009)。
+    # subprocess の tachibana_login_flow._run_auth) からも直接呼ばれる。sAuthId は R2 に
+    # より URL に乗るため、request を投げる前に httpx/httpcore の request ログを沈黙させる。
+    # adapter.__init__ の抑制だけでは dialog 経路を覆えない (#19 / findings 0009)。
     from engine.live.logging import suppress_third_party_http_logs
     suppress_third_party_http_logs()
 
@@ -259,8 +300,7 @@ async def login(
         "p_no": str(p_no_counter.next()),
         "p_sd_date": current_p_sd_date(),
         "sCLMID": "CLMAuthLoginRequest",
-        "sUserId": user_id,
-        "sPassword": password,
+        "sAuthId": auth_id,
     }
     url = build_auth_url(base, payload, sJsonOfmt="5")
 
@@ -278,6 +318,14 @@ async def login(
 
     data = _decode_json(body)
     check_response(data)
+
+    # v4r9 未読書面判定: p_errno=0 && sResultCode=0 でも sUrlRequest が空なら
+    # 契約締結前書面 未読で仮想 URL が使えない（旧 sKinsyouhouMidokuFlg の置き換え）。
+    # この時点の sUrlRequest はまだ暗号化文字列なので「空文字 = 未読」で判定できる。
+    if not data.get("sUrlRequest"):
+        raise UnreadNoticesError()
+
+    _decrypt_virtual_urls(data, private_key)
     _validate_virtual_urls(data)
 
     return TachibanaSession(

@@ -18,7 +18,7 @@ log = logging.getLogger(__name__)
 # (it leaks Tachibana-internal English / inconsistent wording that breaks the
 # Japanese banner contract) and is only logged for triage.
 
-_MSG_LOGIN_FAILED = "ログインに失敗しました。ID / パスワードを確認してください"
+_MSG_LOGIN_FAILED = "ログインに失敗しました。認証 ID / 秘密鍵 / 公開鍵登録を確認してください"
 _MSG_SERVICE_OUT_OF_HOURS = (
     "立花サーバーが現在サービス時間外です（デモ環境は平日 8:00–18:00 JST）。"
     "時間内に再ログインしてください"
@@ -36,8 +36,9 @@ _MSG_VIRTUAL_URL_INVALID = (
 _MSG_UNREAD_NOTICES = "未読の重要通知があります。e-shiten Web で確認後に再ログインしてください"
 
 # p_errno codes indicating "server is currently outside service hours"
-# rather than a credential problem. -62 = システムサービス時間外.
-_SERVICE_OUT_OF_HOURS_CODES = frozenset({"-62"})
+# rather than a credential problem. -62 = システムサービス時間外（旧）、
+# 9 = システム・サービス停止中（利用時間外, v4r9〜 / ServiceOutOfHoursError）。
+_SERVICE_OUT_OF_HOURS_CODES = frozenset({"-62", "9"})
 
 
 def raise_for_login_error(exc: Exception) -> NoReturn:

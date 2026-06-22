@@ -46,6 +46,15 @@ dependencies = [
     # output. altair/vl-convert are intentionally NOT bundled (findings 0075 P6-3: Vega needs a
     # JS renderer Unity lacks; matplotlib covers the charting need).
     "matplotlib>=3.9",
+    # #92 (ADR-0023): 立花 v4r9 公開鍵認証。ログイン応答の仮想 URL 5 本が RSA 公開鍵で
+    # 暗号化されて返り、クライアントが秘密鍵で復号する (PKCS1_OAEP / SHA256)。pycryptodomex
+    # は import 名 `Cryptodome` (legacy pycrypto の `Crypto` と衝突しない別 namespace)。
+    # 立花公式サンプル e_api_login_pubkey.py が `from Cryptodome...` を採用。
+    # findings 0087 / references/pubkey_auth.md。
+    "pycryptodomex>=3.20",
+    # #92 (ADR-0023): 認証情報 (認証ID+秘密鍵) を平文保存しないための Fernet 暗号化
+    # (secure_config.enc + API_DECRYPT_KEY) を立花サンプル互換でサポートする。
+    "cryptography>=42.0",
 ]
 
 [dependency-groups]

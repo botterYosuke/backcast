@@ -96,13 +96,15 @@ public static class TachibanaLiveE2ERunner
         s_loginDone = 0; s_placeDone = 0; s_cancelDone = 0;
 
         // ── step 0: 資格情報を解決。EnvConfig = process env 優先 → <repo>/.env → <repo>/python/.env
-        // （`set -a; source .env` / CI の env 注入も拾える）。USER_ID/PASSWORD は os.environ へ、第二暗証は
-        // char[] に持って submit_secret へ渡す（env には入れない / R10）。 ──
-        string uid = EnvConfig.Get("DEV_TACHIBANA_USER_ID");
-        string pw = EnvConfig.Get("DEV_TACHIBANA_PASSWORD");
+        // （`set -a; source .env` / CI の env 注入も拾える）。v4r9 公開鍵認証 (ADR-0023): 認証ID と
+        // 秘密鍵 PEM パスを os.environ へ渡し、Python 側 resolve_credentials が RSA 鍵を読み込む。
+        // 第二暗証は char[] に持って submit_secret へ渡す（env には入れない / R10）。 ──
+        // このゲートは demo 専用（prod は下で拒否）なので demo 用 env（_DEMO サフィックス）を読む。
+        string authId = EnvConfig.Get("DEV_TACHIBANA_AUTH_ID_DEMO");
+        string keyPath = EnvConfig.Get("DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO");
         string secondStr = EnvConfig.Get("DEV_TACHIBANA_SECOND");
-        if (string.IsNullOrEmpty(uid) || string.IsNullOrEmpty(pw))
-            return "missing DEV_TACHIBANA_USER_ID / DEV_TACHIBANA_PASSWORD (process env or .env)";
+        if (string.IsNullOrEmpty(authId) || string.IsNullOrEmpty(keyPath))
+            return "missing DEV_TACHIBANA_AUTH_ID_DEMO / DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO (process env or .env)";
         if (string.IsNullOrEmpty(secondStr))
             return "missing DEV_TACHIBANA_SECOND (process env or .env; required for order placement)";
         second = secondStr.ToCharArray();
@@ -117,10 +119,11 @@ public static class TachibanaLiveE2ERunner
         host.InitializePython(VENUE);                 // sys.path に ProjectRoot/VenvSite を挿入 + server 構築
         if (!host.ServerReady) return "host server not ready after InitializePython";
 
-        // creds を os.environ へ（"env" credentials_source が tachibana.py:255 で直読みする）。
-        SetOsEnviron("DEV_TACHIBANA_USER_ID", uid);
-        SetOsEnviron("DEV_TACHIBANA_PASSWORD", pw);
+        // creds を os.environ へ（"env" credentials_source が resolve_credentials で is_demo→_DEMO を読む / ADR-0023）。
+        SetOsEnviron("DEV_TACHIBANA_AUTH_ID_DEMO", authId);
+        SetOsEnviron("DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO", keyPath);
         // 第二暗証は os.environ に入れない（R10）。char[] のまま submit_secret へ。
+        // 秘密鍵 PEM はパスのみ env に乗せる（鍵素材は env に入れず Python がファイルから読む）。
 
         bool marketOpen = MarketOpenJst();             // 診断のみ（厳密ゲートなので verdict は変えない）
         if (!marketOpen)

@@ -35,58 +35,58 @@ using UnityEngine;
 
 public static class FloatingWindowMath
 {
-    // #104 (ADR-0019 / findings 0082 §6): drag mode enum — the 7 cases the title-input boundary picks each
-    // frame based on the dragged's group membership, the dragged's |cursor - rest_at_drag_start| distance,
-    // the group's Hakoniwa status, the dragged's core status, and whether a swap drop target exists.
+    // ADR-0024 §2 / findings 0088 §1: the THREE drag modes the title-input boundary picks each frame
+    // PURELY from cursor position (ADR-0019's 7-mode group/Hakoniwa/core machine is SUPERSEDED — there
+    // is no Hakoniwa special case any more; startup / run_result drag exactly like every other window).
     //
-    //   SoloDrag             — the dragged is NOT in a group (groupId=null OR group has <2 visible/live
-    //                          members). Live geometry: dragged tracks cursor (existing #15 behaviour).
-    //   NormalGroupTranslate — group ∧ non-Hakoniwa ∧ |cursor - rest| < D_DETACH. Live geometry: every
-    //                          group member is translated by the frame's delta (the ONLY mode that mutates
-    //                          live geometry mid-drag — findings 0082 §8 "commit-on-release" rule for
-    //                          everything else).
-    //   NormalGroupDetach    — group ∧ non-Hakoniwa ∧ |cursor - rest| ≥ D_DETACH. Live geometry: frozen
-    //                          during drag; release commits dragged.groupId=null (Slice D).
-    //   HakoniwaSwap         — Hakoniwa group ∧ |cursor - rest| < D_DETACH ∧ swap drop target exists.
-    //                          Live geometry: frozen; release commits (x,y,w,h) 4-value swap (Slice E2).
-    //   HakoniwaSnapBack     — Hakoniwa group ∧ |cursor - rest| < D_DETACH ∧ no target. Live geometry:
-    //                          frozen; release leaves dragged at rest (Slice E2).
-    //   HakoniwaDetach       — Hakoniwa group ∧ |cursor - rest| ≥ D_DETACH ∧ non-core. Live geometry:
-    //                          frozen; release commits detach (Slice D).
-    //   HakoniwaCoreLock     — Hakoniwa group ∧ |cursor - rest| ≥ D_DETACH ∧ core. Live geometry: frozen;
-    //                          release snaps back to rest (cores are detach-immune — Slice E1).
+    //   Swap     — the cursor sits inside ANOTHER member of the dragged's island (same groupId,
+    //              visible/live ≥ 2). Live geometry frozen; release exchanges (x,y,w,h) with the target
+    //              (ghost-2 preview). Distance-independent: swap WINS over translate/detach whenever the
+    //              cursor is over a sibling rect.
+    //   Translate— the cursor is OUTSIDE the island ∧ |cursor - dragStart| < D_DETACH_PX. Live geometry:
+    //              the WHOLE island real-renders shifted by the cursor offset (+ magnetic snap). A
+    //              singleton (island = {A}) also translates — it is just a 1-member island.
+    //   Detach   — the cursor is OUTSIDE the island ∧ |cursor - dragStart| ≥ D_DETACH_PX. Live geometry:
+    //              ONLY the dragged real-renders following the cursor (+ magnetic snap); the rest of the
+    //              island stays at rest. Release commits the detach (groupId=null) or, on overlap, a
+    //              singleton-merge into the overlapped island.
     public enum DragMode
     {
-        SoloDrag,
-        NormalGroupTranslate,
-        NormalGroupDetach,
-        HakoniwaSwap,
-        HakoniwaSnapBack,
-        HakoniwaDetach,
-        HakoniwaCoreLock,
+        Swap,
+        Translate,
+        Detach,
     }
 
-    // #104 (ADR-0019 / findings 0082 §6): drag-mode evaluation context — the structural inputs
-    // EvaluateDragMode needs each frame. Pure POCO (no UnityEngine.RectTransform / Unity references) so
-    // the AFK gate drives the 7-mode boundary without a scene. The title-input layer fills this in by
-    // reading the controller's group state at OnBeginDrag (cached for the duration of the drag — the
-    // dragged's group / hakoniwa / core status do not change mid-drag) and updating cursor + hasTarget
-    // per frame.
-    public struct DragContext
+    // ADR-0024 §2 / findings 0088 §1: the result of ResolveDragMode — the mode plus, for Swap, the id of
+    // the island member the cursor sits over. swapTargetId is null/empty for Translate / Detach. Pure
+    // POCO so the AFK gate drives the dispatcher headlessly.
+    public struct DragResolution
     {
-        public Vector2 rest;          // dragged top-left at OnBeginDrag (canvas-logical)
-        public Vector2 cursor;        // current cursor canvas-logical position (rest + accumulated delta)
-        public bool isInGroup;        // dragged's groupId != null AND group has ≥ 2 visible/live members
-        public bool isHakoniwa;       // isInGroup ∧ group has a visible/live core member
-        public bool isCore;           // dragged itself is a core member (DockShape.IsCoreKind)
-        public bool hasTarget;        // a swap drop target exists this frame (cursor over another group member — Slice E2)
+        public DragMode mode;
+        public string swapTargetId;   // non-null/non-empty only when mode == Swap
     }
 
-    // #104 (ADR-0019 D6 / findings 0082 §6): the detach distance threshold in canvas-LOGICAL px.
-    // Distance one — no velocity, no modifier keys, no direction conditions (the design rejects all
-    // these in favour of a single AFK-checkable scalar). Zoom-independent (canvas-logical, like
-    // DEFAULT_SNAP_THRESHOLD): the felt distance does not change when the user zooms.
-    public const float D_DETACH = 64f;
+    // ADR-0024 §6 / findings 0088 §11: the detach distance threshold in canvas-LOGICAL px. Re-calibrated
+    // 64f → 256f so the 3-tier ladder (R_SNAP_PX=96 attract < D_DETACH_PX=256 translate-cap < detach)
+    // lines up: a short outward drag translates the island, a deliberate "tear-off" past one tile-width
+    // detaches it. Distance one — no velocity, no modifier keys (rejected in favour of an AFK-checkable
+    // scalar). Zoom-independent (canvas-logical).
+    public const float D_DETACH_PX = 256f;
+
+    // ADR-0024 §3 / findings 0088 §11: the in-drag magnetic-attraction radius in canvas-LOGICAL px.
+    // While translating / detaching, an outer edge within R_SNAP_PX of another window's opposite edge
+    // (with orthogonal overlap) snaps flush ("プルン"). ~250/2.6 of a tile — strong enough for the
+    // owner's "もっと強く" ask without surprise-snapping a brisk drag. Zoom-independent.
+    public const float R_SNAP_PX = 96f;
+
+    // ADR-0024 §3 / findings 0088 §3, §11: the spring rect-interpolation animation. 200ms duration,
+    // single overshoot of 8% (ease-out-back), settling to the target. SPRING_BACK_S is the ease-out-back
+    // overshoot constant tuned so the peak overshoot is EXACTLY SPRING_OVERSHOOT_RATIO: with the curve
+    // e(t)=1+(s+1)(t-1)³+s(t-1)², the peak is 4s³/(27(s+1)²), which equals 0.08 at s = 1.5 (peak at
+    // t = 0.6). See SpringEase / SpringRectAt.
+    public const int SPRING_DURATION_MS = 200;
+    public const float SPRING_OVERSHOOT_RATIO = 0.08f;
+    public const float SPRING_BACK_S = 1.5f;
 
     // #104 (ADR-0019 / findings 0082 §7): a group-member sample for ResolveDropTarget. siblingIndex is
     // the live uGUI sibling index (`rt.GetSiblingIndex()`) — higher = drawn IN FRONT, so when multiple
@@ -124,19 +124,126 @@ public static class FloatingWindowMath
         return best;
     }
 
-    // #104 (ADR-0019 / findings 0082 §6): pure 7-mode classifier. Distance test is `> D_DETACH`
-    // (strict — `==` belongs with "still close enough", matching the threshold-INCLUSIVE feel of
-    // SnapOffset). Branches in spec order so the AFK gate can pin each boundary independently.
-    public static DragMode EvaluateDragMode(in DragContext ctx)
+    // ADR-0024 §2 / findings 0088 §1: the pure 3-mode dispatcher, evaluated EVERY frame from cursor
+    // position alone. `islandMembers` = the dragged's island (same groupId, visible/live ≥ 2) projected
+    // to GroupMember rects; a singleton drag passes an empty/self-only list. `draggedId` is excluded from
+    // the swap scan. Branch order (Swap first, distance-independent) is the spec's: a cursor over a
+    // sibling rect swaps regardless of how far it has travelled.
+    //
+    //   1. Swap     — cursor inside another island member's rect (ResolveDropTarget: top-sibling wins,
+    //                 hidden / self excluded). Distance is NOT consulted.
+    //   2. Detach   — |cursor - dragStart| ≥ D_DETACH_PX (inclusive — the threshold-INCLUSIVE feel of
+    //                 SnapOffset; the design's "強く引き剥がす" engages exactly at the radius).
+    //   3. Translate— everything else (cursor outside island ∧ within D_DETACH_PX, incl. singleton).
+    public static DragResolution ResolveDragMode(
+        Vector2 cursor, Vector2 dragStart, IList<GroupMember> islandMembers, string draggedId, float dDetach)
     {
-        if (!ctx.isInGroup) return DragMode.SoloDrag;
-        bool detached = (ctx.cursor - ctx.rest).magnitude > D_DETACH;
-        if (ctx.isHakoniwa)
+        string swapTarget = ResolveDropTarget(cursor, islandMembers, draggedId);
+        if (!string.IsNullOrEmpty(swapTarget))
+            return new DragResolution { mode = DragMode.Swap, swapTargetId = swapTarget };
+        if ((cursor - dragStart).magnitude >= dDetach)
+            return new DragResolution { mode = DragMode.Detach, swapTargetId = null };
+        return new DragResolution { mode = DragMode.Translate, swapTargetId = null };
+    }
+
+    // ADR-0024 §3 / findings 0088 §2: in-drag magnetic snap. Returns the canvas-logical Δ to add to
+    // `moving`'s top-left so its outer edge kisses the nearest other window's OPPOSITE edge, within
+    // R_SNAP. Only FLUSH pairings count (right↔left / left↔right / top↔bottom — NOT same-edge align,
+    // which is the dock-on-release affordance, not the magnet), and only when the ORTHOGONAL axis has a
+    // strictly positive overlap (a corner near-miss does not pull). x and y are decided INDEPENDENTLY
+    // (an island can snap horizontally to one neighbour and vertically to another), each picking the
+    // smallest |Δ| ≤ R_SNAP; ties keep the first in list order. Beyond R_SNAP on an axis → 0 there
+    // (free drag). The result IS the stickiness: while the cursor keeps `moving` within R_SNAP of the
+    // neighbour, the same flush Δ recurs every frame (the window stays kissed); drag the cursor past
+    // R_SNAP and the Δ drops to 0 (the window releases and follows freely).
+    //
+    // For TRANSLATE pass the ISLAND bounding box as `moving` (the outer 4 edges); for DETACH pass the
+    // dragged's own rect. `others` excludes every island member. rSnap ≤ 0 / non-finite or empty
+    // `others` → Vector2.zero.
+    public static Vector2 ComputeMagneticSnap(DockRect moving, IList<DockRect> others, float rSnap)
+    {
+        if (!IsFinite(rSnap) || rSnap <= 0f) return Vector2.zero;
+        if (others == null || others.Count == 0) return Vector2.zero;
+
+        float bestDx = 0f, absDx = float.PositiveInfinity;
+        float bestDy = 0f, absDy = float.PositiveInfinity;
+        for (int i = 0; i < others.Count; i++)
         {
-            if (detached) return ctx.isCore ? DragMode.HakoniwaCoreLock : DragMode.HakoniwaDetach;
-            return ctx.hasTarget ? DragMode.HakoniwaSwap : DragMode.HakoniwaSnapBack;
+            DockRect o = others[i];
+            float xOverlap = Math.Min(moving.Right, o.Right) - Math.Max(moving.Left, o.Left);
+            float yOverlap = Math.Min(moving.Top,   o.Top)   - Math.Max(moving.Bottom, o.Bottom);
+            // Vertical-edge kiss (x snap) requires the windows to overlap along y.
+            if (yOverlap > 0f)
+            {
+                ConsiderAxis(o.Left  - moving.Right, rSnap, ref bestDx, ref absDx);   // moving.right ↔ o.left
+                ConsiderAxis(o.Right - moving.Left,  rSnap, ref bestDx, ref absDx);   // moving.left  ↔ o.right
+            }
+            // Horizontal-edge kiss (y snap) requires overlap along x.
+            if (xOverlap > 0f)
+            {
+                ConsiderAxis(o.Bottom - moving.Top,    rSnap, ref bestDy, ref absDy); // moving.top    ↔ o.bottom
+                ConsiderAxis(o.Top    - moving.Bottom, rSnap, ref bestDy, ref absDy); // moving.bottom ↔ o.top
+            }
         }
-        return detached ? DragMode.NormalGroupDetach : DragMode.NormalGroupTranslate;
+        return new Vector2(bestDx, bestDy);
+    }
+
+    // ADR-0024 §4 / findings 0088 §4: resolve the SINGLE-axis offset that snaps `moving` flush against
+    // `target`'s nearest edge — used at release when an island/detached window is dropped OVERLAPPING
+    // another island (commit = snap to nearest flush, then merge). The 4 candidates are moving.right→
+    // target.left / left→right / bottom→top / top→bottom; a candidate is valid only when the ORTHOGONAL
+    // axis overlaps ≥ 1px (so the post-snap windows actually share an edge segment). The smallest |Δ|
+    // wins; ties break left/right (horizontal dock) over top/bottom (vertical). No valid candidate →
+    // Vector2.zero (degenerate; the caller falls back to a plain translate commit).
+    public static Vector2 ResolveNearestFlush(DockRect moving, DockRect target)
+    {
+        float xOverlap = Math.Min(moving.Right, target.Right) - Math.Max(moving.Left, target.Left);
+        float yOverlap = Math.Min(moving.Top,   target.Top)   - Math.Max(moving.Bottom, target.Bottom);
+
+        Vector2 best = Vector2.zero;
+        float bestAbs = float.PositiveInfinity;
+        // Horizontal candidates FIRST so a tie resolves to left/right (the spec tie-break).
+        if (yOverlap >= 1f)
+        {
+            ConsiderFlushVec(new Vector2(target.Left  - moving.Right, 0f), ref best, ref bestAbs); // right→left
+            ConsiderFlushVec(new Vector2(target.Right - moving.Left,  0f), ref best, ref bestAbs); // left→right
+        }
+        if (xOverlap >= 1f)
+        {
+            ConsiderFlushVec(new Vector2(0f, target.Top    - moving.Bottom), ref best, ref bestAbs); // bottom→top
+            ConsiderFlushVec(new Vector2(0f, target.Bottom - moving.Top),    ref best, ref bestAbs); // top→bottom
+        }
+        return best;
+    }
+
+    static void ConsiderFlushVec(Vector2 candidate, ref Vector2 best, ref float bestAbs)
+    {
+        float a = Math.Abs(candidate.x) + Math.Abs(candidate.y);   // one axis is 0, so this is |Δ|
+        if (!IsFinite(a)) return;
+        if (a < bestAbs) { best = candidate; bestAbs = a; }        // strict < ⇒ earlier (x) wins ties
+    }
+
+    // ADR-0024 §3 / findings 0088 §3: the pure ease-out-back curve for the spring "プルン". e(0)=0,
+    // e(1)=1, single overshoot peaking at 1 + SPRING_OVERSHOOT_RATIO (8%) at t = 0.6, then settling.
+    // t is clamped to [0,1]. This is the AFK-authoritative animation shape (DRAG-10 pins the overshoot
+    // peak exactly); the production spring driver samples it over SPRING_DURATION_MS.
+    public static float SpringEase(float t)
+    {
+        if (t <= 0f) return 0f;
+        if (t >= 1f) return 1f;
+        float p = t - 1f;
+        return 1f + (SPRING_BACK_S + 1f) * p * p * p + SPRING_BACK_S * p * p;
+    }
+
+    // ADR-0024 §3 / findings 0088 §3: the spring-interpolated rect at normalized time t ∈ [0,1].
+    // Position AND size interpolate through SpringEase (swap commit animates size too). LerpUnclamped so
+    // the >1 overshoot value carries past the target before settling.
+    public static DockRect SpringRectAt(DockRect from, DockRect to, float t)
+    {
+        float e = SpringEase(t);
+        return new DockRect(
+            Vector2.LerpUnclamped(from.topLeft, to.topLeft, e),
+            Vector2.LerpUnclamped(from.size,    to.size,    e));
     }
     // #99: a window's geometry in canvas-LOGICAL coordinates for the magnet-snap math (findings
     // 0075 §1). topLeft is the FloatingWindowController contract (anchoredPosition = top-left
@@ -292,67 +399,47 @@ public static class FloatingWindowMath
         return false;
     }
 
-    // #104 (ADR-0019 / findings 0082 §4): a single merge participant — a group involved in the
-    // SnapOnRelease attach commit. The controller projects each flush-adjacent partner's group (and the
-    // dragged's own current group) into one of these and hands an array to ResolveMergeWinner. Pure POCO
-    // (no UnityEngine) so the cascade is AFK-driveable headlessly. `id`=null marks a SINGLETON
-    // participant (dragged or partner with current groupId=null) — the cascade only treats it as a
-    // winnable group if every other participant is also null. `memberCount` = visible/live member count
-    // for that group (1 for singletons). `hasCore` = the group contains a visible/live core member.
+    // ADR-0024 §5 / findings 0088 §5: a single merge participant — a group (or singleton) involved in a
+    // release attach / overlap merge. The controller projects each contributing group into one of these
+    // and hands an array to ResolveMergeWinner. Pure POCO so the cascade is AFK-driveable headlessly.
+    // `id`=null marks a SINGLETON participant (current groupId=null); the cascade treats it as a winnable
+    // group only if EVERY participant is null (then a fresh GUID is minted). `memberCount` = visible/live
+    // member count (1 for singletons). The ADR-0019 Hakoniwa-priority field is RETIRED (ADR-0024 §1 —
+    // no core special-casing).
     public struct MergeCandidate
     {
         public string id;
         public int memberCount;
-        public bool hasCore;
 
-        public MergeCandidate(string id, int memberCount, bool hasCore)
+        public MergeCandidate(string id, int memberCount)
         {
             this.id = id;
             this.memberCount = memberCount;
-            this.hasCore = hasCore;
         }
     }
 
-    // #104 (ADR-0019 / findings 0082 §4): cascade-decide the surviving groupId when a release attach
-    // merges several groups (the dragged + each flush-adjacent partner's group).
+    // ADR-0024 §5 / findings 0088 §5: cascade-decide the surviving groupId when a release attach / merge
+    // unites several groups (the dragged + each flush-adjacent partner / the overlapped island).
+    // Hakoniwa-priority is GONE (ADR-0024 §1); the cascade is now a clean two-key sort:
+    //   1. **Member-count max** among participants with a current group (non-null id).
+    //   2. **Dictionary order min** among the tied (StringCompareOrdinal — deterministic).
+    //   3. **All-null** (singleton ↔ singleton attach): returns null — the controller mints a new
+    //      `grp_<hex32>` GUID. This is the ONLY GUID-mint trigger; everywhere else an existing id wins.
     //
-    // Cascade:
-    //   1. **Hakoniwa-priority**: among participants with non-null id AND hasCore, the ONLY one wins
-    //      (if a single Hakoniwa group is involved, its identity is protected). If 2+ Hakoniwa
-    //      participants tie, fall through to step 2 across the Hakoniwa subset.
-    //   2. **Member-count max** among the remaining contenders (Hakoniwa subset if >1 Hakoniwa, else all
-    //      non-null-id participants).
-    //   3. **Dictionary order min** among the tied contenders (StringCompareOrdinal — deterministic).
-    //   4. **All-null** (singleton ↔ singleton attach): returns null — the controller mints a new
-    //      `grp_<hex32>` GUID. This branch is the ONLY GUID-mint trigger; everywhere else, an existing
-    //      groupId survives.
-    //
-    // `candidates` must include the dragged AND each flush-adjacent partner (one entry per group). The
+    // `candidates` must include the dragged AND each contributing partner (one entry per group). The
     // SAME id may appear multiple times if the dragged and a partner already share a group — the cascade
-    // still resolves to that id (its count/hasCore properties are the same). A null array / empty array
-    // / all-null-id array returns null.
+    // still resolves to that id. A null / empty / all-null-id array returns null.
     public static string ResolveMergeWinner(IList<MergeCandidate> candidates)
     {
         if (candidates == null || candidates.Count == 0) return null;
 
-        // Filter to participants with a current group (non-null id). All-null ⇒ no winner, caller mints GUID.
-        List<MergeCandidate> contenders = new List<MergeCandidate>(candidates.Count);
-        foreach (var c in candidates) if (!string.IsNullOrEmpty(c.id)) contenders.Add(c);
-        if (contenders.Count == 0) return null;
-
-        // Step 1: Hakoniwa-priority. If exactly one Hakoniwa group is involved, it wins outright.
-        // If 2+ are involved, restrict the cascade to the Hakoniwa subset (a non-Hakoniwa group can
-        // NEVER survive when a Hakoniwa group is in the merge).
-        List<MergeCandidate> hakos = new List<MergeCandidate>(contenders.Count);
-        foreach (var c in contenders) if (c.hasCore) hakos.Add(c);
-        if (hakos.Count == 1) return hakos[0].id;
-        if (hakos.Count >= 2) contenders = hakos;   // tie among Hakoniwa: step 2/3 across the subset only
-
-        // Step 2/3: max member count, then dictionary order (StringCompareOrdinal, deterministic).
+        // Step 1/2: max member count, then dictionary order (StringCompareOrdinal, deterministic).
+        // Participants with a null/empty id (singletons) are skipped; if NONE has an id ⇒ null (mint).
         string bestId = null;
         int bestCount = -1;
-        foreach (var c in contenders)
+        foreach (var c in candidates)
         {
+            if (string.IsNullOrEmpty(c.id)) continue;
             if (c.memberCount > bestCount
                 || (c.memberCount == bestCount && (bestId == null || string.CompareOrdinal(c.id, bestId) < 0)))
             {

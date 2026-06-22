@@ -52,17 +52,25 @@
 //  20. #104 Slice A: groupId additive schema (Capture/Apply pass-through + on-disk round-trip + back-compat null +
 //      Spawn=null invariant + existing-entry Apply update)                                                  [GROUP-01]
 //  21. #104 Slice B: IsFlushAdjacent pure (flush yes / same-edge align no / corner overlap=0 no / eps=1px) [GROUP-02]
-//  22. #104 Slice B: merge cascade pure (Hakoniwa-priority > size max > StringCompareOrdinal min > new GUID)[GROUP-03]
-//  23. #104 Slice B: flush-attach release commit + Spawn=null invariant + Hakoniwa-priority merge end-to-end [GROUP-04]
-//  24. #104 Slice C: EvaluateDragMode pure 7-mode classifier (D_DETACH=64f, strict ">", hasTarget routing)  [GROUP-05]
-//  25. #104 Slice C: NormalGroupTranslate live wiring (DragApplyDelta, whole-group delta, freeze on Detach) [GROUP-06]
-//  26. #104 Slice D: detach commit + DissolveIfShrunkTo(2) shared helper + Close cascade + Hide preserve   [GROUP-07]
-//  27. #104 Slice E1: Hakoniwa translate ban + core rest snap-back + dynamic visibility re-eval            [GROUP-08]
-//  28. #104 Slice E2: ResolveDropTarget pure (cursor under, top sibling, hidden+dragged exclusion)         [GROUP-09]
-//  29. #104 Slice E2: Hakoniwa swap commit ((x,y,w,h) exchange, kind/id/groupId untouched) + snap-back     [GROUP-10]
+//  22. ADR-0024 §5: merge cascade pure (size max > StringCompareOrdinal min > new GUID — NO Hakoniwa-prio)  [DRAG-12]
+//  23. #104 Slice B: flush-attach release commit + Spawn=null invariant + dict-min merge end-to-end         [GROUP-04]
+//  24. ADR-0024 §2: ResolveDragMode pure 3-mode dispatcher (Swap dist-indep / Detach ≥256 incl / Translate) [DRAG-01..04]
+//  25. ADR-0024 §7: Translate/Detach real-render (whole island vs dragged-only) + groupId unchanged         [DRAG-02/03]
+//  26. ADR-0024 §4: detach release commit + DissolveIfShrunkTo(2) + Close cascade + Hide preserve           [DRAG-08]
+//  27. ADR-0024 §1: Hakoniwa special RETIRED (core-bearing island translates / core member detaches)        [DRAG-11]
+//  28. ADR-0024 §2: ResolveDropTarget pure (cursor under = swap target, top sibling, dragged/hidden excl)   [DRAG-01/04]
+//  29. ADR-0024 §4: Swap commit ((x,y,w,h) exchange, any island, kind/id/groupId untouched)                 [DRAG-01]
 //  30. #104 Slice F: cross-plane group restore split (majority / tie → dock / loser=null) + shared dissolve [GROUP-11]
-//  31. #104 Slice G: drag-ghost preview composition (7 modes, count/rect/style/sibling/commit-on-release)  [GROUP-12]
-//  32. #105: factory first-launch grouping — FormGroup bundles base cluster into ONE Hakoniwa group     [GROUP-14]
+//  31. ADR-0024 §7: drag-ghost is SWAP-ONLY (2 ghosts swap / 0 translate / 0 detach / commit-on-release)    [DRAG-14]
+//  32. #105/ADR-0020/ADR-0024: factory first-launch grouping forms ONE PLAIN island (cores drag freely)     [DRAG-14]
+//  33. ADR-0024 §3: ComputeMagneticSnap pure (flush within R_SNAP, orthogonal overlap, x/y independent)     [DRAG-05/06]
+//  34. ADR-0024 §4: ResolveNearestFlush pure (4 candidates, min move, tie-break x, orthogonal overlap ≥1)   [DRAG-07]
+//  35. ADR-0024 §3: SpringEase / SpringRectAt pure (ease-out-back, peak overshoot exactly 8% at t=0.6)      [DRAG-10]
+//  36. ADR-0024 §3/§7: in-drag magnetic snap real-render (Translate island snap + stickiness / Detach snap) [DRAG-05/06]
+//  37. ADR-0024 §4: release overlap → nearest-flush + merge (Translate & Detach) + ADR-0019 D4 incidental   [DRAG-07]
+//  38. ADR-0024 §8: ESC cancel (live render reverts to rest, state untouched, MouseUp commits nothing)      [DRAG-09]
+//  39. ADR-0024 §3: spring fire-point wiring (swap / detach commit + ESC fire the injected animator)        [DRAG-10]
+//  40. ADR-0024 §8: chart:<id> drags like any window (flush-attach island, translate, detach)               [DRAG-13]
 
 using System;
 using System.Collections.Generic;
@@ -109,15 +117,23 @@ public static class FloatingWindowE2ERunner
                 ?? Section21_IsFlushAdjacentPure()
                 ?? Section22_MergeCascadePure()
                 ?? Section23_FlushAttachWiring(spawned)
-                ?? Section24_EvaluateDragModePure()
-                ?? Section25_NormalGroupTranslateWiring(spawned)
+                ?? Section24_ResolveDragModePure()
+                ?? Section25_TranslateDetachRender(spawned)
                 ?? Section26_DetachDissolveCloseHide(spawned)
-                ?? Section27_HakoniwaTranslateBanCoreLock(spawned)
+                ?? Section27_HakoniwaRetired(spawned)
                 ?? Section28_ResolveDropTargetPure()
-                ?? Section29_HakoniwaSwapWiring(spawned)
+                ?? Section29_SwapWiring(spawned)
                 ?? Section30_CrossPlaneGroupRestoreSplit(spawned)
-                ?? Section31_GhostPreviewStructure(spawned)
-                ?? Section32_FactoryBaseGroupFormsHakoniwa(spawned)
+                ?? Section31_GhostSwapOnly(spawned)
+                ?? Section32_FactoryBaseGroup(spawned)
+                ?? Section33_ComputeMagneticSnapPure()
+                ?? Section34_ResolveNearestFlushPure()
+                ?? Section35_SpringEasePure()
+                ?? Section36_MagneticSnapRenderWiring(spawned)
+                ?? Section37_ReleaseOverlapMerge(spawned)
+                ?? Section38_EscCancel(spawned)
+                ?? Section39_SpringFireWiring(spawned)
+                ?? Section40_ChartEquivalence(spawned)
                 ?? Section19_SceneWiringBackPlane();   // LAST: loads the real scene (root-free sections run first)
         }
         catch (Exception e)
@@ -161,25 +177,32 @@ public static class FloatingWindowE2ERunner
                       "ordering to the scene-builder output, not the test's setup) + " +
                       "#104 groupId additive schema (round-trip on-disk, back-compat null, Spawn=null invariant, " +
                       "Capture/Apply pass-through) + IsFlushAdjacent (flush yes / same-edge align no / corner " +
-                      "overlap=0 no / eps=1px) + merge cascade (Hakoniwa-priority > member-count max > " +
-                      "StringCompareOrdinal min > new GUID) + flush-attach release commit (controller wiring) + " +
-                      "SpawnDockedToFocus groupId=null invariant (attach is user drag-release exclusive) + " +
-                      "EvaluateDragMode 7 modes (Solo/NormalTranslate/NormalDetach/HakoSwap/HakoSnapBack/" +
-                      "HakoDetach/HakoCoreLock) at D_DETACH=64f strict-gt boundary + normal-group translate live " +
-                      "(whole-group delta, groupId unchanged) + detach commit + DissolveIfShrunkTo shared helper " +
-                      "(≥2 keeps, <2 chain dissolves) + Close cascade through same helper + Hide groupId preserve " +
-                      "(mode-switch revive) + Hakoniwa translate ban + core HakoniwaCoreLock rest snap-back + " +
-                      "dynamic visibility re-eval (mode-switch demote/promote) + ResolveDropTarget pure (cursor " +
-                      "under, top-sibling priority, hidden/dragged-exclusion) + Hakoniwa swap commit (x,y,w,h " +
-                      "4-value exchange; kind/id/groupId untouched) + target-less Hakoniwa snap-back + cross-plane " +
-                      "group restore split (majority plane wins / tie → dock / loser groupId=null / shared dissolve " +
-                      "after split) + drag-ghost preview composition (7 modes, count/rect/style flag/" +
-                      "GhostWindow_Solid|Dashed names/alpha=0.45/last-sibling front/commit-on-release clear) + " +
-                      "factory first-launch grouping (FormGroup mints ONE shared groupId across the base cluster, " +
-                      "<2 live → no group, startup+run_result cores ⇒ Hakoniwa semantics, FLUSH/docked placement) " +
+                      "overlap=0 no / eps=1px) + ADR-0024 merge cascade (size max > StringCompareOrdinal min > " +
+                      "new GUID — Hakoniwa-priority RETIRED) + flush-attach release commit (controller wiring) + " +
+                      "SpawnDockedToFocus groupId=null invariant + ResolveDragMode 3-mode dispatcher (Swap " +
+                      "distance-INDEPENDENT over a sibling / Detach |cursor-dragStart|≥256 INCLUSIVE / Translate " +
+                      "otherwise / center-in-rect on-off / singleton) + Translate/Detach real-render (whole island " +
+                      "vs dragged-only at rest+offset, groupId unchanged mid-drag) + detach release commit + " +
+                      "DissolveIfShrunkTo shared helper (≥2 keeps, <2 chain dissolves) + Close cascade + Hide " +
+                      "groupId preserve + HAKONIWA SPECIAL RETIRED (core-bearing island translates, core member " +
+                      "detaches — no translate-ban / no core-lock) + ResolveDropTarget pure (cursor under = swap " +
+                      "target, top-sibling, dragged/hidden excl) + Swap commit (x,y,w,h 4-value exchange, any " +
+                      "island, kind/id/groupId untouched) + cross-plane group restore split (majority / tie → dock " +
+                      "/ loser null / shared dissolve) + drag-ghost SWAP-ONLY (2 ghosts swap solid@target+dashed@" +
+                      "rest / 0 translate / 0 detach / alpha=0.45 / last-sibling / commit-on-release clear) + " +
+                      "factory first-launch grouping (FormGroup mints ONE shared groupId, plain island — cores " +
+                      "drag freely, FLUSH/docked placement) + ComputeMagneticSnap pure (flush within R_SNAP=96, " +
+                      "orthogonal overlap, x/y independent, beyond→0) + ResolveNearestFlush pure (4 candidates, " +
+                      "min move, tie-break x, orthogonal overlap≥1) + SpringEase/SpringRectAt (ease-out-back, peak " +
+                      "overshoot EXACTLY 8% at t=0.6, 200ms) + in-drag magnetic snap real-render (Translate island " +
+                      "snap + stickiness / Detach snap to flush) + release overlap → nearest-flush + merge " +
+                      "(Translate & Detach singleton-join) + ADR-0019 D4 incidental flush attach retained + ESC " +
+                      "cancel (live render reverts to rest, state untouched, MouseUp commits nothing) + spring " +
+                      "fire-points (swap / detach commit + ESC fire the injected animator) + chart:<id> drags like " +
+                      "any window (flush-attach island, translate, detach) " +
                       "(Unity-owned versioned schema, additive capability surface, ADR-0003 capability parity, " +
                       "under Unity Mono) " +
-                      "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03,GROUP-01..14]");
+                      "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03,GROUP-01,02,04,11,DRAG-01..14]");
             EditorApplication.Exit(0);
         }
         else
@@ -1282,72 +1305,63 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 22. #104 Slice B: merge-cascade pure arithmetic ----
-    // Covers: GROUP-03 (ResolveMergeWinner cascade = Hakoniwa 単独 > size 最大 > 辞書順最小 > 新規 GUID)
+    // ---- 22. ADR-0024 §5: merge-cascade pure arithmetic (Hakoniwa-priority RETIRED) ----
+    // Covers: DRAG-12 (ResolveMergeWinner cascade = size 最大 > 辞書順最小 > 新規 GUID. NO Hakoniwa-priority.)
     static string Section22_MergeCascadePure()
     {
-        // (a) Hakoniwa-priority: 1 Hakoniwa group (small, lexically-late) + 1 larger non-Hakoniwa group ⇒
-        // Hakoniwa wins outright regardless of size or dict order.
-        var hPrio = new List<FloatingWindowMath.MergeCandidate>
+        // (a) NO Hakoniwa-priority: a small (would-be-"core") group does NOT beat a bigger group. With the
+        // hasCore field gone, the cascade is pure size-then-dict. A 2-member group lex-late vs a 5-member
+        // group lex-early ⇒ the BIGGER (size 5) wins, regardless of any former "core" status.
+        var noPrio = new List<FloatingWindowMath.MergeCandidate>
         {
-            new FloatingWindowMath.MergeCandidate("grp_zzz", 2, true),   // Hakoniwa, smaller, lex-late
-            new FloatingWindowMath.MergeCandidate("grp_aaa", 5, false),  // non-Hakoniwa, bigger, lex-early
+            new FloatingWindowMath.MergeCandidate("grp_zzz", 2),   // smaller, lex-late (was Hakoniwa)
+            new FloatingWindowMath.MergeCandidate("grp_aaa", 5),   // bigger, lex-early
         };
-        if (FloatingWindowMath.ResolveMergeWinner(hPrio) != "grp_zzz")
-            return $"S22a: Hakoniwa-priority lost to size/dict (got {FloatingWindowMath.ResolveMergeWinner(hPrio)})";
+        if (FloatingWindowMath.ResolveMergeWinner(noPrio) != "grp_aaa")
+            return $"S22a: size-max did not win (Hakoniwa-priority must be retired) — got {FloatingWindowMath.ResolveMergeWinner(noPrio)}";
 
-        // (b) Two Hakoniwa groups ⇒ Hakoniwa subset wins, then size-max within it.
-        var hTie = new List<FloatingWindowMath.MergeCandidate>
-        {
-            new FloatingWindowMath.MergeCandidate("grp_h1", 3, true),
-            new FloatingWindowMath.MergeCandidate("grp_h2", 5, true),
-            new FloatingWindowMath.MergeCandidate("grp_n1", 9, false),    // non-Hakoniwa larger — must lose
-        };
-        if (FloatingWindowMath.ResolveMergeWinner(hTie) != "grp_h2")
-            return $"S22b: two-Hakoniwa size cascade wrong (got {FloatingWindowMath.ResolveMergeWinner(hTie)})";
-
-        // (c) All non-Hakoniwa: size-max wins; ties broken by StringCompareOrdinal min.
+        // (b) Size-max among 3 groups; ties broken by StringCompareOrdinal min.
         var sizeMax = new List<FloatingWindowMath.MergeCandidate>
         {
-            new FloatingWindowMath.MergeCandidate("grp_b", 2, false),
-            new FloatingWindowMath.MergeCandidate("grp_a", 5, false),    // bigger
-            new FloatingWindowMath.MergeCandidate("grp_c", 3, false),
+            new FloatingWindowMath.MergeCandidate("grp_b", 2),
+            new FloatingWindowMath.MergeCandidate("grp_a", 5),    // bigger
+            new FloatingWindowMath.MergeCandidate("grp_c", 3),
         };
         if (FloatingWindowMath.ResolveMergeWinner(sizeMax) != "grp_a")
-            return "S22c: size-max cascade wrong";
+            return "S22b: size-max cascade wrong";
 
-        // (d) Dict tie-break: equal count.
+        // (c) Dict tie-break: equal count ⇒ lexicographically-smallest id wins.
         var tie = new List<FloatingWindowMath.MergeCandidate>
         {
-            new FloatingWindowMath.MergeCandidate("grp_b", 3, false),
-            new FloatingWindowMath.MergeCandidate("grp_a", 3, false),    // lex-min, must win
-            new FloatingWindowMath.MergeCandidate("grp_c", 3, false),
+            new FloatingWindowMath.MergeCandidate("grp_b", 3),
+            new FloatingWindowMath.MergeCandidate("grp_a", 3),    // lex-min, must win
+            new FloatingWindowMath.MergeCandidate("grp_c", 3),
         };
         if (FloatingWindowMath.ResolveMergeWinner(tie) != "grp_a")
-            return "S22d: dict-min tie-break wrong";
+            return "S22c: dict-min tie-break wrong";
 
-        // (e) All singletons (id=null): cascade returns null ⇒ caller mints a new GUID.
+        // (d) All singletons (id=null): cascade returns null ⇒ caller mints a new GUID.
         var singletons = new List<FloatingWindowMath.MergeCandidate>
         {
-            new FloatingWindowMath.MergeCandidate(null, 1, false),
-            new FloatingWindowMath.MergeCandidate(null, 1, false),
+            new FloatingWindowMath.MergeCandidate(null, 1),
+            new FloatingWindowMath.MergeCandidate(null, 1),
         };
         if (FloatingWindowMath.ResolveMergeWinner(singletons) != null)
-            return "S22e: all-singleton cascade did not return null (caller mint expected)";
+            return "S22d: all-singleton cascade did not return null (caller mint expected)";
 
-        // (f) Single non-null entry survives by itself (the dragged already in a group + singleton partner).
+        // (e) Single non-null entry survives over a singleton partner.
         var oneSurvivor = new List<FloatingWindowMath.MergeCandidate>
         {
-            new FloatingWindowMath.MergeCandidate(null, 1, false),
-            new FloatingWindowMath.MergeCandidate("grp_only", 2, false),
+            new FloatingWindowMath.MergeCandidate(null, 1),
+            new FloatingWindowMath.MergeCandidate("grp_only", 2),
         };
         if (FloatingWindowMath.ResolveMergeWinner(oneSurvivor) != "grp_only")
-            return "S22f: lone non-null candidate did not survive";
+            return "S22e: lone non-null candidate did not survive";
 
-        // (g) null array / empty array → null (caller chooses).
-        if (FloatingWindowMath.ResolveMergeWinner(null) != null) return "S22g: null array not null result";
+        // (f) null array / empty array → null (caller chooses).
+        if (FloatingWindowMath.ResolveMergeWinner(null) != null) return "S22f: null array not null result";
         if (FloatingWindowMath.ResolveMergeWinner(new List<FloatingWindowMath.MergeCandidate>()) != null)
-            return "S22g: empty array not null result";
+            return "S22f: empty array not null result";
         return null;
     }
 
@@ -1389,30 +1403,29 @@ public static class FloatingWindowE2ERunner
         if (c3.GroupIdOf("Q") != null || c3.GroupIdOf("P") != null)
             return "S23c: same-edge alignment with gap minted a group (must not attach)";
 
-        // (d) Hakoniwa-priority merge cascade end-to-end: dragged is a startup (CORE) attached to a
-        // non-Hakoniwa group; the resulting merge keeps the Hakoniwa identity. Set up two pre-existing
-        // groups: a non-Hakoniwa pair (M, N) at grp_aaa…, and a Hakoniwa pair (startup, O) at grp_zzz…
-        // arranged so a release commit flush-attaches the dragged startup onto M.
+        // (d) NO Hakoniwa-priority (ADR-0024 §1): two equal-size groups merge by DICT-MIN, NOT by which
+        // one contains a core. A core-bearing group (startup, O) at grp_zzz… and a plain group (M, N) at
+        // grp_aaa… both size 2; the dragged core S flush-attaches onto M. The winner is the
+        // lexicographically-smallest id (grp_aaa…), proving the former core protection is gone.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
         var c4 = MakeController(spawned, layer4);
-        const string NON_HAKO = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        const string HAKO     = "grp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        const string GRP_A = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";   // plain group, lex-EARLY
+        const string GRP_Z = "grp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";   // core-bearing group, lex-LATE
         c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "M", 280, 0, 280, 180, true);     // dragged's flush-right partner
         c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "N", 280, -180, 280, 180, true);   // M's group sibling
-        c4.SetGroupId("M", NON_HAKO);
-        c4.SetGroupId("N", NON_HAKO);
-        c4.Spawn(FloatingWindowCatalog.KIND_STARTUP,   "S", 0, 0, 280, 180, true);        // dragged (core)
-        c4.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT,"O", -280, 0, 280, 180, true);     // S's group sibling (a separate Hakoniwa group)
-        c4.SetGroupId("S", HAKO);
-        c4.SetGroupId("O", HAKO);
-        // Position S flush-right against M: S.right=280 == M.left=280 ⇒ flush. SnapOnRelease(S)
-        // triggers the merge cascade — Hakoniwa wins, every member of both groups + dragged ends up
-        // with HAKO as their groupId.
+        c4.SetGroupId("M", GRP_A);
+        c4.SetGroupId("N", GRP_A);
+        c4.Spawn(FloatingWindowCatalog.KIND_STARTUP,   "S", 0, 0, 280, 180, true);        // dragged (former "core")
+        c4.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT,"O", -280, 0, 280, 180, true);     // S's group sibling
+        c4.SetGroupId("S", GRP_Z);
+        c4.SetGroupId("O", GRP_Z);
+        // S.right=280 == M.left=280 ⇒ flush. SnapOnRelease(S) merges both size-2 groups; the dict-min id
+        // (GRP_A) survives even though S's group contains startup + run_result "cores".
         c4.SnapOnRelease("S");
-        if (c4.GroupIdOf("S") != HAKO) return $"S23d: dragged did not retain Hakoniwa id (got {c4.GroupIdOf("S")})";
-        if (c4.GroupIdOf("O") != HAKO) return $"S23d: Hakoniwa sibling lost its id (got {c4.GroupIdOf("O")})";
-        if (c4.GroupIdOf("M") != HAKO) return $"S23d: flush partner M did not absorb to Hakoniwa (got {c4.GroupIdOf("M")})";
-        if (c4.GroupIdOf("N") != HAKO) return $"S23d: non-Hakoniwa sibling N did not absorb (got {c4.GroupIdOf("N")})";
+        if (c4.GroupIdOf("S") != GRP_A) return $"S23d: dragged did not absorb to dict-min id (got {c4.GroupIdOf("S")})";
+        if (c4.GroupIdOf("O") != GRP_A) return $"S23d: core sibling O did not absorb (got {c4.GroupIdOf("O")})";
+        if (c4.GroupIdOf("M") != GRP_A) return $"S23d: flush partner M lost dict-min id (got {c4.GroupIdOf("M")})";
+        if (c4.GroupIdOf("N") != GRP_A) return $"S23d: sibling N did not keep dict-min id (got {c4.GroupIdOf("N")})";
 
         // (e) Size-max cascade when no Hakoniwa is involved: 2 disjoint non-Hakoniwa groups, dragged
         // attaches to one. Bigger group's id survives, smaller absorbs.
@@ -1444,127 +1457,128 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 24. #104 Slice C: EvaluateDragMode pure 7-mode classifier ----
-    // Covers: GROUP-05 (FloatingWindowMath.EvaluateDragMode の 7 モード境界 / D_DETACH=64 / strict ">" 判定 /
-    //         hasTarget swap↔snap-back 振り分け / core lock detach 拒否)
-    static string Section24_EvaluateDragModePure()
+    // ---- 24. ADR-0024 §2: ResolveDragMode pure 3-mode dispatcher ----
+    // Covers: DRAG-01..04 (cursor-position dispatch: Swap when cursor over a sibling — distance-INDEPENDENT;
+    //         Detach when outside island ∧ |cursor-dragStart| ≥ D_DETACH_PX=256 INCLUSIVE; Translate otherwise;
+    //         center-in-rect swap trigger on/off; singleton)
+    static string Section24_ResolveDragModePure()
     {
-        if (FloatingWindowMath.D_DETACH != 64f) return $"S24: D_DETACH expected 64 (got {FloatingWindowMath.D_DETACH})";
+        float dDetach = FloatingWindowMath.D_DETACH_PX;   // non-const local: pins the value without a folded-constant unreachable warning
+        if (dDetach != 256f) return $"S24: D_DETACH_PX expected 256 (got {dDetach})";
 
-        var rest = new Vector2(0f, 0f);
-        Vector2 within = new Vector2(60f, 0f);    // |cursor-rest|=60 < 64 ⇒ near
-        Vector2 atExact = new Vector2(64f, 0f);   // strict ">" boundary: 64 still counts as "near"
-        Vector2 beyond = new Vector2(70f, 0f);    // > 64 ⇒ detach
+        var dragStart = new Vector2(0f, 0f);
+        // island: A (dragged) at (0,0,280,180); sibling B at (300,0,280,180) → B rect = x[300,580], y[-180,0].
+        var members = new List<FloatingWindowMath.GroupMember>
+        {
+            new FloatingWindowMath.GroupMember { id = "A", rect = new FloatingWindowMath.DockRect(0f,   0f, 280f, 180f), siblingIndex = 0 },
+            new FloatingWindowMath.GroupMember { id = "B", rect = new FloatingWindowMath.DockRect(300f, 0f, 280f, 180f), siblingIndex = 1 },
+        };
 
-        // (a) SoloDrag: NOT in group ⇒ SoloDrag regardless of distance / hasTarget / isCore / isHakoniwa.
-        var solo = new FloatingWindowMath.DragContext { rest = rest, cursor = beyond, isInGroup = false, isHakoniwa = true, isCore = true, hasTarget = true };
-        if (FloatingWindowMath.EvaluateDragMode(solo) != FloatingWindowMath.DragMode.SoloDrag)
-            return "S24a: !isInGroup did not classify SoloDrag";
+        // (a) DRAG-01 Swap: cursor inside sibling B's rect ⇒ Swap(B), even though |cursor-dragStart|≈353 ≥ 256
+        //     (distance-INDEPENDENT — swap wins over the detach threshold).
+        var swap = FloatingWindowMath.ResolveDragMode(new Vector2(350f, -50f), dragStart, members, "A", 256f);
+        if (swap.mode != FloatingWindowMath.DragMode.Swap) return $"S24a: cursor over sibling ≠ Swap (got {swap.mode})";
+        if (swap.swapTargetId != "B") return $"S24a: swap target ≠ B (got {swap.swapTargetId})";
 
-        // (b) NormalGroupTranslate: in group, non-Hakoniwa, near.
-        var nt = new FloatingWindowMath.DragContext { rest = rest, cursor = within, isInGroup = true };
-        if (FloatingWindowMath.EvaluateDragMode(nt) != FloatingWindowMath.DragMode.NormalGroupTranslate)
-            return "S24b: near non-Hakoniwa group ≠ NormalGroupTranslate";
+        // (b) DRAG-03 Detach: cursor outside island ∧ |cursor-dragStart|=300 ≥ 256.
+        var det = FloatingWindowMath.ResolveDragMode(new Vector2(0f, -300f), dragStart, members, "A", 256f);
+        if (det.mode != FloatingWindowMath.DragMode.Detach) return $"S24b: far-outside ≠ Detach (got {det.mode})";
+        if (det.swapTargetId != null) return "S24b: Detach carried a swap target";
 
-        // (c) NormalGroupDetach: in group, non-Hakoniwa, beyond.
-        var nd = new FloatingWindowMath.DragContext { rest = rest, cursor = beyond, isInGroup = true };
-        if (FloatingWindowMath.EvaluateDragMode(nd) != FloatingWindowMath.DragMode.NormalGroupDetach)
-            return "S24c: beyond non-Hakoniwa group ≠ NormalGroupDetach";
+        // (c) DRAG-02 Translate: cursor outside island ∧ |cursor-dragStart|=100 < 256.
+        var tr = FloatingWindowMath.ResolveDragMode(new Vector2(0f, -100f), dragStart, members, "A", 256f);
+        if (tr.mode != FloatingWindowMath.DragMode.Translate) return $"S24c: near-outside ≠ Translate (got {tr.mode})";
 
-        // (d) HakoniwaSwap: Hakoniwa, near, hasTarget.
-        var hs = new FloatingWindowMath.DragContext { rest = rest, cursor = within, isInGroup = true, isHakoniwa = true, hasTarget = true };
-        if (FloatingWindowMath.EvaluateDragMode(hs) != FloatingWindowMath.DragMode.HakoniwaSwap)
-            return "S24d: near Hakoniwa with target ≠ HakoniwaSwap";
+        // (d) Boundary: |cursor-dragStart| EXACTLY 256 ⇒ Detach (inclusive ≥).
+        var atExact = FloatingWindowMath.ResolveDragMode(new Vector2(0f, -256f), dragStart, members, "A", 256f);
+        if (atExact.mode != FloatingWindowMath.DragMode.Detach) return "S24d: |cursor-dragStart|=256 should be Detach (inclusive)";
 
-        // (e) HakoniwaSnapBack: Hakoniwa, near, no target.
-        var hb = new FloatingWindowMath.DragContext { rest = rest, cursor = within, isInGroup = true, isHakoniwa = true };
-        if (FloatingWindowMath.EvaluateDragMode(hb) != FloatingWindowMath.DragMode.HakoniwaSnapBack)
-            return "S24e: near Hakoniwa no target ≠ HakoniwaSnapBack";
+        // (e) DRAG-04 center-in-rect on/off: cursor just inside B ⇒ Swap; nudge it just past B.Right (580) ⇒
+        //     no longer Swap (falls to Detach at this distance). The swap trigger toggles on rect entry/exit.
+        var inB  = FloatingWindowMath.ResolveDragMode(new Vector2(580f, -50f), dragStart, members, "A", 256f);  // x=580 == B.Right (inside, inclusive)
+        if (inB.mode != FloatingWindowMath.DragMode.Swap) return "S24e: cursor at B.Right edge not Swap (edge inclusive)";
+        var outB = FloatingWindowMath.ResolveDragMode(new Vector2(581f, -50f), dragStart, members, "A", 256f);  // x=581 just past B.Right
+        if (outB.mode == FloatingWindowMath.DragMode.Swap) return "S24e: cursor past B.Right still Swap (center-in-rect exit failed)";
 
-        // (f) HakoniwaDetach: Hakoniwa, beyond, non-core.
-        var hd = new FloatingWindowMath.DragContext { rest = rest, cursor = beyond, isInGroup = true, isHakoniwa = true };
-        if (FloatingWindowMath.EvaluateDragMode(hd) != FloatingWindowMath.DragMode.HakoniwaDetach)
-            return "S24f: beyond Hakoniwa non-core ≠ HakoniwaDetach";
-
-        // (g) HakoniwaCoreLock: Hakoniwa, beyond, core. Core can't detach.
-        var hl = new FloatingWindowMath.DragContext { rest = rest, cursor = beyond, isInGroup = true, isHakoniwa = true, isCore = true };
-        if (FloatingWindowMath.EvaluateDragMode(hl) != FloatingWindowMath.DragMode.HakoniwaCoreLock)
-            return "S24g: beyond Hakoniwa core ≠ HakoniwaCoreLock";
-
-        // (h) Boundary: cursor exactly at D_DETACH ⇒ "near" (strict ">"). NormalGroupTranslate.
-        var nx = new FloatingWindowMath.DragContext { rest = rest, cursor = atExact, isInGroup = true };
-        if (FloatingWindowMath.EvaluateDragMode(nx) != FloatingWindowMath.DragMode.NormalGroupTranslate)
-            return "S24h: |cursor-rest|=D_DETACH should classify as near (strict > boundary)";
+        // (f) Singleton: members = [A] only (swap scan excludes the dragged) ⇒ Translate/Detach by distance.
+        var solo = new List<FloatingWindowMath.GroupMember>
+        {
+            new FloatingWindowMath.GroupMember { id = "A", rect = new FloatingWindowMath.DockRect(0f, 0f, 280f, 180f), siblingIndex = 0 },
+        };
+        if (FloatingWindowMath.ResolveDragMode(new Vector2(0f, -50f), dragStart, solo, "A", 256f).mode != FloatingWindowMath.DragMode.Translate)
+            return "S24f: singleton near ≠ Translate";
+        if (FloatingWindowMath.ResolveDragMode(new Vector2(0f, -400f), dragStart, solo, "A", 256f).mode != FloatingWindowMath.DragMode.Detach)
+            return "S24f: singleton far ≠ Detach";
         return null;
     }
 
-    // ---- 25. #104 Slice C: NormalGroupTranslate live wiring (DragApplyDelta) ----
-    // Covers: GROUP-06 (DragApplyDelta が NormalGroupTranslate モードで group 全メンバーへ frameDelta を流す ／
-    //         SoloDrag は単独 / その他 mode は live geometry 凍結 / groupId 不変)
-    static string Section25_NormalGroupTranslateWiring(List<GameObject> spawned)
+    // ---- 25. ADR-0024 §7: Translate / Detach real-render wiring (DragApplyDelta) ----
+    // Covers: DRAG-02 (Translate ⇒ whole island real-renders at rest+offset) / DRAG-03 (Detach ⇒ ONLY the
+    //         dragged real-renders, siblings stay at rest) / groupId unchanged mid-drag / singleton translate.
+    static string Section25_TranslateDetachRender(List<GameObject> spawned)
     {
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
 
-        // 2-member non-Hakoniwa group: place them flush-right and attach via SnapOnRelease, then
-        // drive DragApplyDelta with cursor < D_DETACH ⇒ NormalGroupTranslate ⇒ both move together.
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0,   0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 280, 0, 280, 180, true);
-        c.SnapOnRelease("B");   // flush attach mints grp_<hex32>
-        string g = c.GroupIdOf("A");
-        if (string.IsNullOrEmpty(g)) return "S25: precondition flush attach failed";
+        // 2-member island stacked VERTICALLY (so a horizontal drag never enters the sibling's rect ⇒ no
+        // accidental Swap). A=(0,0,280,180), B=(0,-200,280,180). Bootstrap the group via SetGroupId
+        // (attach itself is pinned by Section23). No external windows ⇒ no magnetic snap interference.
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        const string G = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        c.SetGroupId("A", G); c.SetGroupId("B", G);
         Vector2 a0 = c.RectOf("A").anchoredPosition;
         Vector2 b0 = c.RectOf("B").anchoredPosition;
+        Vector2 dragStart = a0;
 
-        // (a) NormalGroupTranslate: both members move by the frameDelta.
-        var rest = a0;
-        Vector2 cursor = a0 + new Vector2(20f, 5f);    // |cursor-rest|=√(400+25)≈20.6 < 64
-        var mode = c.DragApplyDelta("A", rest, cursor, new Vector2(20f, 5f));
-        if (mode != FloatingWindowMath.DragMode.NormalGroupTranslate)
-            return $"S25a: expected NormalGroupTranslate, got {mode}";
-        if (!Approx2(c.RectOf("A").anchoredPosition, a0 + new Vector2(20f, 5f))) return "S25a: dragged did not translate";
-        if (!Approx2(c.RectOf("B").anchoredPosition, b0 + new Vector2(20f, 5f))) return "S25a: group sibling did not translate";
-        if (c.GroupIdOf("A") != g || c.GroupIdOf("B") != g) return "S25a: groupId mutated during translate";
+        // (a) DRAG-02 Translate: cursor outside the island, |cursor-dragStart|=60 < 256 ⇒ BOTH members
+        //     real-render shifted by the offset (the whole island moves — startup/run_result have no
+        //     special status, this is a plain island).
+        Vector2 cursor = a0 + new Vector2(60f, 0f);
+        var mode = c.DragApplyDelta("A", dragStart, cursor, new Vector2(60f, 0f));
+        if (mode != FloatingWindowMath.DragMode.Translate) return $"S25a: expected Translate, got {mode}";
+        if (!Approx2(c.RectOf("A").anchoredPosition, a0 + new Vector2(60f, 0f))) return "S25a: dragged did not translate";
+        if (!Approx2(c.RectOf("B").anchoredPosition, b0 + new Vector2(60f, 0f))) return "S25a: island sibling did not translate";
+        if (c.GroupIdOf("A") != G || c.GroupIdOf("B") != G) return "S25a: groupId mutated during translate";
 
-        // (b) NormalGroupDetach: cursor moves beyond D_DETACH ⇒ live geometry frozen (no further mutation).
-        Vector2 aStart = c.RectOf("A").anchoredPosition;
-        Vector2 bStart = c.RectOf("B").anchoredPosition;
-        Vector2 cursor2 = a0 + new Vector2(100f, 0f);   // |cursor-rest|=100 > 64
-        mode = c.DragApplyDelta("A", rest, cursor2, new Vector2(80f, -5f));   // big frame delta
-        if (mode != FloatingWindowMath.DragMode.NormalGroupDetach)
-            return $"S25b: expected NormalGroupDetach, got {mode}";
-        if (!Approx2(c.RectOf("A").anchoredPosition, aStart)) return "S25b: live geometry mutated (dragged) — Detach must freeze";
-        if (!Approx2(c.RectOf("B").anchoredPosition, bStart)) return "S25b: live geometry mutated (sibling) — Detach must freeze";
-        if (c.GroupIdOf("A") != g || c.GroupIdOf("B") != g) return "S25b: groupId mutated during detach drag (commit is release-only)";
+        // (b) DRAG-03 Detach: cursor far outside (|cursor-dragStart|=400 ≥ 256), away from B's rect ⇒ ONLY
+        //     the dragged real-renders at offset; the sibling snaps back to rest.
+        Vector2 cursor2 = a0 + new Vector2(400f, 0f);
+        mode = c.DragApplyDelta("A", dragStart, cursor2, new Vector2(340f, 0f));
+        if (mode != FloatingWindowMath.DragMode.Detach) return $"S25b: expected Detach, got {mode}";
+        if (!Approx2(c.RectOf("A").anchoredPosition, a0 + new Vector2(400f, 0f))) return "S25b: detached dragged did not follow cursor";
+        if (!Approx2(c.RectOf("B").anchoredPosition, b0)) return "S25b: sibling moved during Detach (only the dragged should)";
+        if (c.GroupIdOf("A") != G || c.GroupIdOf("B") != G) return "S25b: groupId mutated mid-drag (commit is release-only)";
 
-        // (c) SoloDrag: ungrouped window moves alone via DragApplyDelta (legacy path parity).
+        // (c) Singleton translate: an ungrouped window moves alone via DragApplyDelta.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
         c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "lone", 0, 0, 300, 200, true);
         Vector2 lone0 = c2.RectOf("lone").anchoredPosition;
         var mode2 = c2.DragApplyDelta("lone", lone0, lone0 + new Vector2(10f, 3f), new Vector2(10f, 3f));
-        if (mode2 != FloatingWindowMath.DragMode.SoloDrag) return $"S25c: ungrouped ≠ SoloDrag (got {mode2})";
+        if (mode2 != FloatingWindowMath.DragMode.Translate) return $"S25c: ungrouped near ≠ Translate (got {mode2})";
         if (!Approx2(c2.RectOf("lone").anchoredPosition, lone0 + new Vector2(10f, 3f))) return "S25c: solo move dropped";
 
-        // (d) Singleton group (groupId set but only 1 visible member): falls back to SoloDrag because
-        // findings 0082 §2 "group = ≥2 visible/live members" — singletons are not groups for drag mode.
+        // (d) Singleton-in-name (groupId set but only 1 visible member) is NOT a group ⇒ translates alone
+        //     (findings 0082 §2 "group = ≥2 visible/live").
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
         var c3 = MakeController(spawned, layer3);
         c3.Spawn(FloatingWindowCatalog.KIND_ORDER, "stale", 0, 0, 300, 200, true);
         c3.SetGroupId("stale", "grp_stalestalestalestalestalestalest");
         Vector2 stale0 = c3.RectOf("stale").anchoredPosition;
         var mode3 = c3.DragApplyDelta("stale", stale0, stale0 + new Vector2(1f, 0f), new Vector2(1f, 0f));
-        if (mode3 != FloatingWindowMath.DragMode.SoloDrag) return $"S25d: singleton (≥2 rule) ≠ SoloDrag (got {mode3})";
+        if (mode3 != FloatingWindowMath.DragMode.Translate) return $"S25d: singleton (≥2 rule) ≠ Translate (got {mode3})";
         if (!Approx2(c3.RectOf("stale").anchoredPosition, stale0 + new Vector2(1f, 0f))) return "S25d: singleton drag did not move";
         return null;
     }
 
-    // ---- 26. #104 Slice D: detach commit + dissolve helper + Close cascade + Hide groupId preserve ----
-    // Covers: GROUP-07 (ReleaseDrag の NormalGroupDetach branch / DissolveIfShrunkTo(2) 共有 helper / 残 2→ 維持 /
-    //         残 1→ 連鎖 dissolve / Close も同 helper / Hide は groupId 温存)
+    // ---- 26. ADR-0024 §4: Detach release commit + dissolve helper + Close cascade + Hide preserve ----
+    // Covers: DRAG-08 (Detach release on empty space ⇒ groupId=null + DissolveIfShrunkTo(2): 残 ≥2 維持 /
+    //         残 1 連鎖 dissolve) / Close も同 helper / Hide は groupId 温存. Cursors are placed straight up
+    //         from rest so they never enter a sibling rect (no accidental Swap).
     static string Section26_DetachDissolveCloseHide(List<GameObject> spawned)
     {
-        // (a) 3-member normal group: detach 1 → remainder still ≥2 → group keeps its id.
+        // (a) 3-member group: detach 1 → remainder still ≥2 → group keeps its id.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0,   0, 280, 180, true);
@@ -1576,14 +1590,13 @@ public static class FloatingWindowE2ERunner
         if (string.IsNullOrEmpty(g) || c.GroupIdOf("B") != g || c.GroupIdOf("C") != g)
             return "S26a: precondition 3-member attach failed";
         Vector2 restA = c.RectOf("A").anchoredPosition;
-        // Detach A by releasing at cursor far from rest (|cursor-rest| > 64).
-        Vector2 cursor = restA + new Vector2(200f, 200f);
+        Vector2 cursor = restA + new Vector2(0f, 300f);   // straight UP, |Δ|=300 ≥ 256, off all sibling rects
         var mode = c.ReleaseDrag("A", restA, cursor);
-        if (mode != FloatingWindowMath.DragMode.NormalGroupDetach) return $"S26a: expected NormalGroupDetach (got {mode})";
+        if (mode != FloatingWindowMath.DragMode.Detach) return $"S26a: expected Detach (got {mode})";
         if (c.GroupIdOf("A") != null) return "S26a: dragged groupId not cleared after detach";
         if (c.GroupIdOf("B") != g || c.GroupIdOf("C") != g) return "S26a: 3→2 should NOT dissolve (≥2 remains)";
 
-        // (b) 2-member normal group: detach 1 → remainder = 1 → chain dissolve clears both.
+        // (b) 2-member group: detach 1 → remainder = 1 → chain dissolve clears both.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
         c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0,   0, 280, 180, true);
@@ -1592,8 +1605,8 @@ public static class FloatingWindowE2ERunner
         string g2 = c2.GroupIdOf("P");
         if (string.IsNullOrEmpty(g2)) return "S26b: precondition 2-member attach failed";
         Vector2 restP = c2.RectOf("P").anchoredPosition;
-        var mode2 = c2.ReleaseDrag("P", restP, restP + new Vector2(200f, 0f));
-        if (mode2 != FloatingWindowMath.DragMode.NormalGroupDetach) return "S26b: not NormalGroupDetach";
+        var mode2 = c2.ReleaseDrag("P", restP, restP + new Vector2(0f, 300f));
+        if (mode2 != FloatingWindowMath.DragMode.Detach) return "S26b: not Detach";
         if (c2.GroupIdOf("P") != null) return "S26b: detached dragged still grouped";
         if (c2.GroupIdOf("Q") != null) return "S26b: chain dissolve did not clear the remnant (≥2 rule)";
 
@@ -1620,19 +1633,20 @@ public static class FloatingWindowE2ERunner
         if (c4.GroupIdOf("L") != g4) return "S26d: Hide cleared groupId — must preserve for Replay↔Live revival";
         if (c4.GroupIdOf("M") != g4) return "S26d: Hide leaked to the other member";
 
-        // (e) HakoniwaDetach: dragged is a non-core in a Hakoniwa group (startup, orders). Detach
-        // orders → group is now (startup) alone → chain dissolve → startup.groupId cleared.
+        // (e) Core member detach (ADR-0024 §1 — no core-lock): startup + orders island, detach orders →
+        //     group is now (startup) alone → chain dissolve → startup.groupId cleared. (Pre-ADR-0024 a
+        //     core group banned this; now a core drags exactly like any window.)
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer5, out _);
         var c5 = MakeController(spawned, layer5);
         c5.Spawn(FloatingWindowCatalog.KIND_STARTUP, "startup", 0,   0, 280, 180, true);
         c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,  "orders",  280, 0, 280, 180, true);
         c5.SnapOnRelease("orders");
         string g5 = c5.GroupIdOf("startup");
-        if (string.IsNullOrEmpty(g5)) return "S26e: precondition Hakoniwa attach failed";
+        if (string.IsNullOrEmpty(g5)) return "S26e: precondition attach failed";
         Vector2 restO = c5.RectOf("orders").anchoredPosition;
-        var mode5 = c5.ReleaseDrag("orders", restO, restO + new Vector2(200f, 0f));
-        if (mode5 != FloatingWindowMath.DragMode.HakoniwaDetach) return $"S26e: expected HakoniwaDetach (got {mode5})";
-        if (c5.GroupIdOf("orders") != null) return "S26e: HakoniwaDetach dragged still grouped";
+        var mode5 = c5.ReleaseDrag("orders", restO, restO + new Vector2(0f, 300f));
+        if (mode5 != FloatingWindowMath.DragMode.Detach) return $"S26e: expected Detach (got {mode5})";
+        if (c5.GroupIdOf("orders") != null) return "S26e: Detach dragged still grouped";
         if (c5.GroupIdOf("startup") != null) return "S26e: chain dissolve did not clear remnant (startup alone)";
 
         // (f) Close on a non-grouped window: just returns true and removes (no dissolve attempt).
@@ -1642,10 +1656,8 @@ public static class FloatingWindowE2ERunner
         if (!c6.Close("lone")) return "S26f: Close on ungrouped lone returned false";
         if (c6.Has("lone")) return "S26f: lone not removed";
 
-        // (g) DissolveIfShrunkTo direct call: 3-member group artificially reduced to 1 visible via Hide
-        // does NOT auto-dissolve (Hide preserves), but the helper called with threshold=2 on a group
-        // with 1 visible member DOES dissolve (the helper's contract is "shrunk below threshold ⇒
-        // clear", whatever the caller's intent). This pins the helper's behavior independent of Hide.
+        // (g) DissolveIfShrunkTo direct call: a group with 1 visible member (other Hidden) dissolves to
+        //     null on EVERY member (live or hidden). Pins the helper independent of Hide.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer7, out _);
         var c7 = MakeController(spawned, layer7);
         c7.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "U", 0,   0, 280, 180, true);
@@ -1661,85 +1673,48 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 27. #104 Slice E1: Hakoniwa group translate ban + core lock + dynamic visibility re-eval ----
-    // Covers: GROUP-08 (Hakoniwa drag→live geometry 凍結（NormalGroupTranslate 禁止）/ core HakoniwaCoreLock→rest
-    //         snap-back / mode-switch hide で Hakoniwa→普通へ降格→単独可動 / Show 復帰で再昇格)
-    static string Section27_HakoniwaTranslateBanCoreLock(List<GameObject> spawned)
+    // ---- 27. ADR-0024 §1: Hakoniwa special RETIRED — startup / run_result drag like any window ----
+    // Covers: DRAG-11 (a core-bearing island TRANSLATES (no translate-ban) and a core member DETACHES
+    //         (no core-lock). The old GROUP-08 translate-ban / HakoniwaCoreLock / dynamic re-promote are gone.)
+    static string Section27_HakoniwaRetired(List<GameObject> spawned)
     {
-        // (a) Hakoniwa group (startup + orders): drag startup with cursor < D_DETACH ⇒ HakoniwaSnapBack
-        //     (no target since Slice E2 hasn't wired hasTarget yet). DragApplyDelta freezes — live
-        //     geometry does NOT mutate. Whole-group translation is banned.
+        // Island of the two former "cores": startup + run_result, stacked vertically (so a horizontal
+        // drag never enters the sibling rect). Bootstrap via SetGroupId.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_STARTUP, "startup", 0,   0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,  "orders",  280, 0, 280, 180, true);
-        c.SnapOnRelease("orders");
-        string g = c.GroupIdOf("startup");
-        if (string.IsNullOrEmpty(g)) return "S27a: precondition Hakoniwa attach failed";
-        Vector2 startup0 = c.RectOf("startup").anchoredPosition;
-        Vector2 orders0 = c.RectOf("orders").anchoredPosition;
-        // Drag startup within D_DETACH; mode = HakoniwaSnapBack (core, hasTarget=false).
-        var mode = c.DragApplyDelta("startup", startup0, startup0 + new Vector2(10f, 5f), new Vector2(10f, 5f));
-        if (mode != FloatingWindowMath.DragMode.HakoniwaSnapBack) return $"S27a: expected HakoniwaSnapBack (got {mode})";
-        if (!Approx2(c.RectOf("startup").anchoredPosition, startup0)) return "S27a: Hakoniwa core dragged moved (translate banned)";
-        if (!Approx2(c.RectOf("orders").anchoredPosition, orders0)) return "S27a: Hakoniwa sibling moved during drag (translate banned)";
+        c.Spawn(FloatingWindowCatalog.KIND_STARTUP,    "startup",    0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "run_result", 0, -200, 280, 180, true);
+        const string G = "grp_cccccccccccccccccccccccccccccccc";
+        c.SetGroupId("startup", G); c.SetGroupId("run_result", G);
+        Vector2 s0 = c.RectOf("startup").anchoredPosition;
+        Vector2 r0 = c.RectOf("run_result").anchoredPosition;
 
-        // (b) HakoniwaCoreLock: drag startup beyond D_DETACH (|cursor-rest|>64). DragApplyDelta still
-        //     freezes. ReleaseDrag snaps back to rest; groupId stays.
-        var mode2 = c.DragApplyDelta("startup", startup0, startup0 + new Vector2(120f, 0f), new Vector2(120f, 0f));
-        if (mode2 != FloatingWindowMath.DragMode.HakoniwaCoreLock) return $"S27b: beyond core ≠ HakoniwaCoreLock (got {mode2})";
-        if (!Approx2(c.RectOf("startup").anchoredPosition, startup0)) return "S27b: core moved beyond D_DETACH (freeze broken)";
-        var rel = c.ReleaseDrag("startup", startup0, startup0 + new Vector2(120f, 0f));
-        if (rel != FloatingWindowMath.DragMode.HakoniwaCoreLock) return "S27b: release mode drifted";
-        if (!Approx2(c.RectOf("startup").anchoredPosition, startup0)) return "S27b: release did not snap core back to rest";
-        if (c.GroupIdOf("startup") != g) return "S27b: core lock dissolved the group (groupId must stay)";
-        if (c.GroupIdOf("orders") != g) return "S27b: core lock leaked to sibling";
+        // (a) TRANSLATE a core-bearing island (was BANNED): drag startup (a core) with cursor outside the
+        //     island ∧ <256 ⇒ the WHOLE island shifts. Both members move.
+        Vector2 cursor = s0 + new Vector2(60f, 0f);
+        var mode = c.DragApplyDelta("startup", s0, cursor, new Vector2(60f, 0f));
+        if (mode != FloatingWindowMath.DragMode.Translate) return $"S27a: core-bearing island not Translate (got {mode}) — translate-ban must be retired";
+        if (!Approx2(c.RectOf("startup").anchoredPosition, s0 + new Vector2(60f, 0f))) return "S27a: core dragged did not translate";
+        if (!Approx2(c.RectOf("run_result").anchoredPosition, r0 + new Vector2(60f, 0f))) return "S27a: core sibling did not translate (whole-island move)";
 
-        // (c) Dynamic re-evaluation: Hide the startup (mode-switch Replay→Live). visible/live count of
-        //     the group drops to 1; isInGroup goes false ⇒ orders dragged is SoloDrag now.
-        c.Hide("startup");
-        if (c.GroupIdOf("startup") != g || c.GroupIdOf("orders") != g) return "S27c: Hide cleared groupId (must preserve)";
-        Vector2 ordersBefore = c.RectOf("orders").anchoredPosition;
-        var mode3 = c.DragApplyDelta("orders", ordersBefore, ordersBefore + new Vector2(15f, 0f), new Vector2(15f, 0f));
-        if (mode3 != FloatingWindowMath.DragMode.SoloDrag)
-            return $"S27c: hidden-core ⇒ orders should be SoloDrag (got {mode3})";
-        if (!Approx2(c.RectOf("orders").anchoredPosition, ordersBefore + new Vector2(15f, 0f)))
-            return "S27c: solo move did not land (Hakoniwa demotion not in effect)";
-
-        // (d) Replay restore: Show startup (still groupId-preserved). Now isInGroup=true & isHakoniwa=true
-        //     again ⇒ Hakoniwa restored, orders drag becomes HakoniwaSnapBack (ban). The orders position
-        //     stays where it was after the solo move (Hide didn't lose the geometry).
-        c.Show("startup");
-        Vector2 ordersAfterShow = c.RectOf("orders").anchoredPosition;
-        var mode4 = c.DragApplyDelta("orders", ordersAfterShow, ordersAfterShow + new Vector2(10f, 0f), new Vector2(10f, 0f));
-        if (mode4 != FloatingWindowMath.DragMode.HakoniwaSnapBack)
-            return $"S27d: post-Show ⇒ orders should be HakoniwaSnapBack (got {mode4})";
-        if (!Approx2(c.RectOf("orders").anchoredPosition, ordersAfterShow)) return "S27d: Hakoniwa re-promoted but live geometry mutated";
-
-        // (e) Non-Hakoniwa group with hidden non-core: still non-Hakoniwa even after Hide. A plain group
-        //     (orders + positions) with positions hidden ⇒ visible count = 1 ⇒ orders is SoloDrag.
-        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
-        var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "O", 0,   0, 280, 180, true);
-        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "P", 280, 0, 280, 180, true);
-        c2.SnapOnRelease("P");
-        if (string.IsNullOrEmpty(c2.GroupIdOf("O"))) return "S27e: precondition non-Hakoniwa attach failed";
-        c2.Hide("P");
-        Vector2 oBefore = c2.RectOf("O").anchoredPosition;
-        var modeE = c2.DragApplyDelta("O", oBefore, oBefore + new Vector2(7f, 0f), new Vector2(7f, 0f));
-        if (modeE != FloatingWindowMath.DragMode.SoloDrag)
-            return $"S27e: hidden-sibling ⇒ remaining member should be SoloDrag (got {modeE})";
-        if (!Approx2(c2.RectOf("O").anchoredPosition, oBefore + new Vector2(7f, 0f)))
-            return "S27e: solo move did not apply";
+        // (b) DETACH a CORE member (was core-LOCKED): drag startup beyond 256, off the sibling rect ⇒
+        //     Detach, and ReleaseDrag commits it (groupId=null, remnant dissolves). Cores are no longer
+        //     detach-immune.
+        var mode2 = c.DragApplyDelta("startup", s0, s0 + new Vector2(0f, 400f), new Vector2(0f, 400f));
+        if (mode2 != FloatingWindowMath.DragMode.Detach) return $"S27b: core beyond 256 not Detach (got {mode2}) — core-lock must be retired";
+        var rel = c.ReleaseDrag("startup", s0, s0 + new Vector2(0f, 400f));
+        if (rel != FloatingWindowMath.DragMode.Detach) return "S27b: core release mode drifted";
+        if (c.GroupIdOf("startup") != null) return "S27b: core detach did not clear groupId (core-lock retired)";
+        if (c.GroupIdOf("run_result") != null) return "S27b: remnant did not dissolve after core detach";
         return null;
     }
 
-    // ---- 28. #104 Slice E2: ResolveDropTarget pure arithmetic ----
-    // Covers: GROUP-09 (cursor 下メンバー / 重なり最前面 sibling 優先 / dragged 自身は除外 / cursor が空 ⇒ null /
-    //         null/empty inputs ⇒ null)
+    // ---- 28. ADR-0024 §2: ResolveDropTarget pure (swap-target resolver, used by ResolveDragMode) ----
+    // Covers: DRAG-01/04 (cursor 下メンバー = swap target / 重なり最前面 sibling 優先 / dragged 自身は除外 /
+    //         cursor が空 ⇒ null / null/empty inputs ⇒ null)
     static string Section28_ResolveDropTargetPure()
     {
-        // 3 members of one Hakoniwa group laid out side-by-side; cursor positions probe the resolver.
+        // 3 members of one island laid out side-by-side; cursor positions probe the resolver.
         // Member rects: A=(0..100, 0..-80), B=(100..200, 0..-80), C=(50..150, -40..-120) — A and C
         // overlap; C overlaps B. siblingIndex: A=0, B=1, C=2 (C front-most).
         var members = new List<FloatingWindowMath.GroupMember>
@@ -1778,69 +1753,57 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 29. #104 Slice E2: Hakoniwa swap commit ((x,y,w,h) exchange) + snap-back ----
-    // Covers: GROUP-10 (HakoniwaSwap commit が dragged↔target で (x,y,w,h) 4 値交換 / kind/id/groupId 不変 /
-    //         group footprint 不変 / target なし ⇒ HakoniwaSnapBack ⇒ rest 戻し)
-    static string Section29_HakoniwaSwapWiring(List<GameObject> spawned)
+    // ---- 29. ADR-0024 §4: Swap commit ((x,y,w,h) exchange) — ANY island (no Hakoniwa special) ----
+    // Covers: DRAG-01 (Swap commit が dragged↔target で (x,y,w,h) 4 値交換 / kind/id/groupId 不変 / island
+    //         footprint 不変 / live geometry は drag 中凍結 / cursor が空 ⇒ Translate (swap でない))
+    static string Section29_SwapWiring(List<GameObject> spawned)
     {
-        // (a) Hakoniwa swap end-to-end with DIFFERENT-sized tiles so the (x, y, w, h) exchange is
-        // verifiable on all 4 components. Tiles are laid out partially overlapping so the cursor can
-        // sit INSIDE the target while staying within D_DETACH of the dragged's rest.
+        // (a) Swap end-to-end on a PLAIN island (orders + positions, NO core) with DIFFERENT-sized tiles so
+        // the (x, y, w, h) exchange is verifiable on all 4 components. The tiles overlap so the cursor can
+        // sit inside the target. A third member keeps the island ≥2 even mid-thought (not needed here —
+        // 2 members suffice). Bootstrap via SetGroupId.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        // SetGroupId bootstraps the Hakoniwa group directly (the attach trigger doesn't matter for
-        // exercising the swap commit — Slice B's flush attach is pinned by Section23).
-        c.Spawn(FloatingWindowCatalog.KIND_STARTUP,   "startup",   -500, 0, 280, 180, true);   // core, off to the side
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,    0, 280, 180, true);    // dragged: rest (0,0), size 280×180
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30,   0, 300, 200, true);    // target: pos (30,0), size 300×200 (overlaps orders)
-        const string GH = "grp_hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
-        c.SetGroupId("startup",   GH);
-        c.SetGroupId("orders",    GH);
-        c.SetGroupId("positions", GH);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);    // dragged: (0,0), 280×180
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);    // target: (30,0), 300×200 (overlaps)
+        const string G = "grp_hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
+        c.SetGroupId("orders", G); c.SetGroupId("positions", G);
 
         Vector2 oRest = c.RectOf("orders").anchoredPosition;     // (0, 0)
         Vector2 oSize = c.RectOf("orders").sizeDelta;            // (280, 180)
-        Vector2 pPos = c.RectOf("positions").anchoredPosition;   // (30, 0)
+        Vector2 pPos  = c.RectOf("positions").anchoredPosition;  // (30, 0)
         Vector2 pSize = c.RectOf("positions").sizeDelta;         // (300, 200)
 
-        // Cursor (35, -30) ⇒ inside positions (x in [30, 330] ✓, y in [-200, 0] ✓) AND distance from
-        // oRest = √(35² + 30²) ≈ 46.1 < D_DETACH=64 ⇒ HakoniwaSwap (target = positions).
+        // Cursor (35, -30) ⇒ inside positions (x∈[30,330], y∈[-200,0]) ⇒ Swap(target=positions).
         Vector2 cursor = new Vector2(35f, -30f);
         var mode = c.DragApplyDelta("orders", oRest, cursor, cursor - oRest);
-        if (mode != FloatingWindowMath.DragMode.HakoniwaSwap) return $"S29a: mid-drag mode {mode} ≠ HakoniwaSwap";
+        if (mode != FloatingWindowMath.DragMode.Swap) return $"S29a: mid-drag mode {mode} ≠ Swap";
+        // Live geometry frozen during a swap drag (ghosts only).
+        if (!Approx2(c.RectOf("orders").anchoredPosition, oRest)) return "S29a: orders moved during Swap drag (freeze broken)";
+        if (!Approx2(c.RectOf("positions").anchoredPosition, pPos)) return "S29a: positions moved during Swap drag";
 
-        // Live geometry frozen during drag (commit-on-release rule).
-        if (!Approx2(c.RectOf("orders").anchoredPosition, oRest)) return "S29a: orders moved during HakoniwaSwap drag (freeze broken)";
-        if (!Approx2(c.RectOf("positions").anchoredPosition, pPos)) return "S29a: positions moved during HakoniwaSwap drag";
-
-        // Release commits the (x, y, w, h) swap.
         var relMode = c.ReleaseDrag("orders", oRest, cursor);
-        if (relMode != FloatingWindowMath.DragMode.HakoniwaSwap) return $"S29a: release mode {relMode} ≠ HakoniwaSwap";
+        if (relMode != FloatingWindowMath.DragMode.Swap) return $"S29a: release mode {relMode} ≠ Swap";
         if (!Approx2(c.RectOf("orders").anchoredPosition, pPos)) return $"S29a: orders did not jump to target pos (got {c.RectOf("orders").anchoredPosition})";
         if (!Approx2(c.RectOf("orders").sizeDelta, pSize)) return $"S29a: orders did not take target size (got {c.RectOf("orders").sizeDelta})";
         if (!Approx2(c.RectOf("positions").anchoredPosition, oRest)) return "S29a: positions did not jump to dragged rest pos";
         if (!Approx2(c.RectOf("positions").sizeDelta, oSize)) return "S29a: positions did not take dragged size";
-        // identity preservation: kind / id / groupId untouched.
-        if (c.GroupIdOf("orders") != GH || c.GroupIdOf("positions") != GH) return "S29a: swap mutated groupId";
+        if (c.GroupIdOf("orders") != G || c.GroupIdOf("positions") != G) return "S29a: swap mutated groupId";
 
-        // (b) HakoniwaSnapBack: cursor INSIDE D_DETACH but NOT inside any other member ⇒ hasTarget=false
-        // ⇒ HakoniwaSnapBack ⇒ release snaps back to rest; groupId untouched.
+        // (b) Cursor inside the island but NOT over any sibling ⇒ NOT swap. With the tiles non-overlapping
+        // and the cursor in empty space within 256, the mode is Translate (the whole island would move) —
+        // proving swap requires the cursor to actually be over a sibling rect.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_STARTUP, "startup", -500, 0, 280, 180, true);   // far away — not under cursor
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,  "orders",   0,   0, 280, 180, true);
-        const string GH2 = "grp_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
-        c2.SetGroupId("startup", GH2);
-        c2.SetGroupId("orders",  GH2);
-        Vector2 oRest2 = c2.RectOf("orders").anchoredPosition;
-        Vector2 cursor2 = oRest2 + new Vector2(20f, 5f);   // dist≈20.6 < 64; not inside startup
-        var midMode2 = c2.DragApplyDelta("orders", oRest2, cursor2, cursor2 - oRest2);
-        if (midMode2 != FloatingWindowMath.DragMode.HakoniwaSnapBack) return $"S29b: expected HakoniwaSnapBack (got {midMode2})";
-        if (!Approx2(c2.RectOf("orders").anchoredPosition, oRest2)) return "S29b: live geometry mutated during HakoniwaSnapBack";
-        var relMode2 = c2.ReleaseDrag("orders", oRest2, cursor2);
-        if (relMode2 != FloatingWindowMath.DragMode.HakoniwaSnapBack) return "S29b: release mode drift";
-        if (!Approx2(c2.RectOf("orders").anchoredPosition, oRest2)) return "S29b: release did not snap back to rest";
-        if (c2.GroupIdOf("orders") != GH2) return "S29b: SnapBack disturbed groupId";
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);   // stacked, gap
+        const string G2 = "grp_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
+        c2.SetGroupId("A", G2); c2.SetGroupId("B", G2);
+        Vector2 aRest = c2.RectOf("A").anchoredPosition;
+        Vector2 cursor2 = aRest + new Vector2(20f, 5f);   // empty space, not over B, <256
+        var midMode2 = c2.DragApplyDelta("A", aRest, cursor2, cursor2 - aRest);
+        if (midMode2 != FloatingWindowMath.DragMode.Translate) return $"S29b: cursor in empty space ≠ Translate (got {midMode2})";
+        if (c2.GroupIdOf("A") != G2) return "S29b: Translate disturbed groupId mid-drag";
         return null;
     }
 
@@ -1893,7 +1856,7 @@ public static class FloatingWindowE2ERunner
         if (majorityFront[1].groupId != G_FMAJ) return "S30c: front majority winner #2 lost id";
         if (majorityFront[2].groupId != null) return "S30c: loser-plane dock member retained group";
 
-        // (d) Tie ⇒ DOCK wins (Hakoniwa identity bias per ADR-0019 D9 / findings 0082 §9).
+        // (d) Tie ⇒ DOCK wins (dock-plane bias per ADR-0019 D9 / findings 0082 §9 — retained by ADR-0024).
         const string G_TIE = "grp_tttttttttttttttttttttttttttttttt";
         var tie = new List<FloatingWindowLayout>
         {
@@ -1932,168 +1895,98 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 31. #104 Slice G: drag-ghost preview composition (structural pin) ----
-    // Covers: GROUP-12 (7 mode 別 ghost 構成: 枚数 / 各 ghost の rect / dragged=solid・target=dashed の style /
-    //         ghost container が最前面 sibling / Clear で 0 枚 / commit-on-release で release 時に消える /
-    //         blocksRaycasts=false は CreateUguiGhost 静的不変条件で encoded)
-    static string Section31_GhostPreviewStructure(List<GameObject> spawned)
+    // ---- 31. ADR-0024 §7: drag-ghost preview is SWAP-ONLY (translate / detach real-render) ----
+    // Covers: DRAG-14 (Swap ⇒ 2 ghosts: solid at target rect / dashed at dragged rest. Translate ⇒ 0 ghosts.
+    //         Detach ⇒ 0 ghosts (CHANGED from #104). container 最前面 sibling / Clear で 0 / commit-on-release.)
+    static string Section31_GhostSwapOnly(List<GameObject> spawned)
     {
-        // Bare-stack DragGhostLayer for AFK: factory mints a plain RectTransform (no Canvas / no
-        // Image), so structural assertions (count / rect / name / sibling order) work headlessly.
+        float alpha = DragGhostLayer.ALPHA;   // non-const local (avoid folded-constant unreachable warning)
+        if (alpha != 0.45f) return $"S31: ALPHA != 0.45 (got {alpha})";
+
+        // A plain 2-member island (orders + positions, overlapping) + bare-stack ghost layer.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         var containerGo = new GameObject("GhostContainer", typeof(RectTransform));
         spawned.Add(containerGo);
-        var container = (RectTransform)containerGo.transform;
-        container.SetParent(layer, false);
+        var container = (RectTransform)containerGo.transform; container.SetParent(layer, false);
         var ghostLayer = new DragGhostLayer(container, FloatingWindowCatalog.Default(),
-            () => {
-                var go = new GameObject("GhostWindow_unset", typeof(RectTransform));
-                spawned.Add(go);
-                return (RectTransform)go.transform;
-            },
+            () => { var go = new GameObject("GhostWindow_unset", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; },
             go => UnityEngine.Object.DestroyImmediate(go));
         c.AttachGhostLayer(ghostLayer);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);
+        const string G = "grp_gggggggggggggggggggggggggggggggg";
+        c.SetGroupId("orders", G); c.SetGroupId("positions", G);
 
-        if (DragGhostLayer.ALPHA != 0.45f) return $"S31: ALPHA != 0.45 (got {DragGhostLayer.ALPHA})";
-
-        // Build the Hakoniwa group used by multiple sub-cases below. Direct SetGroupId (attach is
-        // not the focus of this section).
-        c.Spawn(FloatingWindowCatalog.KIND_STARTUP,   "startup",   -500, 0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,    0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30,   0, 300, 200, true);
-        const string GH = "grp_gggggggggggggggggggggggggggggggg";
-        c.SetGroupId("startup",   GH);
-        c.SetGroupId("orders",    GH);
-        c.SetGroupId("positions", GH);
-
-        // (a) SoloDrag: no ghost.
-        BuildCanvasStack(spawned, out _, out _, out RectTransform layerS, out _);
-        var cs = MakeController(spawned, layerS);
-        var containerSGo = new GameObject("GhostContainerS", typeof(RectTransform));
-        spawned.Add(containerSGo);
-        var containerS = (RectTransform)containerSGo.transform; containerS.SetParent(layerS, false);
-        var gs = new DragGhostLayer(containerS, FloatingWindowCatalog.Default(),
-            () => { var go = new GameObject("g", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; }, null);
-        cs.AttachGhostLayer(gs);
-        cs.Spawn(FloatingWindowCatalog.KIND_ORDER, "lone", 0, 0, 300, 200, true);
-        cs.DragApplyDelta("lone", Vector2.zero, new Vector2(20f, 0f), new Vector2(20f, 0f));
-        if (gs.ActiveCount != 0) return $"S31a: SoloDrag should produce 0 ghosts (got {gs.ActiveCount})";
-
-        // (b) NormalGroupTranslate: no ghost.
-        BuildCanvasStack(spawned, out _, out _, out RectTransform layerN, out _);
-        var cn = MakeController(spawned, layerN);
-        var containerNGo = new GameObject("GhostContainerN", typeof(RectTransform));
-        spawned.Add(containerNGo);
-        var containerN = (RectTransform)containerNGo.transform; containerN.SetParent(layerN, false);
-        var gn = new DragGhostLayer(containerN, FloatingWindowCatalog.Default(),
-            () => { var go = new GameObject("g", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; }, null);
-        cn.AttachGhostLayer(gn);
-        cn.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0,   0, 280, 180, true);
-        cn.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 280, 0, 280, 180, true);
-        cn.SnapOnRelease("B");
-        cn.DragApplyDelta("A", new Vector2(0, 0), new Vector2(10f, 0f), new Vector2(10f, 0f));
-        if (gn.ActiveCount != 0) return $"S31b: NormalGroupTranslate should produce 0 ghosts (got {gn.ActiveCount})";
-
-        // (c) NormalGroupDetach: 1 SOLID ghost at cursor, dragged's size.
-        Vector2 restA = cn.RectOf("A").anchoredPosition;
-        Vector2 sizeA = cn.RectOf("A").sizeDelta;
-        Vector2 farCursor = restA + new Vector2(200f, 200f);
-        cn.DragApplyDelta("A", restA, farCursor, farCursor - restA);
-        if (gn.ActiveCount != 1) return $"S31c: NormalGroupDetach should produce 1 ghost (got {gn.ActiveCount})";
-        var ghost = gn.GhostAt(0);
-        if (ghost == null) return "S31c: ghost 0 null";
-        if (!Approx2(ghost.anchoredPosition, farCursor)) return $"S31c: ghost not at cursor (got {ghost.anchoredPosition})";
-        if (!Approx2(ghost.sizeDelta, sizeA)) return $"S31c: ghost not at dragged size (got {ghost.sizeDelta})";
-        if (ghost.gameObject.name != "GhostWindow_Solid") return $"S31c: ghost name not Solid (got {ghost.gameObject.name})";
-
-        // (d) HakoniwaSwap: 2 ghosts — solid at target rect, dashed at dragged rest, dragged's size for
-        // the dashed (target) ghost (per the design's "would-rotate-here" preview semantics).
         Vector2 orest = c.RectOf("orders").anchoredPosition;
         Vector2 osize = c.RectOf("orders").sizeDelta;
-        Vector2 ppos = c.RectOf("positions").anchoredPosition;
+        Vector2 ppos  = c.RectOf("positions").anchoredPosition;
         Vector2 psize = c.RectOf("positions").sizeDelta;
-        Vector2 swapCursor = new Vector2(35f, -30f);   // cursor inside positions, |cursor-rest|≈46 < 64
+
+        // (a) Swap: cursor inside positions ⇒ 2 ghosts (solid at target rect, dashed at dragged rest).
+        Vector2 swapCursor = new Vector2(35f, -30f);
         var mode = c.DragApplyDelta("orders", orest, swapCursor, swapCursor - orest);
-        if (mode != FloatingWindowMath.DragMode.HakoniwaSwap) return $"S31d: precondition mode={mode}";
-        if (ghostLayer.ActiveCount != 2) return $"S31d: HakoniwaSwap should produce 2 ghosts (got {ghostLayer.ActiveCount})";
+        if (mode != FloatingWindowMath.DragMode.Swap) return $"S31a: precondition mode={mode}";
+        if (ghostLayer.ActiveCount != 2) return $"S31a: Swap should produce 2 ghosts (got {ghostLayer.ActiveCount})";
         var g0 = ghostLayer.GhostAt(0);
         var g1 = ghostLayer.GhostAt(1);
-        if (g0 == null || g1 == null) return "S31d: swap ghosts null";
-        if (g0.gameObject.name != "GhostWindow_Solid") return $"S31d: dragged ghost not Solid (got {g0.gameObject.name})";
-        if (g1.gameObject.name != "GhostWindow_Dashed") return $"S31d: target ghost not Dashed (got {g1.gameObject.name})";
-        if (!Approx2(g0.anchoredPosition, ppos)) return $"S31d: dragged ghost not at target pos (got {g0.anchoredPosition} vs {ppos})";
-        if (!Approx2(g0.sizeDelta, psize)) return $"S31d: dragged ghost not at target size";
-        if (!Approx2(g1.anchoredPosition, orest)) return $"S31d: target ghost not at dragged rest";
-        if (!Approx2(g1.sizeDelta, osize)) return $"S31d: target ghost not at dragged size";
+        if (g0 == null || g1 == null) return "S31a: swap ghosts null";
+        if (g0.gameObject.name != "GhostWindow_Solid") return $"S31a: dragged ghost not Solid (got {g0.gameObject.name})";
+        if (g1.gameObject.name != "GhostWindow_Dashed") return $"S31a: target ghost not Dashed (got {g1.gameObject.name})";
+        if (!Approx2(g0.anchoredPosition, ppos)) return $"S31a: dragged ghost not at target pos (got {g0.anchoredPosition} vs {ppos})";
+        if (!Approx2(g0.sizeDelta, psize)) return "S31a: dragged ghost not at target size";
+        if (!Approx2(g1.anchoredPosition, orest)) return "S31a: target ghost not at dragged rest";
+        if (!Approx2(g1.sizeDelta, osize)) return "S31a: target ghost not at dragged size";
 
-        // (e) HakoniwaSnapBack: 1 SOLID ghost at restAtDragStart (orders rest before the swap test).
-        // Move cursor away from any target to force snap-back path. Use orders' rest as anchor; pick a
-        // cursor near rest but not inside startup (startup is far at -500).
-        ghostLayer.Clear();
-        Vector2 snapCursor = orest + new Vector2(20f, 5f);   // dist≈20.6 < 64
-        var modeSB = c.DragApplyDelta("orders", orest, snapCursor, snapCursor - orest);
-        // After the swap test (d), orders' anchoredPosition was moved by ApplyGhost? No — DragApplyDelta froze it.
-        // But the previous swap WAS NOT committed (no ReleaseDrag), so live orders is still at orest.
-        // Wait — (d) only did DragApplyDelta which freezes. So orders is still at orest. Good.
-        // But positions in (d) — positions.position changed? No, only ghost rendered, live frozen.
-        // So at this snapCursor: cursor not inside positions (positions at pos=30,0..330; snapCursor.x≈20)
-        // → hasTarget=false → HakoniwaSnapBack.
-        if (modeSB != FloatingWindowMath.DragMode.HakoniwaSnapBack) return $"S31e: expected HakoniwaSnapBack (got {modeSB})";
-        if (ghostLayer.ActiveCount != 1) return $"S31e: SnapBack should produce 1 ghost (got {ghostLayer.ActiveCount})";
-        var snapGhost = ghostLayer.GhostAt(0);
-        if (snapGhost.gameObject.name != "GhostWindow_Solid") return "S31e: SnapBack ghost not Solid";
-        if (!Approx2(snapGhost.anchoredPosition, orest)) return $"S31e: SnapBack ghost not at rest (got {snapGhost.anchoredPosition})";
-
-        // (f) HakoniwaCoreLock: drag startup beyond D_DETACH ⇒ 1 SOLID ghost at startup's rest (NOT cursor).
-        Vector2 startupRest = c.RectOf("startup").anchoredPosition;
-        Vector2 lockCursor = startupRest + new Vector2(200f, 0f);
-        var modeLock = c.DragApplyDelta("startup", startupRest, lockCursor, lockCursor - startupRest);
-        if (modeLock != FloatingWindowMath.DragMode.HakoniwaCoreLock) return $"S31f: expected HakoniwaCoreLock (got {modeLock})";
-        if (ghostLayer.ActiveCount != 1) return $"S31f: CoreLock should produce 1 ghost (got {ghostLayer.ActiveCount})";
-        var lockGhost = ghostLayer.GhostAt(0);
-        if (lockGhost.gameObject.name != "GhostWindow_Solid") return "S31f: CoreLock ghost not Solid";
-        if (!Approx2(lockGhost.anchoredPosition, startupRest)) return "S31f: CoreLock ghost not at rest (detach refusal)";
-
-        // (g) HakoniwaDetach: drag a non-core (orders) beyond D_DETACH ⇒ 1 SOLID ghost at cursor.
-        Vector2 detachCursor = orest + new Vector2(200f, 0f);
-        var modeDet = c.DragApplyDelta("orders", orest, detachCursor, detachCursor - orest);
-        if (modeDet != FloatingWindowMath.DragMode.HakoniwaDetach) return $"S31g: expected HakoniwaDetach (got {modeDet})";
-        if (ghostLayer.ActiveCount != 1) return $"S31g: Detach should produce 1 ghost (got {ghostLayer.ActiveCount})";
-        var detGhost = ghostLayer.GhostAt(0);
-        if (detGhost.gameObject.name != "GhostWindow_Solid") return "S31g: Detach ghost not Solid";
-        if (!Approx2(detGhost.anchoredPosition, detachCursor)) return "S31g: Detach ghost not at cursor";
-
-        // (h) Sibling order: after a render, the ghost container is the LAST sibling under its parent
-        // (so ghosts draw in front). The bare-stack uses a "sibling pool" — verify the container is at
-        // the highest sibling index amongst its parent's children.
+        // (b) Container is the LAST sibling (ghosts draw in front).
         if (container.parent != null)
         {
             int last = container.parent.childCount - 1;
             if (container.GetSiblingIndex() != last)
-                return $"S31h: ghost container not last sibling (got idx={container.GetSiblingIndex()}, expected {last})";
+                return $"S31b: ghost container not last sibling (idx={container.GetSiblingIndex()}, expected {last})";
         }
 
-        // (i) Clear() collapses ActiveCount to 0; pool is retained (size grows monotonically).
-        ghostLayer.Clear();
-        if (ghostLayer.ActiveCount != 0) return $"S31i: Clear left ActiveCount={ghostLayer.ActiveCount}";
+        // (c) Translate ⇒ NO ghost (real-render). Use the vertically-stacked island so a drag is Translate.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layerT, out _);
+        var ct = MakeController(spawned, layerT);
+        var contTGo = new GameObject("GhostContainerT", typeof(RectTransform)); spawned.Add(contTGo);
+        var contT = (RectTransform)contTGo.transform; contT.SetParent(layerT, false);
+        var gt = new DragGhostLayer(contT, FloatingWindowCatalog.Default(),
+            () => { var go = new GameObject("g", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; }, null);
+        ct.AttachGhostLayer(gt);
+        ct.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
+        ct.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        const string GT = "grp_tttttttttttttttttttttttttttttttt";
+        ct.SetGroupId("A", GT); ct.SetGroupId("B", GT);
+        Vector2 aRest = ct.RectOf("A").anchoredPosition;
+        var modeT = ct.DragApplyDelta("A", aRest, aRest + new Vector2(60f, 0f), new Vector2(60f, 0f));
+        if (modeT != FloatingWindowMath.DragMode.Translate) return $"S31c: precondition mode={modeT}";
+        if (gt.ActiveCount != 0) return $"S31c: Translate should produce 0 ghosts (got {gt.ActiveCount}) — real-render, no ghost";
 
-        // (j) commit-on-release ⇒ ReleaseDrag clears the ghosts even if the previous frame painted.
-        c.DragApplyDelta("orders", orest, detachCursor, detachCursor - orest);   // paint 1 ghost
-        if (ghostLayer.ActiveCount != 1) return "S31j: precondition ghost not painted";
-        c.ReleaseDrag("orders", orest, detachCursor);
-        if (ghostLayer.ActiveCount != 0) return "S31j: ReleaseDrag did not clear ghosts (commit-on-release rule)";
+        // (d) Detach ⇒ NO ghost (CHANGED from #104's 1-ghost detach). Drag A beyond 256 off the sibling.
+        var modeD = ct.DragApplyDelta("A", aRest, aRest + new Vector2(400f, 0f), new Vector2(340f, 0f));
+        if (modeD != FloatingWindowMath.DragMode.Detach) return $"S31d: precondition mode={modeD}";
+        if (gt.ActiveCount != 0) return $"S31d: Detach should produce 0 ghosts (got {gt.ActiveCount}) — real-render, no ghost";
+
+        // (e) Clear() collapses ActiveCount to 0.
+        ghostLayer.Clear();
+        if (ghostLayer.ActiveCount != 0) return $"S31e: Clear left ActiveCount={ghostLayer.ActiveCount}";
+
+        // (f) commit-on-release ⇒ ReleaseDrag clears the swap ghosts.
+        c.DragApplyDelta("orders", orest, swapCursor, swapCursor - orest);   // paint 2 ghosts
+        if (ghostLayer.ActiveCount != 2) return "S31f: precondition swap ghosts not painted";
+        c.ReleaseDrag("orders", orest, swapCursor);
+        if (ghostLayer.ActiveCount != 0) return "S31f: ReleaseDrag did not clear ghosts (commit-on-release rule)";
         return null;
     }
 
-    // ---- 32. #105: factory first-launch grouping — FormFactoryBaseGroup bundles the base dock cluster
-    //      into ONE Hakoniwa group on a no-resume boot (saved layout 無し). Covers GROUP-14:
-    //      FormGroup mints ONE shared non-null groupId across every named member; a programmatic Spawn
-    //      still mints nothing (S20 invariant holds); the cluster carries startup + run_result cores so
-    //      it is a HAKONIWA group (translate banned, core-locked); <2 live members ⇒ no group; and the
-    //      first-launch placement is FLUSH (touching, "docked"), not gapped (e).
+    // ---- 32. #105 / ADR-0020 / ADR-0024 §1: factory first-launch grouping — FormFactoryBaseGroup bundles
+    //      the base dock cluster into ONE PLAIN island (ADR-0024 retires the Hakoniwa special). Covers
+    //      DRAG-14: FormGroup mints ONE shared non-null groupId across every named member; a programmatic
+    //      Spawn still mints nothing (S20 invariant); the cluster is a NORMAL island (cores drag freely —
+    //      no core-lock); <2 live members ⇒ no group; first-launch placement is FLUSH (docked), not gapped.
     //      RED→GREEN litmus: no-op FormGroup's body ⇒ (b)/(c) FAIL; restore a non-zero placement gap ⇒ (e) FAIL.
-    static string Section32_FactoryBaseGroupFormsHakoniwa(List<GameObject> spawned)
+    static string Section32_FactoryBaseGroup(List<GameObject> spawned)
     {
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
@@ -2120,14 +2013,16 @@ public static class FloatingWindowE2ERunner
             if (c.GroupIdOf(id) != g)
                 return $"S32b: {id} not in the factory group (got {c.GroupIdOf(id)}, expected {g})";
 
-        // (c) The cluster carries startup + run_result cores ⇒ it is a HAKONIWA group: dragging a core
-        //     member beyond D_DETACH is HakoniwaCoreLock and the geometry FREEZES (no free translate).
+        // (c) The factory cluster is a PLAIN island (ADR-0024 §1): dragging a core member (startup)
+        //     beyond D_DETACH_PX, off any sibling rect, DETACHES — there is no core-lock. The grid puts
+        //     startup at (0,0) with buying_power flush to its right and orders flush below; dragging
+        //     straight UP keeps the cursor off both, so the mode is Detach (not Swap).
         Vector2 s0 = c.RectOf("startup").anchoredPosition;
-        var mode = c.DragApplyDelta("startup", s0, s0 + new Vector2(120f, 0f), new Vector2(120f, 0f));
-        if (mode != FloatingWindowMath.DragMode.HakoniwaCoreLock)
-            return $"S32c: factory group is not Hakoniwa (core drag mode {mode}, expected HakoniwaCoreLock)";
-        if (!Approx2(c.RectOf("startup").anchoredPosition, s0))
-            return "S32c: factory Hakoniwa core moved (whole-cluster translate must be banned)";
+        var mode = c.DragApplyDelta("startup", s0, s0 + new Vector2(0f, 400f), new Vector2(0f, 400f));
+        if (mode != FloatingWindowMath.DragMode.Detach)
+            return $"S32c: factory core not free to detach (mode {mode}, expected Detach) — Hakoniwa core-lock must be retired";
+        if (!Approx2(c.RectOf("startup").anchoredPosition, s0 + new Vector2(0f, 400f)))
+            return "S32c: factory core did not follow cursor on detach (real-render)";
 
         // (d) <2 live members ⇒ FormGroup forms NO group (a 1-member group is meaningless). Unknown ids
         //     are ignored, not errors.
@@ -2158,6 +2053,399 @@ public static class FloatingWindowE2ERunner
         var gapped = DockDefaultPlacement.ComputeRects(5);
         if (FloatingWindowMath.IsFlushAdjacent(gapped[0], gapped[1], eps))
             return "S32e: gapped placement reported flush — the flush assertion is vacuous (gap not honored)";
+        return null;
+    }
+
+    // ---- 33. ADR-0024 §3: ComputeMagneticSnap pure arithmetic ----
+    // Covers: DRAG-05/06 pure (flush within R_SNAP, orthogonal-overlap required, x/y independent, beyond→0).
+    static string Section33_ComputeMagneticSnapPure()
+    {
+        float R = FloatingWindowMath.R_SNAP_PX;   // non-const local: also pins the value (no folded-constant unreachable warning)
+        if (R != 96f) return $"S33: R_SNAP_PX expected 96 (got {R})";
+        var moving = new FloatingWindowMath.DockRect(0f, 0f, 100f, 80f);   // L0 R100 T0 B-80
+
+        // (a) flush-right within R: other.Left=130 (gap 30 ≤ 96), y-overlap=80 ⇒ snap +30 on x.
+        var snapR = FloatingWindowMath.ComputeMagneticSnap(moving,
+            new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(130f, 0f, 100f, 80f) }, R);
+        if (!Approx2(snapR, new Vector2(30f, 0f))) return $"S33a: flush-right snap wrong (got {snapR})";
+
+        // (b) flush-left: other.Right=-30 ⇒ snap -30 on x.
+        var snapL = FloatingWindowMath.ComputeMagneticSnap(moving,
+            new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(-130f, 0f, 100f, 80f) }, R);
+        if (!Approx2(snapL, new Vector2(-30f, 0f))) return $"S33b: flush-left snap wrong (got {snapL})";
+
+        // (c) flush below (moving.bottom ↔ other.top): other at top-left (0,-110) ⇒ other.Top=-110 ⇒ snap -30 on y.
+        var snapD = FloatingWindowMath.ComputeMagneticSnap(moving,
+            new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(0f, -110f, 100f, 80f) }, R);
+        if (!Approx2(snapD, new Vector2(0f, -30f))) return $"S33c: flush-below snap wrong (got {snapD})";
+
+        // (d) beyond R: other.Left=250 (gap 150 > 96) ⇒ no snap.
+        var none = FloatingWindowMath.ComputeMagneticSnap(moving,
+            new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(250f, 0f, 100f, 80f) }, R);
+        if (!Approx2(none, Vector2.zero)) return $"S33d: beyond-R should not snap (got {none})";
+
+        // (e) no orthogonal overlap ⇒ no snap (a corner near-miss does not pull).
+        var noOverlap = FloatingWindowMath.ComputeMagneticSnap(moving,
+            new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(130f, -200f, 100f, 80f) }, R);
+        if (!Approx2(noOverlap, Vector2.zero)) return $"S33e: no-overlap should not snap (got {noOverlap})";
+
+        // (f) x and y independent: one neighbour pulls x, another pulls y ⇒ combined offset.
+        var both = FloatingWindowMath.ComputeMagneticSnap(moving, new List<FloatingWindowMath.DockRect>
+        {
+            new FloatingWindowMath.DockRect(130f, 0f, 100f, 80f),    // x +30
+            new FloatingWindowMath.DockRect(0f, -110f, 100f, 80f),   // y -30
+        }, R);
+        if (!Approx2(both, new Vector2(30f, -30f))) return $"S33f: independent x/y snap wrong (got {both})";
+
+        // (g) guards: R ≤ 0 / null / empty ⇒ zero.
+        if (!Approx2(FloatingWindowMath.ComputeMagneticSnap(moving, new List<FloatingWindowMath.DockRect> { new FloatingWindowMath.DockRect(130f, 0f, 100f, 80f) }, 0f), Vector2.zero))
+            return "S33g: R=0 not guarded";
+        if (!Approx2(FloatingWindowMath.ComputeMagneticSnap(moving, null, R), Vector2.zero)) return "S33g: null others not guarded";
+        if (!Approx2(FloatingWindowMath.ComputeMagneticSnap(moving, new List<FloatingWindowMath.DockRect>(), R), Vector2.zero)) return "S33g: empty others not guarded";
+        return null;
+    }
+
+    // ---- 34. ADR-0024 §4: ResolveNearestFlush pure arithmetic ----
+    // Covers: DRAG-07 pure (4 候補から最小移動の flush offset / 直交軸 overlap ≥ 1px / tie-break x 優先 / 無効→0).
+    static string Section34_ResolveNearestFlushPure()
+    {
+        var moving = new FloatingWindowMath.DockRect(0f, 0f, 100f, 80f);   // L0 R100 T0 B-80
+
+        // (a) overlapping on the right: nearest flush is right→left (move -20 on x).
+        var t1 = new FloatingWindowMath.DockRect(80f, 0f, 100f, 80f);      // L80 R180
+        var f1 = FloatingWindowMath.ResolveNearestFlush(moving, t1);
+        if (!Approx2(f1, new Vector2(-20f, 0f))) return $"S34a: nearest flush right wrong (got {f1})";
+
+        // (b) tie-break x over y: moving 100×100, target offset so |x-flush| == |y-flush| (both 40).
+        var m2 = new FloatingWindowMath.DockRect(0f, 0f, 100f, 100f);      // L0 R100 T0 B-100
+        var t2 = new FloatingWindowMath.DockRect(60f, -60f, 100f, 100f);   // L60 R160 T-60 B-160
+        var f2 = FloatingWindowMath.ResolveNearestFlush(m2, t2);
+        if (!Approx2(f2, new Vector2(-40f, 0f))) return $"S34b: tie should resolve to x (got {f2})";
+
+        // (c) overlapping on the left: nearest flush is left→right (move +20 on x).
+        var t3 = new FloatingWindowMath.DockRect(-80f, 0f, 100f, 80f);     // L-80 R20
+        var f3 = FloatingWindowMath.ResolveNearestFlush(moving, t3);
+        if (!Approx2(f3, new Vector2(20f, 0f))) return $"S34c: nearest flush left wrong (got {f3})";
+
+        // (d) no orthogonal overlap on either axis ⇒ zero (degenerate; caller falls back to plain translate).
+        var t4 = new FloatingWindowMath.DockRect(300f, -300f, 50f, 50f);
+        var f4 = FloatingWindowMath.ResolveNearestFlush(moving, t4);
+        if (!Approx2(f4, Vector2.zero)) return $"S34d: disjoint target should give zero (got {f4})";
+        return null;
+    }
+
+    // ---- 35. ADR-0024 §3: SpringEase / SpringRectAt pure curve ----
+    // Covers: DRAG-10 (ease-out-back: e(0)=0, e(1)=1, single overshoot peak EXACTLY 8% at t=0.6; rect interp).
+    static string Section35_SpringEasePure()
+    {
+        int springMs = FloatingWindowMath.SPRING_DURATION_MS;   // non-const locals (avoid folded-constant unreachable warning)
+        float overshoot = FloatingWindowMath.SPRING_OVERSHOOT_RATIO;
+        if (springMs != 200) return $"S35: SPRING_DURATION_MS expected 200 (got {springMs})";
+        if (!Approx(overshoot, 0.08f)) return $"S35: SPRING_OVERSHOOT_RATIO expected 0.08 (got {overshoot})";
+
+        if (!Approx(FloatingWindowMath.SpringEase(0f), 0f)) return "S35a: e(0) != 0";
+        if (!Approx(FloatingWindowMath.SpringEase(1f), 1f)) return "S35a: e(1) != 1";
+        if (!Approx(FloatingWindowMath.SpringEase(-1f), 0f)) return "S35a: e(<0) not clamped to 0";
+        if (!Approx(FloatingWindowMath.SpringEase(2f), 1f)) return "S35a: e(>1) not clamped to 1";
+
+        // (b) Peak overshoot EXACTLY 8% at t=0.6 (s=1.5 tuned so 4s³/(27(s+1)²)=0.08).
+        if (!Approx(FloatingWindowMath.SpringEase(0.6f), 1.08f)) return $"S35b: e(0.6) != 1.08 (got {FloatingWindowMath.SpringEase(0.6f)})";
+
+        // (c) 0.6 is the global max over [0,1]; no sample exceeds 1.08 (single overshoot, then settle).
+        float maxE = 0f;
+        for (int i = 0; i <= 100; i++) maxE = Mathf.Max(maxE, FloatingWindowMath.SpringEase(i / 100f));
+        if (maxE > 1.08f + EPS) return $"S35c: peak overshoot exceeds 8% (max {maxE})";
+        if (maxE < 1.08f - 1e-3f) return $"S35c: peak overshoot below 8% (max {maxE})";
+
+        // (d) SpringRectAt interpolates pos + size; t=0 ⇒ from, t=1 ⇒ to, t=0.6 ⇒ 8% past target.
+        var from = new FloatingWindowMath.DockRect(0f, 0f, 100f, 100f);
+        var to   = new FloatingWindowMath.DockRect(100f, 0f, 200f, 100f);
+        var r0 = FloatingWindowMath.SpringRectAt(from, to, 0f);
+        if (!Approx2(r0.topLeft, from.topLeft) || !Approx2(r0.size, from.size)) return "S35d: t=0 != from";
+        var r1 = FloatingWindowMath.SpringRectAt(from, to, 1f);
+        if (!Approx2(r1.topLeft, to.topLeft) || !Approx2(r1.size, to.size)) return "S35d: t=1 != to";
+        var rPeak = FloatingWindowMath.SpringRectAt(from, to, 0.6f);
+        if (!Approx(rPeak.topLeft.x, 108f)) return $"S35d: overshoot x != 108 (got {rPeak.topLeft.x})";   // 0 + 1.08*100
+        if (!Approx(rPeak.size.x, 208f)) return $"S35d: overshoot w != 208 (got {rPeak.size.x})";          // 100 + 1.08*100
+        return null;
+    }
+
+    // ---- 36. ADR-0024 §3/§7: in-drag magnetic snap real-render wiring ----
+    // Covers: DRAG-05 (TRANSLATE: island outer edge within R_SNAP of an external window ⇒ flush snap + stickiness)
+    //         DRAG-06 (DETACH: dragged edge within R_SNAP ⇒ flush snap).
+    static string Section36_MagneticSnapRenderWiring(List<GameObject> spawned)
+    {
+        // (a) DRAG-05 Translate snap: singleton A dragged so its right edge comes within R_SNAP of E.left.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);   // dragged singleton
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 400, 0, 280, 180, true);   // external, ungrouped
+        Vector2 aStart = c.RectOf("A").anchoredPosition;   // (0,0); A.right=280, E.left=400
+        // offset (90,0) ⇒ A.right=370, gap to E.left=400 is 30 ≤ 96 ⇒ snap +30 ⇒ A lands at (120,0) flush.
+        var mode = c.DragApplyDelta("A", aStart, aStart + new Vector2(90f, 0f), new Vector2(90f, 0f));
+        if (mode != FloatingWindowMath.DragMode.Translate) return $"S36a: expected Translate (got {mode})";
+        if (!Approx2(c.RectOf("A").anchoredPosition, new Vector2(120f, 0f))) return $"S36a: magnetic snap did not flush A to E (got {c.RectOf("A").anchoredPosition})";
+
+        // stickiness: drag a bit further (offset 100) — A.right=380, gap 20 ≤ 96 ⇒ still snapped to (120,0).
+        c.DragApplyDelta("A", aStart, aStart + new Vector2(100f, 0f), new Vector2(10f, 0f));
+        if (!Approx2(c.RectOf("A").anchoredPosition, new Vector2(120f, 0f))) return $"S36a: stickiness broke (got {c.RectOf("A").anchoredPosition})";
+
+        // off the magnet: offset 10 ⇒ A.right=290, gap 110 > 96 ⇒ free at (10,0).
+        c.DragApplyDelta("A", aStart, aStart + new Vector2(10f, 0f), new Vector2(-90f, 0f));
+        if (!Approx2(c.RectOf("A").anchoredPosition, new Vector2(10f, 0f))) return $"S36a: did not release from magnet beyond R_SNAP (got {c.RectOf("A").anchoredPosition})";
+
+        // (b) DRAG-06 Detach snap: drag A beyond D_DETACH toward a far E, landing within R_SNAP of E.left.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
+        var c2 = MakeController(spawned, layer2);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 600, 0, 280, 180, true);   // E.left=600
+        Vector2 a2 = c2.RectOf("A").anchoredPosition;
+        // offset (290,0): dist 290 ≥ 256 ⇒ Detach; A.right=570, gap to 600 = 30 ≤ 96 ⇒ snap +30 ⇒ (320,0) flush.
+        var mode2 = c2.DragApplyDelta("A", a2, a2 + new Vector2(290f, 0f), new Vector2(290f, 0f));
+        if (mode2 != FloatingWindowMath.DragMode.Detach) return $"S36b: expected Detach (got {mode2})";
+        if (!Approx2(c2.RectOf("A").anchoredPosition, new Vector2(320f, 0f))) return $"S36b: detach magnetic snap did not flush A to E (got {c2.RectOf("A").anchoredPosition})";
+        return null;
+    }
+
+    // ---- 37. ADR-0024 §4: release-position overlap → nearest-flush + merge ----
+    // Covers: DRAG-07 (Translate release overlapping island Y ⇒ snap to nearest flush + merge cascade /
+    //         Detach release overlapping Y ⇒ A snaps flush + joins Y via singleton merge / ADR-0019 D4 retained).
+    static string Section37_ReleaseOverlapMerge(List<GameObject> spawned)
+    {
+        // (a) TRANSLATE release overlapping a different island Y ⇒ snap to nearest flush + merge into Y.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",  0,   0,   280, 180, true);   // dragged singleton
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Y1", 150, 0,   280, 180, true);   // Y island, within 256 of A
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y2", 150, 180, 280, 180, true);   // Y2 above Y1, flush
+        const string GY = "grp_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
+        c.SetGroupId("Y1", GY); c.SetGroupId("Y2", GY);
+        Vector2 aStart = c.RectOf("A").anchoredPosition;   // (0,0)
+        Vector2 cursor = new Vector2(200f, -50f);          // over Y1 ([150,430]×[-180,0]); dist≈206 < 256 ⇒ Translate
+        var mode = c.ReleaseDrag("A", aStart, cursor);
+        if (mode != FloatingWindowMath.DragMode.Translate) return $"S37a: expected Translate (got {mode})";
+        // nearest flush of A(shifted to (200,-50)) against Y1 ⇒ top→bottom (A below Y1): applied (200,-180).
+        if (!Approx2(c.RectOf("A").anchoredPosition, new Vector2(200f, -180f))) return $"S37a: A did not snap to nearest flush (got {c.RectOf("A").anchoredPosition})";
+        if (c.GroupIdOf("A") != GY) return $"S37a: A did not merge into Y (got {c.GroupIdOf("A")})";
+        if (c.GroupIdOf("Y1") != GY || c.GroupIdOf("Y2") != GY) return "S37a: Y island lost its id on merge";
+
+        // (b) DETACH release overlapping a different island Y ⇒ A leaves its island, snaps flush to Y, joins Y.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
+        var c2 = MakeController(spawned, layer2);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",   0,   0,    280, 180, true);   // dragged
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Asib",0,   -200, 280, 180, true);   // A's island sibling
+        const string GI = "grp_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
+        c2.SetGroupId("A", GI); c2.SetGroupId("Asib", GI);
+        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y1", 400, -200, 280, 180, true);    // external Y island
+        c2.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "Y2", 400, -20, 280, 180, true);  // Y2 above Y1, flush
+        const string GY2 = "grp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
+        c2.SetGroupId("Y1", GY2); c2.SetGroupId("Y2", GY2);
+        Vector2 a2 = c2.RectOf("A").anchoredPosition;     // (0,0)
+        Vector2 cursor2 = new Vector2(450f, -260f);       // over Y1 ([400,680]×[-380,-200]); dist≈521 ≥ 256 ⇒ Detach
+        var mode2 = c2.ReleaseDrag("A", a2, cursor2);
+        if (mode2 != FloatingWindowMath.DragMode.Detach) return $"S37b: expected Detach (got {mode2})";
+        if (c2.GroupIdOf("A") != GY2) return $"S37b: detached A did not join Y (got {c2.GroupIdOf("A")})";
+        if (c2.GroupIdOf("Asib") != null) return $"S37b: A's old island remnant did not dissolve (got {c2.GroupIdOf("Asib")})";
+        if (c2.GroupIdOf("Y1") != GY2 || c2.GroupIdOf("Y2") != GY2) return "S37b: Y island lost its id";
+
+        // (c) ADR-0019 D4 retained: TRANSLATE release on EMPTY space that happens to land flush (via the
+        //     magnetic snap) attaches. Singleton A dragged flush-right to E ⇒ mint a group.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
+        var c3 = MakeController(spawned, layer3);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 290, 0, 280, 180, true);   // E.left=290; A.right=280 (gap 10)
+        Vector2 a3 = c3.RectOf("A").anchoredPosition;
+        // offset (5,0) ⇒ A.right=285, gap 5 ≤ 96 ⇒ snap +5 ⇒ A flush at (10,0); empty (cursor not over E).
+        var mode3 = c3.ReleaseDrag("A", a3, a3 + new Vector2(5f, 0f));
+        if (mode3 != FloatingWindowMath.DragMode.Translate) return $"S37c: expected Translate (got {mode3})";
+        string g3 = c3.GroupIdOf("A");
+        if (string.IsNullOrEmpty(g3)) return "S37c: incidental flush attach (ADR-0019 D4) did not mint a group";
+        if (c3.GroupIdOf("E") != g3) return "S37c: flush partner E did not adopt the minted group";
+
+        // (d) ISLAND-WIDE merge: a multi-member island docks flush to an external window via a NON-dragged
+        //     member's edge. A (dragged, top) + B (bottom) island; the island shifts right so B's right
+        //     edge kisses Y — but A does NOT y-overlap Y. The merge must still fire (the old dragged-only
+        //     flush scan would miss it). Translate EMPTY branch (cursor in empty space) + magnetic snap.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
+        var c4 = MakeController(spawned, layer4);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);   // dragged (top)
+        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);   // island sibling (bottom)
+        const string GD = "grp_dddddddddddddddddddddddddddddddd";
+        c4.SetGroupId("A", GD); c4.SetGroupId("B", GD);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 300, -200, 280, 180, true);     // external, aligned with B only
+        Vector2 a4 = c4.RectOf("A").anchoredPosition;
+        // offset (15,0): island bbox right=280→295, gap 5 ≤ R_SNAP ⇒ snap +5 ⇒ island shifts (20,0).
+        // B.right=300=Y.left (flush, y-overlap with Y); A.right=300 but A has NO y-overlap with Y.
+        var mode4 = c4.ReleaseDrag("A", a4, a4 + new Vector2(15f, 0f));
+        if (mode4 != FloatingWindowMath.DragMode.Translate) return $"S37d: expected Translate (got {mode4})";
+        if (!Approx2(c4.RectOf("B").anchoredPosition, new Vector2(20f, -200f))) return $"S37d: island did not snap flush via B (got {c4.RectOf("B").anchoredPosition})";
+        if (c4.GroupIdOf("Y") != GD) return $"S37d: island-wide merge missed — Y not absorbed via B's edge (got {c4.GroupIdOf("Y")})";
+        if (c4.GroupIdOf("A") != GD || c4.GroupIdOf("B") != GD) return "S37d: island lost its id on merge";
+
+        // (e) OVERLAP-merge is driven by the cursor-over-Y RULE, not a member-level flush rescan: a
+        //     multi-member island dropped ON Y merges with Y even when no member ends up geometrically
+        //     flush after the bbox snap (review fix — CommitMergeWithTarget). 2-member island, cursor over
+        //     external singleton Y, within 256 ⇒ Translate overlap branch.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer5, out _);
+        var c5 = MakeController(spawned, layer5);
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);   // dragged
+        c5.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);   // island sibling
+        const string GE = "grp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        c5.SetGroupId("A", GE); c5.SetGroupId("B", GE);
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 200, -50, 280, 180, true);      // external singleton
+        Vector2 a5 = c5.RectOf("A").anchoredPosition;
+        Vector2 cur5 = new Vector2(230f, -100f);   // over Y ([200,480]×[-230,-50]); dist≈251 < 256 ⇒ Translate
+        var mode5 = c5.ReleaseDrag("A", a5, cur5);
+        if (mode5 != FloatingWindowMath.DragMode.Translate) return $"S37e: expected Translate (got {mode5})";
+        if (c5.GroupIdOf("Y") != GE) return $"S37e: cursor-over-Y multi-member merge missed (got {c5.GroupIdOf("Y")})";
+        if (c5.GroupIdOf("A") != GE || c5.GroupIdOf("B") != GE) return "S37e: island lost its id on overlap merge";
+        return null;
+    }
+
+    // ---- 38. ADR-0024 §8: ESC cancel during drag ----
+    // Covers: DRAG-09 (ESC ⇒ live render reverts to rest, state (groupId / persisted rect) untouched,
+    //         MouseUp commits nothing).
+    static string Section38_EscCancel(List<GameObject> spawned)
+    {
+        // (a) Translate then ESC: island reverts to rest; groupId unchanged; ReleaseDrag commits nothing.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        const string G = "grp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+        c.SetGroupId("A", G); c.SetGroupId("B", G);
+        Vector2 a0 = c.RectOf("A").anchoredPosition, b0 = c.RectOf("B").anchoredPosition;
+        Vector2 dragStart = a0;
+        c.BeginDrag("A", dragStart);
+        c.DragApplyDelta("A", dragStart, a0 + new Vector2(80f, 0f), new Vector2(80f, 0f));   // translate the island
+        if (Approx2(c.RectOf("A").anchoredPosition, a0)) return "S38a: precondition — island did not move before ESC";
+        c.CancelDrag("A");
+        if (!Approx2(c.RectOf("A").anchoredPosition, a0)) return "S38a: ESC did not revert dragged to rest";
+        if (!Approx2(c.RectOf("B").anchoredPosition, b0)) return "S38a: ESC did not revert sibling to rest";
+        if (c.GroupIdOf("A") != G || c.GroupIdOf("B") != G) return "S38a: ESC mutated groupId (state must be untouched)";
+        // The following MouseUp commits NOTHING.
+        c.ReleaseDrag("A", dragStart, a0 + new Vector2(80f, 0f));
+        if (!Approx2(c.RectOf("A").anchoredPosition, a0)) return "S38a: post-ESC MouseUp committed a move";
+        if (c.GroupIdOf("A") != G) return "S38a: post-ESC MouseUp committed a group change";
+
+        // (b) Detach drag then ESC: dragged reverts to rest; groupId never went null (commit skipped).
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
+        var c2 = MakeController(spawned, layer2);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0, 0,    280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Q", 0, -200, 280, 180, true);
+        const string G2 = "grp_ffffffffffffffffffffffffffffffff";
+        c2.SetGroupId("P", G2); c2.SetGroupId("Q", G2);
+        Vector2 p0 = c2.RectOf("P").anchoredPosition;
+        c2.BeginDrag("P", p0);
+        c2.DragApplyDelta("P", p0, p0 + new Vector2(0f, 400f), new Vector2(0f, 400f));   // detach drag (beyond 256)
+        if (Approx2(c2.RectOf("P").anchoredPosition, p0)) return "S38b: precondition — detached dragged did not move";
+        c2.CancelDrag("P");
+        if (!Approx2(c2.RectOf("P").anchoredPosition, p0)) return "S38b: ESC did not revert detached dragged to rest";
+        if (c2.GroupIdOf("P") != G2 || c2.GroupIdOf("Q") != G2) return "S38b: ESC during detach changed groupId (must be untouched)";
+        c2.ReleaseDrag("P", p0, p0 + new Vector2(0f, 400f));
+        if (c2.GroupIdOf("P") != G2) return "S38b: post-ESC MouseUp committed the detach (must skip)";
+        return null;
+    }
+
+    // ---- 39. ADR-0024 §3: spring fire-point wiring (non-vacuous) ----
+    // Covers: DRAG-10 wiring (the injected spring animator fires on swap / translate / detach commit and ESC).
+    static string Section39_SpringFireWiring(List<GameObject> spawned)
+    {
+        int fires = 0;
+        Action<RectTransform, FloatingWindowMath.DockRect, FloatingWindowMath.DockRect> recorder =
+            (rt, from, to) => fires++;
+
+        // (a) Swap commit fires the spring (both windows move ⇒ ≥1 fire).
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+        c.SetSpringAnimator(recorder);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);
+        const string G = "grp_ssssssssssssssssssssssssssssssss";
+        c.SetGroupId("orders", G); c.SetGroupId("positions", G);
+        fires = 0;
+        c.ReleaseDrag("orders", Vector2.zero, new Vector2(35f, -30f));   // swap commit
+        if (fires == 0) return "S39a: swap commit did not fire the spring";
+
+        // (b) Detach commit fires the spring.
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
+        var c2 = MakeController(spawned, layer2);
+        c2.SetSpringAnimator(recorder);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0, 0,    280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Q", 0, -200, 280, 180, true);
+        const string G2 = "grp_ssssssssssssssssssssssssssssss22";
+        c2.SetGroupId("P", G2); c2.SetGroupId("Q", G2);
+        fires = 0;
+        c2.ReleaseDrag("P", Vector2.zero, new Vector2(0f, 400f));   // detach commit
+        if (fires == 0) return "S39b: detach commit did not fire the spring";
+
+        // (c) ESC fires the spring (revert animation).
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
+        var c3 = MakeController(spawned, layer3);
+        c3.SetSpringAnimator(recorder);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "X", 0, 0,    280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Z", 0, -200, 280, 180, true);
+        const string G3 = "grp_ssssssssssssssssssssssssssssss33";
+        c3.SetGroupId("X", G3); c3.SetGroupId("Z", G3);
+        c3.BeginDrag("X", Vector2.zero);
+        c3.DragApplyDelta("X", Vector2.zero, new Vector2(80f, 0f), new Vector2(80f, 0f));
+        fires = 0;
+        c3.CancelDrag("X");
+        if (fires == 0) return "S39c: ESC cancel did not fire the spring (revert animation)";
+
+        // (d) BeginDrag STOPS any in-flight tween on every island member (review fix: a re-grab within the
+        //     200ms commit/ESC tween must settle the leftover tween so it cannot fight the new drag).
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
+        var c4 = MakeController(spawned, layer4);
+        var stopped = new List<string>();
+        c4.SetSpringAnimator(recorder, rt => { if (rt != null) stopped.Add(rt.name); });
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "M", 0, 0,    280, 180, true);
+        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "N", 0, -200, 280, 180, true);
+        const string G4 = "grp_ssssssssssssssssssssssssssssss44";
+        c4.SetGroupId("M", G4); c4.SetGroupId("N", G4);
+        c4.BeginDrag("M", Vector2.zero);
+        // Both island members (M, N) must have had their tweens stopped+settled at drag start.
+        string stoppedList = string.Join(",", stopped);
+        if (!stopped.Contains("W_M") || !stopped.Contains("W_N"))
+            return "S39d: BeginDrag did not stop in-flight tweens on island members (stopped: " + stoppedList + ")";
+        return null;
+    }
+
+    // ---- 40. ADR-0024 §8 / findings 0088 §8: chart:<id> drags like any window ----
+    // Covers: DRAG-13 (chart:<id> can form an island with a base window via flush attach, then translate
+    //         and detach exactly like the others — programmatic spawn keeps groupId=null until drag-release).
+    static string Section40_ChartEquivalence(List<GameObject> spawned)
+    {
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
+        var c = MakeController(spawned, layer);
+        c.Spawn(FloatingWindowCatalog.KIND_STARTUP, "startup",   0,   0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_CHART,   "chart:abc", 280, 0, 280, 180, true);   // flush-right of startup
+        // (a) programmatic chart spawn is ungrouped (attach is drag-release exclusive).
+        if (c.GroupIdOf("chart:abc") != null) return "S40a: chart spawned with a groupId (must be null)";
+
+        // (b) chart forms an island with startup via flush attach (chart is NOT special).
+        c.SnapOnRelease("chart:abc");
+        string g = c.GroupIdOf("chart:abc");
+        if (string.IsNullOrEmpty(g)) return "S40b: chart did not flush-attach to startup";
+        if (c.GroupIdOf("startup") != g) return "S40b: startup did not join the chart's island";
+
+        // (c) chart translates the whole island (cursor outside island, < 256). startup at (0,0,280,180);
+        //     chart at (280,0). Drag down-RIGHT so the cursor clears startup's rect (x>280) — a straight-
+        //     down drag would land on startup's inclusive right edge and trigger Swap instead.
+        Vector2 chartRest = c.RectOf("chart:abc").anchoredPosition;
+        Vector2 startupRest = c.RectOf("startup").anchoredPosition;
+        Vector2 trOffset = new Vector2(60f, -60f);   // cursor (340,-60): clear of startup, dist≈85 < 256
+        var mode = c.DragApplyDelta("chart:abc", chartRest, chartRest + trOffset, trOffset);
+        if (mode != FloatingWindowMath.DragMode.Translate) return $"S40c: chart drag not Translate (got {mode})";
+        if (!Approx2(c.RectOf("chart:abc").anchoredPosition, chartRest + trOffset)) return "S40c: chart did not translate";
+        if (!Approx2(c.RectOf("startup").anchoredPosition, startupRest + trOffset)) return "S40c: island sibling (startup) did not follow chart";
+
+        // (d) chart detaches beyond D_DETACH ⇒ chart leaves the island, remnant (startup) dissolves. Drag
+        //     straight down past 256: cursor (280,-300) is below startup (y<-180) so it stays off the rect.
+        var mode2 = c.ReleaseDrag("chart:abc", chartRest, chartRest + new Vector2(0f, -300f));
+        if (mode2 != FloatingWindowMath.DragMode.Detach) return $"S40d: chart detach not Detach (got {mode2})";
+        if (c.GroupIdOf("chart:abc") != null) return "S40d: chart did not detach (groupId not cleared)";
+        if (c.GroupIdOf("startup") != null) return "S40d: remnant startup did not dissolve";
         return null;
     }
 

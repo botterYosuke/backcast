@@ -43,6 +43,29 @@ public class FloatingWindowController
     // see ADR-0019 D8 amendment / findings 0082 §12, findings 0083). The cell coordinator never mints.
     class Entry { public RectTransform rt; public string kind; public string id; public string groupId; }
 
+    // ADR-0024 §2/§7 / findings 0088 §1, §7: the per-drag snapshot that makes the 3-mode dispatcher work
+    // and ESC-cancel trivial. Captured at BeginDrag: the dragged's drag-start top-left, the dragged's
+    // ISLAND (every visible/live member sharing its non-null groupId when ≥2, else just {dragged}), and
+    // each island member's REST rect. Every frame re-derives the live position ABSOLUTELY from the rest
+    // rect + (cursor - dragStart) + magnetic snap, so a stale/transient frame can never corrupt the
+    // geometry, and ESC reverts by writing the rest rects straight back. `canceled` short-circuits the
+    // release commit (ESC already reverted; MouseUp must commit nothing).
+    class DragSession
+    {
+        public string draggedId;
+        public Vector2 dragStart;
+        public List<string> islandIds;                                         // includes draggedId
+        public Dictionary<string, FloatingWindowMath.DockRect> restRects;      // per island member
+        public bool canceled;
+        // ADR-0024 (efficiency): drag-INVARIANTS snapshotted once at BeginDrag so the per-frame
+        // DragApplyDelta does not re-allocate them. islandBbox = union of rest rects; islandMembers =
+        // GroupMember rects (rest) for the swap scan; nonIslandRects = every visible/live window NOT in
+        // the island (the magnetic-snap "others" — external windows do not move during a title drag).
+        public FloatingWindowMath.DockRect islandBbox;
+        public List<FloatingWindowMath.GroupMember> islandMembers;
+        public List<FloatingWindowMath.DockRect> nonIslandRects;
+    }
+
     static readonly Vector2 CENTER = new Vector2(0.5f, 0.5f);
     static readonly Vector2 TOP_LEFT = new Vector2(0f, 1f);
 
@@ -62,13 +85,11 @@ public class FloatingWindowController
     // works (the structural slices A–F are independent of the visual preview). DragApplyDelta /
     // ReleaseDrag drive it; the root binds one per plane via AttachGhostLayer.
     DragGhostLayer _ghostLayer;
-    // #104 F8 (ADR-0019 / findings 0082 §7): the LAST resolved Hakoniwa swap-target id from the most
-    // recent DragApplyDelta frame. Cached so CommitHakoniwaSwap at OnEndDrag commits against the same
-    // target the last-painted ghost predicted, even if sibling order or rect positions shifted between
-    // the final ghost frame and the release (e.g., another window's SetAsLastSibling on the same plane,
-    // or a parallel restore mid-drag). Null whenever the dragged is not currently in HakoniwaSwap mode;
-    // CommitHakoniwaSwap falls back to a fresh ResolveHakoniwaSwapTarget when null, so a release without
-    // a tracked mid-drag frame (rare; degenerate) still produces a defined outcome.
+    // ADR-0024 §7 / findings 0088 §7: the LAST resolved swap-target id from the most recent Swap-mode
+    // DragApplyDelta frame. Cached so CommitSwap at OnEndDrag commits against the same target the
+    // last-painted ghost predicted, even if sibling order / rects shifted between the final ghost frame
+    // and the release. Null whenever the dragged is not currently in Swap mode; CommitSwap falls back to
+    // the release-frame's resolved target when null, so a degenerate release still has a defined outcome.
     string _lastSwapTargetId;
 
     // #101 (fix #99 regression; findings 0078): the window the USER last focused via a title-bar
@@ -77,6 +98,23 @@ public class FloatingWindowController
     // restore BringToFronts every window and must NOT forge a focus target). May go stale when the
     // focused window is closed/hidden; the resolver re-validates liveness, so staleness is harmless.
     string _lastUserFocusedId;
+
+    // ADR-0024 §2/§7: the live drag snapshot (null between drags). Owned by BeginDrag / DragApplyDelta /
+    // ReleaseDrag / CancelDrag.
+    DragSession _drag;
+
+    // ADR-0024 §3 / findings 0088 §3: the injected spring side-effect ("プルン" rect interpolation). The
+    // controller ALWAYS writes the authoritative final geometry directly (so the AFK gate sees the
+    // settled rect without a driver); this optional hook lets the production RectSpringDriver animate the
+    // visual transition from→to over SPRING_DURATION_MS. Null ⇒ no animation (AFK / headless). Signature:
+    // (rt, fromRect, toRect). Injected via SetSpringAnimator; a recorder can be injected by the gate to
+    // pin the fire-points (engage / commit / ESC) non-vacuously.
+    Action<RectTransform, FloatingWindowMath.DockRect, FloatingWindowMath.DockRect> _springAnim;
+    // ADR-0024 §3 (review fix): stop+settle any in-flight spring tween on an rt. BeginDrag calls this
+    // for every island member so a re-grab WITHIN the 200ms commit/ESC tween reads a SETTLED rest pose
+    // (not a transient overshoot) and the dying tween cannot fight the new drag's per-frame writes. Null
+    // ⇒ no driver (AFK / headless — nothing to stop).
+    Action<RectTransform> _springStop;
 
     public FloatingWindowController(
         RectTransform layer,
@@ -101,8 +139,30 @@ public class FloatingWindowController
     // release rule from findings 0082 §8 — ghosts vanish at the end of the drag).
     public void AttachGhostLayer(DragGhostLayer ghostLayer) { _ghostLayer = ghostLayer; }
     public DragGhostLayer GhostLayer => _ghostLayer;
+
+    // ADR-0024 §3 / findings 0088 §3: bind the spring animator (production RectSpringDriver.Animate, or a
+    // gate recorder) and, optionally, its stop+settle hook (RectSpringDriver.Stop). Null clears them. The
+    // controller still writes the final geometry directly regardless of the animator.
+    public void SetSpringAnimator(
+        Action<RectTransform, FloatingWindowMath.DockRect, FloatingWindowMath.DockRect> springAnim,
+        Action<RectTransform> springStop = null)
+    {
+        _springAnim = springAnim;
+        _springStop = springStop;
+    }
+
+    // Fire the spring from `from` to the rt's CURRENT (already-settled) rect. Caller writes the final
+    // geometry first, then calls this so production animates from the pre-commit pose into it. No-op when
+    // no animator is bound or the rects are identical (nothing to animate).
+    void FireSpring(RectTransform rt, FloatingWindowMath.DockRect from)
+    {
+        if (_springAnim == null || rt == null) return;
+        var to = new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta);
+        if (from.topLeft == to.topLeft && from.size == to.size) return;
+        _springAnim(rt, from, to);
+    }
     // #104 (ADR-0019 / findings 0082 §1): the group-membership read seam. null = singleton. The math
-    // layer (FloatingWindowMath.EvaluateDragMode) and the input layer (drag mode pick) read through this
+    // layer (FloatingWindowMath.ResolveDragMode) and the input layer (drag mode pick) read through this
     // — never reach into the entry struct directly.
     public string GroupIdOf(string id) => _windows.TryGetValue(id, out var e) ? e.groupId : null;
     // #104 (ADR-0019 / findings 0082 §1): the group-membership write seam used by SnapOnRelease's attach
@@ -353,139 +413,340 @@ public class FloatingWindowController
         foreach (var m in toDissolve) m.groupId = null;
     }
 
-    // #104 (ADR-0019 / findings 0082 §5, §6, §7, §8): the SINGLE production release entry. Called from
-    // FloatingWindowTitleInput.OnEndDrag with the dragged's drag-start logical anchor (`restAtDragStart`)
-    // and the running cursor (`cursor` = rest + accumulated frameDelta). Classifies the final mode via
-    // EvaluateDragMode and commits the variant outcome:
-    //
-    //   SoloDrag / NormalGroupTranslate: live geometry already tracked the cursor; snap-on-release runs
-    //     (SnapOnRelease applies the magnet snap AND the flush-attach commit — Slice B's group merge).
-    //   NormalGroupDetach / HakoniwaDetach: live geometry was frozen during drag; at release the dragged
-    //     jumps to `cursor` (where the Slice G ghost was painted), drops its current groupId, runs the
-    //     magnet snap (ApplySnapOffset), and re-evaluates flush-attach with the OLD group EXCLUDED
-    //     (CommitFlushAttachOnRelease(id, excludeGroupId: oldGroup)) — findings 0082 §5: a detach
-    //     commit must never silently re-merge the dragged back into the group it just left, but a flush
-    //     partner OUTSIDE oldGroup (or a flush singleton) still mints / joins a fresh group. The old
-    //     group is then run through DissolveIfShrunkTo (≥2 visible/live members ⇒ group keeps, else the
-    //     remnant goes solo). detach + dissolve are commit-on-release per findings 0082 §8.
-    //   HakoniwaCoreLock / HakoniwaSnapBack: dragged returns to `restAtDragStart`; groupId untouched.
-    //     Live geometry was frozen during drag, so this is just an explicit snap-back.
-    //   HakoniwaSwap: Slice E2's `(x,y,w,h)` 4-value swap with the drop target. Until E2 lands the
-    //     hasTarget path stays false ⇒ EvaluateDragMode never returns HakoniwaSwap here, so this branch
-    //     is unreachable in Slice D — Slice E2 wires the swap commit.
-    public FloatingWindowMath.DragMode ReleaseDrag(string id, Vector2 restAtDragStart, Vector2 cursor)
+    // ADR-0024 §2/§7 / findings 0088 §1, §7: open a drag session — snapshot the dragged's drag-start
+    // top-left, its island (visible/live members sharing a non-null groupId when ≥2; else just {dragged}),
+    // and every island member's rest rect. The title input calls this from OnBeginDrag; DragApplyDelta /
+    // ReleaseDrag self-heal via EnsureDragSession if a caller (or the AFK gate) skips it. Idempotent —
+    // re-opening for the same id re-snapshots from the current (rest) geometry.
+    public void BeginDrag(string id, Vector2 dragStart)
     {
-        if (string.IsNullOrEmpty(id)) return FloatingWindowMath.DragMode.SoloDrag;
-        if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null)
-            return FloatingWindowMath.DragMode.SoloDrag;
+        _drag = null;
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var dragged) || dragged.rt == null) return;
+        var islandIds = ResolveIslandIds(dragged);
 
-        var ctx = BuildDragContext(dragged, restAtDragStart, cursor);
-        var mode = FloatingWindowMath.EvaluateDragMode(ctx);
-        string oldGroup = dragged.groupId;
+        // Review fix: settle any in-flight commit/ESC spring on the island members FIRST, so the rest
+        // snapshot below reads each window's settled target — not a transient overshoot — and no dying
+        // tween fights this drag's per-frame writes.
+        if (_springStop != null)
+            foreach (var mid in islandIds)
+                if (_windows.TryGetValue(mid, out var se) && se.rt != null) _springStop(se.rt);
 
-        switch (mode)
+        var session = new DragSession
         {
-            case FloatingWindowMath.DragMode.SoloDrag:
-                SnapOnRelease(id);
-                break;
-
-            case FloatingWindowMath.DragMode.NormalGroupTranslate:
-                // #104 F4 (findings 0082 §3-4): the magnet snap at release must move the WHOLE
-                // group, not just the dragged. Mid-drag DragApplyDelta translated every group
-                // member by frameDelta so the group's flush adjacency is intact at release; if
-                // SnapOnRelease moved only the dragged, that adjacency breaks and the subsequent
-                // CommitFlushAttachOnRelease scan could reclassify the dragged against an
-                // unrelated flush partner (or leave it singleton), splitting the original group.
-                // Fix: apply ApplySnapOffset to the dragged, propagate that same offset to every
-                // OTHER visible/live group member, THEN run CommitFlushAttachOnRelease. The flush
-                // partners are unchanged (group still flush internally; offset is shared with any
-                // external snap target), so the merge cascade just confirms the existing groupId.
-                {
-                    Vector2 groupOffset = ApplySnapOffset(id, DEFAULT_SNAP_THRESHOLD);
-                    if (groupOffset != Vector2.zero && !string.IsNullOrEmpty(dragged.groupId))
-                    {
-                        foreach (var kv in _windows)
-                        {
-                            if (kv.Key == id) continue;                                 // dragged already moved by ApplySnapOffset
-                            if (kv.Value.groupId != dragged.groupId) continue;          // only this group
-                            var rt = kv.Value.rt;
-                            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
-                            rt.anchoredPosition += groupOffset;
-                        }
-                    }
-                    CommitFlushAttachOnRelease(id);
-                }
-                break;
-
-            case FloatingWindowMath.DragMode.NormalGroupDetach:
-            case FloatingWindowMath.DragMode.HakoniwaDetach:
-                dragged.rt.anchoredPosition = cursor;
-                dragged.groupId = null;
-                // findings 0082 §5: detach commit clears groupId, then re-evaluates snap + flush-attach
-                // at the new cursor. The attach commit EXCLUDES oldGroup so a dragged that lands flush
-                // to a former sibling does NOT silently re-merge (the user's detach gesture wins). A
-                // flush partner OUTSIDE oldGroup (or a flush singleton) still forms / joins a new group.
-                ApplySnapOffset(id, DEFAULT_SNAP_THRESHOLD);
-                CommitFlushAttachOnRelease(id, excludeGroupId: oldGroup);
-                if (!string.IsNullOrEmpty(oldGroup)) DissolveIfShrunkTo(oldGroup, 2);
-                break;
-
-            case FloatingWindowMath.DragMode.HakoniwaCoreLock:
-            case FloatingWindowMath.DragMode.HakoniwaSnapBack:
-                dragged.rt.anchoredPosition = restAtDragStart;
-                break;
-
-            case FloatingWindowMath.DragMode.HakoniwaSwap:
-                CommitHakoniwaSwap(id, restAtDragStart, cursor);
-                break;
+            draggedId = id,
+            dragStart = dragStart,
+            islandIds = islandIds,
+            restRects = new Dictionary<string, FloatingWindowMath.DockRect>(islandIds.Count),
+            islandMembers = new List<FloatingWindowMath.GroupMember>(islandIds.Count),
+        };
+        var islandSet = new HashSet<string>(islandIds);
+        float left = float.PositiveInfinity, top = float.NegativeInfinity;
+        float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
+        foreach (var mid in islandIds)
+        {
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            var rect = new FloatingWindowMath.DockRect(e.rt.anchoredPosition, e.rt.sizeDelta);
+            session.restRects[mid] = rect;
+            session.islandMembers.Add(new FloatingWindowMath.GroupMember { id = mid, rect = rect, siblingIndex = e.rt.GetSiblingIndex() });
+            if (rect.Left < left) left = rect.Left;
+            if (rect.Right > right) right = rect.Right;
+            if (rect.Top > top) top = rect.Top;
+            if (rect.Bottom < bottom) bottom = rect.Bottom;
         }
-        // F8 (#104 contract): clear the swap-target cache so the NEXT drag's DragApplyDelta starts
-        // from a clean slate. ReleaseDrag is the single end-of-drag boundary, so doing the clear
-        // here covers every mode path (including non-swap modes that never wrote the field).
-        _lastSwapTargetId = null;
-        // #104 Slice G (findings 0082 §8): commit-on-release rule — at release the ghost preview
-        // disappears (it was a phantom; the live geometry now reflects the commit). Clear runs whether
-        // or not we used the ghost layer this drag, so a probe that never set a ghost layer is fine.
-        if (_ghostLayer != null) _ghostLayer.Clear();
-        return mode;
+        session.islandBbox = new FloatingWindowMath.DockRect(new Vector2(left, top), new Vector2(right - left, top - bottom));
+
+        // The magnetic-snap "others" set: every visible/live window NOT in the island. External windows
+        // do not move during a title drag, so this is a drag-invariant snapshot.
+        session.nonIslandRects = new List<FloatingWindowMath.DockRect>(_windows.Count);
+        foreach (var kv in _windows)
+        {
+            if (islandSet.Contains(kv.Key)) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            session.nonIslandRects.Add(new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta));
+        }
+        _drag = session;
     }
 
-    // #104 (ADR-0019 / findings 0082 §7): commit a Hakoniwa swap. The dragged ↔ drop-target exchange
-    // four values verbatim — `(x, y, w, h)`. kind / id / groupId / content are UNCHANGED, so the
-    // group's footprint stays exactly the same; only the geometry is rotated between the two members.
-    // The drop target is resolved at release time via ResolveHakoniwaSwapTarget — the SAME resolver
-    // BuildDragContext used during drag, so the mid-drag mode and the commit cannot disagree.
-    void CommitHakoniwaSwap(string id, Vector2 restAtDragStart, Vector2 cursor)
+    void EnsureDragSession(string id, Vector2 dragStart)
+    {
+        if (_drag == null || _drag.draggedId != id) BeginDrag(id, dragStart);
+    }
+
+    void EndDrag()
+    {
+        _drag = null;
+        _lastSwapTargetId = null;
+        if (_ghostLayer != null) _ghostLayer.Clear();
+    }
+
+    // ADR-0024 §1 / findings 0088 §1: the dragged's island = every visible/live window sharing its
+    // groupId, BUT only when that set has ≥2 members (a singleton-in-name groupId is not a group —
+    // findings 0082 §2). Otherwise the island is just {dragged}. Always includes the dragged id.
+    List<string> ResolveIslandIds(Entry dragged)
+    {
+        var ids = new List<string> { dragged.id };
+        if (string.IsNullOrEmpty(dragged.groupId)) return ids;
+        var members = new List<string>();
+        foreach (var kv in _windows)
+        {
+            if (kv.Value.groupId != dragged.groupId) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            members.Add(kv.Key);
+        }
+        if (members.Count < 2) return ids;            // singleton: island is just the dragged
+        return members;                               // ≥2: the real island (already includes dragged)
+    }
+
+    // NOTE: the swap-scan members (`_drag.islandMembers`), the magnetic-snap "others"
+    // (`_drag.nonIslandRects`), and the island bbox (`_drag.islandBbox`) are drag-INVARIANTS snapshotted
+    // once in BeginDrag (the island moves as a unit; external windows do not move during a title drag),
+    // so DragApplyDelta reads them per-frame WITHOUT re-allocating. The swap test runs against REST slots
+    // so a mid-drag TRANSLATE cannot make the cursor "fall out of" a sibling slot.
+
+    // ADR-0024 §8 / findings 0088 §6: ESC during a drag — actively revert the live render (TRANSLATE
+    // island / DETACH dragged) to the drag-start rest via spring, and mark the session canceled so the
+    // following MouseUp commits NOTHING. SWAP needed no live move (geometry was frozen + ghosts), so the
+    // revert is a no-op there beyond clearing ghosts. State (groupId / persisted rect) was never touched
+    // during the drag, so there is nothing to roll back beyond geometry. No-op when no drag is active or
+    // the id does not match the active drag.
+    public void CancelDrag(string id)
+    {
+        if (_drag == null || _drag.draggedId != id) return;
+        foreach (var mid in _drag.islandIds)
+        {
+            if (!_drag.restRects.TryGetValue(mid, out var rest)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            var from = new FloatingWindowMath.DockRect(e.rt.anchoredPosition, e.rt.sizeDelta);
+            e.rt.anchoredPosition = rest.topLeft;
+            e.rt.sizeDelta = rest.size;
+            FireSpring(e.rt, from);
+        }
+        _drag.canceled = true;
+        _lastSwapTargetId = null;
+        if (_ghostLayer != null) _ghostLayer.Clear();
+    }
+
+    // ADR-0024 §1: is `id` a member of the active drag's island? (used to exclude island members from
+    // the magnetic-snap / overlap-merge "other window" scans).
+    bool IsInDragIsland(string id) => _drag != null && _drag.islandIds.Contains(id);
+
+    // ADR-0024 §4 / findings 0088 §4: find the window the cursor sits over that is NOT in the drag island
+    // — the "別 island Y" of the overlap-merge rule. Multiple overlaps break by top sibling (front-most),
+    // mirroring the swap resolver. Returns the window's id (out rect + groupId) or null.
+    string FindOverlapWindowAtCursor(Vector2 cursor, out FloatingWindowMath.DockRect rect, out string groupId)
+    {
+        rect = default; groupId = null;
+        string best = null; int bestSibling = int.MinValue;
+        foreach (var kv in _windows)
+        {
+            if (IsInDragIsland(kv.Key)) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            var r = new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta);
+            if (cursor.x < r.Left || cursor.x > r.Right) continue;
+            if (cursor.y < r.Bottom || cursor.y > r.Top) continue;
+            int sib = rt.GetSiblingIndex();
+            if (sib > bestSibling) { best = kv.Key; bestSibling = sib; rect = r; groupId = kv.Value.groupId; }
+        }
+        return best;
+    }
+
+    // ADR-0024 §4 / findings 0088 §4: the SINGLE production release entry — the universal
+    // release-position commit. Called from FloatingWindowTitleInput.OnEndDrag with the dragged's
+    // drag-start logical anchor (`dragStart`) and the running cursor (`cursor` = dragStart + accumulated
+    // frameDelta). The path taken during the drag does NOT matter; the RELEASE position alone decides the
+    // outcome. Re-classifies the final mode via ResolveDragMode and commits:
+    //
+    //   Swap     — exchange (x,y,w,h) with the target; both groupIds unchanged (CommitSwap).
+    //   Translate— island shifts by the cursor offset; on overlap with another island, snap to nearest
+    //              flush and merge; on empty space, keep position and (incidental) flush-attach merge.
+    //   Detach   — dragged leaves its island (groupId=null, dissolve the remnant if <2); on overlap,
+    //              snap flush to the overlapped island and join it (singleton merge); on empty space,
+    //              land at cursor with an (incidental) flush-attach merge that EXCLUDES the just-left
+    //              group (the user's detach gesture must not silently re-merge).
+    //
+    // If ESC canceled the drag, NOTHING commits (the geometry was already reverted to rest).
+    public FloatingWindowMath.DragMode ReleaseDrag(string id, Vector2 dragStart, Vector2 cursor)
+    {
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var dragged) || dragged.rt == null)
+        {
+            EndDrag();
+            return FloatingWindowMath.DragMode.Translate;
+        }
+        EnsureDragSession(id, dragStart);
+
+        // ADR-0024 §8: ESC already reverted the geometry and marked the session canceled — commit nothing.
+        if (_drag != null && _drag.canceled)
+        {
+            EndDrag();
+            return FloatingWindowMath.DragMode.Translate;
+        }
+
+        var res = FloatingWindowMath.ResolveDragMode(
+            cursor, dragStart, _drag.islandMembers, id, FloatingWindowMath.D_DETACH_PX);
+        string oldGroup = dragged.groupId;
+
+        switch (res.mode)
+        {
+            case FloatingWindowMath.DragMode.Swap:
+                CommitSwap(id, res.swapTargetId);
+                break;
+            case FloatingWindowMath.DragMode.Translate:
+                CommitTranslate(id, cursor - dragStart);
+                break;
+            case FloatingWindowMath.DragMode.Detach:
+                CommitDetach(id, oldGroup, cursor - dragStart, cursor);
+                break;
+        }
+
+        EndDrag();
+        return res.mode;
+    }
+
+    // ADR-0024 §4 / findings 0088 §4: TRANSLATE release commit. Shift the whole island by the cursor
+    // offset. If the cursor sits over a window outside the island (overlap with island Y), snap the
+    // island's bbox to Y's nearest flush edge and merge; otherwise keep the magnetic-snapped position and
+    // run the incidental flush-attach commit (ADR-0019 D4 — a release that happens to land flush attaches).
+    void CommitTranslate(string id, Vector2 offset)
+    {
+        var movingAtOffset = Shift(_drag.islandBbox, offset);
+        string yId = FindOverlapWindowAtCursor(_drag.dragStart + offset, out var yRect, out _);
+        if (yId != null)
+        {
+            // Cursor over a non-island window → snap the island bbox to Y's nearest flush edge, then merge
+            // DIRECTLY with Y. The merge is driven by the release-position rule (cursor-over-Y intent),
+            // NOT by a member-level flush rescan: for a non-rectangular / mixed-size island the bbox edge
+            // that ends up flush to Y may belong to a member that does not itself y/x-overlap Y, so a flush
+            // rescan would miss it and silently fail to merge (review fix).
+            Vector2 appliedOffset = offset + FloatingWindowMath.ResolveNearestFlush(movingAtOffset, yRect);
+            ApplyIslandOffsetWithSpring(appliedOffset);
+            CommitMergeWithTarget(id, yId);
+        }
+        else
+        {
+            // Empty space → keep the magnetic-snapped position, then run the INCIDENTAL flush-attach
+            // commit (ADR-0019 D4 — a release that happens to land flush attaches; island-wide scan).
+            Vector2 appliedOffset = offset + FloatingWindowMath.ComputeMagneticSnap(
+                movingAtOffset, _drag.nonIslandRects, FloatingWindowMath.R_SNAP_PX);
+            ApplyIslandOffsetWithSpring(appliedOffset);
+            CommitFlushAttachOnRelease(id);
+        }
+    }
+
+    // ADR-0024 §4 / findings 0088 §4: DETACH release commit. The dragged leaves its island
+    // (groupId=null) and the remnant dissolves if it drops below 2. On overlap with a window outside the
+    // island, snap the dragged flush to it and merge (singleton join); on empty space, land at the
+    // magnetic-snapped cursor position with an incidental flush-attach that EXCLUDES the just-left group.
+    void CommitDetach(string id, string oldGroup, Vector2 offset, Vector2 cursor)
     {
         if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null) return;
+        dragged.groupId = null;
 
-        // F8 (#104 contract): use the LAST-painted-ghost target id (cached by DragApplyDelta) so the
-        // commit binds to the same window the user saw highlighted. Fallback to a fresh resolve only
-        // when the cache is empty (degenerate: ReleaseDrag invoked without a preceding HakoniwaSwap
-        // DragApplyDelta frame). The cache plus fallback together guarantee the same defined outcome
-        // as the prior unconditional resolve, without the inter-frame drift risk.
-        string targetId = _lastSwapTargetId ?? ResolveHakoniwaSwapTarget(dragged, cursor);
-        if (string.IsNullOrEmpty(targetId)
-            || !_windows.TryGetValue(targetId, out var target)
-            || target.rt == null)
+        var aRest = _drag.restRects.TryGetValue(id, out var r) ? r
+                    : new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
+        var aAtOffset = Shift(aRest, offset);
+        string yId = FindOverlapWindowAtCursor(cursor, out var yRect, out _);
+        Vector2 appliedOffset = yId != null
+            ? offset + FloatingWindowMath.ResolveNearestFlush(aAtOffset, yRect)
+            : offset + FloatingWindowMath.ComputeMagneticSnap(aAtOffset, _drag.nonIslandRects, FloatingWindowMath.R_SNAP_PX);
+
+        var from = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
+        dragged.rt.anchoredPosition = aRest.topLeft + appliedOffset;
+        FireSpring(dragged.rt, from);
+
+        if (yId != null)
         {
-            // Defensive: hasTarget said yes mid-drag but the target vanished by release. Snap back.
-            dragged.rt.anchoredPosition = restAtDragStart;
+            // Cursor over Y → A joins Y's island directly (singleton merge), regardless of member-level
+            // flush geometry (review fix — same robustness as CommitTranslate's overlap branch).
+            CommitMergeWithTarget(id, yId);
+        }
+        else
+        {
+            // Empty space → re-attach only if the dragged landed flush, never silently re-merging into the
+            // group it just left (findings 0082 §5).
+            CommitFlushAttachOnRelease(id, excludeGroupId: oldGroup);
+        }
+        if (!string.IsNullOrEmpty(oldGroup)) DissolveIfShrunkTo(oldGroup, 2);
+    }
+
+    // ADR-0024 §4 / findings 0088 §5 (review fix): merge the dragged's island into the OVERLAP target Y's
+    // island. Driven by the release-position rule (cursor was over Y), so it does NOT depend on a
+    // member-level flush rescan — a non-rectangular island whose bbox edge member is not itself flush to Y
+    // still merges. The cascade (size max > dict min > new GUID) picks the surviving groupId; every member
+    // of both contributing groups (plus the dragged + Y themselves) is rewritten to it.
+    void CommitMergeWithTarget(string draggedId, string targetId)
+    {
+        if (!_windows.TryGetValue(draggedId, out var dragged)) return;
+        if (!_windows.TryGetValue(targetId, out var target)) return;
+
+        var seen = new HashSet<string>();
+        var cands = new List<FloatingWindowMath.MergeCandidate>(2);
+        AddCandidateFor(cands, seen, dragged.groupId);
+        AddCandidateFor(cands, seen, target.groupId);
+        string winnerId = FloatingWindowMath.ResolveMergeWinner(cands) ?? MintGroupId();
+
+        var contributingGroupIds = new HashSet<string>();
+        if (!string.IsNullOrEmpty(dragged.groupId)) contributingGroupIds.Add(dragged.groupId);
+        if (!string.IsNullOrEmpty(target.groupId)) contributingGroupIds.Add(target.groupId);
+        var winners = new HashSet<string> { draggedId, targetId };
+        if (contributingGroupIds.Count > 0)
+            foreach (var kv in _windows)
+                if (contributingGroupIds.Contains(kv.Value.groupId)) winners.Add(kv.Key);
+
+        foreach (var wid in winners)
+            if (_windows.TryGetValue(wid, out var we)) we.groupId = winnerId;
+    }
+
+    // ADR-0024 §4 / findings 0088 §4: SWAP release commit. The dragged ↔ target exchange (x,y,w,h)
+    // verbatim; kind / id / groupId / content stay put, so the island footprint is unchanged — only the
+    // two rects rotate. Animated with the spring on both windows. The target is the cached last-painted
+    // swap target (so the commit matches what the user saw), falling back to a fresh resolve.
+    void CommitSwap(string id, string swapTargetId)
+    {
+        if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null) return;
+        string targetId = swapTargetId ?? _lastSwapTargetId;
+        if (string.IsNullOrEmpty(targetId)
+            || !_windows.TryGetValue(targetId, out var target) || target.rt == null)
+        {
+            // Target vanished between the last ghost frame and release — restore the dragged to rest.
+            if (_drag != null && _drag.restRects.TryGetValue(id, out var rest))
+            {
+                var from0 = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
+                dragged.rt.anchoredPosition = rest.topLeft;
+                dragged.rt.sizeDelta = rest.size;
+                FireSpring(dragged.rt, from0);
+            }
             return;
         }
 
-        // Live geometry was frozen during the drag, so dragged.anchoredPosition == restAtDragStart.
-        // Read both sides BEFORE writing to avoid clobbering: simultaneously assign the 4 values.
-        Vector2 draggedPos = dragged.rt.anchoredPosition;
-        Vector2 draggedSize = dragged.rt.sizeDelta;
-        Vector2 targetPos = target.rt.anchoredPosition;
-        Vector2 targetSize = target.rt.sizeDelta;
-        dragged.rt.anchoredPosition = targetPos;
-        dragged.rt.sizeDelta = targetSize;
-        target.rt.anchoredPosition = draggedPos;
-        target.rt.sizeDelta = draggedSize;
-        // kind / id / content / groupId on both Entry rows are untouched — the design's identity-
-        // preservation rule (only the rect rotates).
+        var dFrom = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
+        var tFrom = new FloatingWindowMath.DockRect(target.rt.anchoredPosition, target.rt.sizeDelta);
+        // Read both BEFORE writing to avoid clobbering, then exchange the 4 values.
+        dragged.rt.anchoredPosition = tFrom.topLeft;
+        dragged.rt.sizeDelta = tFrom.size;
+        target.rt.anchoredPosition = dFrom.topLeft;
+        target.rt.sizeDelta = dFrom.size;
+        FireSpring(dragged.rt, dFrom);
+        FireSpring(target.rt, tFrom);
+    }
+
+    // Shift a DockRect's top-left by an offset (size unchanged).
+    static FloatingWindowMath.DockRect Shift(FloatingWindowMath.DockRect r, Vector2 offset)
+        => new FloatingWindowMath.DockRect(r.topLeft + offset, r.size);
+
+    // ADR-0024 §4: write every island member to restRect + offset and spring it from its pre-commit pose.
+    void ApplyIslandOffsetWithSpring(Vector2 offset)
+    {
+        foreach (var mid in _drag.islandIds)
+        {
+            if (!_drag.restRects.TryGetValue(mid, out var rest)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            var from = new FloatingWindowMath.DockRect(e.rt.anchoredPosition, e.rt.sizeDelta);
+            e.rt.anchoredPosition = rest.topLeft + offset;
+            FireSpring(e.rt, from);
+        }
     }
 
     // Move a window by a CANVAS-LOGICAL delta (the input boundary already divided the viewport
@@ -496,200 +757,130 @@ public class FloatingWindowController
             e.rt.anchoredPosition += logicalDelta;
     }
 
-    // #104 (ADR-0019 / findings 0082 §6): the SINGLE per-frame drag entry. Classifies the dragged into
-    // one of the 7 DragModes (FloatingWindowMath.EvaluateDragMode) and acts accordingly. Returns the
-    // classified mode so the title-input boundary can route additional UI (e.g. Slice G ghost).
+    // ADR-0024 §2/§3/§7 / findings 0088 §1, §2, §7: the SINGLE per-frame drag entry. Each frame
+    // re-resolves the 3 modes PURELY from cursor position (ResolveDragMode) and real-renders the preview
+    // ABSOLUTELY from the drag-start snapshot (rest rect + cursor offset + magnetic snap), so a transient
+    // frame can never corrupt the geometry. Returns the resolved mode so the input boundary can route
+    // extra UI. `frameDelta` is no longer used for positioning (kept for signature parity with the input
+    // boundary's existing call) — the absolute model supersedes the incremental one.
     //
-    // Live-geometry rules (findings 0082 §8 "commit-on-release"):
-    //   SoloDrag             — dragged tracks cursor (existing #15 behaviour).
-    //   NormalGroupTranslate — every visible/live group member translates by frameDelta — the ONE mode
-    //                          where multi-window live geometry mutates during drag.
-    //   NormalGroupDetach    — frozen; release commits detach (Slice D).
-    //   HakoniwaSwap / Hak.SnapBack / Hak.Detach / Hak.CoreLock — frozen; release commits the variant
-    //                          outcome (Slice E1/E2/D). Slice G's ghost layer preview the outcome.
-    //
-    // `restAtDragStart` and `cursor` are canvas-LOGICAL coordinates. `cursor` = restAtDragStart +
-    // accumulated frameDelta over the drag (the title-input tracks the running cursor — the controller
-    // does not re-derive it from rectangles, so a window that snaps mid-drag does not corrupt the
-    // detach-threshold metric).
-    public FloatingWindowMath.DragMode DragApplyDelta(string id, Vector2 restAtDragStart, Vector2 cursor, Vector2 frameDelta)
+    //   Swap     — geometry frozen at rest; render 2 ghosts (dragged at target slot / target at dragged
+    //              slot). No magnetic snap (swap is center-in-rect, not edge attraction).
+    //   Translate— whole island real-renders at rest + offset + magnetic snap; no ghost.
+    //   Detach   — ONLY the dragged real-renders at rest + offset + magnetic snap; siblings stay at rest;
+    //              no ghost.
+    public FloatingWindowMath.DragMode DragApplyDelta(string id, Vector2 dragStart, Vector2 cursor, Vector2 frameDelta)
     {
-        if (string.IsNullOrEmpty(id)) return FloatingWindowMath.DragMode.SoloDrag;
+        if (string.IsNullOrEmpty(id)) return FloatingWindowMath.DragMode.Translate;
         if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null)
-            return FloatingWindowMath.DragMode.SoloDrag;
+            return FloatingWindowMath.DragMode.Translate;
+        EnsureDragSession(id, dragStart);
+        // ADR-0024 §8: after ESC the session is canceled — ignore further drag frames until release.
+        if (_drag != null && _drag.canceled) return FloatingWindowMath.DragMode.Translate;
 
-        var ctx = BuildDragContext(dragged, restAtDragStart, cursor);
-        var mode = FloatingWindowMath.EvaluateDragMode(ctx);
+        var res = FloatingWindowMath.ResolveDragMode(
+            cursor, dragStart, _drag.islandMembers, id, FloatingWindowMath.D_DETACH_PX);
+        Vector2 offset = cursor - dragStart;
 
-        switch (mode)
+        switch (res.mode)
         {
-            case FloatingWindowMath.DragMode.SoloDrag:
-                dragged.rt.anchoredPosition += frameDelta;
+            case FloatingWindowMath.DragMode.Swap:
+                FreezeIslandToRest();
+                _lastSwapTargetId = res.swapTargetId;
+                if (_ghostLayer != null) _ghostLayer.Render(ComposeSwapGhosts(id, res.swapTargetId));
                 break;
-            case FloatingWindowMath.DragMode.NormalGroupTranslate:
-                // The ONE multi-window live-geometry path. Iterate group members (the dragged is
-                // included by virtue of its own groupId match).
-                foreach (var kv in _windows)
-                {
-                    if (kv.Value.groupId != dragged.groupId) continue;
-                    var rt = kv.Value.rt;
-                    if (rt == null || !rt.gameObject.activeInHierarchy) continue;
-                    rt.anchoredPosition += frameDelta;
-                }
+
+            case FloatingWindowMath.DragMode.Translate:
+                _lastSwapTargetId = null;
+                RenderTranslate(offset);
+                if (_ghostLayer != null) _ghostLayer.Clear();
                 break;
-            // All other modes: live geometry frozen during drag. Release commits the outcome (Slices D / E1 / E2);
-            // Slice G's ghost layer renders the post-release preview. Intentionally no-op here.
-            case FloatingWindowMath.DragMode.NormalGroupDetach:
-            case FloatingWindowMath.DragMode.HakoniwaSwap:
-            case FloatingWindowMath.DragMode.HakoniwaSnapBack:
-            case FloatingWindowMath.DragMode.HakoniwaDetach:
-            case FloatingWindowMath.DragMode.HakoniwaCoreLock:
+
+            case FloatingWindowMath.DragMode.Detach:
+                _lastSwapTargetId = null;
+                FreezeIslandToRest();            // siblings rest; the dragged is re-positioned next
+                RenderDetach(id, offset);
+                if (_ghostLayer != null) _ghostLayer.Clear();
                 break;
         }
-        // F8 (#104 contract): cache the resolved swap target so CommitHakoniwaSwap at OnEndDrag binds
-        // to the same id the last-painted ghost predicted. Clear when not in HakoniwaSwap mode so a
-        // mode transition (e.g., cursor moves off the target) does not leave a stale id for release.
-        _lastSwapTargetId = (mode == FloatingWindowMath.DragMode.HakoniwaSwap)
-            ? ResolveHakoniwaSwapTarget(dragged, cursor)
-            : null;
-        // #104 Slice G (ADR-0019 / findings 0082 §8): paint the ghost preview for this frame's mode.
-        // The composer computes the 0/1/2 ghost specs that match the mode (no allocation for
-        // SoloDrag / NormalGroupTranslate). Ghost layer is optional — controllers without one (the
-        // AFK gate's bare-stack sections) simply skip the render.
-        if (_ghostLayer != null) _ghostLayer.Render(ComposeDragGhosts(dragged, mode, restAtDragStart, cursor));
-        return mode;
+        return res.mode;
     }
 
-    // #104 (ADR-0019 / findings 0082 §8): the 7-mode ghost composition. Returns:
-    //   SoloDrag / NormalGroupTranslate          → empty (live geometry already shows the outcome)
-    //   NormalGroupDetach / HakoniwaDetach       → 1 solid ghost at cursor (the dragged "would land here")
-    //   HakoniwaSwap                             → 2 ghosts: dragged-style solid at target rect +
-    //                                              target-style dashed at dragged rest rect (the
-    //                                              "would-rotate-here" preview)
-    //   HakoniwaSnapBack                         → 1 solid ghost at restAtDragStart ("would snap back")
-    //   HakoniwaCoreLock                         → 1 solid ghost at restAtDragStart (core can't escape)
-    //
-    // Pure composition over the controller's current state (no Unity calls beyond reading rects), so
-    // the AFK gate drives it headlessly via a bare-RectTransform pool.
-    public List<DragGhostLayer.GhostSpec> ComposeDragGhosts(string id, FloatingWindowMath.DragMode mode, Vector2 restAtDragStart, Vector2 cursor)
+    // ADR-0024 §7 / findings 0088 §2: TRANSLATE real-render — the whole island at rest + offset +
+    // magnetic snap (discrete: the snap is a hard-set to the flush position each frame, "離散 snap"). The
+    // spring "プルン" is NOT fired mid-drag — a per-frame tween would fight these per-frame absolute
+    // writes (and depend on Update order); the spring fires only at the settled commit / ESC points where
+    // no further per-frame write follows. The magnetic snap is computed on the island BBOX vs every
+    // non-island window.
+    void RenderTranslate(Vector2 offset)
     {
-        if (string.IsNullOrEmpty(id)) return new List<DragGhostLayer.GhostSpec>(0);
-        if (!_windows.TryGetValue(id, out var dragged)) return new List<DragGhostLayer.GhostSpec>(0);
-        return ComposeDragGhosts(dragged, mode, restAtDragStart, cursor);
+        var movingAtOffset = Shift(_drag.islandBbox, offset);
+        Vector2 applied = offset + FloatingWindowMath.ComputeMagneticSnap(
+            movingAtOffset, _drag.nonIslandRects, FloatingWindowMath.R_SNAP_PX);
+        foreach (var mid in _drag.islandIds)
+        {
+            if (!_drag.restRects.TryGetValue(mid, out var rest)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            e.rt.anchoredPosition = rest.topLeft + applied;
+        }
     }
 
-    List<DragGhostLayer.GhostSpec> ComposeDragGhosts(Entry dragged, FloatingWindowMath.DragMode mode, Vector2 restAtDragStart, Vector2 cursor)
+    // ADR-0024 §7 / findings 0088 §2: DETACH real-render — ONLY the dragged at rest + offset + magnetic
+    // snap (siblings were already frozen to rest by the caller). Discrete snap, no mid-drag spring (see
+    // RenderTranslate).
+    void RenderDetach(string id, Vector2 offset)
+    {
+        if (!_drag.restRects.TryGetValue(id, out var aRest)) return;
+        if (!_windows.TryGetValue(id, out var dragged) || dragged.rt == null) return;
+        var movingAtOffset = Shift(aRest, offset);
+        Vector2 applied = offset + FloatingWindowMath.ComputeMagneticSnap(
+            movingAtOffset, _drag.nonIslandRects, FloatingWindowMath.R_SNAP_PX);
+        dragged.rt.anchoredPosition = aRest.topLeft + applied;
+    }
+
+    // ADR-0024 §7: pin every island member back to its rest rect (SWAP shows ghosts over the rested
+    // windows; DETACH keeps siblings at rest). Idempotent — cheap when already at rest.
+    void FreezeIslandToRest()
+    {
+        if (_drag == null) return;
+        foreach (var mid in _drag.islandIds)
+        {
+            if (!_drag.restRects.TryGetValue(mid, out var rest)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            e.rt.anchoredPosition = rest.topLeft;
+            e.rt.sizeDelta = rest.size;
+        }
+    }
+
+    // ADR-0024 §7 / findings 0088 §7: SWAP is the ONLY ghost-bearing mode now (translate / detach
+    // real-render). Returns 2 ghosts: the dragged-style SOLID ghost at the target's rect (where the
+    // dragged would land) + the target-style DASHED ghost at the dragged's rest slot (where the target
+    // would land). Empty list when the id/target is unknown. Pure composition over current rects (the
+    // swap mode freezes both windows at rest, so reading live == reading rest), so the AFK gate drives
+    // it headlessly via a bare-RectTransform pool.
+    public List<DragGhostLayer.GhostSpec> ComposeSwapGhosts(string id, string targetId)
     {
         var ghosts = new List<DragGhostLayer.GhostSpec>(2);
-        if (dragged == null || dragged.rt == null) return ghosts;
-        Vector2 draggedSize = dragged.rt.sizeDelta;
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var dragged) || dragged.rt == null)
+            return ghosts;
+        if (string.IsNullOrEmpty(targetId) || !_windows.TryGetValue(targetId, out var target) || target.rt == null)
+            return ghosts;
 
-        switch (mode)
+        Vector2 draggedPos = dragged.rt.anchoredPosition, draggedSize = dragged.rt.sizeDelta;
+        Vector2 targetPos = target.rt.anchoredPosition, targetSize = target.rt.sizeDelta;
+        // Dragged ghost (SOLID) at the target rect.
+        ghosts.Add(new DragGhostLayer.GhostSpec
         {
-            case FloatingWindowMath.DragMode.SoloDrag:
-            case FloatingWindowMath.DragMode.NormalGroupTranslate:
-                return ghosts;   // no ghost
-
-            case FloatingWindowMath.DragMode.NormalGroupDetach:
-            case FloatingWindowMath.DragMode.HakoniwaDetach:
-                ghosts.Add(new DragGhostLayer.GhostSpec
-                {
-                    kind = dragged.kind, topLeft = cursor, size = draggedSize,
-                    style = DragGhostLayer.GhostStyle.Solid,
-                });
-                return ghosts;
-
-            case FloatingWindowMath.DragMode.HakoniwaSnapBack:
-            case FloatingWindowMath.DragMode.HakoniwaCoreLock:
-                ghosts.Add(new DragGhostLayer.GhostSpec
-                {
-                    kind = dragged.kind, topLeft = restAtDragStart, size = draggedSize,
-                    style = DragGhostLayer.GhostStyle.Solid,
-                });
-                return ghosts;
-
-            case FloatingWindowMath.DragMode.HakoniwaSwap:
-            {
-                string targetId = ResolveHakoniwaSwapTarget(dragged, cursor);
-                if (string.IsNullOrEmpty(targetId) || !_windows.TryGetValue(targetId, out var target) || target.rt == null)
-                {
-                    // hasTarget said yes but resolver returned nothing this frame (boundary jitter); paint a
-                    // snap-back-style single ghost so the user gets a defined visual rather than no ghost.
-                    ghosts.Add(new DragGhostLayer.GhostSpec
-                    {
-                        kind = dragged.kind, topLeft = restAtDragStart, size = draggedSize,
-                        style = DragGhostLayer.GhostStyle.Solid,
-                    });
-                    return ghosts;
-                }
-                Vector2 targetPos = target.rt.anchoredPosition;
-                Vector2 targetSize = target.rt.sizeDelta;
-                // Dragged ghost (SOLID) sits AT the target rect (where it would land).
-                ghosts.Add(new DragGhostLayer.GhostSpec
-                {
-                    kind = dragged.kind, topLeft = targetPos, size = targetSize,
-                    style = DragGhostLayer.GhostStyle.Solid,
-                });
-                // Target ghost (DASHED) sits AT the dragged's rest rect (where it would land).
-                ghosts.Add(new DragGhostLayer.GhostSpec
-                {
-                    kind = target.kind, topLeft = restAtDragStart, size = draggedSize,
-                    style = DragGhostLayer.GhostStyle.Dashed,
-                });
-                return ghosts;
-            }
-        }
+            kind = dragged.kind, topLeft = targetPos, size = targetSize,
+            style = DragGhostLayer.GhostStyle.Solid,
+        });
+        // Target ghost (DASHED) at the dragged's rest rect.
+        ghosts.Add(new DragGhostLayer.GhostSpec
+        {
+            kind = target.kind, topLeft = draggedPos, size = draggedSize,
+            style = DragGhostLayer.GhostStyle.Dashed,
+        });
         return ghosts;
-    }
-
-    // Build the EvaluateDragMode input from the controller's live state. isInGroup requires the
-    // dragged's groupId is non-null AND the group has ≥ 2 visible/live members (findings 0082 §2:
-    // singleton == not a group). isHakoniwa = isInGroup AND there is at least one visible/live core
-    // member (DockShape.IsCoreKind). isCore = dragged itself is a core. hasTarget is wired in Slice E2
-    // (ResolveDropTarget) — Slice C/E1 leave it false.
-    FloatingWindowMath.DragContext BuildDragContext(Entry dragged, Vector2 restAtDragStart, Vector2 cursor)
-    {
-        var ctx = new FloatingWindowMath.DragContext
-        {
-            rest = restAtDragStart,
-            cursor = cursor,
-            isCore = DockShape.IsCoreKind(dragged.kind),
-        };
-        if (string.IsNullOrEmpty(dragged.groupId)) return ctx;
-
-        int visibleCount = CountLiveGroupMembers(dragged.groupId, out bool groupHasCore);
-        ctx.isInGroup = visibleCount >= 2;
-        ctx.isHakoniwa = ctx.isInGroup && groupHasCore;
-        // #104 Slice E2 (ADR-0019 / findings 0082 §7): hasTarget = the cursor sits over another
-        // visible/live group member. Only Hakoniwa groups distinguish swap vs snap-back, so we skip
-        // the resolution work outside that case (saves a per-frame allocation+walk on the common
-        // SoloDrag / NormalGroup paths).
-        if (ctx.isHakoniwa)
-            ctx.hasTarget = !string.IsNullOrEmpty(ResolveHakoniwaSwapTarget(dragged, cursor));
-        return ctx;
-    }
-
-    // #104 (ADR-0019 / findings 0082 §7): resolve the swap drop-target id for a Hakoniwa drag, or
-    // null. The dragged is excluded; hidden members are excluded; multiple overlapping members are
-    // broken by the highest live sibling index (front-most). Returns the target id so both
-    // BuildDragContext (for hasTarget) and CommitHakoniwaSwap (for the (x,y,w,h) exchange) read the
-    // same answer — they will not disagree on a frame where the cursor is exactly on a boundary.
-    string ResolveHakoniwaSwapTarget(Entry dragged, Vector2 cursor)
-    {
-        var members = new List<FloatingWindowMath.GroupMember>();
-        foreach (var kv in _windows)
-        {
-            if (kv.Value.groupId != dragged.groupId) continue;
-            var rt = kv.Value.rt;
-            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
-            members.Add(new FloatingWindowMath.GroupMember
-            {
-                id = kv.Key,
-                rect = new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta),
-                siblingIndex = rt.GetSiblingIndex(),
-            });
-        }
-        return FloatingWindowMath.ResolveDropTarget(cursor, members, dragged.id);
     }
 
     // #99 Slice 1 (ADR-0017 / findings 0075 §1): magnet snap on drag release. The title-bar
@@ -705,14 +896,11 @@ public class FloatingWindowController
     // pass a different value; the production input path uses the default.
     public Vector2 SnapOnRelease(string id, float threshold)
     {
-        // #104 (ADR-0019 / findings 0082 §3, §4): SnapOnRelease is the SOLE production attach entry
-        // for SoloDrag / NormalGroupTranslate releases: ApplySnapOffset moves the dragged toward the
-        // nearest neighbour, then CommitFlushAttachOnRelease evaluates the flush-attach trigger and
-        // commits any group merge. Programmatic Spawn / restore / cell coordinator never run this
-        // branch, so "the only way a group forms is the user's drag-release" (findings 0082 §10) is
-        // enforced by where the call lives, not by a flag. ReleaseDrag's NormalGroupDetach /
-        // HakoniwaDetach branch calls ApplySnapOffset + CommitFlushAttachOnRelease(id, oldGroup)
-        // directly so the detach commit can never silently re-merge into the just-left group.
+        // #99 magnet-snap-on-release (ADR-0017): ApplySnapOffset moves the dragged toward the nearest
+        // neighbour (12px DEFAULT_SNAP_THRESHOLD), then CommitFlushAttachOnRelease commits any flush
+        // group merge (ADR-0019 D4, retained). ADR-0024's drag dispatch no longer routes through here
+        // (CommitTranslate / CommitDetach use the in-drag 96px magnet directly), but SnapOnRelease stays
+        // as the standalone release-snap utility the #99 AFK sections (Section10/11) gate.
         Vector2 offset = ApplySnapOffset(id, threshold);
         CommitFlushAttachOnRelease(id);
         return offset;
@@ -756,8 +944,8 @@ public class FloatingWindowController
     // (the dragged stays in its current group, possibly as a singleton remnant — Slice D handles
     // dissolve on detach commit, not on a non-attach release).
     //
-    // `excludeGroupId` (non-null only from ReleaseDrag's NormalGroupDetach / HakoniwaDetach
-    // branch, passed as the dragged's pre-detach `oldGroup`) filters out flush partners whose
+    // `excludeGroupId` (non-null only from ReleaseDrag's Detach commit, passed as the dragged's
+    // pre-detach `oldGroup`) filters out flush partners whose
     // CURRENT groupId == excludeGroupId. The detach commit zeroed `dragged.groupId` and the
     // design (findings 0082 §5) treats the commit as "out of that group"; allowing the very
     // next attach scan to silently re-merge the dragged back into oldGroup (because the magnet
@@ -768,22 +956,39 @@ public class FloatingWindowController
     {
         if (!_windows.TryGetValue(draggedId, out var dragged) || dragged.rt == null) return;
         if (!dragged.rt.gameObject.activeInHierarchy) return;   // a hidden dragged cannot attach
-        var draggedRect = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
 
-        // Find every flush-adjacent partner (visible/live, !=self). The partner list defines the merge
-        // participants. A dragged with ZERO flush partners → no attach commit (groupId untouched).
-        // When excludeGroupId is non-null, partners whose CURRENT groupId == excludeGroupId are
-        // skipped (findings 0082 §5: a detach commit must never silently re-form the old group).
+        // ADR-0024 §4 (F: island-wide merge): the dragged's island moves as a UNIT, so a flush formed by
+        // ANY island member docks the two islands — not just a flush on the dragged's own edge. Source
+        // rects = the dragged + every visible/live member of its CURRENT group (singleton ⇒ just the
+        // dragged; a detach commit zeroed the groupId, so the source set is again just the dragged).
+        var sourceIds = new HashSet<string> { draggedId };
+        if (!string.IsNullOrEmpty(dragged.groupId))
+            foreach (var kv in _windows)
+                if (kv.Key != draggedId && kv.Value.groupId == dragged.groupId
+                    && kv.Value.rt != null && kv.Value.rt.gameObject.activeInHierarchy)
+                    sourceIds.Add(kv.Key);
+
+        // Find every flush-adjacent partner (visible/live, NOT an island source). A flush on any source
+        // member counts. When excludeGroupId is non-null, partners whose CURRENT groupId == excludeGroupId
+        // are skipped (findings 0082 §5: a detach commit must never silently re-form the old group).
         var flushPartnerIds = new List<string>();
-        foreach (var kv in _windows)
+        var partnerSeen = new HashSet<string>();
+        foreach (var sid in sourceIds)
         {
-            if (kv.Key == draggedId) continue;
-            var rt = kv.Value.rt;
-            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
-            if (excludeGroupId != null && kv.Value.groupId == excludeGroupId) continue;   // detach: never re-merge into oldGroup
-            var partnerRect = new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta);
-            if (FloatingWindowMath.IsFlushAdjacent(draggedRect, partnerRect, DEFAULT_FLUSH_EPS))
-                flushPartnerIds.Add(kv.Key);
+            var srt = _windows[sid].rt;
+            if (srt == null || !srt.gameObject.activeInHierarchy) continue;
+            var srcRect = new FloatingWindowMath.DockRect(srt.anchoredPosition, srt.sizeDelta);
+            foreach (var kv in _windows)
+            {
+                if (sourceIds.Contains(kv.Key)) continue;
+                if (partnerSeen.Contains(kv.Key)) continue;
+                var rt = kv.Value.rt;
+                if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+                if (excludeGroupId != null && kv.Value.groupId == excludeGroupId) continue;   // detach: never re-merge into oldGroup
+                var partnerRect = new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta);
+                if (FloatingWindowMath.IsFlushAdjacent(srcRect, partnerRect, DEFAULT_FLUSH_EPS))
+                { flushPartnerIds.Add(kv.Key); partnerSeen.Add(kv.Key); }
+            }
         }
         if (flushPartnerIds.Count == 0) return;   // no attach → leave groupId untouched
 
@@ -818,19 +1023,13 @@ public class FloatingWindowController
             if (_windows.TryGetValue(wid, out var we)) we.groupId = winnerId;
     }
 
-    // #104 F9 (findings 0082 §13): the scalar "visible/live member count + hasCore" projection
-    // shared by BuildDragContext (isInGroup/isHakoniwa decision) and AddCandidateFor (Merge-
-    // Candidate row). Both call sites walk `_windows` once and want the same two answers, so
-    // pulling them into one helper makes the "what counts as a live group member" rule live in
-    // one place (rt != null && rt.gameObject.activeInHierarchy && groupId match). Hot-path
-    // sites (DragApplyDelta NormalGroupTranslate, ResolveHakoniwaSwapTarget, ReleaseDrag F4
-    // offset propagation, DissolveIfShrunkTo dissolve list, CommitFlushAttachOnRelease winners
-    // expansion) intentionally stay inline — each has a heterogeneous projection (mutating
-    // anchoredPosition / building GroupMember / clearing groupId / etc.) that cannot share a
-    // scalar-return helper without a per-frame allocation (callback delegate or IEnumerable).
-    int CountLiveGroupMembers(string groupId, out bool hasCore)
+    // #104 F9 (findings 0082 §13): visible/live member count for a groupId — the "what counts as a live
+    // group member" rule in one place (rt != null && activeInHierarchy && groupId match). ADR-0024 drops
+    // the hasCore projection (no Hakoniwa special-casing). Hot-path sites that need a heterogeneous
+    // projection (DragApplyDelta translate render, the overlap scan, DissolveIfShrunkTo, CommitFlush-
+    // AttachOnRelease winners) stay inline to avoid a per-frame delegate allocation.
+    int CountLiveGroupMembers(string groupId)
     {
-        hasCore = false;
         if (string.IsNullOrEmpty(groupId)) return 0;
         int count = 0;
         foreach (var kv in _windows)
@@ -839,26 +1038,22 @@ public class FloatingWindowController
             var rt = kv.Value.rt;
             if (rt == null || !rt.gameObject.activeInHierarchy) continue;
             count++;
-            if (DockShape.IsCoreKind(kv.Value.kind)) hasCore = true;
         }
         return count;
     }
 
-    // Project an existing groupId into a MergeCandidate by counting its visible/live members and
-    // detecting a visible/live core. Singleton (null/empty groupId) → a single MergeCandidate with
-    // id=null, memberCount=1, hasCore=IsCoreKind(dragged_or_partner_kind)? — but the cascade only uses
-    // hasCore on NON-null ids (Hakoniwa-priority), so a singleton's hasCore is moot. We pass
-    // hasCore=false on the singleton entry. De-dupe by id so the same group is not listed twice.
+    // Project an existing groupId into a MergeCandidate by counting its visible/live members. Singleton
+    // (null/empty groupId) → a single MergeCandidate(null, 1). De-dupe by id so the same group is not
+    // listed twice.
     void AddCandidateFor(List<FloatingWindowMath.MergeCandidate> cands, HashSet<string> seen, string groupId)
     {
         if (string.IsNullOrEmpty(groupId))
         {
-            cands.Add(new FloatingWindowMath.MergeCandidate(null, 1, false));
+            cands.Add(new FloatingWindowMath.MergeCandidate(null, 1));
             return;
         }
         if (!seen.Add(groupId)) return;
-        int count = CountLiveGroupMembers(groupId, out bool hasCore);
-        cands.Add(new FloatingWindowMath.MergeCandidate(groupId, count, hasCore));
+        cands.Add(new FloatingWindowMath.MergeCandidate(groupId, CountLiveGroupMembers(groupId)));
     }
 
     // #104 (ADR-0019 D1 / findings 0082 §1): mint a fresh groupId — "grp_<Guid.NewGuid().ToString("N")>"

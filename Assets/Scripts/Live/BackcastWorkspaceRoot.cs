@@ -362,6 +362,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // controllers paint ghosts during DragApplyDelta and Clear at ReleaseDrag (commit-on-release).
         _windows.AttachGhostLayer(NewGhostLayer(_floatingLayer, "FloatGhostLayer"));
         _dockWindows.AttachGhostLayer(NewGhostLayer(_dockLayer,    "DockGhostLayer"));
+        // ADR-0024 §3 / findings 0088 §3: one spring driver per scene drives the "プルン" rect
+        // interpolation (magnetic-snap engage / swap / merge / detach commit / ESC revert). The
+        // controllers write the authoritative final geometry directly; the driver only animates the
+        // visual transition, so a headless run (no driver) is still correct.
+        var springDriver = new GameObject("RectSpringDriver").AddComponent<RectSpringDriver>();
+        springDriver.transform.SetParent(transform, false);
+        _windows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
+        _dockWindows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
 
         // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
@@ -735,14 +743,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
     }
 
-    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083): factory-default grouping.
-    // On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 5 base dock
-    // windows into ONE Hakoniwa group. The cluster includes startup + run_result cores
-    // (DockShape.IsCoreKind) so the group is automatically a HAKONIWA group: tile-fixed swap, core-
-    // locked, no whole-cluster free translate (findings 0082 §2). This is the ONLY first-launch
-    // grouping path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the
-    // doc's persisted groupId instead (工場出荷値のみ＝owner decision). The base windows are already
-    // spawned ungrouped (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
+    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083 / ADR-0020): factory-default
+    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 5 base
+    // dock windows into ONE island (a plain group — ADR-0024 §1 retires the "Hakoniwa group" special
+    // case, so startup / run_result drag exactly like the others). This is the ONLY first-launch grouping
+    // path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the doc's persisted
+    // groupId instead (工場出荷値のみ＝owner decision). The base windows are already spawned ungrouped
+    // (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
     void FormFactoryBaseGroup() => _dockWindows?.FormGroup(BaseDockWindowIds);
 
     // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----

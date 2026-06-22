@@ -1,10 +1,9 @@
-// DragGhostLayer.cs — issue #104 Slice G (ADR-0019 / findings 0082 §8)
+// DragGhostLayer.cs — issue #104 Slice G / ADR-0024 §7 (puzzle-feel drag)
 //
-// The drag-time PREVIEW overlay that shows where a Hakoniwa swap / normal-group detach / Hakoniwa
-// detach / Hakoniwa snap-back / Hakoniwa core-lock would land if the user released NOW. Pure
-// commit-on-release discipline (findings 0082 §8) — the ghost is a PREVIEW only; live geometry and
-// groupId are untouched during the drag (the one exception is NormalGroupTranslate, which mutates
-// live geometry directly and shows NO ghost — the live group IS the preview).
+// The drag-time PREVIEW overlay. Under ADR-0024 it is used by the SWAP mode ONLY: 2 ghosts (the dragged
+// at the target's slot + the target at the dragged's slot) show the would-be (x,y,w,h) exchange. Translate
+// and Detach REAL-RENDER the live island / dragged window (no ghost — the live geometry IS the preview).
+// Commit-on-release discipline: the ghost is a PREVIEW only; groupId is untouched until release.
 //
 // LAYER MODEL: the ghost container is a child RectTransform on the same plane as the windows it
 // previews (the controller owns the layer; the root creates one DragGhostLayer per plane and binds
@@ -15,8 +14,7 @@
 //
 // POOLING: ghost GameObjects are re-used across frames (pool grows monotonically). Inactive ghosts
 // stay deactivated; ActiveCount is the live ghost prefix. The pool is small in practice — at most
-// 2 ghosts per drag (HakoniwaSwap), 1 ghost for the other ghost-bearing modes, 0 for SoloDrag /
-// NormalGroupTranslate.
+// 2 ghosts per drag (Swap), 0 for Translate / Detach (real-render, no ghost).
 //
 // VISUAL CONTRACT (findings 0082 §8): alpha = 0.45, kind accent border. Dragged ghost = SOLID border
 // (1 px); target ghost = DASHED border (1 px). The dashed/solid distinction is part of the spec —
@@ -44,7 +42,7 @@ public class DragGhostLayer
 
     // A single ghost rendering: a window-sized phantom at a canvas-logical top-left position with the
     // catalog accent for `kind` and the style flag. Pure POCO — assembled by the controller's
-    // ComposeDragGhosts and handed to Render(). Multiple ghosts per frame are common (HakoniwaSwap).
+    // ComposeSwapGhosts and handed to Render(). Swap paints 2 ghosts per frame.
     public struct GhostSpec
     {
         public string kind;          // accent color source (FloatingWindowCatalog.TryGet)

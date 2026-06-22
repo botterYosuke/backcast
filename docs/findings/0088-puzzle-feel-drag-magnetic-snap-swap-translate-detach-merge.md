@@ -264,9 +264,34 @@ function RenderDragPreview(mode):
 
 数値（R_SNAP=96 / D_DETACH=256 / spring 200ms / overshoot 8%）は section 内で exact value assert。
 
-## §14 実装着地（実装後追記）
+## §14 実装着地（2026-06-22）
 
-- 実装スライス（→ `/to-issues` で issue 化）
-- 着地コミット
-- AFK GREEN（DRAG-01..14）
-- code-review(simplify) 後の修正履歴
+issue #108–111（S1–S4）を 1 セッションで連続実装（owner all-in 指示「実装コストは度外視・理想的な完成形」）。
+
+**支配的変更（production）**:
+- `FloatingWindowMath`: 旧 7-mode `DragMode`/`DragContext`/`EvaluateDragMode`/`D_DETACH=64f` を退役 → 3-mode `DragMode {Swap,Translate,Detach}` + `DragResolution` + `ResolveDragMode`（cursor 位置動的・swap は距離不問・detach は `≥ D_DETACH_PX` inclusive）。新定数 `D_DETACH_PX=256f` / `R_SNAP_PX=96f` / `SPRING_DURATION_MS=200` / `SPRING_OVERSHOOT_RATIO=0.08f` / `SPRING_BACK_S=1.5f`。新 pure 関数 `ComputeMagneticSnap`（flush within R_SNAP・直交 overlap 必須・x/y 独立）/ `ResolveNearestFlush`（4 候補最小移動・tie-break x）/ `SpringEase`（ease-out-back・peak overshoot を s=1.5 で **厳密に 8%**＝`4s³/(27(s+1)²)=0.08`・t=0.6）/ `SpringRectAt`。`ResolveMergeWinner` から Hakoniwa-priority 除去（`MergeCandidate.hasCore` 削除）= size 最大 > 辞書順最小 > null。
+- `FloatingWindowController`: `DragSession` snapshot（island ids + rest rects）導入。`BeginDrag`/`EnsureDragSession`/`EndDrag`/`CancelDrag`。`DragApplyDelta` を **絶対オフセット実描画**（rest + (cursor-dragStart) + magnetic snap）の 3-mode へ反転（Swap=freeze+ghost / Translate=島全員 / Detach=A のみ）。`ReleaseDrag`→`CommitOnRelease`（Swap=4 値交換 / Translate=overlap なら ResolveNearestFlush+merge・empty は magnetic+D4 flush attach / Detach=groupId=null+dissolve・overlap は singleton merge・excludeGroupId=oldGroup）。ghost を `ComposeSwapGhosts`（swap 専用 2 枚）へ縮小。spring 注入 seam `SetSpringAnimator` + `FireSpring`（fire-point は**確定点のみ**: swap / translate / detach commit / ESC revert。mid-drag の磁石吸着は離散 hard-set＝per-frame tween で実描画を奪わない・code-review 修正参照）。`IsCoreKind` 参照を drag/merge から除去（`DockShape.IsCoreKind` 自体は ADR-0020 factory 列挙のため残置）。
+- `FloatingWindowTitleInput`: `BeginDrag` 呼び出し・`Update()` で InputSystem `Keyboard.current.escapeKey` poll → `CancelDrag`・ESC 後の OnDrag/MouseUp は no-op。
+- `RectSpringDriver`（新規 MonoBehaviour）: SpringEase を 200ms サンプリングする production tween（kill-and-replace）。`BackcastWorkspaceRoot` が 1 体生成し両 plane controller へ `SetSpringAnimator`。
+- `BackcastWorkspaceRoot.FormFactoryBaseGroup`: 「Hakoniwa group」→「plain island」へコメント整合（挙動は不変＝base 5 窓 1 island 起動）。
+
+**AFK GREEN（`FloatingWindowE2ERunner`・exit 0・error CS 0）**: 旧 GROUP-03/05/06/07/08/10/12/14 を退役/書換、GROUP-01/02/04/11 維持。新 section 24–40 で **DRAG-01..14** 網羅:
+- 24=DRAG-01..04（ResolveDragMode pure）/ 25=DRAG-02/03（real-render）/ 26=DRAG-08（detach+dissolve）/ 27=DRAG-11（Hakoniwa 退役）/ 28=DRAG-01/04（drop target）/ 29=DRAG-01（swap commit）/ 31=DRAG-14（ghost swap-only）/ 32=DRAG-14（factory plain island）/ 33=DRAG-05/06 pure / 34=DRAG-07 pure / 35=DRAG-10（spring 8% 厳密）/ 36=DRAG-05/06 wiring / 37=DRAG-07（overlap merge）/ 38=DRAG-09（ESC）/ 39=DRAG-10（spring fire-point）/ 40=DRAG-13（chart 同等）。
+- RED→GREEN: 実装中の唯一の RED は S40c（chart を真下 drag で cursor が startup 右端=inclusive 境界に入り Swap 誤判定）→ cursor を矩形外（右下）へずらして GREEN。`ResolveDragMode` の swap 判定が edge-inclusive な性質を突いた正当な検出。
+
+**HITL 未**: spring の体感（200ms/8%）・ESC キーバインドの実機操作感・"プルン" の見た目は owner playmode 目視（findings §3 / §13 DRAG-10 は pure 曲線で gate 済み）。
+
+**code-review(high) 修正履歴**（3 件・2026-06-22）:
+1. **mid-drag spring 再発火 + per-frame 書き込み競合**（CONFIRMED）: 旧実装は磁石吸着 engage 時に `RenderTranslate`/`RenderDetach` から `FireSpring` を edge-trigger していたが、(a) DETACH 経路で `FreezeIslandToRest` が `snapEngaged=false` をリセット → 毎フレーム再発火、(b) `RectSpringDriver` の tween が controller の毎フレーム絶対書き込みと競合し 200ms カーソル追従が止まる。**修正**: mid-drag spring を撤去し離散 hard-set に統一（findings §2「離散 snap」と整合）。spring は **commit / ESC の確定点のみ**で発火（その後 per-frame 書き込みが続かないので tween と競合しない）。`DragSession.snapEngaged` 削除。
+2. **island-wide merge 漏れ**（CONFIRMED）: `CommitTranslate` が島 bbox を `ResolveNearestFlush` で Y に flush snap しても、merge 駆動の `CommitFlushAttachOnRelease(id)` が **dragged 自身の辺**しか flush 走査しないため、dragged 以外のメンバー辺で Y に接した時に merge し損なう（ADR-0024 §4「snap → merge」契約違反・旧 NormalGroupTranslate から継承した underapprox）。**修正**: flush 走査を **島全メンバーの辺**へ一般化（dragged の現 group の visible/live 全員を source に）。detach は groupId=null 後なので source=dragged 単独（不変）。**回帰テスト S37(d)** 追加（多メンバー島が非 dragged 辺で flush → merge）。
+3. **doc-rot コメント**（Low）: `DragGhostLayer` ヘッダ・`FloatingWindowController` の `EvaluateDragMode` 参照・`FloatingWindowTitleInput` の旧 mode 名を ADR-0024 へ整合。
+
+再走: AFK `FloatingWindowE2ERunner` GREEN（exit 0・error CS 0）を 3 件修正後に再確認。
+
+**code-review(high) 第2ラウンド 修正履歴**（4 件・2026-06-22）:
+4. **spring tween 再 grab 競合**（CONFIRMED）: commit/ESC の 200ms spring tween が走っている間に同窓を再 grab すると、`BeginDrag` が overshoot 途中の rect を rest として snapshot し、瀕死 tween が新 drag の毎フレーム書き込みと競合。**修正**: 注入 seam に `springStop`（`RectSpringDriver.Stop`＝tween を target へ settle して除去）を追加し、`BeginDrag` で island 全メンバーの tween を停止してから snapshot。**S39d** で検証。
+5. **overlap-merge が非矩形 island で漏れる**（CONFIRMED）: `CommitTranslate`/`CommitDetach` の overlap 経路が島 bbox を `ResolveNearestFlush` で Y に snap しても、merge を member-level flush 再走査（`CommitFlushAttachOnRelease`）に委ねていたため、bbox 辺を定義するメンバーが Y と直交 overlap しない（mixed-size 島）と merge し損なう。**修正**: overlap 経路を **release-position rule 直結**の `CommitMergeWithTarget(dragged, Y)` に変更（cursor が Y 上＝幾何に依らず Y へ編入）。empty 経路は従来の incidental flush attach（D4）維持。**S37e** で検証。
+6. **per-frame drag アロケーション**（efficiency）: `DragApplyDelta` が毎フレーム `BuildIslandMembers`/`CaptureNonIslandRects`/`IslandRestBbox` を再構築（島・外部窓は drag 中不変）。**修正**: `DragSession` に `islandBbox`/`islandMembers`/`nonIslandRects` を `BeginDrag` で 1 度 snapshot しキャッシュ（3 ヘルパ削除）。
+7. **`RectSpringDriver.Update` の毎フレーム List 確保**（efficiency）: `new List(_tweens.Keys)` を毎フレーム確保（自身のコメントの「allocates nothing」と矛盾）。**修正**: 再利用 `_keys` バッファ化。
+
+再走: 第2ラウンド 4 件修正後も AFK GREEN（exit 0・error CS 0・変更ファイル warning 0）。S37e / S39d 追加で回帰網拡張。

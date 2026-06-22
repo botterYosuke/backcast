@@ -385,8 +385,7 @@ _Avoid_: per-mode 化対象を tile 順以外（canvas/window/editor）へ広げ
 infinite canvas の Content 上を **自由配置（free placement）**で漂う window。**ADR-0017 以降、Hakoniwa のパネル
 （`chart` / `positions` / `orders` / `run_result` / `buying_power` / `startup`）も floating window**＝旧「chart は
 floating window ではない」は**反転**（chart は multi-instance kind `chart:<id>`・universe 同期）。
-**ドッキング = 磁石スナップ＋group 関係（ADR-0019）**: drag リリース時に近接 window の辺が閾値内なら揃い
-（`FloatingWindowMath.SnapOffset`・pure/AFK 権威）、その後の **flush 隣接判定**（ε=1px ∧ 直交軸 overlap > 0）で **[[window group / groupId]]** を付与/merge。group 内 window は drag で**一体移動**するが、core（`startup` / `run_result`）含み時は [[Hakoniwa group]] へ昇格し**移動禁止・内部 swap・core 不抜**。`D_DETACH=64f` canvas-logical px を超える drag で detach commit。
+**ドッキング = 磁石スナップ＋group 関係（ADR-0019 ＋ ADR-0024）**: drag 中は **in-drag 磁石吸着**（[[R_SNAP]]=96px で flush 位置へ実描画 snap）、release で **flush 隣接判定**（ε=1px ∧ 直交軸 overlap > 0）／overlap なら最寄り flush へ snap して **[[window group / groupId]]** を付与/merge。drag mode は **cursor 位置で動的 3 判定**（[[window group / groupId]] §1）: 同 island メンバー rect 内 → **swap**（ghost 2 枚）／島外 ∧ < [[D_DETACH]] (256px) → **island translate**（島全員が実描画でシフト）／島外 ∧ ≥ 256px → **detach**（A 単独）。**~~core（startup/run_result）含み時の Hakoniwa 昇格・移動禁止・core 不抜は ADR-0024 で退役~~**——全 island が同一挙動。`D_DETACH=256f` 超で detach commit。**ESC** で drag 中 revert（spring 200ms・state 不変）。
 **FloatingWindowLayer** = ADR-0018 §10 で「手前 1.2倍プレーン」用に縮退（`strategy_editor` cell ＋ `order` のみ）。元箱庭 6 種は **`DockLayer`（1.0倍・奥・背面 sibling）** に居る。各プレーンに独立 `FloatingWindowController` が居り、snap/group 母集合はプレーンに閉じる（cross-plane snap・cross-plane group とも禁止＝ADR-0018／ADR-0019）。**z-order** =
 window の前後関係。live は **各 plane 内の sibling index**（後の sibling ほど前面）、persist は **`zOrder` int**（plane-relative）。**click-to-front** =
 window をクリック/drag したとき最前面へ（TTWR `WindowManager.max_z` bump の capability parity・形式非互換）。**move** =

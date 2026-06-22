@@ -21,6 +21,7 @@
 
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;       // ADR-0024 §8: ESC poll (project uses the new Input System, activeInputHandler=1)
 
 public class FloatingWindowTitleInput : MonoBehaviour,
     IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
@@ -32,11 +33,17 @@ public class FloatingWindowTitleInput : MonoBehaviour,
 
     // #104 (ADR-0019 / findings 0082 §6): the canvas-LOGICAL drag-start anchor and running cursor.
     // restAtDragStart is the dragged top-left at OnBeginDrag; cursor is restAtDragStart plus the
-    // accumulated frameDelta over the drag. The controller's DragApplyDelta uses |cursor - rest| as
-    // the detach-threshold metric (NOT a re-derive from rectangles each frame — a window that snaps
-    // mid-drag does not corrupt the metric this way).
+    // accumulated frameDelta over the drag. ADR-0024's controller resolves the 3-mode drag from
+    // |cursor - dragStart| each frame (NOT a re-derive from rectangles — a window that snaps mid-drag
+    // does not corrupt the metric).
     Vector2 _restAtDragStart;
     Vector2 _cursorLogical;
+
+    // ADR-0024 §8: true between OnBeginDrag and OnEndDrag, so Update() only polls ESC during an active
+    // drag. _escCanceled latches the ESC so a second ESC in the same drag is a no-op and OnDrag stops
+    // feeding the controller (the controller also guards, but skipping the per-frame work is cleaner).
+    bool _dragging;
+    bool _escCanceled;
 
     public void Initialize(FloatingWindowController windows, InfiniteCanvasController canvas, RectTransform viewport, string windowId)
     {
@@ -56,10 +63,10 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     }
 
     // Begin-drag also raises+focuses (a drag is a press too), then OnDrag moves. Raising here keeps the
-    // window on top while it is being dragged even if OnPointerDown was missed. #104: snapshot the
-    // dragged's logical rest position so subsequent OnDrag frames can evaluate |cursor - rest| against
-    // D_DETACH without re-reading anchoredPosition each frame (which may have been snapped or, in
-    // NormalGroupTranslate mode, mutated by the controller — both would break the metric).
+    // window on top while it is being dragged even if OnPointerDown was missed. ADR-0024: snapshot the
+    // dragged's logical rest position so subsequent OnDrag frames evaluate |cursor - dragStart| against
+    // D_DETACH_PX without re-reading anchoredPosition each frame (which the controller re-positions every
+    // frame in Translate/Detach — re-reading would corrupt the metric).
     public void OnBeginDrag(PointerEventData eventData)
     {
         _windows?.NoteUserFocus(_windowId);
@@ -69,33 +76,52 @@ public class FloatingWindowTitleInput : MonoBehaviour,
             _restAtDragStart = rt.anchoredPosition;
             _cursorLogical = _restAtDragStart;
         }
+        _escCanceled = false;
+        _dragging = true;
+        // ADR-0024 §2/§7: open the controller's drag session — snapshot the island + rest rects so the
+        // 3-mode dispatcher real-renders absolutely from rest and ESC can revert.
+        _windows?.BeginDrag(_windowId, _restAtDragStart);
     }
 
     public void OnDrag(PointerEventData eventData)
     {
         if (_windows == null || _canvas == null || _viewport == null) return;
+        if (_escCanceled) return;   // ESC already canceled this drag — feed the controller nothing more
 
         Vector2 viewportDelta = ScreenDeltaToViewportLocal(eventData);
         float zoom = _canvas.CaptureView().zoom;
         Vector2 frameDelta = FloatingWindowMath.ViewportDeltaToLogical(viewportDelta, zoom);
         _cursorLogical += frameDelta;
-        // #104: DragApplyDelta classifies the 7-mode drag state and applies live geometry per mode
-        // (SoloDrag = dragged tracks cursor, NormalGroupTranslate = every group member tracks cursor,
-        // all other modes = geometry frozen; Slice G ghost-previews them). MoveByLogical is no longer
-        // called from production — Section3/Section11 still drive it directly for the pure solo-move test.
+        // ADR-0024 §2/§3/§7: DragApplyDelta resolves the 3 modes from cursor position and real-renders
+        // the preview (Swap = ghosts, Translate = whole island, Detach = dragged only) with in-drag
+        // magnetic snap. frameDelta is passed for signature parity; positioning is absolute from the
+        // drag-start snapshot.
         _windows.DragApplyDelta(_windowId, _restAtDragStart, _cursorLogical, frameDelta);
     }
 
-    // #104 (ADR-0019 / findings 0082 §5, §6, §7, §8): release commit. ReleaseDrag classifies the
-    // final drag mode using the dragged's drag-start rest position + the running cursor, and commits
-    // the variant outcome — magnet snap + flush-attach commit for solo / normal-translate, jump-to-
-    // cursor + detach + dissolve for the detach modes, snap-back to rest for Hakoniwa core-lock /
-    // snap-back, swap (x,y,w,h) for Hakoniwa swap (Slice E2). Replaces the bare SnapOnRelease call —
-    // SnapOnRelease still runs INSIDE ReleaseDrag for the solo/translate/detach branches so the
-    // existing magnet snap + Slice B flush-attach commit semantics are preserved unchanged.
+    // ADR-0024 §4 / findings 0088 §4: release commit. ReleaseDrag re-resolves the final mode from the
+    // release cursor and commits the universal release-position outcome (swap / translate / detach,
+    // with overlap→nearest-flush merge). After an ESC cancel it commits nothing.
     public void OnEndDrag(PointerEventData eventData)
     {
         _windows?.ReleaseDrag(_windowId, _restAtDragStart, _cursorLogical);
+        _dragging = false;
+        _escCanceled = false;
+    }
+
+    // ADR-0024 §8 / findings 0088 §6: poll ESC during an active drag. The new Input System
+    // (activeInputHandler=1) exposes the keyboard via Keyboard.current; a press cancels the drag
+    // (CancelDrag springs the live render back to rest and latches commit-skip). Null-safe when no
+    // keyboard device is present (headless / AFK never reaches Update with _dragging true).
+    void Update()
+    {
+        if (!_dragging || _escCanceled) return;
+        var kb = Keyboard.current;
+        if (kb != null && kb.escapeKey.wasPressedThisFrame)
+        {
+            _windows?.CancelDrag(_windowId);
+            _escCanceled = true;
+        }
     }
 
     // Screen-pixel drag delta -> viewport-local delta (same mechanism #13's pan uses, so a

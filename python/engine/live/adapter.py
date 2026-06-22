@@ -36,6 +36,21 @@ Nautilus 型への変換は別 step（reducer 側）で行う。"""
 Channel = Literal["price", "trades", "depth"]
 """購読チャネル種別。venue 横断で共通。"""
 
+
+class SubscriptionLimitExceeded(Exception):
+    """venue のハード購読上限超過を venue 非依存に表す例外（#107・方針 ADR-0022）。
+
+    kabu の 50 銘柄登録上限（`KabuRegisterFullError` / errno 4002006）のような
+    *venue 側の実上限* を、orchestrator が venue 固有例外を知らずに typed な
+    `SUBSCRIPTION_LIMIT_EXCEEDED` として surface するための境界型。各 venue adapter が
+    自分の上限例外をこの型へ翻訳して raise する。立花は per-ticker WS で実上限が無いので
+    raise しない。orchestrator は人工的な件数 cap を持たず（撤去済み）、この例外でのみ上限を知る。
+    """
+
+    def __init__(self, message: str = "", venue_code: object = None) -> None:
+        super().__init__(message)
+        self.venue_code = venue_code
+
 # --- credentials / instrument の骨格 ---
 
 class VenueCredentials(BaseModel):

@@ -445,7 +445,7 @@ class DataEngineBackend:
     _KNOWN_VENUES = {"TACHIBANA", "KABU", "MOCK"}  # D26: MOCK added
     _KNOWN_CRED_SOURCES = {"prompt", "session_cache", "env", "prompt_result"}
     _KNOWN_MODES = {"Replay", "LiveManual", "LiveAuto"}
-    _MAX_LIVE_SUBSCRIPTIONS = 50
+    # #107/ADR-0022: 人工的な購読件数 cap は撤去。件数上限は venue adapter の実上限に委譲する。
 
     # Backward-compat properties: tests monkey-patch these on the servicer.
     @property
@@ -569,6 +569,9 @@ class DataEngineBackend:
 
     def subscribe_market_data(self, instrument_id: str) -> CommandAck:
         return self._live_mgr.subscribe_market_data(instrument_id)
+
+    def subscribe_market_data_batch(self, instrument_ids) -> dict:
+        return self._live_mgr.subscribe_market_data_batch(instrument_ids)
 
     def unsubscribe_market_data(self, instrument_id: str) -> CommandAck:
         return self._live_mgr.unsubscribe_market_data(instrument_id)

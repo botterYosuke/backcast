@@ -37,9 +37,10 @@ public sealed class UniverseSidebarController
 
     public InstrumentPickerController Picker { get; } = new InstrumentPickerController();
 
-    // DEFERRED Live seam (D5): in Live mode a row click should also subscribe market data
-    // (TTWR instrument_row_click_system Live branch). #31 leaves this null — the real venue
-    // subscribe is a separate issue. Set by a future Live wiring without reshaping this brain.
+    // Live subscribe seam (D5): in Live mode a row select / [+ Add] subscribes market data
+    // (TTWR instrument_row_click_system Live branch). #31 left this null (DEFERRED); #107 wires it to
+    // LiveSubscriptionCoordinator.OnLiveRowSelected (方針 ADR-0022). Fired only in Live; never touches
+    // the universe registry (membership 不可侵 — the subscribe is subordinate to the add/select).
     public Action<string> LiveSubscribeHook { get; set; }
 
     public UniverseSidebarController(
@@ -77,10 +78,17 @@ public sealed class UniverseSidebarController
         Picker.BuildList(_provider, _registry, mode);
 
     // Click a picker candidate → add to the universe + flush the writeback (Replay-gated).
+    // #107: in Live, a newly added instrument must also be market-data subscribed (AC#2 [+ Add]).
+    // Same DEFERRED seam as row-select (LiveSubscribeHook) so the production trigger is one place;
+    // membership add is unchanged (the subscribe is subordinate, never gates the add — ADR-0022 D3).
     public bool AddFromPicker(string id, UniverseSourceMode mode, IStrategyFileProvider strategyProvider, long nowMs)
     {
         bool added = Picker.ClickRow(id, _registry, _writeback, nowMs);
-        if (added) _writeback.Flush(_registry, strategyProvider, mode);
+        if (added)
+        {
+            _writeback.Flush(_registry, strategyProvider, mode);
+            if (mode == UniverseSourceMode.Live) LiveSubscribeHook?.Invoke(id);  // null in #31 (seam) — wired by #107
+        }
         return added;
     }
 

@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from engine.live.adapter import OrderingVenueAdapter
 
 from engine.live._build_mode import IS_DEBUG_BUILD
+from engine.live.adapter import SubscriptionLimitExceeded
 from engine.live.live_runner import LiveRunner
 from engine.live.reducer_bridge import LiveReducerBridge
 from engine.live.last_price_cache import LastPriceCache
@@ -901,30 +902,26 @@ class LiveLoopManager:
             self._suppress_live_last_error = True
         return CommandAck(success=True, error_code="")
 
-    # kabuステーション API 上限 (R6). LiveRunner 自体に gating が無いので
-    # servicer 層で拒否する。re-subscribe は cap 計算から外す。
-    _MAX_LIVE_SUBSCRIPTIONS = 50
-
     def subscribe_market_data(self, instrument_id: str) -> CommandAck:
         # Live runner 未起動 (Replay モード等) は precondition reject
         if self._session is None:
             return CommandAck(success=False, error_code="EXECUTION_MODE_PRECONDITION")
-        # 50 銘柄 cap: 新規 instrument のみカウント (re-subscribe は no-op)
-        try:
-            already = self._session.runner.subscribed_ids()
-        except Exception:
-            already = set()
-        if (
-            instrument_id not in already
-            and len(already) >= self._MAX_LIVE_SUBSCRIPTIONS
-        ):
-            return CommandAck(success=False, error_code="SUBSCRIPTION_LIMIT_EXCEEDED")
+        # #107/ADR-0022: 人工的な件数 cap は持たない。件数上限は venue adapter の実上限に委譲し、
+        # SubscriptionLimitExceeded（kabu 50 銘柄 = 4002006 等）を typed な
+        # SUBSCRIPTION_LIMIT_EXCEEDED で surface する（SUBSCRIBE_FAILED に握り潰さない）。
+        # re-subscribe は runner 側で idempotent no-op。membership には触らない（ADR-0022 D3）。
         loop = self._ensure_live_loop()
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self._session.runner.subscribe(instrument_id), loop
             )
             future.result(timeout=self._live_timeout_s)
+        except SubscriptionLimitExceeded as exc:
+            logging.warning(
+                "subscribe_market_data: venue limit hit for %s (venue_code=%s)",
+                instrument_id, exc.venue_code,
+            )
+            return CommandAck(success=False, error_code="SUBSCRIPTION_LIMIT_EXCEEDED")
         except Exception as exc:
             logging.exception("subscribe_market_data failed: %s", exc)
             return CommandAck(success=False, error_code="SUBSCRIBE_FAILED")
@@ -934,6 +931,47 @@ class LiveLoopManager:
         if self.venue_sm is not None and self.venue_sm.current == "CONNECTED":
             self.venue_sm.transition_to("SUBSCRIBED")
         return CommandAck(success=True, error_code="")
+
+    def subscribe_market_data_batch(self, instrument_ids) -> dict:
+        """universe 全銘柄を一括購読する（#107 LiveManual 突入時・方針 ADR-0022）。
+
+        逐次購読（`runner.subscribe_many`）で銘柄ごとに (success, error_code) を集約して返す。
+        人工的な件数 cap は無く、venue 実上限は per-id `SUBSCRIPTION_LIMIT_EXCEEDED` で surface する。
+        membership は一切変えない（購読は membership に従属・ADR-0022 D3）。
+        返り値: {"success": all_ok, "error_code": first_failure, "results": [{instrument_id, success, error_code}, ...]}
+        """
+        if self._session is None:
+            return {"success": False, "error_code": "EXECUTION_MODE_PRECONDITION", "results": []}
+        ids = [str(i) for i in (instrument_ids or [])]
+        if not ids:
+            return {"success": True, "error_code": "", "results": []}
+        loop = self._ensure_live_loop()
+        # 逐次購読＋venue rate-limit gate の待ちを許容するため timeout を件数でスケール。
+        timeout = self._live_timeout_s + len(ids) * 2.0
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._session.runner.subscribe_many(ids), loop
+            )
+            per_id = future.result(timeout=timeout)
+        except Exception as exc:
+            logging.exception("subscribe_market_data_batch failed: %s", exc)
+            return {
+                "success": False,
+                "error_code": "SUBSCRIBE_FAILED",
+                "results": [
+                    {"instrument_id": i, "success": False, "error_code": "SUBSCRIBE_FAILED"}
+                    for i in ids
+                ],
+            }
+        results = [
+            {"instrument_id": i, "success": ok, "error_code": ec} for (i, ok, ec) in per_id
+        ]
+        any_ok = any(r["success"] for r in results)
+        all_ok = all(r["success"] for r in results)
+        if any_ok and self.venue_sm is not None and self.venue_sm.current == "CONNECTED":
+            self.venue_sm.transition_to("SUBSCRIBED")
+        first_err = next((r["error_code"] for r in results if not r["success"]), "")
+        return {"success": all_ok, "error_code": first_err, "results": results}
 
     def unsubscribe_market_data(self, instrument_id: str) -> CommandAck:
         # Live runner 未起動 (Replay モード等) は precondition reject

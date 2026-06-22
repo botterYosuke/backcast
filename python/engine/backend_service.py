@@ -232,6 +232,16 @@ class BackendService:
     def subscribe_market_data(self, instrument_id: str) -> dict:
         return _call_ack(self._srv.subscribe_market_data, instrument_id)
 
+    def subscribe_market_data_batch(self, instrument_ids) -> dict:
+        # #107: orchestrator が既に plain dict（success/error_code/results）を返すので素通し。
+        try:
+            return self._srv.subscribe_market_data_batch(instrument_ids)
+        except RuntimeError as exc:
+            return {"success": False, "error_code": "INPROC_ABORT", "results": [], "detail": str(exc)}
+        except Exception:
+            logging.exception("[backend_service] subscribe_market_data_batch failed")
+            return {"success": False, "error_code": "INPROC_ERROR", "results": []}
+
     def unsubscribe_market_data(self, instrument_id: str) -> dict:
         return _call_ack(self._srv.unsubscribe_market_data, instrument_id)
 

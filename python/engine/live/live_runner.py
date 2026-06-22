@@ -29,6 +29,7 @@ from engine.live.adapter import (
     InstrumentId,
     KlineUpdate,
     LiveVenueAdapter,
+    SubscriptionLimitExceeded,
     TradesUpdate,
 )
 from engine.live.aggregator import TickBarAggregator
@@ -82,6 +83,36 @@ class LiveRunner(SupervisedTask):
             # adapter 側で失敗したら登録を巻き戻す
             self._aggregators.pop(instrument_id, None)
             raise
+
+    async def subscribe_many(
+        self, instrument_ids: Iterable[InstrumentId]
+    ) -> list[tuple[InstrumentId, bool, str]]:
+        """複数銘柄を **逐次** 購読し、銘柄ごとの (id, ok, error_code) を返す（#107）。
+
+        逐次にする理由（asyncio.gather を使わない）:
+        - kabu adapter は subscribe 毎に累積 `_put_register(all_symbols())` を撃つので、
+          並行 subscribe は `RegisterSet` を競合させる。逐次なら register set が一貫する。
+        - kabu の register rate-limit gate（`kabusapi_ratelimit`）が各 PUT を throttle するので、
+          一括購読でも burst（errno 4001006）を踏まない。
+        1 銘柄の失敗は他銘柄を止めない（per-id に集約）。venue 実上限は
+        `SubscriptionLimitExceeded` → "SUBSCRIPTION_LIMIT_EXCEEDED"、その他は "SUBSCRIBE_FAILED"。
+        membership には一切触れない（購読は membership に従属・ADR-0022 D3）。
+        """
+        results: list[tuple[InstrumentId, bool, str]] = []
+        for instrument_id in instrument_ids:
+            try:
+                await self.subscribe(instrument_id)
+                results.append((instrument_id, True, ""))
+            except SubscriptionLimitExceeded:
+                log.warning("subscribe_many: venue limit hit for %s", instrument_id)
+                results.append((instrument_id, False, "SUBSCRIPTION_LIMIT_EXCEEDED"))
+            except Exception:
+                # NOTE: `except Exception` (not BaseException) on purpose — asyncio.CancelledError /
+                # KeyboardInterrupt must propagate so a cancelled batch (loop teardown) does NOT keep
+                # subscribing the rest of the universe and mis-report cancellation as a venue failure.
+                log.exception("subscribe_many: subscribe failed for %s", instrument_id)
+                results.append((instrument_id, False, "SUBSCRIBE_FAILED"))
+        return results
 
     async def unsubscribe(self, instrument_id: InstrumentId) -> None:
         # idempotent: 未登録なら何もしない

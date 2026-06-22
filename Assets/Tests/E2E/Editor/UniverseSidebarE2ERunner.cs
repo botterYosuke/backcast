@@ -261,8 +261,9 @@ public static class UniverseSidebarE2ERunner
         return null;
     }
 
-    // ---- 6. row → SelectedSymbol (+ Live deferred hook, Replay does not fire) ----
-    // Covers: SIDEBAR-01 (行クリックで focus 移動・Selected フラグ), SIDEBAR-02 (Live のみ LiveSubscribeHook 発火・Replay は focus のみ)
+    // ---- 6. row → SelectedSymbol (+ Live subscribe hook on select AND [+ Add]; Replay never fires) ----
+    // Covers: SIDEBAR-01 (行クリックで focus 移動・Selected フラグ), SIDEBAR-02 (Live のみ LiveSubscribeHook 発火・Replay は focus のみ),
+    //   #107 SUBWIRE-02/03 controller half (row-select + [+ Add] が Live で hook 発火・Replay は発火しない)
     static string Section6_SelectFocusAndLiveHook()
     {
         var ctrl = NewController(out var reg, out var sel, new StubProvider());
@@ -293,6 +294,17 @@ public static class UniverseSidebarE2ERunner
         if (rows.Count != 2) return "rows count wrong";
         if (!rows.Single(x => x.Id == "7203.TSE").Selected) return "focused row not flagged";
         if (rows.Single(x => x.Id == "9984.TSE").Selected) return "non-focused row flagged";
+
+        // #107 (AC#2): [+ Add] also fires the Live subscribe hook (same DEFERRED seam as row-select), and
+        // Replay does NOT. This is the controller-level half of the production wiring; the full subscribe→
+        // board-render chain is gated by LiveSubscribeWiringE2ERunner (SUBWIRE-03).
+        var spAdd = new StubStrategyProvider { Path = null };
+        string addHooked = null;
+        ctrl.LiveSubscribeHook = id => addHooked = id;
+        ctrl.AddFromPicker("1301.TSE", UniverseSourceMode.Replay, spAdd, 10_000);
+        if (addHooked != null) return "Replay [+ Add] fired Live subscribe hook";
+        ctrl.AddFromPicker("6758.TSE", UniverseSourceMode.Live, spAdd, 20_000);
+        if (addHooked != "6758.TSE") return "Live [+ Add] did not fire subscribe hook for added id";
         return null;
     }
 

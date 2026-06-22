@@ -159,6 +159,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     MenuBarViewModel _menuBar;
     VenueMenuViewModel _venueMenu;
     UniverseSidebarController _sidebarCtrl;
+    LiveSubscriptionCoordinator _subCoord;   // #107: live market-data 購読の本番トリガ (ADR-0022)
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
 
@@ -533,6 +534,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // writeback. The restored ids are not an unsaved edit (#31 D4).
         _sidebarCtrl.PrimeWritebackFromCurrent();
         if (_sidebarView != null) _sidebarView.Bind(_sidebarCtrl, EditorFileProvider, _font);   // #78: editor's .py sidecar; #77: uGUI font
+
+        // #107 (ADR-0022): the production trigger for live market-data subscription. Two triggers:
+        // (1) bulk-subscribe the whole universe on a Live-mode rising edge (LiveManual 突入), fed by
+        // OnModePoll in DriveFooter; (2) the #31 DEFERRED LiveSubscribeHook, fired by the sidebar on a
+        // Live row-select AND [+ Add] (per-instrument). There is deliberately NO universe-Changed
+        // auto-subscribe — that would make the hook redundant and break the AC#6 delete-to-RED litmus.
+        // Reads the SAME _scenario.Universe SoT and NEVER writes it (membership 不可侵 / D3). The egress is
+        // the real LiveRpcLanes write lane via LaneSubscribeSink (host.Lanes resolved lazily — built by
+        // InitializePython, always ready before the first Live edge).
+        _subCoord = new LiveSubscriptionCoordinator(new LaneSubscribeSink(_host), _scenario.Universe);
+        _sidebarCtrl.LiveSubscribeHook = _subCoord.OnLiveRowSelected;
     }
 
     // #104 Slice G (findings 0082 §8): create a per-plane ghost overlay container as a child of the
@@ -1583,6 +1595,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (st != _lastFooterPoll) { _lastFooterPoll = st; _footerMode.ApplyPoll(st); }
             _host.Conn.ApplyStatePoll(st);
         }
+
+        // #107 (ADR-0022): feed the poll's execution_mode to the subscription coordinator. A Replay→Live
+        // rising edge bulk-subscribes the universe so every chart/ladder tile updates on LiveManual entry.
+        // Cheap edge-detector (idempotent when the mode is unchanged).
+        _subCoord?.OnModePoll(_footerMode.DisplayMode);
 
         // #99 dock shape flip: the poll is the mode SoT (DisplayMode). LiveManual⇄LiveAuto share one
         // Live shape (no-op); a Replay⇄Live transition flips the `startup` window visibility (Replay

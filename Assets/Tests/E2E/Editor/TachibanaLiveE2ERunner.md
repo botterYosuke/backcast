@@ -53,6 +53,12 @@
 | 3-4 | `SubmitPlaceOrder` onResult `Success==true`（ack `ACCEPTED`）、`SecretRequiredCount` の edge を 1 回応答 | 発注が venue に受理 |
 | 5 | `panel.FilledOrderCount>0` ＆ `LatestOrder.Status=="FILLED"` ＆ `FilledQty>=100` | 成行が約定 |
 
+> **#107（2026-06-22）**: step 2.4 の EC carrier 購読を**本番トリガに置換**した。以前は runner が
+> `host.Lanes.SubmitSubscribeMarketData` を *自分で* 叩いていた（＝本番 UI の購読配線をゲートできない
+> production-binding の死角）。現在は本番と同じ `LiveSubscriptionCoordinator` + `LaneSubscribeSink` を
+> universe 投入 → `OnModePoll(LiveManual)` の一括購読として駆動し、テスト自身は購読 RPC を呼ばない。
+> 購読が走った観測は step 2.5 の EC WS gate（実 demo の per-ticker FD WS 確立）が担う。方針: ADR-0022。
+
 ## 合格条件
 
 - ログに `[E2E TACHIBANA-LIVE PASS] ...`、プロセス exit 0（`-quit` 併用、self-failing gate）。`error CS\d+` 0 件。

@@ -107,6 +107,9 @@ class InprocLiveServer:
     def subscribe_market_data(self, instrument_id: str) -> dict:
         return self._svc.subscribe_market_data(instrument_id)
 
+    def subscribe_market_data_batch(self, instrument_ids) -> dict:
+        return self._svc.subscribe_market_data_batch(instrument_ids)
+
     def unsubscribe_market_data(self, instrument_id: str) -> dict:
         return self._svc.unsubscribe_market_data(instrument_id)
 

@@ -72,6 +72,20 @@ def emit_depth(server, i: int, bid: float, ask: float) -> None:
     loop.call_soon_threadsafe(adapter.emit_depth_snapshot, IID, i * DAY_NS, bids, asks)
 
 
+def emit_depth_for(server, instrument_id: str, i: int, bid: float, ask: float) -> None:
+    """#107: 任意 instrument_id へ 1 段の depth を注入する（production-binding gate 用）。
+
+    `emit_depth` は IID 固定だが、本 helper は instrument_id を受けるので一括購読された universe の
+    各銘柄に板を流せる。mock adapter は subscribe 済み instrument のみ受け付ける（inject_tick の
+    subscribe gating）ので、未購読 id への注入は no-op ＝『購読されていなければ板は出ない』を gate できる。
+    """
+    adapter = _adapter(server)
+    loop = _loop(server)
+    bids = [DepthLevel(price=bid, size=300.0)]
+    asks = [DepthLevel(price=ask, size=300.0)]
+    loop.call_soon_threadsafe(adapter.emit_depth_snapshot, instrument_id, i * DAY_NS, bids, asks)
+
+
 def _levels_from_csv(prices_csv: str, sizes_csv: str) -> list[DepthLevel]:
     """CSV("p1,p2"), CSV("s1,s2") → [DepthLevel,...]。空文字列は片側欠の空板を表す。"""
     if not prices_csv:

@@ -23,6 +23,7 @@
 // is zeroized the moment the RPC returns (D5).
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 using Python.Runtime;
 
@@ -192,6 +193,35 @@ public class LiveRpcLanes
             using (PyObject ok = res.GetItem("success")) r.Success = ok.As<bool>();
             using (PyObject ec = res.GetItem("error_code")) r.ErrorCode = ec.As<string>() ?? "";
             return r;
+        }
+    }
+
+    // #107: LiveManual 突入時の universe 一括購読を engine 側で逐次 gather する batch RPC 1 回に畳む
+    // (subscribe_market_data_batch・方針 ADR-0022)。狙いは (1) kabu の累積 re-register を N 個別 RPC の
+    // O(N²) から O(N) に減らす、(2) register rate-limit gate を engine 側でまとめて尊重し burst(4001006)を
+    // 避けること。⚠️ batch は他の order RPC と同じ write lane で 1 タスクとして走る＝その間 place/cancel は
+    // 待つ（_coord book-keeping を order と共有するため。突入直後の一括購読なので許容）。venue 実上限は
+    // per-id typed エラーで surface するが、ここでは aggregate の success/error_code だけを OrderRpcResult に畳む。
+    public void SubmitSubscribeMarketDataBatch(IReadOnlyList<string> instrumentIds,
+                                               Action<OrderRpcResult> onResult)
+        => EnqueueWrite(() => CallSubscribeMarketDataBatch(instrumentIds), onResult);
+
+    OrderRpcResult CallSubscribeMarketDataBatch(IReadOnlyList<string> instrumentIds)
+    {
+        using (Py.GIL())
+        using (var lst = new PyList())
+        {
+            if (instrumentIds != null)
+                foreach (string id in instrumentIds)
+                    using (var s = new PyString(id ?? ""))
+                        lst.Append(s);
+            using (PyObject res = _server.InvokeMethod("subscribe_market_data_batch", lst))
+            {
+                var r = new OrderRpcResult { Status = "", OrderId = "" };
+                using (PyObject ok = res.GetItem("success")) r.Success = ok.As<bool>();
+                using (PyObject ec = res.GetItem("error_code")) r.ErrorCode = ec.As<string>() ?? "";
+                return r;
+            }
         }
     }
 

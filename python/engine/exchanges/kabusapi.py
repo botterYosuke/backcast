@@ -12,7 +12,12 @@ import httpx
 
 from engine.exchanges import kabusapi_orders as _orders
 from engine.exchanges import kabusapi_ws  # patch 対象を module 経由で参照
-from engine.exchanges.kabusapi_auth import KabuApiError, auth_headers, check_response
+from engine.exchanges.kabusapi_auth import (
+    KabuApiError,
+    KabuRegisterFullError,
+    auth_headers,
+    check_response,
+)
 from engine.exchanges.kabusapi_register import RegisterSet
 from engine.exchanges.kabusapi_execution import KabuExecutionEngine
 from engine.exchanges.kabusapi_url import endpoint
@@ -28,6 +33,7 @@ from engine.live.adapter import (
     OnOrderEvent,
     OnVenueLogout,
     SecretResolver,
+    SubscriptionLimitExceeded,
     TradesUpdate,
     VenueCredentials,
 )
@@ -254,7 +260,12 @@ class KabuStationAdapter:
             raise RuntimeError("login required before subscribe")
         symbol, exchange = self._parse_instrument_id(instrument_id)
         was_registered = (symbol, exchange) in self._register_set
-        self._register_set.register(symbol, exchange)
+        try:
+            self._register_set.register(symbol, exchange)
+        except KabuRegisterFullError as exc:
+            # #107: venue 実上限（50 銘柄）を venue 非依存の typed 例外へ翻訳して surface する。
+            # 人工的件数 cap は orchestrator から撤去済み（ADR-0022）。membership は触らない。
+            raise SubscriptionLimitExceeded(str(exc), venue_code=exc.code) from exc
         try:
             await self._put_register(self._register_set.all_symbols())
         except BaseException:

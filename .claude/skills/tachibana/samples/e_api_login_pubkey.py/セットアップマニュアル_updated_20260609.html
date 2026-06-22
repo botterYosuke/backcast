@@ -1,0 +1,817 @@
+<!-- このマニュアルは、ダウンロードし、ブラウザで開いて読んでください。 -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API&emsp;公開鍵認証 導入・設定マニュアル (v4r9)</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #34495e;
+            --accent-color: #e74c3c;
+            --bg-color: #f8f9fa;
+            --text-color: #333333;
+            --border-color: #e2e8f0;
+            --code-bg: #2d3748;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans JP", sans-serif;
+            line-height: 1.7;
+            color: var(--text-color);
+            background-color: #ffffff;
+            margin: 0;
+            padding: 0;
+        }
+        .container {
+            max-width: 840px;
+            margin: 0 auto;
+            padding: 40px 20px;
+        }
+        header {
+            border-bottom: 3px solid var(--primary-color);
+            padding-bottom: 20px;
+            margin-bottom: 40px;
+        }
+        h1 {
+            color: var(--primary-color);
+            font-size: 2rem;
+            margin: 0 0 10px 0;
+        }
+        .subtitle {
+            color: var(--secondary-color);
+            font-size: 1.1rem;
+            font-weight: bold;
+            margin: 0;
+        }
+        .version-badge {
+            display: inline-block;
+            background-color: #2b6cb0;
+            color: white;
+            padding: 3px 10px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: bold;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        .lead-text {
+            background-color: var(--bg-color);
+            padding: 15px 20px;
+            border-left: 4px solid var(--secondary-color);
+            border-radius: 4px;
+            margin-bottom: 30px;
+        }
+        h2 {
+            color: var(--primary-color);
+            font-size: 1.5rem;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 8px;
+            margin-top: 40px;
+            margin-bottom: 20px;
+        }
+        h3 {
+            color: var(--secondary-color);
+            font-size: 1.1rem;
+            margin-top: 20px;
+            margin-bottom: 10px;
+        }
+        p {
+            margin-top: 0;
+            margin-bottom: 16px;
+        }
+        ul {
+            margin-top: 0;
+            margin-bottom: 16px;
+            padding-left: 24px;
+        }
+        li {
+            margin-bottom: 8px;
+        }
+        code {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            background-color: #edf2f7;
+            color: #2d3748;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        pre {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, Courier, monospace;
+            background-color: var(--code-bg);
+            color: #fff;
+            padding: 20px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin-top: 10px;
+            margin-bottom: 25px;
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        pre code {
+            background-color: transparent;
+            color: inherit;
+            padding: 0;
+            border-radius: 0;
+            font-size: inherit;
+        }
+        .alert-box {
+            background-color: #fff5f5;
+            border: 1px solid #fed7d7;
+            border-left: 4px solid var(--accent-color);
+            padding: 15px 20px;
+            border-radius: 4px;
+            margin-bottom: 25px;
+        }
+        .alert-box p {
+            margin: 0;
+        }
+        .alert-title {
+            font-weight: bold;
+            color: var(--accent-color);
+            margin-bottom: 5px !important;
+        }
+        hr {
+            border: 0;
+            border-top: 1px solid var(--border-color);
+            margin: 40px 0;
+        }
+        .success-box {
+            background-color: #f0fff4;
+            border-left: 4px solid #38a169;
+            padding: 20px;
+            border-radius: 4px;
+            margin-top: 30px;
+            margin-bottom: 20px;
+        }
+        .success-title {
+            font-weight: bold;
+            color: #276749;
+            margin-top: 0;
+            margin-bottom: 15px;
+            font-size: 1.15rem;
+        }
+        .check-list {
+            list-style-type: none;
+            padding-left: 0;
+            margin: 0;
+        }
+        .check-list > li {
+            position: relative;
+            padding-left: 0;
+            margin-bottom: 25px;
+            line-height: 1.6;
+        }
+        .check-list strong {
+            color: #22543d;
+            display: inline-block;
+            margin-bottom: 5px;
+        }
+        .check-block {
+            background-color: #2d3748;
+            color: #fff;
+            padding: 12px 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.9rem;
+            margin: 8px 0;
+            overflow-x: auto;
+        }
+        .check-block span {
+            display: block;
+            white-space: pre;
+        }
+        .check-block .comment { color: #a0aec0; }
+        .check-block .prompt { color: #cbd5e0; user-select: none; display: inline; }
+        .check-block .output { color: #81e6d9; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <h1>API&emsp;公開鍵認証 導入・設定マニュアル<span class="version-badge">v4r9</span></h1>
+        <p class="subtitle">（認証情報暗号化・自動運用設定編）</p>
+    </header>
+
+    <div class="lead-text">
+        <p>
+            ダウンロードしたAPIプログラムをLinux環境に導入し、認証IDや秘密鍵を安全に暗号化（独自暗号化によるセキュア保存）した上で、<code>systemd</code> を用いて自動実行するための設定手順書です。<br>
+            <br>
+            ※ 本マニュアルの認証方式は、従来の『認証局（CA）の発行するデジタル証明書』を用いたPKI認証とは異なり、FIDO/パスキーの仕組みに準拠した公開鍵認証を採用しています。そのため、クライアント証明書のインストール作業は不要です。<br>
+            <br>
+            動作確認環境は、API v4r9 / Python 3.13.5 / debian13 です。
+    </div>
+    <div class="alert-box">
+            固定IP指定の推奨<br>
+            ・秘密鍵、第2パスワードファイル、またはログインレスポンスファイルが万が一流出した場合、第三者に不正ログインされるリスクがあります。<br>
+            ・<strong style="color: #d9534f; background-color: #f9f2f2; padding: 2px 4px; border-radius: 4px;">安全のため、接続元を固定IPに限定する設定（IP制限）を行ってのご利用を強く推奨いたします。</strong><br>
+            <br>
+            ご注意<br>
+            ・本番環境とデモ環境では、別々のAuthID、秘密鍵、公開鍵のセットになります。<br>
+            ・デモ環境でv4r9を利用する場合、デモ環境の標準web画面にログインしていただき、<br>
+            　デモ環境専用のAuthID、秘密鍵、公開鍵のセットを取得してください。
+        </p>
+    </div>
+
+    <div class="note-block" style="background-color: #ebf8ff; border-left: 4px solid #3182ce; padding: 15px; margin-bottom: 20px;">
+        <p style="margin: 0; font-weight: bold; color: #2b6cb0;">ℹ️ 本APIの接続方式について</p>
+        <p style="margin: 5px 0 0 0; font-size: 0.95em;">
+            <p>
+            本APIは、プログラミング初心者や非ITエンジニアの方にも利用しやすいよう、URLにJSON形式のパラメーターを付加して送信する独自方式を採用しています。
+            </p>
+
+            <p>
+            一般的なWeb APIとは異なる構成ですが、HTTPヘッダーやPOSTデータなどの知識を最小限に抑えながら利用できることを重視しています。
+            </p>
+
+            <p>
+            そのため、本APIはURLとJSON文字列を組み立てて送信するだけで利用でき、特別な知識を必要としない接続を提供しています。
+            </p>
+        </p>
+        <p></p>
+        <p style="margin: 0; font-weight: bold; color: #2b6cb0;">ℹ️ 公式リファレンスとの関係について</p>
+        <p style="margin: 5px 0 0 0; font-size: 0.95em;">
+            本マニュアルおよび付属のスクリプトは、公式の 
+            <a href="https://www.e-shiten.jp/e_api/mfds_json_api_refference.html" target="_blank" style="color: #3182ce; text-decoration: underline;">
+                ｅ支店 API マニュアル
+            </a> 
+            に準拠した設計となっています。公式リファレンスに記載されている公開鍵認証方式を、Linuxサーバー上で安全（秘密鍵の生ファイル放置リスクを排除）に自動運用するための実践的なセットアップ手順を提供しています。<br>
+        </p>
+        <p></p>
+        <p style="margin: 0; font-weight: bold; color: #2b6cb0;">ℹ️ 本マニュアルでの接続先</p>
+        <p style="margin: 5px 0 0 0; font-size: 0.95em;">
+            <p>
+            本マニュアルおよびサンプルプログラムでは、誤って実際の取引を行うことを防ぐため、デモ環境（demo-）への接続を例示しています。
+            </p>
+
+            <p>
+            本番環境を利用する場合は、接続先URLをお客様ご自身で変更してください。
+            接続先を変更する際は、接続先が本番環境であることを十分確認のうえ実施してください。
+            </p>
+        </p>
+
+        
+    </div>
+
+    <h2>1. ディレクトリ構成の作成と権限設定</h2>
+    <p>安全な運用のために、実行用ディレクトリと鍵を格納する隠しディレクトリを作成し、<strong>所有者以外のユーザーからのアクセスを遮断（権限700）</strong>します。</p>
+
+    <h3>推奨ディレクトリ構成</h3>
+<pre><code>~/e_api/                        ← API実行基盤（権限: 700 / 所有者のみアクセス可）
+├── .auth/                      ← 鍵・暗号化データ格納（権限: 700）
+│   ├── file_pwd2.txt           ← 第2パスワード保存ファイル（手動作成）
+│   └── file_login_response.txt ← ログイン応答出力先（自動生成）
+├── .venv/                      ← Python仮想環境（自動生成されます）
+├── e_api_encode_auth.py        ← 暗号化ユーティリティ
+├── e_api_login_pubkey.py       ← ログイン実行スクリプト
+└── file_url_info.txt           ← API接続情報ファイル（手動作成）</code></pre>
+
+    <h3>設定コマンド</h3>
+    <p>ターミナルを開き、以下のコマンドを順番に実行してディレクトリを作成・保護してください。</p>
+<pre><code># [1] ディレクトリの作成
+$ mkdir -p ~/e_api/.auth
+
+# [2] ディレクトリの権限（パーミッション）制限
+# 親ディレクトリを含め、所有者のみに全権限を付与し、他ユーザーを完全に締め出します
+$ chmod 700 ~/e_api
+$ chmod 700 ~/e_api/.auth</code></pre>
+
+    <hr>
+
+    <h2>2. Python仮想環境の準備</h2>
+    <p>システムのPython環境に影響を与えず、プログラムに必要な依存ライブラリ（通信・暗号化モジュール等）を独立してインストールするため、仮想環境を作成します。</p>
+
+    <h3>2.1. システムパッケージの確認と導入</h3>
+    <p>Debian系OS（debian/Ubuntuなど）では、仮想環境の構築に必要なOS側のパッケージが標準で入っていない場合があります。環境構築をスムーズに行うため、以下の手順で事前準備を行います。</p>
+<pre><code># [1] e_api ディレクトリに移動
+$ cd ~/e_api
+
+# [2] venvパッケージのインストール
+$ sudo apt update
+$ sudo apt install -y python3-venv</code></pre>
+
+    <div class="alert-box" style="background-color: #fff5f5; border-color: #fed7d7; border-left-color: #e74c3c;">
+        <p class="alert-title" style="color: #e74c3c;">⚠️ 「ユーザー名 は sudoers ファイルにありません」とエラーが出る場合</p>
+        <p>
+            Linuxの初期設定によっては、操作している一般ユーザーに管理者権限（sudo権限）が割り当てられておらず、コマンドが拒否されることがあります。その場合は、一度以下の手順で<strong>管理者（root）ユーザーに切り替えてから</strong>インストールを行ってください。
+        </p>
+
+<div class="check-block" style="margin-top: 10px;">
+    <span class="comment"># 1. 一時的に管理者（root）ユーザーに切り替える（rootのパスワードを入力）</span>
+    <span><span class="prompt">$ </span>su -</span>
+    <span>パスワード: </span>
+    <span><span class="prompt"># </span></span>
+    <span>&nbsp;</span>
+    <span class="comment"># 2. パッケージ名簿を最新化し、インストールを実行する</span>
+    <span><span class="prompt"># </span>apt update</span>
+    <span><span class="prompt"># </span>apt install -y python3-venv</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 3. インストールが終わったら、元の一般ユーザーの画面に戻る</span>
+    <span><span class="prompt"># </span>exit</span>
+    <span>logout</span>
+    <span><span class="prompt">$ </span></span>
+</div>
+</div>
+
+<div class="alert-box" style="background-color: #fffaf0; border-color: #feebc8; border-left-color: #dd6b20; margin-top: 15px;">
+    <p class="alert-title" style="color: #dd6b20;">💡 パッケージが見つからない、またはバージョンエラーが出る場合のヒント</p>
+    <p>
+        もし <code>python3-venv</code> が見つからない、あるいは <code>404 Not Found</code> などのエラー画面が表示されて進行が止まった場合は、公式サーバーのキャッシュが古くなっているか、セキュリティニュースの確認画面で一時停止しています。<br>
+        <br>
+        その場合は、本マニュアルの後半にある<strong>「補足：パッケージのインストールでエラーになる場合の対処法」</strong>の手順（管理者権限でのキャッシュリセットおよび <code>q</code> キーによるニュースの離脱）に従って実行してください。
+    </p>
+</div>
+
+<h3>2.2. 仮想環境の作成とライブラリ導入</h3>
+<div class="check-block" style="margin-top: 15px;">
+    <span class="comment"># 1. 仮想環境（.venv）の作成</span>
+    <span><span class="prompt">$ </span>python3 -m venv .venv</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 2. 仮想環境の有効化（アクティベート）</span>
+    <span><span class="prompt">$ </span>source .venv/bin/activate</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 3. 必須パッケージのインストール</span>
+    <span class="comment"># ※ プログラムで使用する通信・暗号化用の外部ライブラリを一括導入します</span>
+    <span class="comment"># ※証明書（CA）を使わない代わりに、デバイス側で鍵を安全に暗号化保存（Cryptodome）するためのライブラリを導入します</span>
+    <span><span class="prompt">(venv) $ </span>pip install --upgrade pip</span>
+    <span><span class="prompt">(venv) $ </span>pip install urllib3 cryptography pycryptodomex</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 4. （確認）指定した3つのライブラリが正しくインストールされたか確認</span>
+    <span><span class="prompt">(venv) $ </span>pip list</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 5. 仮想環境から抜ける</span>
+    <span><span class="prompt">(venv) $ </span>deactivate</span>
+    <span><span class="prompt">$ </span></span>
+</div>
+
+<p><em>※以降の作業でターミナルを一度閉じた場合は、再度 <code>cd ~/e_api && source .venv/bin/activate</code> を実行して仮想環境に入ってください。</em></p>
+
+    <hr>
+
+    <h2>3. 準備するファイルの配置と初期設定</h2>
+
+    <h3>3.1. サイトからダウンロードしたファイルの配置</h3>
+    <p>API運用サイトから取得した以下の<strong>4つのファイル</strong>を、先ほど作成した <code>~/e_api/.auth/</code> ディレクトリ直下に配置（コピー）してください。</p>
+    <ul>
+        <li><code>e_api_authid.txt</code></li>
+        <li><code>e_api_private_key.pem</code></li>
+        <li><code>e_api_private_key.der</code></li>
+        <li><code>e_api_public_key.pem</code></li>
+    </ul>
+    <p><strong>ご注意：</strong>本番環境とデモ環境では、別々のAuthID、秘密鍵、公開鍵のセットになります。本番環境のファイルセットで、デモ環境にログインできません。デモ環境のファイルセットで本番環境にはログインできません。</p>    
+    
+    <h3>3.2. プログラムファイルの配置</h3>
+    <p>配布された以下の<strong>2つのPythonスクリプト</strong>を、<code>~/e_api/</code> ディレクトリ直下に配置してください。</p>
+    <ul>
+        <li><code>e_api_encode_auth.py</code></li>
+        <li><code>e_api_login_pubkey.py</code></li>
+    </ul>
+
+    <h3>3.3. API接続情報ファイル（手動作成）</h3>
+    <p>接続先や暗証番号を記録するファイルを <code>~/e_api/file_url_info.txt</code> として新規作成します。例ではエディターとしてnanoを使っていますが、vi等のご自身の使い慣れたエディターで編集してください。</p>
+<pre><code>$ nano ~/e_api/file_url_info.txt</code></pre>
+    <p>環境（本番/デモ）に合わせて以下の内容を記述し、保存してください。文字コードはUTF-8で保存します。</p>
+<pre><code>{
+    "sUrl": "https://demo-kabuka.e-shiten.jp/e_api_v4r9/",
+    "sJsonOfmt": "5"
+}</code></pre>
+
+    <h3>3.4. 第2パスワード保存ファイル（手動作成）</h3>
+    <p>注文、訂正、取り消しの処理で個別に利用する第2パスワードファイル（ログイン処理では未使用）を <code>~/e_api/.auth/file_pwd2.txt</code> として新規作成します。</p>
+<pre><code>$ nano ~/e_api/.auth/file_pwd2.txt</code></pre>
+    <div class="alert-box" style="background-color: #fffaf0; border-color: #feebc8; border-left-color: #dd6b20;">
+        <p class="alert-title" style="color: #dd6b20;">⚠️ 記述時の重要な注意点</p>
+        <p>
+            このファイルには<strong>第2パスワードを保存</strong>します。その際、末尾に改行コードや余分な制御文字が混入しないよう注意して記述してください。<br>
+            <br>
+            第2パスワードは、注文、訂正、取消で使います。慎重に取り扱ってください。また短い期間で変更してお使いください。<br>
+            <br>
+            また、ログイン後に同じディレクトリに出来るログイン応答出力（file_login_response.txt）も同様に慎重に扱ってください。
+        </p>
+    </div>
+
+    <h3>3.5. 配置ファイルの権限変更</h3>
+    <p>万が一に備え、配下のすべてのファイルも所有者のみ読み書き可能（600）に制限します。</p>
+<pre><code>$ chmod 600 ~/e_api/.auth/*
+$ chmod 600 ~/e_api/file_url_info.txt
+$ chmod 600 ~/e_api/*.py</code></pre>
+
+    <hr>
+
+    <h2>4. 初回限定：鍵情報の暗号化と原本の削除</h2>
+    <p>認証IDと秘密鍵、第2暗証番号を一つにまとめ、強固に暗号化した設定ファイル（<code>secure_config.enc</code>）を生成します。</p>
+    
+
+    <h3>4.1. 暗号化プログラムの実行</h3>
+<pre><code>$ cd ~/e_api
+$ python3 e_api_encode_auth.py</code></pre>
+
+    <h3>4.2. 出力結果の記録（最重要）</h3>
+    <p>実行が成功すると、画面に以下のようなメッセージが表示されます。</p>
+<pre><code>============================================================
+【重要】暗号化ファイルの作成に成功しました。
+作成されたファイル: /home/[実行ユーザー名]/e_api/.auth/secure_config.enc
+------------------------------------------------------------
+以下の文字列を、自動実行環境の「環境変数 (API_DECRYPT_KEY)」に設定してください。
+この鍵はファイルとしてディスクに保存せず、環境変数としてメモリから注入します。
+
+API_DECRYPT_KEY=...（ランダムな長い文字列）...=
+
+上の行の内容は /etc/systemd/system/e_api_login.service ファイルに設定してください。
+============================================================</code></pre>
+
+    <div class="alert-box">
+        <p class="alert-title">⚠️ 注意</p>
+        <p>画面に表示された <code>API_DECRYPT_KEY=〜</code> の文字列は、次のステップで <code>systemd</code> の設定に使用します。<strong>必ず一時的にメモ帳などへ控えておいてください。</strong></p>
+    </div>
+
+    <h3>4.3. 生ファイルの安全な削除</h3>
+    <p>暗号化ファイル（<code>secure_config.enc</code>）が正常に生成されたため、サーバー上に残った<strong>暗号化されていない原本ファイルは安全のために速やかに削除</strong>します。</p>
+<pre><code>$ rm ~/e_api/.auth/e_api_authid.txt
+$ rm ~/e_api/.auth/e_api_private_key.pem
+$ rm ~/e_api/.auth/e_api_private_key.der</code></pre>
+
+
+    <h3>4.4. 本サンプルにおける認証情報保護について</h3>
+
+    <p>
+    本サンプルでは、認証IDや秘密鍵を平文ファイルで保存しないよう、
+    暗号化設定ファイル（secure_config.enc）を利用しています。
+    </p>
+
+    <p>
+    公開鍵認証自体には必須ではありませんが、認証情報の漏洩リスクを
+    低減するための対策として実装しています。
+    </p>
+
+    <p>
+    本サンプルで採用している方式は、認証情報を平文で保存する運用を
+    避けるための実装例です。利用環境や運用方針に応じて、<br>
+    &emsp;・OSの資格情報ストア<br>
+    &emsp;・Windows DPAPI<br>
+    &emsp;・Linux Secret Service<br>
+    &emsp;・TPM や YubiKeyなどのHSM（ハードウェア・セキュリティ・モジュール） の採用<br>
+    など、本サンプルと同等以上の安全性を確保できる方式を採用してください。
+    </p>
+
+    <p>
+    なお、本サンプルでは、認証情報を格納した暗号化ファイル
+    （secure_config.enc）と、復号に必要なキー（API_DECRYPT_KEY）を
+    分離して管理しています。
+    </p>
+
+    <p>
+    暗号化ファイルのみ、または復号キーのみが漏洩した場合には、
+    認証情報が直ちに利用されることがないよう配慮しています。
+    しかし、両方が第三者に取得された場合には認証情報が復元される
+    可能性があります。
+    </p>
+
+    <p>
+    そのため、secure_config.enc および API_DECRYPT_KEY は適切な
+    アクセス権限のもとで管理し、第三者へ開示しないよう十分注意してください。
+    </p>
+
+    <hr>
+
+
+    <h2>5. systemdによるサービス化（基盤設定）</h2>
+    <p>OS管理機能（<code>systemd</code>）にプログラムを登録することで、環境変数を安全に隠蔽しながら実行できる環境を整えます。</p>
+
+    <h3>5.1. サービス定義ファイルの配置</h3>
+    <p>配布された <code>e_api_login.service</code> を、システムの配置ディレクトリにコピーします（要管理者権限）。</p>
+
+
+<div class="check-block" style="margin-top: 15px;">
+    <span class="comment"># 1. 一般ユーザー（作業ディレクトリ）の場所にいることを一度確認</span>
+    <span><span class="prompt">$ </span>cd ~/e_api</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 2. 一時的に管理者（root）ユーザーに切り替える（rootのパスワードを入力）</span>
+    <span class="comment"># ※「su」にすることで、一般ユーザーの現在地（~/e_api）を維持したまま root になれます</span>
+    <span><span class="prompt">$ </span>su</span>
+    <span>パスワード: </span>
+    <span><span class="prompt"># </span></span>
+    <span>&nbsp;</span>
+    <span class="comment"># 3. 現在地（./）にあるサービスファイルを、システム領域へコピーする</span>
+    <span><span class="prompt"># </span>cp ./e_api_login.service /etc/systemd/system/e_api_login.service</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 4. セキュリティのため、ファイルの権限を所有者（root）のみ（600）に制限する</span>
+    <span><span class="prompt"># </span>chmod 600 /etc/systemd/system/e_api_login.service</span>
+    <span>&nbsp;</span>
+    <span class="comment"># 5. コピーと権限設定が成功したか（ -rw------- になっているか）確認</span>
+    <span><span class="prompt"># </span>ls -l /etc/systemd/system/e_api_login.service</span>
+    <span><span class="output">-rw------- 1 root root 597  6月  3 16:02 /etc/systemd/system/e_api_login.service</span></span>
+</div>
+
+
+ 
+
+<h3>5.2. サービスファイルの編集</h3>
+    <p>コピーしたファイルを編集し、実行ユーザー名や環境変数を各自の環境に書き換えます。例ではエディターnanoを使っていますが、vi等のご自身の使い慣れたエディターで編集してください。</p>
+<pre><code># nano /etc/systemd/system/e_api_login.service</code></pre>
+
+    <p>以下の項目を、お客様の環境に合わせて修正してください。</p>
+    <ul>
+        <li><code>User=</code> : 実行するLinuxのユーザー名（例: <code>[実行ユーザー名]</code>）</li>
+        <li><code>WorkingDirectory=</code> : ディレクトリのフルパス（例: <code>/home/[実行ユーザー名]/e_api/</code>）</li>
+        <li><code>Environment=</code> : <strong>手順4の4.2.でメモした <code>API_DECRYPT_KEY</code> の値を貼り付けます。</strong></li>
+        <li><code>ExecStart=</code> : 仮想環境内のPythonパスと実行スクリプトのフルパス</li>
+    </ul>
+
+    <p><strong>【設定例】</strong></p>
+<pre><code>[Unit]
+Description=My Python Crypto API Service
+After=network.target
+
+[Service]
+Type=simple
+User=[実行ユーザー名]
+WorkingDirectory=/home/[実行ユーザー名]/e_api/
+
+# 手順4で生成されたキーをここに設定
+Environment="API_DECRYPT_KEY=...（あなたのキー）..."
+
+# 必ず仮想環境(.venv)下のpython3を指定してください
+ExecStart=/home/[実行ユーザー名]/e_api/.venv/bin/python3 /home/[実行ユーザー名]/e_api/e_api_login_pubkey.py
+
+[Install]
+WantedBy=multi-user.target</code></pre>
+
+    <h3>5.3. systemdの設定反映</h3>
+    <p>設定ファイルを保存したら、以下のコマンドでシステムに設定をリロードさせます。</p>
+<pre><code># systemctl daemon-reload</code></pre>
+
+    <hr>
+
+    <h2>6. 運用・実行方法と障害対応</h2>
+    <p>セットアップ完了後の、手動での実行方法、障害発生時のセーフティ仕様、およびタイマー（定時自動実行）の設定手順です。</p>
+
+    <h3>6.1. 手動実行と状態確認の方法</h3>
+    <p>プログラムをテスト起動したい場合、また実行したプログラムの処理状態や成否ログを確認したい場合は、以下のシステム管理コマンドを利用します。</p>
+
+    <p><strong>■ サービスの手動起動（実行リクエスト）</strong></p>
+<pre><code># systemctl start e_api_login.service</code></pre>
+
+    <p><strong>■ サービスの実行ステータス・ログ確認</strong></p>
+<pre><code># systemctl status e_api_login.service</code></pre>
+    <p>※ログにエラーが出ておらず、隠しディレクトリ内に <code>~/e_api/.auth/file_login_response.txt</code> が正しく生成・復号されていれば、プログラムは正常に動作しています。</p>
+
+    <div class="alert-box" style="background-color: #fffaf0; border-color: #feebc8; border-left-color: #dd6b20; margin-top: 15px;">
+    <p class="alert-title" style="color: #dd6b20;">⚠️ ログ確認時の注意：画面が止まって元の入力画面に戻れなくなった場合</p>
+    <p>
+        エラー原因を調べるために <code>systemctl status</code> を実行した際、画面の最下部に <code>:</code> や <code>(END)</code> と表示され、コマンドを入力できなくなることがあります。<br>
+        <br>
+        これはフリーズではなく、システムがログの閲覧モード（スクロール可能な状態）を開いているためです。確認が終わったら、キーボードの <strong><code>q</code></strong> キー（Quit）を1回押してください。閲覧モードが終了し、安全に元のコマンドプロンプト（<code>#</code> や <code>$</code>）に戻ることができます。
+    </p>
+</div>
+
+<div class="alert-box" style="background-color: #f7fafc; border-color: #cbd5e0; border-left-color: #4a5568; margin-top: 40px;">
+    <p class="alert-title" style="color: #2d3748; font-size: 1.2rem; margin-bottom: 15px !important;">
+        🔍 サービスが起動しない（Failedになった）ときのトラブル確認リスト
+    </p>
+    <p style="margin-bottom: 20px;">
+        サービスを起動した際にエラーが出た場合は、焦らずに以下の4つのチェックポイントを上から順番に確認してください。ほとんどのエラーはこれで解決できます。
+    </p>
+
+    <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #c53030; margin-top: 0; margin-bottom: 8px;">
+            【チェック 1】ログに「status=217/USER」と表示されていませんか？
+        </h4>
+        <p style="font-size: 0.95rem; margin-bottom: 10px;">
+            <strong>原因：</strong> サービスファイル（<code>.service</code>）内に書かれている実行ユーザー名（<code>User=</code>）が、システムに存在しない名前（またはプレースホルダーのまま）になっています。
+        </p>
+        <p style="font-size: 0.95rem; margin-bottom: 0;">
+            <strong>対策：</strong> ファイルをエディタで開き、<code>[Service]</code> セクションの <code>User=[実行ユーザー名]</code>、<code>Group=user</code> の箇所が、実際のLinux一般ユーザー名と完全に一致しているか確認・修正してください。修正後は必ず <code>systemctl daemon-reload</code> を実行してから再起動します。
+        </p>
+    </div>
+
+    <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #c53030; margin-top: 0; margin-bottom: 8px;">
+            【チェック 2】ファイル末尾に「^M」という謎の文字が付いていませんか？
+        </h4>
+        <p style="font-size: 0.95rem; margin-bottom: 10px;">
+            <strong>原因：</strong> Windows上のメモ帳などでサービスファイルを作成・編集してLinuxに転送した場合、Windows特有の改行コード（CR）がゴミ（<code>^M</code>）として混入し、システムがファイルを正常に読み込めなくなります。
+        </p>
+        <p style="font-size: 0.95rem; margin-bottom: 0;">
+            <strong>対策：</strong> 管理者権限で <code>sed -i 's/\r//' /etc/systemd/system/e_api_login.service</code> を実行し、改行コードを一括除去してください。
+        </p>
+    </div>
+
+    <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 15px; margin-bottom: 15px;">
+        <h4 style="color: #c53030; margin-top: 0; margin-bottom: 8px;">
+            【チェック 3】ファイルの権限（パーミッション）は適切ですか？
+        </h4>
+        <p style="font-size: 0.95rem; margin-bottom: 10px;">
+            <strong>原因：</strong> システムを保護するため、サービスファイルは管理者（root）以外が閲覧・改ざんできないように設定する必要があります。
+        </p>
+        <p style="font-size: 0.95rem; margin-bottom: 0;">
+            <strong>対策：</strong> <code>chmod 600 /etc/systemd/system/e_api_login.service</code> を実行し、権限を絞ってください。<code>ls -l</code> を実行した際、先頭が <code>-rw-------</code> になっていれば正常です。
+        </p>
+    </div>
+
+    <div style="background: #fff; border: 1px solid #e2e8f0; border-radius: 6px; padding: 15px;">
+        <h4 style="color: #2b6cb0; margin-top: 0; margin-bottom: 8px;">
+            【💡 共通注意】状態確認（status）から元の画面に戻れなくなったら？
+        </h4>
+        <p style="font-size: 0.95rem; margin-bottom: 0;">
+            <code>systemctl status</code> を実行した後に画面最下部に <code>:</code> や <code>(END)</code> が出てフリーズしたように見えるのは、ログ閲覧モードが開いているためです。キーボードの <strong><code>q</code></strong> キーを1回押せば、いつでも安全に元のプロンプト画面に戻れます。
+        </p>
+    </div>
+</div>
+
+
+<h3>6.2. 通信タイムアウトと自動リトライ（運用上の重要仕様）</h3>
+    <p>API側のサーバーは、夜間や週末（土日祝日）のメンテナンス時間帯に通信が遮断されるケースがあります。本プログラムは運用時のハングアップを防ぐため、以下の通信セーフティロジックが自動作動します。</p>
+    <ul>
+        <li><strong>タイムアウト制限:</strong> サーバーからの応答が15秒間ない場合、通信を自動で切り上げます。</li>
+        <li><strong>自動リトライ:</strong> 通信失敗を検知すると、5秒間の待機を挟んで最大3回まで自動的に再接続を試みます。</li>
+        <li><strong>エラーハンドリング:</strong> すべてのリトライが失敗した場合は、きれいなエラーメッセージを標準エラー出力へ吐き出し、ステータス「1 (FAILURE)」で安全にプロセスを終了します。</li>
+    </ul>
+
+    <p>詳細な生ログ（直近150行分）を直接確認したい場合は、一般ユーザー画面から以下のコマンドを実行してください。</p>
+    <div class="check-block" style="margin-top: 10px;">
+        <span class="comment"># サービス専用の出力ログを確認する（画面が止まらずにプロンプトに戻るオプション付き）</span>
+        <span><span class="prompt">$ </span>journalctl -u e_api_login.service --no-pager -n 150</span>
+    </div>
+
+    <h3>6.3. 指定時刻に自動実行する設定（タイマー設定）</h3>
+    <p>毎日決まった時刻（例：毎朝 08:30）にAPIログインを自動で実行させるため、systemdのタイマー機能（<code>.timer</code>）を作成します。ここからの作業はすべて管理者権限（root）で行います。</p>
+
+    <p><strong>1. 一時的に管理者（root）ユーザーに切り替えます。</strong><br>
+    ※<code>su</code>にすることで、現在の作業ディレクトリ（<code>~/e_api</code>）を維持したままrootになれます。rootのパスワードを入力してください。</p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt">$ </span>su</span>
+        <span>パスワード: </span>
+        <span><span class="prompt"># </span></span>
+    </div>
+
+    <p><strong>2. 【手順 A】タイマー定義ファイルをシステム領域に新規作成します。</strong></p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt"># </span>nano /etc/systemd/system/e_api_login.timer</span>
+    </div>
+
+    <p><strong>3. 【手順 B】タイマー内容を記述します。</strong><br>
+    開いた nano エディタに、以下のコードブロックの内容をそのまま貼り付けて保存・終了してください。</p>
+    <div style="background-color: #2d3748; border: 1px solid #4a5568; border-radius: 4px; padding: 12px; margin: 10px 0; color: #fff; font-family: monospace; white-space: pre; line-height: 1.5;">[Unit]
+Description=Run My Python Crypto API Service Daily
+
+[Timer]
+# 毎日 朝08時30分00秒 に実行する設定例（必要に応じて書き換えてください）
+OnCalendar=*-*-* 08:30:00
+# サーバー起動後、最初の実行を少し遅らせる安全弁
+OnBootSec=2min
+# 呼び出す対象のサービス
+Unit=e_api_login.service
+
+[Install]
+WantedBy=timers.target</div>
+
+    <p style="margin-top: 15px;"><strong>4. 【手順 C】新しく作ったタイマー設定をシステムに認識させます（リロード）。</strong></p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt"># </span>systemctl daemon-reload</span>
+    </div>
+
+    <p><strong>5. タイマーを有効化（OS起動時の自動登録）し、今すぐタイマーをスタートさせます。</strong></p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt"># </span>systemctl enable --now e_api_login.timer</span>
+    </div>
+
+    <p><strong>6. タイマーが正常にセットされ、次回実行時刻（NEXT）が計算されているか確認します。</strong></p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt"># </span>systemctl list-timers --all | grep e_api_login</span>
+        <span><span class="output">Wed 2026-06-03 08:30:00 JST  15h left  n/a  n/a  e_api_login.timer  e_api_login.service</span></span>
+    </div>
+
+    <p><strong>7. タイマーのセットが確認できたら、管理者画面を終了して一般ユーザーに戻ります。</strong></p>
+    <div class="check-block" style="margin-top: 5px; margin-bottom: 15px;">
+        <span><span class="prompt"># </span>exit</span>
+        <span>logout</span>
+        <span><span class="prompt">$ </span><span class="output">← 元の画面に戻ればすべての自動化設定が完了！</span></span>
+    </div>
+
+    <p style="margin-top: 15px;">※確認コマンドを実行し、上のサンプルのように <code>NEXT</code>（次回実行予定時刻）の列に指定した時間（朝 08:30:00 など）が表示されていれば、毎日の自動運用設定は無事に成功しています。</p>
+
+
+    <hr>
+
+    <h2>7. 最終環境確認チェックリスト</h2>
+    <p>すべての設定が正常に完了しているか、以下のコマンドを実行して状態確認を行ってください。</p>
+    
+    <div class="success-box">
+        <ul class="check-list">
+            <li>
+                <strong>1. 認証関係ファイルの削除確認</strong><br>
+                不要になった設定ファイル（txt, pem, der）が残っていないことを確認します。
+                <div class="check-block">
+                    <span class="comment"># 確認コマンドを実行</span>
+                    <span><span class="prompt">$ </span>ls -l ~/e_api/e_api_authid.txt ~/e_api/e_api_private_key.* 2>/dev/null</span>
+                    <span class="comment"></span>
+                    <span class="comment"># 正しい表示結果（何も表示されなければ正常に削除されています）</span>
+                    <span class="output">（何も表示されないこと）</span>
+                </div>
+            </li>
+
+            <li>
+                <strong>2. ディレクトリとファイルの権限（パーミッション）確認</strong><br>
+                重要なファイルが、所有者のみ読み書き可能（600）に制限されているか確認します。
+                <div class="check-block">
+                    <span class="comment"># 確認コマンドを実行</span>
+                    <span><span class="prompt">$ </span>ls -l /etc/systemd/system/e_api_login.service</span>
+                    <span class="comment"></span>
+                    <span class="comment"># 正しい表示結果（行頭が必ず「-rw-------」から始まり、所有者が root になっていること）</span>
+                    <span class="output">-rw------- 1 root root 510  5月 31 12:00 /etc/systemd/system/e_api_login.service</span>
+                </div>
+
+                <div class="check-block">
+                    <span class="comment"># 確認コマンドを実行</span>
+                    <span><span class="prompt">$ </span>ls -l ~/e_api/file_url_info.txt ~/e_api/*.py</span>
+                    <span class="comment"></span>
+                    <span class="comment"># 正しい表示結果（行頭が必ず「-rw-------」から始まり、所有者が [実行ユーザー名] になっていること）</span>
+                    <span class="output">-rw------- 1 [実行ユーザー名] user  123  5月 31 12:00 /home/[実行ユーザー名]/e_api/file_url_info.txt</span>
+                    <span class="output">-rw------- 1 [実行ユーザー名] user 4567  5月 31 12:01 /home/[実行ユーザー名]/e_api/e_api_login_pubkey.py</span>
+                    <span class="output">-rw------- 1 [実行ユーザー名] user 4567  5月 31 12:02 /home/[実行ユーザー名]/e_api/e_api_encode_auth.py</span>
+                </div>
+
+            </li>
+
+            <li>
+                <strong>3. Python仮想環境の有効化確認</strong><br>
+                仮想環境に入った状態で、使用されるPythonのパスが正しいか確認します。
+                <div class="check-block">
+                    <span class="comment"># ディレクトリに移動して有効化</span>
+                    <span><span class="prompt">$ </span>cd ~/e_api</span>
+                    <span><span class="prompt">$ </span>source .venv/bin/activate</span>
+                    <span>(venv) <span class="prompt">$ </span>which python</span>
+                    <span class="comment"></span>
+                    <span class="comment"># 正しい表示結果（末尾が「/e_api/.venv/bin/python」になっていること）</span>
+                    <span class="output">/home/[実行ユーザー名]/e_api/.venv/bin/python</span>
+                    <span class="comment"># 仮想環境から抜ける</span>
+                    <span>(venv) <span class="prompt">$ </span>deactivate</span>
+                    <span><span class="prompt">$ </span></span>
+                </div>
+            </li>
+
+            <li>
+                <strong>4. systemdサービス稼働状態の最終確認</strong><br>
+                APIログインサービスがエラーなく、正常に起動・動作しているか確認します。
+                <div class="check-block">
+                    <span class="comment"># サービスの状態を確認</span>
+                    <span><span class="prompt">$ </span>sudo systemctl status e_api_login.service</span>
+                    <span class="comment"></span>
+                    <span class="comment"># 正しい表示結果（「Active: active (running)」または「active (exited)」が表示されていること）</span>
+                    <span>e_api_login.service - Tachibana API Login Service</span>
+                    <span>     Loaded: loaded (/etc/systemd/system/e_api_login.service; enabled; vendor preset: enabled)</span>
+                    <span>     Active: <span class="output">active (running)</span> since Sun 2026-05-31 12:00:00 JST; 5min ago</span>
+                    <span>   Main PID: 1234 (python)</span>
+                </div>
+            </li>
+        </ul>
+    </div>
+    
+    <div class="alert-box" style="background-color: #f7fafc; border-color: #cbd5e0; border-left-color: #4a5568; margin-top: 40px;">
+        <p class="alert-title" style="color: #2d3748; font-size: 1.2rem; margin-bottom: 10px !important;">
+            💡 補足：パッケージのインストールでエラーになる場合の対処法
+        </p>
+        <p>
+            手順2の「<code>apt install -y python3-venv</code>」を実行した際、環境によっては以下の2つのトラブル（エラー）が発生して進行が止まることがあります。その場合は、一時的に管理者（root）権限に切り替えて以下の手順で強制解決してください。
+        </p>
+
+        <h4 style="color: #2c3e50; margin-top: 15px; margin-bottom: 5px;">ケースA：国やサーバー側の都合で「404 Not Found」エラーが出る場合</h4>
+        <p style="font-size: 0.95rem; margin-bottom: 8px;">
+            Debian公式サーバーのパッケージ名簿が更新された直後などに、ダウンロードURLの不一致（404）が発生します。この場合は、古い名簿キャッシュを物理的に一度リセットして再取得するのが確実です。
+        </p>
+
+        <h4 style="color: #2c3e50; margin-top: 15px; margin-bottom: 5px;">ケースB：画面に「apt-listchanges: News / (press q to quit)」と表示されて止まる場合</h4>
+        <p style="font-size: 0.95rem; margin-bottom: 8px;">
+            Debianの安全機能により、重要なセキュリティ変更点のニュースが表示されています。故障ではありませんので、キーボードの <strong><code>q</code></strong> キーを1回押すことで、自動的にインストールの続きが再開されます。
+        </p>
+
+        <div class="check-block" style="margin-top: 15px;">
+            <span class="comment"># 1. 一時的に管理者（root）ユーザーに切り替える（rootのパスワードを入力）</span>
+            <span><span class="prompt">$ </span>su -</span>
+            <span>パスワード: </span>
+            <span><span class="prompt"># </span></span>
+            <span>&nbsp;</span>
+            <span class="comment"># 2. 【ケースA対策】古い名簿キャッシュを物理削除して、まっさらに更新する</span>
+            <span><span class="prompt"># </span>rm -rf /var/lib/apt/lists/*</span>
+            <span><span class="prompt"># </span>apt update</span>
+            <span>&nbsp;</span>
+            <span class="comment"># 3. パッケージのインストールを再実行する</span>
+            <span class="comment"># ※【ケースB】のニュース画面が出たら、キーボードの「q」を押して進めてください</span>
+            <span><span class="prompt"># </span>apt install -y python3-venv</span>
+            <span>&nbsp;</span>
+            <span class="comment"># 4. 不要になった古いシステムファイルを掃除する</span>
+            <span><span class="prompt"># </span>apt autoremove -y</span>
+            <span>&nbsp;</span>
+            <span class="comment"># 5. 管理者画面を終了し、元の一般ユーザーに戻る</span>
+            <span><span class="prompt"># </span>exit</span>
+            <span>logout</span>
+            <span><span class="prompt">$ </span><span class="output">← 元の画面に戻れば成功！</span></span>
+        </div>
+    </div>
+
+</div>
+
+</body>
+</html>

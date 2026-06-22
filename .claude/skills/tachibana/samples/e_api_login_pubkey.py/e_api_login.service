@@ -1,0 +1,17 @@
+[Unit]
+Description=My Python Crypto API Service
+After=network.target
+
+[Service]
+Type=simple
+User=[実行ユーザー名]
+WorkingDirectory=/home/[実行ユーザー名]/e_api/
+
+# 手順「4. 初回限定：鍵情報の暗号化と原本の削除」で生成されたキーをここに設定
+Environment="API_DECRYPT_KEY=...（あなたのキー）..."
+
+# 必ず仮想環境(.venv)下のpython3を指定してください
+ExecStart=/home/[実行ユーザー名]/e_api/.venv/bin/python3 /home/[実行ユーザー名]/e_api/e_api_login_pubkey.py
+
+[Install]
+WantedBy=multi-user.target

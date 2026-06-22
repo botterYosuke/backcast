@@ -309,50 +309,50 @@ infinite canvas の Content 座標系の座標。**画面ピクセルでも zoom
 フィールド**として載る（capability surface 追加・findings 0004 §10 の予約項目）。
 _Avoid_: pan/zoom 状態を panel `LayoutRect`（正規化 0..1 表示矩形）に混ぜること（別次元・別フィールド）
 
-**Hakoniwa（ドッキング window クラスタ）** ※2026-06-21 **再々定義**・方針 [[ADR-0017]]＋[[ADR-0018]]＋**[[ADR-0019]]**（findings 0075／**0080**）:
+**Hakoniwa（ドッキング window クラスタ）** ※2026-06-22 **再々々定義**・方針 [[ADR-0017]]＋[[ADR-0018]]＋[[ADR-0019]]＋**[[ADR-0024]]**（findings 0075／0080／**0088**）:
 infinite canvas の Content 上で、**独立した floating window**（`chart` / `positions` / `orders` / `run_result` /
 `buying_power` / `startup`）が **同一 [[window group / groupId]] を共有してくっついた集合**を指す概念ラベル。
 専用の bounded サーフェス GameObject（HakoniwaRoot）は持たず、全 window は奥プレーン `DockLayer`（ADR-0018・1.0倍）の子。
-くっつき方は drag リリース時の**磁石スナップ → flush 隣接判定で `groupId` 付与/merge**（ADR-0019）。
-**[[Hakoniwa group]] = visible/live ≥ 2 ∧ core（`startup` ∨ `run_result`）含む group** に昇格し、group 一体移動を**禁止**して内部 swap に切り替わる
-（仕様反転＝ADR-0017 の「結合なし」を ADR-0019 が supersede）。それ以外（非 core クラスタ）は通常 group で一体移動可能、core は **detach 不可**。
+くっつき方は drag 中の **in-drag 磁石吸着（[[R_SNAP]] = 96px）+ release-position commit（最寄り flush へ snap して merge）**（ADR-0024）。
+**~~[[Hakoniwa group]] 概念は ADR-0024 で退役~~**（startup / run_result の特別扱い無し・全 group が同じ挙動）。drag mode は **cursor 位置で動的決定**（同 island 別メンバー rect 内 → swap / island 外 ∧ < [[D_DETACH]] → island translate / 島外 ∧ ≥ D_DETACH → detach）＝ ADR-0019 D3/D7 の core 含み判定固定モデルを supersede。
 ~~旧定義（SUPERSEDED・findings 0007・TTWR `src/ui/hakoniwa.rs`/ADR 0011/0014 parity）: `ceil(√n)` split-grid に tile を
 並べ swap で並べ替える単一サーフェス~~——ADR-0017 で TTWR split-grid parity から意図的逸脱し退役（grid/box-grow/swap/per-mode を全廃）。
 ~~ADR-0017 直後の中間定義「磁石スナップでくっついた集合・結合なし・各 window 常に独立」~~——ADR-0019 で「結合あり・groupId による group lifecycle」へ反転。
+~~ADR-0019 の中間定義「core 含み group は Hakoniwa group として全体 translate 禁止 / 内部 swap・core は detach 不可」~~——ADR-0024 で「全 group 同一挙動・cursor 位置で動的 mode 判定」へ再反転（owner の "puzzle game プルン" 体感要件）。
 _Avoid_: 「Hakoniwa = 固有の GameObject/bounded box」と捉えること（クラスタの概念ラベル・実体は floating window 群）／
-タイリング強制・resize 連動を持ち込むこと（group 一体移動は ADR-0019 で許可、ただし core 含み時は swap）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）／「結合なし・各 window 独立」を不変条件と扱うこと（ADR-0019 で反転＝group 関係を `groupId` で持つ）
+タイリング強制・resize 連動を持ち込むこと（drag は ADR-0024 の cursor 位置 mode 判定が SoT）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）／「結合なし・各 window 独立」を不変条件と扱うこと（ADR-0019 で反転＝group 関係を `groupId` で持つ・ADR-0024 でも維持）／startup / run_result を core として特別扱いすること（ADR-0024 で Hakoniwa special 廃止＝全 window 同等）
 
-**window group / groupId** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-floating window の **永続的な集合関係**。`FloatingWindowLayout.groupId: string?`（nullable・GUID `grp_<hex32>`）に保存され、同一 `groupId` を共有する **visible/live 集合が 2 個以上** のとき "group" とみなす（singleton は group 不成立）。group の attach は **flush 隣接判定**（`|dragged.edge - other.opposite_edge| ≤ 1px` ∧ 直交軸 overlap > 0）が release commit / dock spawn の後にトリガ。same-edge 整列だけ（離れて並んだ状態）では attach しない。merge 衝突は **[[Hakoniwa group]] 単独 > size 最大 > 辞書順最小 > 新規 GUID** の cascade で生き残る ID を決定。detach commit で dragged の `groupId=null`、残 visible/live が 1 なら連鎖 dissolve（残 1 も null）。**hide は groupId 温存**（Replay/Live mode 切替で復活）、**close（universe sync 削除等）は連鎖 dissolve**、**spawn は groupId=null**（attach はユーザ drag-release だけ）。**cross-plane group は禁止**（ADR-0018 plane 分離と整合）＝restore 時に多数派 plane 残し・同数なら dock plane 優先で分割。group 関係は座標から再導出せず `groupId` が唯一の真実源。
-_Avoid_: same-edge 整列だけで attach すると期待すること（flush 必須）／groupId を doc 外で再導出すること（persist が SoT）／singleton を group と扱うこと（≥2 必須）／cross-plane で同一 `groupId` を許可すること（restore で分割される）／spawn 時に自動 attach すること（ユーザ drag-release だけが attach 元）
+**window group / groupId** ※2026-06-21 新設・**2026-06-22 drag mode 更新**・方針 [[ADR-0019]]＋**[[ADR-0024]]**（findings 0082／**0088**）:
+floating window の **永続的な集合関係**。`FloatingWindowLayout.groupId: string?`（nullable・GUID `grp_<hex32>`）に保存され、同一 `groupId` を共有する **visible/live 集合が 2 個以上** のとき "group"（≒ "island"）とみなす（singleton は group 不成立）。group の attach は **flush 隣接判定**（`|dragged.edge - other.opposite_edge| ≤ 1px` ∧ 直交軸 overlap > 0）が release commit 後にトリガ＝ADR-0024 では **release-position rule**（cursor が別 island と overlap なら最寄り flush へ snap → merge）＋ **in-drag 磁石吸着**（[[R_SNAP]] = 96px で flush 位置へ実描画 snap）が attach 経路。drag 中の挙動は **cursor 位置で動的 3 mode 判定**（ADR-0024 §1）: ① cursor が同 island の別メンバー rect 内 → **swap**（A/B の (x,y,w,h) 4 値交換・ghost 2 枚プレビュー）、② island 外 ∧ < [[D_DETACH]] (256px) → **island translate**（島全員が cursor offset 分実描画でシフト・magnetic snap 中は flush へ stickiness）、③ island 外 ∧ ≥ D_DETACH → **detach**（A だけ単独 cursor 追従・残メンバー rest）。merge 衝突は **size 最大 > 辞書順最小 > 新規 GUID**（ADR-0024 simplify＝ADR-0019 D5 の Hakoniwa-priority 退役）。detach commit で dragged の `groupId=null`、残 visible/live が 1 なら連鎖 dissolve（残 1 も null）。**hide は groupId 温存**（Replay/Live mode 切替で復活）、**close（universe sync 削除等）は連鎖 dissolve**、**spawn は groupId=null**（attach はユーザ drag-release だけ）。**cross-plane group は禁止**（ADR-0018 plane 分離と整合）＝restore 時に多数派 plane 残し・同数なら dock plane 優先で分割。group 関係は座標から再導出せず `groupId` が唯一の真実源。**ESC キャンセル**: drag 中 ESC で実描画 / ghost を rest へ spring 200ms で revert（state は不変）。
+_Avoid_: same-edge 整列だけで attach すると期待すること（flush 必須）／groupId を doc 外で再導出すること（persist が SoT）／singleton を group と扱うこと（≥2 必須）／cross-plane で同一 `groupId` を許可すること（restore で分割される）／spawn 時に自動 attach すること（ユーザ drag-release だけが attach 元）／core 含み group を Hakoniwa group として特別扱いすること（ADR-0024 で退役）／drag 中に groupId / geometry を commit すること（MouseUp 一括 commit が ADR-0019 D8 規律＋ADR-0024 で維持）
 
-**Hakoniwa group** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-[[window group / groupId]] の特殊形態。判定: **visible/live 集合 ≥ 2 ∧ core（`startup` ∨ `run_result`）を visible で含む**（drag 開始時点で動的再評価＝Replay/Live で mode-switch のたびに昇格/降格しうる）。挙動: ① group **全体 translate 禁止**（dragged window 含む group が動かない）／② 内部 drag は **swap drop target** との `(x,y,w,h)` 4 値交換（group footprint 不変）／③ **core は detach 不可**（`D_DETACH` 超でも rest snap-back ghost 固定）／④ 非 core は detach 可（`D_DETACH=64f` 超で release commit）。Hakoniwa group merge 時は ID 優先生存（identity 保護）。例: `(startup, run_result, positions)` から positions detach → 残 2＋core → Hakoniwa 維持・`(run_result, orders)` から orders detach → 残 1 → 連鎖 dissolve で run_result.groupId=null。
-_Avoid_: Hakoniwa group を「dock plane クラスタ」と同一視すること（plane ではなく内容＝core 含み判定）／core を含まない dock クラスタを Hakoniwa group と呼ぶこと（普通の group・translate 可）／core を Live で hidden の時 Hakoniwa として扱うこと（visible/live ベース判定なので降格）／swap で kind/content を交換すると解釈すること（`(x,y,w,h)` だけ）
+**~~Hakoniwa group~~** ※2026-06-21 新設・**2026-06-22 SUPERSEDED by [[ADR-0024]]**（findings 0088 §0 Q1）:
+~~[[window group / groupId]] の特殊形態。判定: **visible/live 集合 ≥ 2 ∧ core（`startup` ∨ `run_result`）を visible で含む**~~。**ADR-0024 で概念退役**——startup / run_result を含む island を特別扱いしない（owner Q1=A・"puzzle game プルン" 体感を全 group 共通にするため）。今後 "Hakoniwa group" の語を新規コードに使わない。drag mode は cursor 位置で動的判定（[[window group / groupId]] 参照）。
+_Avoid_: Hakoniwa group を新コード / コメントで使うこと（ADR-0024 で退役）／core 含み group を特別扱いするコードを足すこと
 
-**core member** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-[[Hakoniwa group]] の判定に使う kind 集合 = **`startup` / `run_result`** の 2 つ。これらが visible で group に居れば Hakoniwa group へ昇格する。**detach 不可**（D_DETACH 超え drag でも rest にゴースト固定で戻る）＝Hakoniwa の "核" identity を user 操作で壊さない。hidden 時（Live mode で startup hidden）は core としてカウントされず（visible/live ベース判定）、結果として group が普通の group へ降格しうる（mode 復帰で再昇格）。
-_Avoid_: core を kind 設定 / config として可変にすること（`startup` / `run_result` 固定）／hidden core を Hakoniwa 判定に含めること（visible/live のみ）
+**~~core member~~** ※2026-06-21 新設・**2026-06-22 SUPERSEDED by [[ADR-0024]]**（findings 0088 §0 Q1）:
+~~[[Hakoniwa group]] の判定に使う kind 集合 = **`startup` / `run_result`**~~。**ADR-0024 で概念退役**——startup / run_result は他の window と同等のドラッグ挙動。detach 不可 invariant も廃止（全 window が D_DETACH 超えで detach 可）。`DockShape.IsCoreKind` は ADR-0020 first-launch factory grouping の base 窓 ID 列挙には引き続き存在しうるが、ドラッグ判定からは参照されない。
+_Avoid_: core / non-core で挙動を分けるコードを新規に書くこと（ADR-0024 で全 window 同一挙動）
 
-**D_DETACH（detach 閾値）** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-group drag 中の detach 判定閾値 = **`64f` canvas-logical px**（`FloatingWindowMath` 側 pure 定数）。判定 = `|cursor - rest| > D_DETACH`。**rest** = 通常 group なら drag 開始時の当該 window 位置 ＋ group_translation、Hakoniwa group なら swap 判定後の "離したら置かれる" 位置。閾値内 → group 操作（normal は translate / Hakoniwa は swap target hover）。閾値超 → detach 状態 ghost（非 core）／rest snap-back ghost（core）。commit は release 一括（drag 中は groupId・geometry 不変・通常 group translate のみ実描画）。zoom 非依存（canvas-logical px）。
-_Avoid_: D_DETACH を screen pixel にすること（zoom 非依存性が壊れる）／drag 中の閾値 cross で即 commit すること（release commit 規律違反）／速度や修飾キーで detach 判定を補強すること（距離一本＝pure 算術で AFK 可能）
+**D_DETACH（detach 閾値）** ※2026-06-21 新設・**2026-06-22 値再較正 + role 変更**・方針 [[ADR-0019]]＋**[[ADR-0024]]**（findings 0082／**0088 §11**）:
+drag 中の detach 判定閾値 = **`256f` canvas-logical px**（ADR-0024 で 64f から 256f へ再較正・owner Q16=C）。`FloatingWindowMath.D_DETACH_PX` 定数。判定 = `|cursor - drag_start| ≥ D_DETACH`。**新 role（2-tier 閾値）**: 閾値未満 → cursor が島外なら **island translate**（島全員が cursor offset で実描画シフト）／閾値以上 → **detach**（A 単独 cursor 追従・残メンバー rest）。drag mode はさらに「cursor が同 island メンバー rect 内なら swap」が距離不問で優先（[[window group / groupId]] §1）。commit は release 一括（drag 中は groupId・geometry 不変・[[drag ghost]] / 実描画は preview のみ）。zoom 非依存（canvas-logical px）。
+_Avoid_: D_DETACH を screen pixel にすること（zoom 非依存性が壊れる）／drag 中の閾値 cross で即 commit すること（release commit 規律違反）／速度や修飾キーで detach 判定を補強すること（距離一本＝pure 算術で AFK 可能）／旧 `64f` 値を AFK の magic number として残すこと（256f に統一）
 
-**swap drop target** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-[[Hakoniwa group]] 内 drag 中、**カーソル直下にある同 `groupId` の他メンバー**（dragged 除く・hidden 除く・複数重なりは最前面 sibling 優先）。release 時に dragged ↔ target の **`(x, y, w, h)` 4 値を交換**（kind/id/content 不変・group footprint 不変）。target が無く `< D_DETACH` なら snap-back（dragged は元 rest へ戻す）。ghost: dragged ghost は target rect / target ghost は dragged 元 rect の 2 枚同時表示で「入れ替わり後」を可視化。
-_Avoid_: drop target を中心距離最小で選ぶこと（カーソル直下＝意図に直結）／(x,y) だけ交換すること（w/h 違いで overlap・footprint 崩壊）／kind/id を交換すること（identity を壊す＝content rehome は射程外）
+**R_SNAP（磁石吸着半径）** ※2026-06-22 新設・方針 **[[ADR-0024]]**（findings 0088 §2・§11）:
+in-drag 磁石吸着の発動距離 = **`96f` canvas-logical px**（owner Q15=C）。`FloatingWindowMath.R_SNAP_PX` 定数。island translate / detach mode で毎フレーム発動: dragged の **外周辺**（translate なら island の外 4 辺・detach なら A の 4 辺）と他 window の対辺との最短距離が `≤ R_SNAP` ∧ 直交軸 overlap > 0 のとき、実描画位置を flush 位置へ snap（実窓ごと寄せる）。cursor が R_SNAP 圏外に出るまで貼り付く（stickiness）。発動の瞬間は [[spring animation]] 200ms で補間（"プルン"）。release で snap 位置が確定したら最寄り flush merge へ統合（[[window group / groupId]] release-position rule）。離散 snap で物理シミュレーションではない（owner Q6=A・連続吸引は AFK の "snap-on-release" 権威モデルを崩すため不採用）。
+_Avoid_: R_SNAP を screen pixel にすること（zoom 非依存性）／毎フレームの座標変動を AFK で再現しようとすること（mode 状態と最終 rect の assert で十分）／swap mode に R_SNAP を適用すること（swap は center-in-rect 判定で edge attraction 無し）
 
-**drag ghost** ※2026-06-21 新設・方針 **[[ADR-0019]]**（findings 0082）:
-drag 中の **post-release 状態の半透明プレビュー**（alpha **0.45**・kind accent border・dragged ghost は solid border・target ghost は dashed border）。drag 中だけ実 window より前面 sibling に描画される一時 UI（drag 終了で破棄）。操作タイプ別:
-- 単独 window: ghost なし（実 window がカーソル追従＝現 #15 のまま）
-- 通常 group・`< D_DETACH`: ghost なし（実 group 全員が平行移動＝post-release と同じ）
-- 通常 group・`≥ D_DETACH`: dragged 1 枚 ghost をカーソル位置に
-- Hakoniwa group・`< D_DETACH`・target あり: dragged ghost を target rect / target ghost を dragged 元 rect（2 枚）
-- Hakoniwa group・`< D_DETACH`・target なし: dragged ghost を元 rest 位置（snap-back プレビュー）
-- Hakoniwa group・`≥ D_DETACH`・非 core: dragged 1 枚 ghost をカーソル位置に（detach プレビュー）
-- Hakoniwa group・`≥ D_DETACH`・core: dragged 1 枚 ghost を rest 位置（detach 不可フィードバック）
-**commit-on-release**: drag 中は groupId・geometry 不変、ghost はあくまで preview。release で初めて detach/swap/snap-back/translate を確定（ADR-0017 §1 snap-on-release 精神と整合）。
-_Avoid_: ghost を drag 中に commit と扱うこと（preview のみ・release で commit）／通常 group の translate に ghost を被せること（実描画で十分・冗長）／単独 window drag に ghost を入れること（#15 AFK と挙動互換を壊す）
+**swap drop target** ※2026-06-21 新設・**2026-06-22 scope 拡張**・方針 [[ADR-0019]]＋**[[ADR-0024]]**（findings 0082／**0088 §1**）:
+drag 中、**カーソル直下にある同 `groupId` の他メンバー**（dragged 除く・hidden 除く・複数重なりは最前面 sibling 優先・**center-in-rect 判定**＝`Rect.Contains(dragged.center)`）。ADR-0024 で **全 island に汎化**（旧 Hakoniwa group 限定を廃止）。release 時に dragged ↔ target の **`(x, y, w, h)` 4 値を交換**（kind/id/content 不変・island footprint 不変）。target が無くなれば mode は cursor 位置で再判定（島外 → translate or detach・[[window group / groupId]] §1）。ghost: dragged ghost を target rect / target ghost を dragged 元 rect の 2 枚同時表示で「入れ替わり後」を可視化。**[[drag ghost]] は ADR-0024 で swap モード専用**へ縮小（translate / detach は実描画）。
+_Avoid_: drop target を中心距離最小で選ぶこと（カーソル直下＝意図に直結）／(x,y) だけ交換すること（w/h 違いで overlap・footprint 崩壊）／kind/id を交換すること（identity を壊す＝content rehome は射程外）／cross-island swap を許可すること（ADR-0024 Q3=B で同 island 限定）
+
+**drag ghost** ※2026-06-21 新設・**2026-06-22 scope 縮小**・方針 [[ADR-0019]]＋**[[ADR-0024]]**（findings 0082／**0088 §7**）:
+drag 中の **post-release 状態の半透明プレビュー**（alpha **0.45**・kind accent border・dragged ghost は solid border・target ghost は dashed border）。ADR-0024 で **swap モード専用**へ縮小: dragged ghost を target rect / target ghost を dragged 元 rect の 2 枚で「入れ替わり後」を可視化（[[swap drop target]] と同型）。**translate / detach は実描画**（実窓 / 実 island が cursor について動く・magnetic snap は実窓ごと spring 補間）＝ ADR-0019 D8 の ghost-only モデルを反転（owner Q13=B）。drag 中だけ実 window より前面 sibling に描画される一時 UI（drag 終了で破棄）。**commit-on-release**: drag 中は groupId・geometry 不変、ghost / 実描画はあくまで preview。release で初めて swap/translate/detach/merge を確定。**ESC キャンセル**: drag 中 ESC で ghost / 実描画とも rest へ [[spring animation]] 200ms で revert（state は不変）。
+_Avoid_: ghost を drag 中に commit と扱うこと（preview のみ・release で commit）／translate / detach に ghost を被せること（実描画で十分・冗長）／単独 window drag や island translate に ghost を入れること（#15 AFK と挙動互換を壊す）
+
+**spring animation** ※2026-06-22 新設・方針 **[[ADR-0024]]**（findings 0088 §3・§11）:
+"プルン" 体感の rect 補間 animation = **200ms / overshoot 8% / 1-overshoot ease-out-back**（owner Q14=B）。`FloatingWindowMath.SPRING_DURATION_MS = 200` / `SPRING_OVERSHOOT_RATIO = 0.08f`。**trigger**: ① [[R_SNAP]] 磁石吸着発動の瞬間（cursor が R_SNAP 圏に入った時、実窓 / 実 island の rect が flush 位置へ）／② ESC キャンセル（drag 中の rect を rest へ）／③ release commit 完了時（swap / merge / detach の最終 rect）。前 tween が走っている間に次が始まったら前を kill して新 tween へ（重複は kill-and-replace で汚さない）。Unity の `Animator` / `LeanTween.easeSpring` 等 1 ヘルパー（`AnimateRectSpring(window, from, to, ms=200)`）に集約。
+_Avoid_: 200ms を超える長い animation を入れること（連続操作で重い）／overshoot ratio を 8% より大きくすること（puzzle feel を超えて派手・連続発火で汚い）／bounce（2-3 回弾む）にすること（owner Q14=B で却下）／drag 中の毎フレーム rect 補正を spring tween で重ねること（snap 発動瞬間だけ・continuous 補間は free drag）
 パネルは独立 floating window（canvas 論理座標の position+size）になり、slot 順序の正本・swap・`ceil(√n)` 派生 rect は廃止。
 くっつきは磁石スナップ。以下は履歴:
 **tile** = Hakoniwa の 1 区画（安定 `id` で同定）。**slot** = tile が占める grid スロット番号（row-major・

@@ -19,9 +19,10 @@ using UnityEngine;
 
 public static class LiveDemoRoundtripMenu
 {
-    // The VENUE is selected by LIVE_VENUE env (one-per-server, bound at root Awake) — NOT by the menu.
-    // These items only preset the instrument and spawn the connect harness; the harness shows the real
-    // configured venue. Set LIVE_VENUE=TACHIBANA|KABU in .env BEFORE Play for a real-venue HITL.
+    // This HITL harness connects the CONFIGURED venue via ConnectConfigured (root._venue, resolved from
+    // LIVE_VENUE at Awake) — so a real-venue roundtrip still wants LIVE_VENUE=TACHIBANA|KABU set BEFORE
+    // Play. ADR-0021: the mainline Venue MENU can now connect any venue at runtime (rebind on login)
+    // WITHOUT re-Play; this harness predates that and stays venue-configured for the scripted roundtrip.
     [MenuItem("Tools/Backcast/Live Demo Roundtrip (Tachibana demo)")]
     static void SpawnTachibana() => Spawn("TACHIBANA", "8918.TSE");
 
@@ -37,8 +38,8 @@ public static class LiveDemoRoundtripMenu
         {
             EditorUtility.DisplayDialog(
                 "Live Demo Roundtrip",
-                "1) Set LIVE_VENUE=" + expectedVenue + " in .env (default MOCK) — the venue is bound when the " +
-                "server is built, so it must be chosen before Play.\n" +
+                "1) Set LIVE_VENUE=" + expectedVenue + " in .env (default MOCK) — this harness connects the " +
+                "configured venue via ConnectConfigured, so choose it before Play.\n" +
                 "2) Enter Play mode (BackcastWorkspace), then run this menu again.\n\n" +
                 "The root owns Python and renders the live surfaces; this harness only drives venue connect.",
                 "OK");
@@ -57,7 +58,9 @@ public static class LiveDemoRoundtripMenu
         if (root != null && root.ConfiguredVenue != expectedVenue)
             Debug.LogWarning("[LIVE DEMO ROUNDTRIP] this item expects LIVE_VENUE=" + expectedVenue +
                              " but the running server is configured for " + root.ConfiguredVenue +
-                             ". Connecting " + expectedVenue + " would hit VENUE_MISMATCH — set LIVE_VENUE in .env and re-Play.");
+                             ". This harness connects the configured venue (" + root.ConfiguredVenue +
+                             "), not " + expectedVenue + " — set LIVE_VENUE=" + expectedVenue +
+                             " and re-Play (or use the mainline Venue menu, which rebinds the venue on login).");
 
         LiveDemoRoundtripHarness.DefaultInstrumentId = instrumentId;
         var go = new GameObject("LiveDemoRoundtripHarness");

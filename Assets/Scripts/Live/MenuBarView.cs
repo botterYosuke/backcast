@@ -42,7 +42,7 @@ public sealed class MenuBarView : MonoBehaviour
     Func<bool> _connectReady;              // server ready && !teardown
     Func<string> _modeText;                // current execution-mode display for the bar badge
     Func<string> _documentBadgeText;       // #95 P6 S6 (#90): notebook document-identity string (Untitled/basename/* dirty)
-    bool _showMockConnect;                 // dev-only MOCK connect item (editor only); derived at Bind
+    string _filterVenue;                   // ADR-0021: explicit LIVE_VENUE or null = show all venues (VisibleConnectItems normalizes)
     OpenMenu _open;
     string _message;
     Font _font;
@@ -69,7 +69,7 @@ public sealed class MenuBarView : MonoBehaviour
                      Action onNew, Action onOpen, Action onSave, Action onSaveAs,
                      Action<string, string> onConnect, Action onDisconnect,
                      Func<bool> connectReady, Func<string> modeText, Func<string> documentBadgeText,
-                     string devVenue, Font font)
+                     string filterVenue, Font font)
     {
         _vm = vm;
         _onNew = onNew;
@@ -81,7 +81,10 @@ public sealed class MenuBarView : MonoBehaviour
         _connectReady = connectReady;
         _modeText = modeText;
         _documentBadgeText = documentBadgeText;
-        _showMockConnect = devVenue == "MOCK";   // MOCK is the only credential-less dev venue (findings 0027 D2)
+        // ADR-0021: LIVE_VENUE no longer LOCKS the server's venue — it filters the menu. null (unset)
+        // surfaces all connect variants (the menu drives the runtime venue rebind); an explicit venue
+        // surfaces ONLY that venue's variants. Stored verbatim — VisibleConnectItems normalizes.
+        _filterVenue = filterVenue;
         _container = GetComponent<RectTransform>();
         _font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         Build();
@@ -215,11 +218,10 @@ public sealed class MenuBarView : MonoBehaviour
     void BuildVenueMenu()
     {
         var venue = _vm.Venue;
-        var items = new List<(string label, string v, string env)>();
-        // dev-only MOCK connect (editor only): MOCK is a credential-less dev venue, NOT a TTWR parity
-        // variant, surfaced so the LiveAuto-on-mainline HITL is reachable (findings 0027 D2).
-        if (Application.isEditor && _showMockConnect) items.Add(("Connect MOCK (dev)", "MOCK", ""));
-        foreach (var v in VenueMenuViewModel.ConnectVariants) items.Add((v.Label, v.Venue, v.Env));
+        // ADR-0021: the venue list is computed by the pure VenueMenuViewModel.VisibleConnectItems so the
+        // AFK gate drives the filter without building uGUI. LIVE_VENUE unset → all variants (+ editor
+        // MOCK dev); pinned → only that venue's variants (the menu then rebinds the server on login).
+        var items = VenueMenuViewModel.VisibleConnectItems(_filterVenue, Application.isEditor);
 
         var dd = NewDropdown(OpenMenu.Venue, W_FILE + W_EDIT, 260f, items.Count + 1);
         int row = 0;

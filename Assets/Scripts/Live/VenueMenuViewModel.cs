@@ -10,6 +10,7 @@
 // Pure logic (no UGUI) so the AFK gate drives it deterministically; the actual buttons
 // + badge GameObjects live in the owner-manual playmode harness and bind to this.
 using System;
+using System.Collections.Generic;
 
 public struct VenueConnectRequest
 {
@@ -68,6 +69,28 @@ public class VenueMenuViewModel
         ("KABU",      "verify", "Connect kabuStation (Verify)"),
         ("KABU",      "prod",   "Connect kabuStation (Prod)"),
     };
+
+    // ADR-0021: the connect items the Venue menu surfaces, given the LIVE_VENUE filter. A null/empty
+    // filter (LIVE_VENUE unset) surfaces ALL variants — plus the credential-less MOCK dev connect, but
+    // only in the EDITOR (an unset shipped build must not offer MOCK) — because the menu now rebinds the
+    // server's venue at login. An explicit venue (LIVE_VENUE pinned) surfaces ONLY that venue's variants;
+    // a pinned MOCK surfaces the MOCK connect in EITHER build (#106 — pinning LIVE_VENUE=MOCK is an
+    // explicit choice, so a player build must NOT dead-end on an empty menu). The isEditor gate therefore
+    // governs only the UNSET dev-convenience item, never the pinned-MOCK escape hatch. This is
+    // PRESENTATIONAL only, NOT an enforcement boundary: the backend still rebinds to any _KNOWN_VENUES
+    // venue on a direct venue_login (e.g. ConnectConfigured / a scripted call) — the filter just keeps
+    // the menu from offering venues a pinned deployment doesn't intend to surface. Pure logic so the AFK
+    // gate drives it without building uGUI; MenuBarView.BuildVenueMenu renders exactly this list.
+    public static List<(string Label, string Venue, string Env)> VisibleConnectItems(
+        string filterVenue, bool isEditor)
+    {
+        string f = string.IsNullOrEmpty(filterVenue) ? null : filterVenue.ToUpperInvariant();
+        var items = new List<(string, string, string)>();
+        if (f == "MOCK" || (f == null && isEditor)) items.Add(("Connect MOCK (dev)", "MOCK", ""));
+        foreach (var v in ConnectVariants)
+            if (f == null || v.Venue == f) items.Add((v.Label, v.Venue, v.Env));
+        return items;
+    }
 
     // Build a connect request for an explicit (venue, env) — the prod-aware path. The env hint
     // flows straight through to venue_login; the prompt subprocess owns credential entry (D4).

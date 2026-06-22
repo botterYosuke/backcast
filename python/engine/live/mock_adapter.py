@@ -42,6 +42,10 @@ class MockVenueAdapter:
 
     def __init__(self) -> None:
         self.is_logged_in: bool = False
+        # テスト専用: login が venue に到達した回数。同一 venue 再 login の idempotent 短絡
+        # (live_orchestrator: CONNECTED→success で返す) が二重 login を防ぐことを検証する観測点
+        # (logout_call_count と同流儀)。
+        self.login_call_count: int = 0
         self.logout_call_count: int = 0
         # テスト専用: submit_order が venue に到達した回数（余力超過/dedup の「約定しない」
         # = venue 未到達 を検証する。logout_call_count と同じ流儀の観測点）。
@@ -64,6 +68,7 @@ class MockVenueAdapter:
         )
 
     async def login(self, creds: VenueCredentials) -> None:
+        self.login_call_count += 1
         self.is_logged_in = True
 
     async def logout(self) -> None:

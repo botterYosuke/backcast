@@ -44,6 +44,7 @@ Help（Settings＝現状 stub）、メニュー外クリックで閉じる backd
 | MENU-16 | Help → Settings | `MenuBarView.cs:230` | 無効 stub（deferred slice） | — | 対象外（Settings slice 未実装の placeholder） | — |
 | MENU-17 | メニュー外クリックで閉じる（backdrop） | `MenuBarView.cs:139` | backdrop クリックで `_open=None`、クリックは下層 sidebar へ届かない | backdrop の onClick を駆動し `_open` を assert（EventSystem の実 raycast 経路は HITL） | 要新規自動化 | — |
 | MENU-18 | dropdown の z-order・前面描画（視覚） | findings 0045 | dropdown が sidebar の前面、secret modal が最前面、クリック取りこぼし無し | — | HITL専用（実ピクセル＋EventSystem raycaster・GPU/実ウィンドウ前提） | `MenuBarHitlMenu` |
+| MENU-19 | Venue メニューの LIVE_VENUE 絞り込み（ADR-0021） | `MenuBarView.BuildVenueMenu`→`VenueMenuViewModel.VisibleConnectItems` | LIVE_VENUE 未設定→全 variant 表示（＋Editor 限定 MOCK dev＝Editor 5/Player 4）／明示 pin→その venue の variant のみ（Tachibana=2・kabu=2・MOCK=1）。**pinned MOCK は editor/player 両方で MOCK connect のみ＝player の空 dead-end を回避（#106）**。menu はサーバ venue をロックせず engine が login 時に再バインドする（filter は presentational） | `VenueMenuViewModel.VisibleConnectItems` を直接 assert（未設定/Editor=5・未設定/Player=4・pin 各 venue の項目集合・**pinned MOCK は editor/player 両方=1 #106**・delete-the-filter litmus） | 自動(Probe有・要昇格) | `VenueMenuM3Probe`（`VenueMenuFilterByLiveVenue`） |
 
 > badge（mode/venue 表示・transient orange message）は入力の無い**表示**なので行動行には載せない。MENU-02/04/14 の
 > 観測点として badge 文字列を併せて確認する（`MenuBarView.Refresh` の badge 合成）。
@@ -59,6 +60,11 @@ Help（Settings＝現状 stub）、メニュー外クリックで閉じる backd
 - **MENU-05/06（Save / Save As）**: layout sidecar の round-trip と `.py`/`.json` ペア fork。`MultiDocLayoutProbe`/
   `ReplayLayoutProbe` の assert を昇格。
 - **MENU-12（prod grey-out）**: `VenueMenuViewModel.CanConnectEnv` の gate（`MenuBarVerify` の 5 assert）。
+- **MENU-19（LIVE_VENUE 絞り込み・ADR-0021）**: どの venue variant が *出現するか* を `VenueMenuViewModel.VisibleConnectItems`
+  が決める（MENU-12 は出現した変種の *enable/grey-out*、MENU-19 は *出現集合* ＝直交）。`VenueMenuM3Probe.VenueMenuFilterByLiveVenue`
+  が未設定/Editor=5・未設定/Player=4・pin Tachibana/kabu=2・pin MOCK=1 を assert。delete-the-filter litmus: `VisibleConnectItems`
+  が絞り込みを止めると pinned ケースが他 venue を漏らし RED。engine 側の再バインド（VENUE_MISMATCH 撤去）は Python seam
+  `python/tests/test_venue_mismatch_inproc_server.py`（findings 0085）が正本＝この台本は menu 出現集合のみを担当。
 
 ## 自動判定（合格条件）
 
@@ -79,7 +85,7 @@ Help（Settings＝現状 stub）、メニュー外クリックで閉じる backd
 | `MenuBarVerify` | EditMode・pure 決定ロジック | MENU-03/04/12 の判定を昇格元として流用 |
 | `MenuBarCutoverProbe` | batchmode・root 合成 | MENU-02 の正本。`Section1` を E2ERunner へ移送 |
 | `MenuBarHitlMenu` | HITL ハーネス | MENU-18 の視覚確認用に**探索 Probe として残す** |
-| `VenueMenuM3Probe` `VenueLoginSecretProbe` | venue 接続 | MENU-11/14 の mock 経路。secret 詳細は `SecretModalE2ERunner` が担当 |
+| `VenueMenuM3Probe` `VenueLoginSecretProbe` | venue 接続 | MENU-11/14 の mock 経路＋MENU-19 の LIVE_VENUE 絞り込み（`VenueMenuFilterByLiveVenue`）。secret 詳細は `SecretModalE2ERunner` が担当 |
 
 ## 将来の `MenuBarE2ERunner.cs` 実装方針（第二波）
 

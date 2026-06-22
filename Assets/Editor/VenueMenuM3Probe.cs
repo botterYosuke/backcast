@@ -26,6 +26,7 @@ public static class VenueMenuM3Probe
             ConnectGate();
             DisconnectGatedByWrite();
             ReloginHintOnNotice();
+            VenueMenuFilterByLiveVenue();
         }
         catch (Exception e) { _fail.Add("exception: " + e); }
 
@@ -97,6 +98,46 @@ public static class VenueMenuM3Probe
         Check(m.CanDisconnect, "disconnect re-enabled after write drains");
         coord.SetSecretModalOpen(true);
         Check(!m.CanDisconnect, "open secret modal must disable disconnect");
+    }
+
+    // ADR-0021: LIVE_VENUE filters the Venue menu instead of LOCKING the server's venue. Unset → all
+    // variants (+ editor-only MOCK dev), because the menu rebinds the venue at login. Pinned → only
+    // that venue's variants (presentational — the backend still rebinds any known venue on a direct
+    // venue_login). delete-the-filter litmus: if VisibleConnectItems stopped filtering, the pinned
+    // cases would leak other venues → RED.
+    static void VenueMenuFilterByLiveVenue()
+    {
+        // unset (null) in the editor → MOCK dev + both TTWR venues (4 variants).
+        var all = VenueMenuViewModel.VisibleConnectItems(null, isEditor: true);
+        Check(all.Count == 5, "unset/editor should surface MOCK dev + 4 variants, got " + all.Count);
+        Check(all.Exists(i => i.Venue == "MOCK"), "unset/editor should include MOCK dev");
+        Check(all.Exists(i => i.Venue == "TACHIBANA"), "unset should include Tachibana");
+        Check(all.Exists(i => i.Venue == "KABU"), "unset should include kabu");
+
+        // unset in a player build → no MOCK dev item (editor-only), still both real venues.
+        var player = VenueMenuViewModel.VisibleConnectItems(null, isEditor: false);
+        Check(player.Count == 4, "unset/player should surface 4 variants (no MOCK dev), got " + player.Count);
+        Check(!player.Exists(i => i.Venue == "MOCK"), "MOCK dev is editor-only");
+
+        // pinned TACHIBANA → only Tachibana variants; kabu + MOCK hidden.
+        var t = VenueMenuViewModel.VisibleConnectItems("TACHIBANA", isEditor: true);
+        Check(t.Count == 2, "pinned TACHIBANA should surface 2 variants, got " + t.Count);
+        Check(t.TrueForAll(i => i.Venue == "TACHIBANA"), "pinned TACHIBANA must hide other venues");
+
+        // pinned KABU (case-insensitive) → only kabu variants.
+        var k = VenueMenuViewModel.VisibleConnectItems("kabu", isEditor: true);
+        Check(k.Count == 2, "pinned KABU should surface 2 variants, got " + k.Count);
+        Check(k.TrueForAll(i => i.Venue == "KABU"), "pinned KABU must hide other venues");
+
+        // pinned MOCK → exactly the MOCK connect, in EITHER build (#106). Pinning LIVE_VENUE=MOCK is an
+        // explicit deployment choice, so a player build must NOT dead-end on an empty menu — the isEditor
+        // gate only governs the UNSET dev-convenience item above, never the pinned-MOCK escape hatch.
+        var mockEditor = VenueMenuViewModel.VisibleConnectItems("MOCK", isEditor: true);
+        Check(mockEditor.Count == 1 && mockEditor[0].Venue == "MOCK",
+            "pinned MOCK in editor should surface only the MOCK connect, got " + mockEditor.Count);
+        var mockPlayer = VenueMenuViewModel.VisibleConnectItems("MOCK", isEditor: false);
+        Check(mockPlayer.Count == 1 && mockPlayer[0].Venue == "MOCK",
+            "#106: pinned MOCK in a PLAYER build must surface the MOCK connect (not an empty dead-end menu), got " + mockPlayer.Count);
     }
 
     static void ReloginHintOnNotice()

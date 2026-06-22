@@ -240,11 +240,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (_font == null) _font = Resources.GetBuiltinResource<Font>("Arial.ttf");
 
-        // Live venue is one-per-server and bound at server build (the backend rejects a later
-        // venue_login for a different venue with VENUE_MISMATCH, live_orchestrator.py:684). So it must
-        // be chosen BEFORE InitializePython — resolve it from LIVE_VENUE env now (the documented live
-        // selector; default MOCK keeps the Replay mainline credential-less). A demo HITL sets
-        // LIVE_VENUE=TACHIBANA|KABU in .env before Play.
+        // ADR-0021: the server is built for an INITIAL venue (resolved from LIVE_VENUE env; default MOCK
+        // keeps the Replay mainline credential-less), but the venue is NO LONGER locked — a later
+        // venue_login for a different venue rebinds the adapter factory at runtime (the Venue menu's
+        // venue switch). LIVE_VENUE, when set, also filters the menu to that one venue
+        // (ResolveExplicitLiveVenue). A demo HITL still sets LIVE_VENUE=TACHIBANA|KABU before Play for
+        // the scripted ConnectConfigured harness, but mainline users just pick from the menu.
         _venue = ResolveLiveVenue();
 
         BuildWorkspace();        // UI build ALWAYS runs (independent of _ownPlay / batchmode)
@@ -503,7 +504,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
                 () => _footerMode.DisplayMode,                        // bar mode badge
                 DocumentBadgeText,                                    // #95 P6 S6 (#90): document-identity badge
-                _venue,                                               // "MOCK" → dev connect item (editor only)
+                ResolveExplicitLiveVenue(),                           // ADR-0021: pinned LIVE_VENUE (null=show all)
                 _font);                                               // uGUI font (#77)
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
@@ -1414,12 +1415,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!string.IsNullOrEmpty(iid)) _footerSelected.Set(iid);
     }
 
-    // LIVE_VENUE selects the live venue the server is built for; default MOCK. Whitelisted so a typo can't
-    // build a server for an unknown venue (it falls back to MOCK rather than failing opaquely).
-    static string ResolveLiveVenue()
+    // LIVE_VENUE selects the live venue the server is INITIALLY built for; default MOCK when unset or
+    // unknown (a typo can't build a server for an unknown venue — it falls back to MOCK rather than
+    // failing opaquely). ADR-0021: this is no longer a LOCK — a menu venue_login rebinds the server's
+    // venue at runtime; the env only chooses the startup factory and (via ResolveExplicitLiveVenue)
+    // filters the Venue menu. Derived from the explicit value so the whitelist lives in ONE place.
+    static string ResolveLiveVenue() => ResolveExplicitLiveVenue() ?? "MOCK";
+
+    // ADR-0021: the EXPLICITLY-set LIVE_VENUE (whitelisted, upper) or null when unset/unknown. Distinct
+    // from ResolveLiveVenue() which defaults to MOCK — the Venue menu needs to tell "user pinned a venue"
+    // (offer only that one) from "unset" (offer all, rebind on login).
+    static string ResolveExplicitLiveVenue()
     {
-        string v = (EnvConfig.Get("LIVE_VENUE", "MOCK") ?? "MOCK").Trim().ToUpperInvariant();
-        return (v == "TACHIBANA" || v == "KABU") ? v : "MOCK";
+        string v = (EnvConfig.Get("LIVE_VENUE", "") ?? "").Trim().ToUpperInvariant();
+        return (v == "MOCK" || v == "TACHIBANA" || v == "KABU") ? v : null;
     }
 
     // Read-only seams the root-based HITL harness observes (connect affordance gating + badge readout).

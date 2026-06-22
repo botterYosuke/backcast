@@ -674,19 +674,36 @@ class LiveLoopManager:
                 venue_state=venue_state, instruments_loaded=0,
             )
 
-        # D26: validate against configured factory venue (1 backend = 1 venue)
-        if self._live_adapter_factory is None:
-            return VenueSessionResult(
-                success=False, error_code="LIVE_ADAPTER_NOT_CONFIGURED",
-                venue_state=venue_state, instruments_loaded=0,
-            )
-
-        configured_venue = (self._live_venue_id or venue_id).upper()
-        if configured_venue != venue_id:
+        # ADR-0021 (supersedes D26 "1 backend = 1 venue" startup lock): the live venue is no longer
+        # frozen at server build. While DISCONNECTED, a venue_login for a different venue REBINDS the
+        # adapter factory to the requested venue — this is the menubar's runtime venue switch (set
+        # LIVE_VENUE / re-Play is no longer required to reach Tachibana/kabu). A different-venue login
+        # while a session is already live is still rejected with VENUE_MISMATCH: there is no hot-swap,
+        # and the UI greys out Connect while connected, so this branch is defense-in-depth.
+        bound_venue = self._live_venue_id.upper() if self._live_venue_id else None
+        live_session = self.venue_sm is not None and self.venue_sm.current in (
+            "AUTHENTICATING", "CONNECTED", "SUBSCRIBED", "RECONNECTING")
+        if bound_venue is not None and bound_venue != venue_id and live_session:
             return VenueSessionResult(
                 success=False, error_code="VENUE_MISMATCH",
                 venue_state=venue_state, instruments_loaded=0,
             )
+        if self._live_adapter_factory is None or bound_venue != venue_id:
+            # (re)build the factory for the requested venue. venue_id is already validated against
+            # _KNOWN_VENUES above, so build_live_adapter_factory only raises on a programming error.
+            try:
+                from engine.live.live_adapter_factory import build_live_adapter_factory
+                self._live_adapter_factory = build_live_adapter_factory(venue_id)
+            except Exception:
+                logging.warning(
+                    "[venue_login] adapter factory build failed for venue_id=%r",
+                    venue_id, exc_info=True,
+                )
+                return VenueSessionResult(
+                    success=False, error_code="LIVE_ADAPTER_NOT_CONFIGURED",
+                    venue_state=venue_state, instruments_loaded=0,
+                )
+            self._live_venue_id = venue_id
 
         # Idempotent: already CONNECTED/SUBSCRIBED → no-op success — UNLESS the
         # runner/bridge died with a last_error. LiveRunner._run() never transitions

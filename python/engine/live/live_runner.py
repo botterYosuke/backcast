@@ -66,6 +66,43 @@ class LiveRunner(SupervisedTask):
         # 変更検出ガード（Step 8 efficiency review）。
         self._last_partial: dict[tuple, KlineUpdate] = {}
 
+    def set_interval_ns(
+        self, interval_ns: int, instrument_ids: Optional[Iterable[InstrumentId]] = None
+    ) -> None:
+        """Reconfigure the tick→bar aggregation cadence to a single interval (#112 ADR-0025 D6).
+
+        The controller calls this at attach with the run's ``granularity``-derived interval so a
+        live run is driven at its scenario granularity, not a session-global 60s.
+
+        ``instrument_ids`` (the run's universe) scopes the change to JUST those instruments — the
+        runner is **shared** with manual UI watchlist subscriptions, so rebuilding every aggregator
+        would silently change unrelated symbols' chart cadence (and ``_intervals_ns`` — the default
+        for FUTURE manual subscribes — must stay at the session default so a manual symbol added
+        during the run keeps Minute). ``None`` rebuilds all + sets the default (session-wide reset).
+
+        Idempotent for the same interval. Subscribe the run's universe FIRST, then call this (the
+        run's aggregators are rebuilt from the session default to the run interval)."""
+        interval_ns = int(interval_ns)
+        if interval_ns <= 0:
+            raise ValueError("interval_ns must be positive")
+        if instrument_ids is None:
+            if self._intervals_ns == (interval_ns,):
+                return
+            self._intervals_ns = (interval_ns,)  # session-wide default change
+            targets: list = list(self._aggregators)
+        else:
+            # Scope to the run's universe; leave the session default (and other symbols) untouched.
+            targets = [iid for iid in instrument_ids if iid in self._aggregators]
+        for iid in targets:
+            aggs = self._aggregators.get(iid)
+            if aggs and len(aggs) == 1 and aggs[0]._interval_ns == interval_ns:
+                continue  # already at this interval (no spurious rebuild / dropped in-progress bar)
+            self._aggregators[iid] = [
+                TickBarAggregator(instrument_id=iid, interval_ns=interval_ns)
+            ]
+            for key in [k for k in self._last_partial if k[0] == iid]:
+                self._last_partial.pop(key, None)
+
     async def subscribe(self, instrument_id: InstrumentId) -> None:
         # idempotent: 既に登録済みなら何もしない
         if instrument_id in self._aggregators:

@@ -159,6 +159,25 @@ def normalize_granularity(value: str) -> str:
     raise ValueError(f"Unsupported granularity: {value!r}")
 
 
+# Per-granularity bar interval in nanoseconds — the single source of truth for the LIVE bar
+# cadence (#112 ADR-0025 D6). Daily = one calendar day. The live tick→bar aggregator derives its
+# interval from this so a Daily cell is NOT silently driven at 1-minute (the accidental-parity bug
+# D6 kills: granularity was never referenced in the live path, so "Minute"==60s only worked by
+# coincidence). nautilus-free, kernel-side, shared by Replay and Auto.
+_GRANULARITY_INTERVAL_NS: dict[str, int] = {
+    "Daily": 24 * 60 * 60 * 1_000_000_000,
+    "Minute": 60 * 1_000_000_000,
+}
+
+
+def granularity_to_interval_ns(granularity: str) -> int:
+    """Map a scenario granularity to its live bar interval in nanoseconds (single source of truth).
+
+    Accepts any case/whitespace via ``normalize_granularity``. Raises ``ValueError`` for an
+    unknown granularity (fail-closed — never silently fall back to 1-minute)."""
+    return _GRANULARITY_INTERVAL_NS[normalize_granularity(granularity)]
+
+
 def db_path(
     data_root: str | Path, instrument_id: str, granularity: str = "Daily"
 ) -> Path:

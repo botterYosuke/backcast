@@ -41,7 +41,13 @@ _INCOMPATIBLE_HANDLERS: frozenset[str] = frozenset(
 
 
 class StrategyLoadError(Exception):
-    pass
+    """戦略ロード失敗。``error_code`` を持つ場合は materialize 層（registry / host）が
+    その code をそのまま gRPC/UI へ運ぶ（例: #112 ADR-0025 D4 の ``NOT_A_MARIMO_NOTEBOOK``）。
+    code 無し（None）の汎用ロード失敗は ``STRATEGY_LOAD_FAILED`` に正規化される。"""
+
+    def __init__(self, message: str, *, error_code: str | None = None) -> None:
+        super().__init__(message)
+        self.error_code = error_code
 
 
 def load(

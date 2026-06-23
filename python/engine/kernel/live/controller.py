@@ -215,6 +215,18 @@ class KernelLiveEngineController:
         try:
             for iid in instrument_ids:
                 await runner.subscribe(iid)
+            # #112 ADR-0025 D6: drive THIS run's tick→bar aggregation at its scenario granularity
+            # (single source of truth), not a session-global 60s. Scoped to the run's universe so the
+            # shared runner's manual-watchlist symbols (and the session default for future manual
+            # subscribes) are untouched. Minute keeps 60s (the old accidental value, now explicit);
+            # Daily uses a 1-day interval so a Daily cell is not silently driven at 1-minute.
+            granularity = scenario.get("granularity") if isinstance(scenario, dict) else None
+            if granularity and hasattr(runner, "set_interval_ns"):
+                from engine.kernel.duckdb_bars import granularity_to_interval_ns
+
+                runner.set_interval_ns(
+                    granularity_to_interval_ns(granularity), instrument_ids=instrument_ids
+                )
             await driver.run_on_start()
             driver.start_consumer()
         except BaseException:  # noqa: BLE001 — timeout/cancel(CancelledError) も含め必ず teardown する
@@ -241,6 +253,15 @@ class KernelLiveEngineController:
             asyncio.run_coroutine_threadsafe(driver.stop(), loop).result(timeout=10.0)
         except Exception:  # noqa: BLE001 — 停止失敗でも run state は terminal にする
             log.exception("kernel live driver stop failed during detach")
+        # #112 ADR-0025 D5-R: marimo cell bridge の worker は **この caller スレッドで** join する
+        # （driver.stop が番兵を put 済み・live loop は worker を block-join しない＝self-deadlock 回避）。
+        # 命令型 Strategy は worker を持たない（join_worker 無し）ので no-op。
+        join = getattr(getattr(driver, "_strategy", None), "join_worker", None)
+        if join is not None:
+            try:
+                join()
+            except Exception:  # noqa: BLE001 — teardown は best-effort
+                log.exception("kernel live cell worker join failed during detach")
 
     def apply_venue_async_event(self, ev: Any) -> bool:
         """orchestrator が adapter 非同期 event（poll/EC）を kernel broker へ転送する seam（#23・(b)）。

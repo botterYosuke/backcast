@@ -183,6 +183,11 @@ class LiveStrategyHost:
                 params.strategy_file,
                 original_path=Path(params.original_path) if params.original_path else None,
             )
+        except strategy_loader.StrategyLoadError as exc:
+            # #112 ADR-0025 D4: 専用 error_code（NOT_A_MARIMO_NOTEBOOK 等）はそのまま運ぶ。
+            code = getattr(exc, "error_code", None) or "STRATEGY_LOAD_FAILED"
+            sm.error(code)
+            raise LiveStrategyHostError(code) from exc
         except Exception as exc:  # noqa: BLE001 — load 失敗は構造化エラーに正規化
             sm.error("STRATEGY_LOAD_FAILED")
             raise LiveStrategyHostError("STRATEGY_LOAD_FAILED") from exc

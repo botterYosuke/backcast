@@ -190,7 +190,7 @@ def test_pre_set_stop_event_streams_no_bars() -> None:
     stop = threading.Event()
     stop.set()
     rec = _Recorder()
-    stepper = _make_bt(_bars(_CLOSES), rec, stop_event=stop)._stepper
+    stepper = _make_bt(_bars(_CLOSES), rec, stop_event=stop)._bars
 
     handle = stepper.open_next_bar()
     assert handle.event is StepEvent.STOPPED
@@ -304,7 +304,7 @@ def test_lifecycle_states_bar_and_portfolio() -> None:
 # --------------------------------------------------------------------------------------
 
 def test_finalize_before_terminal_raises() -> None:
-    stepper = _make_bt(_bars(_CLOSES), _Recorder())._stepper
+    stepper = _make_bt(_bars(_CLOSES), _Recorder())._bars
     stepper.open_next_bar()  # BAR_OPEN — run is live, not terminal
     with pytest.raises(RuntimeError):
         stepper.finalize()
@@ -316,7 +316,7 @@ def test_zero_qty_submit_is_noop_inside_open_bar() -> None:
     bt.submit_market(0)    # flat = no order (signed_qty_to_side → None)
     bt.submit_market(-0.0)
     # advance to settle: no fills should have been produced.
-    rec_orders = [e for e in bt._stepper._ctx.pending]
+    rec_orders = [e for e in bt._bars._ctx.pending]
     assert rec_orders == []
 
 

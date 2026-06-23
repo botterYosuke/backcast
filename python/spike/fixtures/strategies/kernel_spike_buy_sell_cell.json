@@ -1,0 +1,10 @@
+{
+  "scenario": {
+    "schema_version": 2,
+    "instruments": ["8918.TSE"],
+    "start": "2024-10-01",
+    "end": "2025-01-10",
+    "granularity": "Daily",
+    "initial_cash": 10000000
+  }
+}

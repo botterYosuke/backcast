@@ -45,6 +45,11 @@ log = logging.getLogger(__name__)
 # on_safety_violation には乗せず、OrderDenied で戦略へ返すだけ（手動経路の order_facade と同じ規約）。
 KIND_INVALID_QTY = "INVALID_QTY"
 
+# How long ``stop`` waits for the cancelled bus consumer to unwind before abandoning it and
+# proceeding to ``on_stop`` (which puts the cell-bridge stop sentinel). Kept short so the live UI's
+# ■→▶ is snappy; a consumer wedged in an uncancellable venue await is abandoned, not awaited (#112).
+_CONSUMER_STOP_TIMEOUT_S = 2.0
+
 _OPEN_STATES = frozenset(
     {
         OrderStatus.SUBMITTED,
@@ -196,9 +201,17 @@ class KernelLiveDriver:
         if task is not None:
             task.cancel()
             try:
-                await task
-            except asyncio.CancelledError:
-                pass
+                # Bound the wait (#112 HITL / nautilus live-loop teardown contract): a consumer wedged
+                # in an UNCANCELLABLE venue await — an order submit blocked on a second-password /
+                # slow HTTP that ignores cancellation — must NOT hang teardown. Use ``asyncio.wait``,
+                # NOT ``await task`` / ``wait_for``: ``await task`` never returns on such a consumer, and
+                # ``wait_for`` RE-cancels-and-awaits on timeout (hanging again the same way). ``asyncio.
+                # wait`` just returns (done, pending) after the timeout, so ``on_stop`` below ALWAYS runs
+                # — it puts the cell-bridge stop sentinel that unblocks the worker (else ■ never → ▶).
+                # The wedged task is abandoned (best-effort); the run still tears down promptly.
+                await asyncio.wait({task}, timeout=_CONSUMER_STOP_TIMEOUT_S)
+            except Exception:  # noqa: BLE001 — a consumer exception during stop is best-effort
+                log.exception("kernel live consumer stop wait raised")
         # 共有 bus の購読を解除する。consumer が一度も起動していない rollback 経路では生成器の finally が
         # 走らず queue が bus に残り leak するため、明示 close で確実に外す（冪等・#25 review finding 7）。
         if self._bus_iter is not None:
@@ -298,7 +311,15 @@ class KernelLiveDriver:
                             close=evt.close,
                             volume=evt.volume,
                         )
-                        self._strategy.on_bar(bar)
+                        # #112 S2 外科的フック（ADR-0025 D1/D2）: 戦略が marimo cell bridge（async
+                        # ``drive_bar``）なら、worker thread の cell ループと **1 bar ランデブー**して
+                        # 「この bar 終わった」signal を待ってから drain する（A-1 lock-step）。普通の
+                        # 命令型 Strategy は ``drive_bar`` を持たず sync ``on_bar`` → byte-identical。
+                        drive_bar = getattr(self._strategy, "drive_bar", None)
+                        if drive_bar is not None:
+                            await drive_bar(bar)
+                        else:
+                            self._strategy.on_bar(bar)
                         await self._drain()
                 except Exception as exc:  # noqa: BLE001 — 戦略/イベント処理失敗は run を fail させる
                     # 握り潰さない: on_bar/on_tick/drain（dup 等）例外は run の障害として host.fail_run へ

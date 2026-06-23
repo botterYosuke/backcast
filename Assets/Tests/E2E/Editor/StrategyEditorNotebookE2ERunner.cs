@@ -67,7 +67,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section19_RichOutput(spawned)
                 ?? Section20_PlaceholderHint(spawned)
                 ?? Section21_ConsoleAndDynamicLayout(spawned)
-                ?? Section22_ConsoleAuditGaps(spawned);
+                ?? Section22_ConsoleAuditGaps(spawned)
+                ?? Section23_ModeAwareLiveLaunch(spawned);
         }
         catch (Exception e)
         {
@@ -125,6 +126,11 @@ public static class StrategyEditorNotebookE2ERunner
                       "appends), re-press with empty hides the block, overflow → real ScrollRect with " +
                       "operable verticalNormalizedPosition, first-frame bodyH==0 still paints visibly, " +
                       "'</color>' injection escaped, dormant-reuse race dropped via ListMutated → Invalidate) " +
+                      "+ #112 mode-aware launcher (STRATEGY-47..50 / ADR-0025 D3: in LiveAuto+connected a " +
+                      "per-cell RUN LAUNCHES a live run via onLiveLaunch (not the Replay lane) and toggles ▶→■; " +
+                      "a 2nd press while live-active is rejected; ■ routes to the LIVE stop (not backtest " +
+                      "ForceStop) and SyncLiveRunButton restores ▶ when the run terminals; the SAME press in " +
+                      "Replay drives a backtest — mode-conditional dispatch) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1098,6 +1104,110 @@ public static class StrategyEditorNotebookE2ERunner
         // a fresh press is accepted again (the guard is not stuck).
         run.RunCell(R1);
         if (!run.IsBacktestRunning) return "S14/STRATEGY-23: a new run was not accepted after the prior one finished";
+        run.DrainAndRoute();
+
+        lane.Dispose();
+        return null;
+    }
+
+    // ======================================================================
+    // Section 23: #112 ADR-0025 D3 — per-cell RUN is the MODE-AWARE launcher
+    //     Covers STRATEGY-47 (in LiveAuto + connected a press LAUNCHES a live run via onLiveLaunch,
+    //     NOT the Replay backtest lane; the cell toggles ▶→■), STRATEGY-48 (a 2nd press while a live
+    //     run is active is rejected), STRATEGY-49 (■ → StopRunning routes to the LIVE stop, not the
+    //     backtest ForceStop; SyncLiveRunButton restores ▶ when the run terminals), STRATEGY-50 (the
+    //     SAME press in Replay drives a backtest — the dispatch is mode-conditional).
+    //     Python-FREE: fake live callbacks model HasActiveRun∨start-in-flight; the REAL register→start
+    //     + the cell parity are pinned in python (test_v19_cell_auto_parity / test_cell_auto_bridge_roundtrip).
+    // ======================================================================
+    static string Section23_ModeAwareLiveLaunch(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string SCN = "{\"instruments\":[\"8918.TSE\"],\"granularity\":\"Daily\"}";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+
+        var layerGo = new GameObject("FWLayer23", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        if (view1 == null) return "S23: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        nb.Cells[0].SetBody("for bar in bt.replay():\n    bt.submit_market(100)\n");
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S23: precondition — cell0 not bound to region_001";
+
+        var btn = StrategyEditorWindowFrame.EnsureRunButton(controller.RectOf(R1), font);
+        if (btn == null) return "S23: region_001 has no RUN button";
+        if (GlyphText(btn) != "▶") return "S23: precondition — RUN button does not start as ▶";
+
+        var exec = new _RecordingExecutor(_ => { });
+        var errors = new List<string>();
+        var runningEvents = new List<string>();
+        var liveLaunches = new List<string>();
+        int liveStops = 0;
+        int btForceStops = 0;
+        bool autoMode = true;     // LiveAuto + venue connected
+        bool liveActive = false;  // HasActiveRun ∨ start-in-flight (set by launch, cleared by stop)
+
+        var lane = new NotebookRunLane(exec, startWorker: false);   // synchronous: Submit runs inline
+        var run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, lane,
+            msg => errors.Add(msg),
+            () => SCN,
+            () => btForceStops++,
+            (region, running) => { runningEvents.Add(region + ":" + running); StrategyEditorWindowFrame.SetRunButtonGlyph(btn, running); },
+            null, null,
+            liveLaunchActive: () => autoMode,
+            onLiveLaunch: region => { liveLaunches.Add(region); liveActive = true; },   // register→start → start-in-flight
+            onLiveStop: () => { liveStops++; liveActive = false; },                      // stop_live_strategy
+            liveRunActive: () => liveActive);
+
+        // STRATEGY-47: in LiveAuto a press LAUNCHES a live run (not the Replay lane); cell ▶→■.
+        run.RunCell(R1);
+        if (liveLaunches.Count != 1 || liveLaunches[0] != R1) return "S23/STRATEGY-47: per-cell RUN did not launch a live run in Auto";
+        if (exec.Calls != 0) return "S23/STRATEGY-47: a live press wrongly drove the Replay backtest lane";
+        if (run.IsBacktestRunning) return "S23/STRATEGY-47: backtest guard set on a live launch";
+        if (!run.IsLiveRunLaunched) return "S23/STRATEGY-47: live-run-launched flag not set";
+        if (GlyphText(btn) != "■") return "S23/STRATEGY-47: ▶ did not toggle to ■ on live launch";
+
+        // STRATEGY-48: a 2nd press while the live run is active is rejected (no 2nd launch).
+        run.RunCell(R1);
+        if (liveLaunches.Count != 1) return "S23/STRATEGY-48: a 2nd live run launched while one was active";
+        if (errors.Count == 0) return "S23/STRATEGY-48: the rejected 2nd live press surfaced no message";
+
+        // STRATEGY-49: ■ → StopRunning routes to the LIVE stop (not the backtest ForceStop); Sync restores ▶.
+        run.StopRunning();
+        if (liveStops != 1) return "S23/STRATEGY-49: ■ did not route to the live stop";
+        if (btForceStops != 0) return "S23/STRATEGY-49: ■ wrongly force-stopped a backtest on a live run";
+        run.SyncLiveRunButton();   // liveActive now false → ■→▶
+        if (run.IsLiveRunLaunched) return "S23/STRATEGY-49: live-run flag not cleared after the run terminated";
+        if (GlyphText(btn) != "▶") return "S23/STRATEGY-49: ■ did not restore ▶ after the live run stopped";
+        if (!runningEvents.Contains(R1 + ":False")) return "S23/STRATEGY-49: ▶ restore event not fired";
+
+        // STRATEGY-50: the SAME press in Replay mode drives a backtest — the dispatch is mode-conditional.
+        autoMode = false;
+        run.RunCell(R1);
+        if (exec.Calls == 0) return "S23/STRATEGY-50: in Replay the press did not drive the backtest lane";
+        if (liveLaunches.Count != 1) return "S23/STRATEGY-50: a Replay press wrongly launched a live run";
         run.DrainAndRoute();
 
         lane.Dispose();

@@ -24,14 +24,22 @@ public sealed class NotebookRunController
     readonly Action _onStop;                         // #95 P4: ■ press → force-stop the running backtest
     readonly Action<string, bool> _onRunningChanged;  // #95 P4: (region, running) → swap ▶/■ on the cell
     readonly Action<IReadOnlyList<string>> _onStaleRegionsChanged;  // #95 P6 S3: regions still stale → amber ▶
+    // #112 ADR-0025 D3: per-cell RUN is the mode-aware launcher. In Auto + venue connected a press
+    // starts a LIVE run (register→start) instead of a Replay backtest; the footer ▶ launch retires.
+    readonly Func<bool> _liveLaunchActive;  // true → a press launches a live run (Auto + connected)
+    readonly Action<string> _onLiveLaunch;  // (region) → host register→start (the root marshals the RPC)
+    readonly Action _onLiveStop;            // ■ on a live cell → host.StopLiveStrategy(activeRunId)
+    readonly Func<bool> _liveRunActive;     // live run active OR start-in-flight (drives the live ■→▶)
     int _generation;                    // notebook epoch; bumped by Invalidate to drop stale in-flight runs
 
     int _runSeq;                        // monotonic run id source
     bool _btRunActive;                  // a backtest-driving run is in flight (running guard, ADR-0016 D3)
     int _btRunId = -1;                  // the in-flight backtest's run id (correlates its result)
     string _runningRegion;              // the cell whose ▶ is currently showing ■
+    string _liveRunRegion;              // #112: the cell whose press launched the active live run (■)
 
     public bool IsBacktestRunning => _btRunActive;
+    public bool IsLiveRunLaunched => _liveRunRegion != null;  // #112: a cell launched a live run (showing ■)
 
     public NotebookRunController(
         NotebookCellCoordinator coordinator,
@@ -42,7 +50,11 @@ public sealed class NotebookRunController
         Action onStop = null,
         Action<string, bool> onRunningChanged = null,
         Action<IReadOnlyList<string>> onStaleRegionsChanged = null,
-        Func<string> strategyPathProvider = null)
+        Func<string> strategyPathProvider = null,
+        Func<bool> liveLaunchActive = null,
+        Action<string> onLiveLaunch = null,
+        Action onLiveStop = null,
+        Func<bool> liveRunActive = null)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _viewFor = viewFor ?? (_ => null);
@@ -53,6 +65,10 @@ public sealed class NotebookRunController
         _onStop = onStop;
         _onRunningChanged = onRunningChanged;
         _onStaleRegionsChanged = onStaleRegionsChanged;
+        _liveLaunchActive = liveLaunchActive;
+        _onLiveLaunch = onLiveLaunch;
+        _onLiveStop = onLiveStop;
+        _liveRunActive = liveRunActive;
     }
 
     // A RUN press on the cell in `regionId`: synthesise the LIVE source (unsaved buffer ok — owner
@@ -71,6 +87,14 @@ public sealed class NotebookRunController
     // (a multi-bar transaction with potentially long pacing) activates the guard.
     public void RunCell(string regionId)
     {
+        // #112 ADR-0025 D3 — mode-aware launcher: in Auto + venue connected the SAME per-cell RUN
+        // starts a LIVE run (register→start) instead of a Replay backtest (AC#2 同一ジェスチャ). The
+        // running cell's ■ stops it via StopRunning (host.StopLiveStrategy). footer ▶ launch retired.
+        if (_liveLaunchActive != null && _liveLaunchActive())
+        {
+            LaunchLive(regionId);
+            return;
+        }
         if (_btRunActive)
         {
             _onError?.Invoke("a backtest is already running — press ■ to stop it before running another cell");
@@ -137,12 +161,53 @@ public sealed class NotebookRunController
         });
     }
 
-    // The running cell's ■ press: ask the engine to stop the in-flight backtest. The run still
-    // completes (the stepper returns STOPPED) and its result drains through ApplyResult, which
-    // clears the busy flag and restores ▶. No-op when nothing is running.
+    // #112 ADR-0025 D3 — launch a LIVE run from a cell press (Auto + venue connected). Optimistically
+    // toggles ▶→■; SyncLiveRunButton reconciles to the real lifecycle (a failed start reverts to ▶).
+    // The root marshals the gated register→start (BuildStartRequest → host.RegisterAndStartLiveAuto).
+    void LaunchLive(string regionId)
+    {
+        if (_btRunActive)
+        {
+            // A Replay backtest is still in flight (e.g. mode was switched to Auto mid-backtest).
+            // Refuse to start a live run alongside it — that dual-active state makes StopRunning
+            // ambiguous (■ would target one and orphan the other).
+            _onError?.Invoke("a backtest is still running — press ■ to stop it before starting a live run");
+            return;
+        }
+        if (_liveRunRegion != null || (_liveRunActive != null && _liveRunActive()))
+        {
+            _onError?.Invoke("a live run is already active — press ■ to stop it before running another cell");
+            return;
+        }
+        var cell = _coordinator.CellOf(regionId);
+        if (cell == null) return;
+        _liveRunRegion = regionId;
+        _onRunningChanged?.Invoke(regionId, true);   // ▶ → ■ (optimistic; SyncLiveRunButton reconciles)
+        _onLiveLaunch?.Invoke(regionId);
+    }
+
+    // Reconcile the live cell's ▶/■ with the run lifecycle (call per frame). The launch press shows ■
+    // optimistically; when the run terminals — neither active NOR start-in-flight (a failed start, a
+    // venue drop, or a graceful ■ stop) — restore ▶. #112 ADR-0025 D3/D5.
+    public void SyncLiveRunButton()
+    {
+        if (_liveRunRegion == null) return;
+        bool active = _liveRunActive != null && _liveRunActive();
+        if (!active)
+        {
+            string region = _liveRunRegion;
+            _liveRunRegion = null;
+            _onRunningChanged?.Invoke(region, false);   // ■ → ▶
+        }
+    }
+
+    // The running cell's ■ press: stop the in-flight run. #112: a LIVE run (Auto) → host stop
+    // (stop_live_strategy via _onLiveStop); a Replay backtest → ForceStop. The result drains/terminals
+    // through ApplyResult / SyncLiveRunButton, which restores ▶. No-op when nothing is running.
     public void StopRunning()
     {
-        if (_btRunActive) _onStop?.Invoke();
+        if (_liveRunRegion != null) { _onLiveStop?.Invoke(); return; }  // live ■ → stop_live_strategy
+        if (_btRunActive) _onStop?.Invoke();                            // backtest ■ → ForceStop
     }
 
     // Bump the notebook epoch so any in-flight run's result is dropped at drain time — call when the

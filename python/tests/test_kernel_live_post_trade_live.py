@@ -14,21 +14,35 @@ import pytest
 
 from engine.core import DataEngine
 from engine.live import backend_events
+from engine.live.adapter import KlineUpdate
 from engine.live.live_orchestrator import LiveLoopManager
 from engine.live.mock_adapter import MockVenueAdapter
 from engine.live.state_machine import VenueStateMachine
 from engine.mode_manager import ModeManager
 
 IID = "8918.TSE"
-SCENARIO_FILE = "spike/fixtures/strategies/kernel_spike_buy_sell.py"
-ON_START_BUY_FILE = "spike/fixtures/strategies/kernel_on_start_buy.py"
+# #112 ADR-0025 D4: the editor live path is marimo-forced — these orchestrator gates drive the
+# marimo-cell twins (through LiveCellBridge). The post-trade rails fire from AccountSync
+# (orchestrator-driven, independent of the idle cell); the venue-order gate uses the buy-once cell
+# driven by an injected first bar (the cell submits on its first bar, the run already RUNNING).
+SCENARIO_FILE = "spike/fixtures/strategies/kernel_spike_buy_sell_cell.py"
+ON_START_BUY_FILE = "spike/fixtures/strategies/kernel_buy_once_cell.py"
 
 
-def test_on_start_order_reaches_venue_full_path():
-    """on_start 発注が full-chain で venue に届く（run は attach 前に RUNNING・#25 review finding 1）。
+def _kline(close: float) -> KlineUpdate:
+    return KlineUpdate(
+        kind="kline", instrument_id=IID, ts_ns=86_400 * 1_000_000_000,
+        open=close, high=close, low=close, close=close, volume=100.0, is_closed=True,
+    )
 
-    READY のまま attach すると run gate が on_start 発注を STRATEGY_PAUSED で DENIED にし venue 未到達
-    （venue_calls=0）になる回帰を塞ぐ。start_run が attach 前に RUNNING へ遷移することで gate を通す。
+
+def test_first_bar_order_reaches_venue_full_path():
+    """marimo cell の first-bar 発注が full-chain で venue に届く（#112 ADR-0025 / 旧 on_start gate）。
+
+    cell モデルは on_start 発注を持たず、最初の ``bt.replay()`` bar で発注する（その時点で run は既に
+    RUNNING）。注入した確定 bar が bridge → cell loop → submit → drain → venue まで full-chain で
+    到達することを確認する（旧テストの「RUNNING-before-attach で gate を通す」不変条件を cell 経路に
+    引き継いだ形・start_run は依然 attach 前に RUNNING へ遷移する）。
     """
     shared_mock = MockVenueAdapter()
     shared_mock.set_account_snapshot(cash=10_000_000.0, buying_power=10_000_000.0, positions=())
@@ -48,6 +62,7 @@ def test_on_start_order_reaches_venue_full_path():
         engine_controller=None,
         publish_backend_event_callback=events.append,
     )
+    start = None
     try:
         reg = mgr.register_live_strategy(strategy_file=ON_START_BUY_FILE, original_path=ON_START_BUY_FILE)
         assert reg.success, reg.error_code
@@ -58,11 +73,22 @@ def test_on_start_order_reaches_venue_full_path():
         start = mgr.start_live_strategy(reg.strategy_id, IID, "MOCK", safety_limits_dict={})
         assert start.success, start.error_code
 
+        # The cell submits on its first bar (the run is RUNNING by then). Inject one closed bar so
+        # the buy travels the full orchestrator + bridge chain to the venue.
+        mgr._live_loop.call_soon_threadsafe(shared_mock.inject_tick, _kline(8.0))
+
         deadline = time.time() + 5.0
         while time.time() < deadline and shared_mock.submit_order_call_count == 0:
             time.sleep(0.02)
-        assert shared_mock.submit_order_call_count >= 1, "on_start order never reached the venue (gated)"
+        assert shared_mock.submit_order_call_count >= 1, "first-bar order never reached the venue"
     finally:
+        # Stop the run first so detach joins the cell worker and closes its marimo session on the
+        # worker thread (else the orphaned session leaks the per-thread RuntimeContext / fds).
+        try:
+            if start is not None and start.run_id:
+                mgr.stop_live_strategy(start.run_id)
+        except Exception:
+            pass
         try:
             mgr.set_execution_mode("Replay")
             mgr.venue_logout()

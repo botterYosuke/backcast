@@ -19,8 +19,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# #112 ADR-0025 D4: the editor live path is marimo-forced, so the live run uses the marimo-cell
+# twin (driven through LiveCellBridge), not the imperative fixture. No bars are fed by the MOCK
+# here, so the worker reaches ``bt.replay()`` and idles (D5) until the sentinel on stop.
 _STRATEGY = os.path.join(
-    _PYTHON_ROOT, "spike", "fixtures", "strategies", "kernel_spike_buy_sell.py"
+    _PYTHON_ROOT, "spike", "fixtures", "strategies", "kernel_spike_buy_sell_cell.py"
 )
 IID = "8918.TSE"
 

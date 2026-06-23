@@ -142,17 +142,17 @@ class LiveLoopManager:
         self._secret_vault: SecretVault = SecretVault()
 
         # live auto strategy
-        # #25: kernel-native loader（nautilus Strategy ではなく engine.kernel.strategy.Strategy の
-        # subclass を検出 = Rust core 非ロード）。register_live_strategy（StrategyRegistry）と
-        # start_live_strategy（LiveStrategyHost）の **両方** に同じ kernel loader を差す。register 側を
-        # nautilus 既定のままにすると、①kernel 戦略ファイルが 0 subclass で登録できず ②register 時点で
-        # Rust core をロードし LiveAuto import-purity を破る（codex review #25）。
-        import functools
+        # #112 ADR-0025 D4: editor の live materialize は **marimo 強制**。register_live_strategy
+        # （StrategyRegistry）と start_live_strategy（LiveStrategyHost）の **両方** に marimo loader を
+        # 差す。loader は marimo App を build → ``LiveCellBridge`` factory を返し、非marimo は
+        # ``NOT_A_MARIMO_NOTEBOOK`` で raise（分岐なし＝D4「唯一の道」）。同一 marimo cell が Replay と
+        # Auto を無改変で駆動する（cell の ``bt`` が mode 適合の seam を隠す façade・ADR-0025 D1）。
+        # 命令型 ``strategy_loader.load(base_cls=KernelStrategy)`` は editor live 経路から外れ、parity
+        # oracle / #24 golden / pytest の **直接** caller 用に存続する（Rust core も marimo guard も
+        # 通らない）。marimo loader も Rust core を一切 import しない（#25 の import-purity 不変条件を保つ）。
+        from engine.strategy_runtime.live_cell_runtime import build_live_marimo_loader
 
-        from engine.kernel.strategy import Strategy as _KernelStrategy
-        from engine.strategy_runtime import strategy_loader as _strategy_loader
-
-        _kernel_loader = functools.partial(_strategy_loader.load, base_cls=_KernelStrategy)
+        _kernel_loader = build_live_marimo_loader()
 
         self._run_registry: RunRegistry = RunRegistry()
         self._strategy_registry: StrategyRegistry = StrategyRegistry(loader=_kernel_loader)
@@ -228,9 +228,14 @@ class LiveLoopManager:
 
         # Step 8: partial_push_interval_s=1.0 → 進行中バーのスナップショットを 1 秒間隔で
         # bus に publish（UI 用 partial bar、§2.3）。確定バーは on_tick が emit する。
+        # #112 ADR-0025 D6: the session default is the Minute cadence derived from the single
+        # source of truth (NOT a bare 60s magic number). The per-run granularity overrides this at
+        # attach (controller.set_interval_ns) so each run is driven at its scenario granularity.
+        from engine.kernel.duckdb_bars import granularity_to_interval_ns
+
         runner = LiveRunner(
             adapter=adapter,
-            interval_ns=60 * 1_000_000_000,
+            interval_ns=granularity_to_interval_ns("Minute"),
             partial_push_interval_s=1.0,
         )
         # D10: wire the event loop reference so fetch_instruments_blocking works

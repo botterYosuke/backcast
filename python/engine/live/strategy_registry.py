@@ -83,6 +83,12 @@ class StrategyRegistry:
             _module, scenario, strategy_cls = self._loader(str(resolved))
         except FileNotFoundError as exc:
             raise StrategyRegistryError("STRATEGY_FILE_NOT_FOUND") from exc
+        except strategy_loader.StrategyLoadError as exc:
+            # #112 ADR-0025 D4: 専用 error_code（NOT_A_MARIMO_NOTEBOOK 等）は素通しで gRPC/UI へ運ぶ。
+            # 無印（汎用ロード失敗）は STRATEGY_LOAD_FAILED に正規化する。
+            raise StrategyRegistryError(
+                getattr(exc, "error_code", None) or "STRATEGY_LOAD_FAILED"
+            ) from exc
         except Exception as exc:  # noqa: BLE001 — load 失敗は構造化エラーに正規化
             raise StrategyRegistryError("STRATEGY_LOAD_FAILED") from exc
 

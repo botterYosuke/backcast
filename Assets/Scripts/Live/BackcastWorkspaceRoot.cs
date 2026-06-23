@@ -233,6 +233,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile int _venueLoginResult;         // worker→main: 0 none / 1 ok / 2 fail (venue_login)
     volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
     volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
+    // #112 ADR-0025 D3: a per-cell-RUN live launch (register→start) RPC result, marshalled worker→main.
+    volatile bool _liveStartResultPending;  // set last after the value fields (publish ordering)
+    bool _liveStartOk;
+    string _liveStartRunId;
     string _lastFooterSig = "";
     string _lastFooterPoll = "";            // dedup the footer-mode ApplyPoll (avoid per-frame JSON parse)
 
@@ -435,7 +439,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // #78 EditorFileProvider: the canonical .py path of the document the editor shows, so the
             // marimo cell globals get the right __file__ for cell-adjacent artifact resolution (e.g.
             // v19's artifacts dir). Unbound editor → null → backend leaves __file__ at the default.
-            BuildNotebookStrategyPath);
+            BuildNotebookStrategyPath,
+            // #112 ADR-0025 D3 — mode-aware launcher: in LiveAuto + venue connected the per-cell RUN
+            // starts a live run instead of a Replay backtest; ■ stops it; the cell's ▶/■ tracks the
+            // live lifecycle (HasActiveRun ∨ start-in-flight). These lambdas read _footerMode/_footerAuto
+            // by closure (built just below at composition time), invoked only at press/frame time.
+            liveLaunchActive: () => _footerMode != null
+                && _footerMode.DisplayMode == FooterModeViewModel.LiveAuto
+                && !string.IsNullOrEmpty(_host.Conn.VenueId),
+            onLiveLaunch: LaunchLiveFromCell,
+            onLiveStop: () => { if (_footerAuto != null && _footerAuto.HasActiveRun)
+                                    _host.StopLiveStrategy(_footerAuto.ActiveRunId, _ => { }); },
+            liveRunActive: () => _footerAuto != null
+                && (_footerAuto.HasActiveRun || _footerAuto.IsStartInFlight));
         // #102 findings 0079 §6 D7: every AddCell/DeleteCell/SyncWindowsToNotebook bumps the run
         // controller's generation so an in-flight per-cell RUN whose pressed-index frame predates the
         // mutation is dropped at drain time (the dormant region_001 reuse race — pressing A, deleting A,
@@ -1584,6 +1600,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return sb.ToString();
     }
 
+    // #112 ADR-0025 D3 — marshal a per-cell-RUN live launch (LiveAuto + connected). Re-uses the footer
+    // VM's pre-flight gate (strategy supplyable / instrument in universe / venue connected). On a block,
+    // surface it; the optimistic ■ reverts next frame (SyncLiveRunButton: neither active nor in-flight).
+    // On Ready, NotifyStartIssued (main) then fire the host's 2-stage register→start; its worker result
+    // is published back to main via _liveStartResultPending (applied in DriveFooter before ObserveLifecycle).
+    void LaunchLiveFromCell(string region)
+    {
+        if (_footerAuto == null) return;
+        var req = _footerAuto.BuildStartRequest();
+        if (req.Gate != LiveAutoStartGate.Ready)
+        {
+            _menuBarView?.ShowMessage("Run cell (Auto): " + (req.Message ?? "cannot start live run"));
+            return;
+        }
+        _footerAuto.NotifyStartIssued();
+        _host.RegisterAndStartLiveAuto(req.StrategyFile, req.OriginalPath, req.InstrumentId, req.Venue,
+            (ok, runId) =>
+            {
+                // RPC worker thread → publish to main: value fields first, then the pending flag.
+                _liveStartOk = ok;
+                _liveStartRunId = runId;
+                _liveStartResultPending = true;
+            });
+    }
+
     // ---- #39: main-thread footer drive (ported from the retired ProductionLiveShell, with its review
     // fixes): consume worker→VM signals, overwrite the mode display from the poll (D1), release the
     // start guard as the lifecycle catches up, honour venue-drop auto-replay (G1: stop the run, not just
@@ -1631,7 +1672,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // VM AppliedCount so idle frames cost one long compare. A shape flip force-repaints inside
         // SyncStartupVisibilityToMode (above).
 
+        // #112 ADR-0025 D3: apply a per-cell-RUN live launch result (marshalled from the RPC worker)
+        // BEFORE ObserveLifecycle/SyncLiveRunButton so the in-flight guard releases correctly. On
+        // failure the guard drops → SyncLiveRunButton reverts the launching cell's ■ back to ▶.
+        if (_liveStartResultPending)
+        {
+            _liveStartResultPending = false;
+            _footerAuto.NotifyStartResult(_liveStartOk, _liveStartRunId);
+        }
         _footerAuto.ObserveLifecycle();
+        // #112: reconcile the live-launching cell's ▶/■ with the lifecycle (active ∨ start-in-flight).
+        _notebookRun?.SyncLiveRunButton();
 
         // G1: a venue drop does NOT stop a running LiveAuto run (engine emits VenueLogoutDetected only),
         // so an active run must be stopped first. Act (and consume the one-shot) only when no live RPC is

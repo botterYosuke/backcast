@@ -29,14 +29,52 @@ Marimo-free (gated by test_strategy_runtime_offline): importing this module pull
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterator, NoReturn, Optional
-
-from typing import Callable
+from typing import Callable, Iterator, NoReturn, Optional, Protocol, runtime_checkable
 
 from engine.kernel.duckdb_bars import Bar, load_universe_bars
 from engine.kernel.portfolio import PortfolioSnapshot
-from engine.kernel.stepper import KernelStepper, RunResult, StepEvent
+from engine.kernel.stepper import KernelStepper, RunResult, StepEvent, StepHandle
 from engine.live.safety_rails import SafetyRails
+
+
+# -- the two seams the ``bt`` façade hides (ADR-0025 D1) ----------------------
+#
+# ``bt`` is a (BarSource, ExecutionSeam) pair. The cell body is identical in both modes
+# (nautilus DNA: the strategy never branches on mode — the engine supplies data/exec). The
+# façade swaps the backing seams at construction:
+#
+#   Replay : BarSource = ExecutionSeam = ``KernelStepper`` (historical iterator + bar-close
+#            sim fills over one pre-loaded bar list).
+#   Auto   : BarSource = a venue-confirmed-bar queue (``open_next_bar`` blocks on the live
+#            rendezvous — D2 A-1 lock-step), ExecutionSeam = the live ``KernelLiveDriver`` ctx
+#            (intent queue → SafetyRails → broker → venue, portfolio/buying_power marshalled to
+#            the live loop — D2-R2). The live ``LiveCellBackend`` (S2) implements BOTH halves.
+#
+# Protocols (not ABCs) so a ``KernelStepper`` satisfies them structurally with no import back
+# into this module — the kernel stays façade-agnostic.
+
+
+@runtime_checkable
+class BarSource(Protocol):
+    """The bar-feed half of ``bt`` (ADR-0025 D1). Replay pulls the next historical bar
+    (auto-closing the previous); Auto blocks until the live consumer hands over a venue bar,
+    or the stop sentinel finalizes the stream (D5: empty queue ≠ StopIteration)."""
+
+    def open_next_bar(self) -> StepHandle: ...
+    def close_current_bar(self) -> None: ...
+    def finalize(self) -> RunResult: ...
+    def current_or_last_bar(self) -> Optional[Bar]: ...
+    def set_pacing(self, bars_per_second: Optional[float]) -> None: ...
+
+
+@runtime_checkable
+class ExecutionSeam(Protocol):
+    """The order/portfolio half of ``bt`` (ADR-0025 D1). Replay fills at bar close against the
+    sim broker and reads the kernel portfolio; Auto routes submits to the live ctx (R3: the
+    open bar's instrument) and marshals portfolio/buying_power reads to the live loop (R2)."""
+
+    def submit_market(self, qty: float) -> None: ...
+    def portfolio_snapshot(self) -> PortfolioSnapshot: ...
 
 
 class Backtester:
@@ -56,9 +94,17 @@ class Backtester:
     """
 
     def __init__(
-        self, stepper: KernelStepper, *, on_run_begin: Optional[Callable[[], None]] = None
+        self,
+        bar_source: BarSource,
+        *,
+        execution_seam: Optional[ExecutionSeam] = None,
+        on_run_begin: Optional[Callable[[], None]] = None,
     ) -> None:
-        self._stepper = stepper
+        # The two façade seams (ADR-0025 D1). In Replay one ``KernelStepper`` is BOTH; in Auto
+        # the ``LiveCellBackend`` is BOTH (it owns the rendezvous queue AND marshals exec) — so
+        # ``execution_seam`` defaults to ``bar_source``. The split keeps the seams nameable.
+        self._bars = bar_source
+        self._exec: ExecutionSeam = bar_source if execution_seam is None else execution_seam
         # Captured by replay() at stream start (immutable for the run — F6). None → full speed.
         self._bars_per_second: Optional[float] = None
         self._on_run_begin = on_run_begin
@@ -153,12 +199,12 @@ class Backtester:
         if not self._armed:  # cold-run / graph build: yield nothing, do not drive the engine
             return
         self._bars_per_second = bars_per_second
-        self._stepper.set_pacing(bars_per_second)
+        self._bars.set_pacing(bars_per_second)
         self._begin_run_once()
         while True:
-            handle = self._stepper.open_next_bar()
+            handle = self._bars.open_next_bar()
             if handle.event is not StepEvent.BAR_OPEN:
-                self._result = self._stepper.finalize()  # host reads bt.result to finalize summary
+                self._result = self._bars.finalize()  # host reads bt.result to finalize summary
                 return
             yield handle.bar
 
@@ -169,27 +215,29 @@ class Backtester:
         if not self._armed:  # cold-run / graph build: report no bar, do not drive the engine
             return None
         self._begin_run_once()
-        handle = self._stepper.open_next_bar()
+        handle = self._bars.open_next_bar()
         if handle.event is StepEvent.BAR_OPEN:
             return handle.bar
-        self._result = self._stepper.finalize()  # terminal reached: host finalizes the summary
+        self._result = self._bars.finalize()  # terminal reached: host finalizes the summary
         return None
 
     def bar(self) -> Optional[Bar]:
         """The current bar while one is open, else the last bar opened (``None`` before the
         first step)."""
-        return self._stepper.current_or_last_bar()
+        return self._bars.current_or_last_bar()
 
     def portfolio(self) -> PortfolioSnapshot:
         """A frozen snapshot for the current/last bar's instrument (aggregate before the first
         step). ``.position`` / ``.avg_price`` read the primary instrument; ``.positions`` is the
-        full multi-instrument book (#95 Q3)."""
-        return self._stepper.portfolio_snapshot()
+        full multi-instrument book (#95 Q3). In Auto this round-trips to the live loop so the
+        snapshot is built off the live portfolio without racing async fills (ADR-0025 D2-R2)."""
+        return self._exec.portfolio_snapshot()
 
     def submit_market(self, qty: float) -> None:
         """Submit a signed delta MARKET order to the OPEN bar's instrument. Raises ``ValueError``
-        outside an open bar (#95 Q3 a)."""
-        self._stepper.submit_market(qty)
+        outside an open bar (#95 Q3 a). In Auto the order is buffered worker-locally and flushed
+        to the live ctx at the bar boundary in one hop (ADR-0025 D2-R1/R3)."""
+        self._exec.submit_market(qty)
 
     # -- Phase 2 hook (idempotent, under-the-line public) ---------------------
 
@@ -197,7 +245,7 @@ class Backtester:
         """Close the currently-open bar without opening the next one. The Phase 2 per-cell-RUN
         ``finally`` calls this so a cell's submits settle (and Hakoniwa updates) before the user
         runs the next cell. Idempotent; safe to call when no bar is open (#95 Q2)."""
-        self._stepper.close_current_bar()
+        self._bars.close_current_bar()
 
 
 # #95 Phase 5 (#98 / findings 0074): guidance text the placeholder ``bt`` emits.

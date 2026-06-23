@@ -34,11 +34,15 @@ IID = "8918.TSE"
 DAY_NS = 86_400 * 1_000_000_000
 _NSID_PREFIX = "LIVE-"  # host issues "LIVE-{run_id[:8]}"
 
+# #112 ADR-0025 D4: the editor live path is marimo-forced, so the full-chain purity harness drives
+# the marimo-cell twins (through LiveCellBridge), not the imperative fixtures. Same deterministic
+# plan (BUY@3/SELL@40, and buy-once-and-rest), so the PASS assertions are unchanged. This also
+# proves the live CELL path stays Rust-core-free (the purity invariant) end-to-end.
 _TWIN_PATH = str(
-    Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_spike_buy_sell.py"
+    Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_spike_buy_sell_cell.py"
 )
 _REST_PATH = str(
-    Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_buy_and_rest.py"
+    Path(__file__).resolve().parents[1] / "fixtures" / "strategies" / "kernel_buy_once_cell.py"
 )
 
 

@@ -54,13 +54,13 @@ def test_pacing_captures_rate_at_stream_start() -> None:
     bt = _make_bt(_bars(_CLOSES), _Recorder())
     gen = bt.replay(bars_per_second=4)
     next(gen)
-    assert bt._stepper._bar_interval_sec == pytest.approx(0.25)
+    assert bt._bars._bar_interval_sec == pytest.approx(0.25)
 
 
 def test_pacing_full_speed_when_unspecified() -> None:
     bt = _make_bt(_bars(_CLOSES), _Recorder())
     list(bt.replay())  # no bars_per_second → full speed
-    assert bt._stepper._bar_interval_sec == 0.0
+    assert bt._bars._bar_interval_sec == 0.0
 
 
 def test_pacing_non_positive_rate_fails_closed() -> None:
@@ -254,4 +254,4 @@ def test_stop_event_set_mid_stream_halts_early() -> None:
     # The stream stops well before the end: after the 2nd bar settles, the next open_next_bar sees
     # the set event and returns STOPPED. We saw fewer than all bars.
     assert 0 < len(streamed) < len(bars)
-    assert bt._stepper.finalize().stopped_reason == "stopped"
+    assert bt._bars.finalize().stopped_reason == "stopped"

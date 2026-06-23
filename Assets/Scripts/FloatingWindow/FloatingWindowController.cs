@@ -553,6 +553,28 @@ public class FloatingWindowController
         return best;
     }
 
+    // ADR-0024 §4 / findings 0088 §5 (review fix): the OVERLAP target's island bounding box. The
+    // release-position rule snaps the moving island/window flush to the TARGET ISLAND's outer bbox — NOT
+    // the single frontmost member rect under the cursor (yRect), which could be an INTERNAL edge of a
+    // multi-window island (dropping onto it would land on an internal seam). Collect every visible/live
+    // window sharing Y's groupId; a real island (≥2) → the union bbox, a singleton-in-name (exactly 1 live
+    // member) → that member's FRESH rect (it IS Y, read from _windows rather than the captured yRect), and
+    // the null/empty-group or unreachable 0-member case → yRect itself (the member is the whole "island").
+    FloatingWindowMath.DockRect ResolveTargetIslandBbox(string yGroupId, FloatingWindowMath.DockRect yRect)
+    {
+        if (string.IsNullOrEmpty(yGroupId)) return yRect;
+        var rects = new List<FloatingWindowMath.DockRect>();
+        foreach (var kv in _windows)
+        {
+            if (kv.Value.groupId != yGroupId) continue;
+            var rt = kv.Value.rt;
+            if (rt == null || !rt.gameObject.activeInHierarchy) continue;
+            rects.Add(new FloatingWindowMath.DockRect(rt.anchoredPosition, rt.sizeDelta));
+        }
+        if (rects.Count < 2) return rects.Count == 1 ? rects[0] : yRect;   // 1 live member ⇒ that member's
+        return FloatingWindowMath.UnionBbox(rects);                        // FRESH rect (== Y); 0 ⇒ yRect fallback
+    }
+
     // ADR-0024 §4 / findings 0088 §4: the SINGLE production release entry — the universal
     // release-position commit. Called from FloatingWindowTitleInput.OnEndDrag with the dragged's
     // drag-start logical anchor (`dragStart`) and the running cursor (`cursor` = dragStart + accumulated
@@ -612,15 +634,18 @@ public class FloatingWindowController
     void CommitTranslate(string id, Vector2 offset)
     {
         var movingAtOffset = Shift(_drag.islandBbox, offset);
-        string yId = FindOverlapWindowAtCursor(_drag.dragStart + offset, out var yRect, out _);
+        string yId = FindOverlapWindowAtCursor(_drag.dragStart + offset, out var yRect, out var yGroup);
         if (yId != null)
         {
-            // Cursor over a non-island window → snap the island bbox to Y's nearest flush edge, then merge
-            // DIRECTLY with Y. The merge is driven by the release-position rule (cursor-over-Y intent),
-            // NOT by a member-level flush rescan: for a non-rectangular / mixed-size island the bbox edge
-            // that ends up flush to Y may belong to a member that does not itself y/x-overlap Y, so a flush
-            // rescan would miss it and silently fail to merge (review fix).
-            Vector2 appliedOffset = offset + FloatingWindowMath.ResolveNearestFlush(movingAtOffset, yRect);
+            // Cursor over a non-island window → snap the moving island bbox flush to the TARGET ISLAND's
+            // OUTER bbox (not yRect — the single frontmost member under the cursor, which could be an
+            // internal edge of a multi-window target island), then merge DIRECTLY with Y. The merge is
+            // driven by the release-position rule (cursor-over-Y intent), NOT by a member-level flush
+            // rescan: for a non-rectangular / mixed-size island the bbox edge that ends up flush to Y may
+            // belong to a member that does not itself y/x-overlap Y, so a flush rescan would miss it and
+            // silently fail to merge (review fix).
+            var targetBbox = ResolveTargetIslandBbox(yGroup, yRect);
+            Vector2 appliedOffset = offset + FloatingWindowMath.ResolveNearestFlush(movingAtOffset, targetBbox);
             ApplyIslandOffsetWithSpring(appliedOffset);
             CommitMergeWithTarget(id, yId);
         }
@@ -647,9 +672,9 @@ public class FloatingWindowController
         var aRest = _drag.restRects.TryGetValue(id, out var r) ? r
                     : new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);
         var aAtOffset = Shift(aRest, offset);
-        string yId = FindOverlapWindowAtCursor(cursor, out var yRect, out _);
+        string yId = FindOverlapWindowAtCursor(cursor, out var yRect, out var yGroup);
         Vector2 appliedOffset = yId != null
-            ? offset + FloatingWindowMath.ResolveNearestFlush(aAtOffset, yRect)
+            ? offset + FloatingWindowMath.ResolveNearestFlush(aAtOffset, ResolveTargetIslandBbox(yGroup, yRect))
             : offset + FloatingWindowMath.ComputeMagneticSnap(aAtOffset, _drag.nonIslandRects, FloatingWindowMath.R_SNAP_PX);
 
         var from = new FloatingWindowMath.DockRect(dragged.rt.anchoredPosition, dragged.rt.sizeDelta);

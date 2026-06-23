@@ -223,6 +223,25 @@ public static class FloatingWindowMath
         if (a < bestAbs) { best = candidate; bestAbs = a; }        // strict < ⇒ earlier (x) wins ties
     }
 
+    // ADR-0024 §4 / findings 0088 §5 (review fix): the union bounding box of a set of rects — the OUTER
+    // 4 edges of an island. Used at overlap commit to snap the moving island/window flush to the TARGET
+    // ISLAND's outer bbox (not the single member rect under the cursor). Null/empty → default (zero) rect.
+    public static DockRect UnionBbox(IList<DockRect> rects)
+    {
+        if (rects == null || rects.Count == 0) return default;
+        float left = float.PositiveInfinity, top = float.NegativeInfinity;
+        float right = float.NegativeInfinity, bottom = float.PositiveInfinity;
+        for (int i = 0; i < rects.Count; i++)
+        {
+            DockRect r = rects[i];
+            if (r.Left < left) left = r.Left;
+            if (r.Right > right) right = r.Right;
+            if (r.Top > top) top = r.Top;
+            if (r.Bottom < bottom) bottom = r.Bottom;
+        }
+        return new DockRect(new Vector2(left, top), new Vector2(right - left, top - bottom));
+    }
+
     // ADR-0024 §3 / findings 0088 §3: the pure ease-out-back curve for the spring "プルン". e(0)=0,
     // e(1)=1, single overshoot peaking at 1 + SPRING_OVERSHOOT_RATIO (8%) at t = 0.6, then settling.
     // t is clamped to [0,1]. This is the AFK-authoritative animation shape (DRAG-10 pins the overshoot

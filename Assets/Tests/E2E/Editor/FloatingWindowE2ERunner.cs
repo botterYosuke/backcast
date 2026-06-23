@@ -2299,6 +2299,29 @@ public static class FloatingWindowE2ERunner
         if (mode5 != FloatingWindowMath.DragMode.Translate) return $"S37e: expected Translate (got {mode5})";
         if (c5.GroupIdOf("Y") != GE) return $"S37e: cursor-over-Y multi-member merge missed (got {c5.GroupIdOf("Y")})";
         if (c5.GroupIdOf("A") != GE || c5.GroupIdOf("B") != GE) return "S37e: island lost its id on overlap merge";
+
+        // (f) OVERLAP snap target is the TARGET ISLAND's OUTER bbox, NOT the single frontmost member rect
+        //     under the cursor (yRect). Cursor over the BOTTOM member Y2 of a 2-member vertical island:
+        //     snapping flush to Y2's own edge would land A on the INTERNAL seam (y∈[-180,0] = on top of
+        //     Y1), a wrong placement; the commit must snap to the island's outer bbox (flush ABOVE the
+        //     outer top edge). Review fix (FindOverlapWindowAtCursor returns yRect of one member only).
+        BuildCanvasStack(spawned, out _, out _, out RectTransform layer6, out _);
+        var c6 = MakeController(spawned, layer6);
+        c6.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",  0,   0,    280, 180, true);   // dragged singleton, rest (0,0)
+        c6.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Y1", 200, 0,    280, 180, true);   // island TOP    y[-180,0]
+        c6.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y2", 200, -180, 280, 180, true);   // island BOTTOM y[-360,-180]
+        const string GF = "grp_ffffffffffffffffffffffffffffffff";
+        c6.SetGroupId("Y1", GF); c6.SetGroupId("Y2", GF);   // island bbox = x[200,480] y[-360,0]
+        // dragStart (100,-110), cursor (300,-200) over Y2; offset (200,-90), |offset|≈219 < 256 ⇒ Translate.
+        // A_shifted bbox x[200,480] y[-270,-90]. Nearest flush to Y2's edge = +90 (A.bottom→Y2.top=-180 ⇒
+        // A lands y[-180,0] = the Y1 seam, WRONG). Nearest flush to the island bbox = +270 (A.bottom→bbox.top=0
+        // ⇒ A lands y[0,180], flush ABOVE the outer top edge, CORRECT). anchoredPosition must be (200,180).
+        var mode6 = c6.ReleaseDrag("A", new Vector2(100f, -110f), new Vector2(300f, -200f));
+        if (mode6 != FloatingWindowMath.DragMode.Translate) return $"S37f: expected Translate (got {mode6})";
+        if (!Approx2(c6.RectOf("A").anchoredPosition, new Vector2(200f, 180f)))
+            return $"S37f: snapped to internal member edge, not the island outer bbox (got {c6.RectOf("A").anchoredPosition}, want (200,180))";
+        if (c6.GroupIdOf("A") != GF) return $"S37f: A did not merge into the target island (got {c6.GroupIdOf("A")})";
+        if (c6.GroupIdOf("Y1") != GF || c6.GroupIdOf("Y2") != GF) return "S37f: Y island lost its id on merge";
         return null;
     }
 

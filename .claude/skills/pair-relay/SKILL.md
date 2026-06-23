@@ -164,6 +164,8 @@ format / restore の判断も Navigator に任せます。
 
 ⚠️ **codex（CLAUDE.md 指定のセカンドオピニオン）が usage limit / 未インストールで回せないときは、`Explore` read-only レビュー Agent がそのまま正規の代替**となり、レビュー＆修正ループは完結させてよい（codex 不在を理由にループを止めない）。完了報告に「codex は usage limit のため Explore で代替」と明記する。実例（#209、2026-06）: `codex exec` が `You've hit your usage limit` で失敗 → 観点別（削除振る舞い+cross-file / cleanup）の `Explore` 2本でレビューし、Medium 1件（コメント精度）を検出・修正して完了。codex 1本より観点分割した Explore 複数本のほうが recall は高い。
 
+⚠️ **codex が使えても、Medium+ 収束の最終ラウンドは codex ＋ 独立 Explore を併走させて recall を上げる**（codex を fallback でなく second-opinion として常設する）。codex の「No Medium+」だけで緑を確定しない —— 観点の違う Explore が codex の見落としを拾うことがある。実例（#108-111 ADR-0024、2026-06-23）: overlap-commit High 修正後の Round 2 で codex は「No Medium+」と clean を返したが、並走させた Explore（座標規約・順序 edge-case 観点）が Medium 1件（`ResolveTargetIslandBbox` の stale-yRect fallback）を提起。司令塔は判定せず Navigator に verbatim で運び、Navigator が「production では yRect==rects[0] で vacuous（実装は正）」と切り分けたうえで zero-risk cleanup を入れて board からも消した。codex clean = ループ終了、ではない。
+
 ## 完了報告（司令塔 → Human）
 
 完了時、司令塔Agentは事実を短く並べます。

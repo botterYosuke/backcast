@@ -295,3 +295,8 @@ issue #108–111（S1–S4）を 1 セッションで連続実装（owner all-in
 7. **`RectSpringDriver.Update` の毎フレーム List 確保**（efficiency）: `new List(_tweens.Keys)` を毎フレーム確保（自身のコメントの「allocates nothing」と矛盾）。**修正**: 再利用 `_keys` バッファ化。
 
 再走: 第2ラウンド 4 件修正後も AFK GREEN（exit 0・error CS 0・変更ファイル warning 0）。S37e / S39d 追加で回帰網拡張。
+
+**code-review(high) 第3ラウンド 修正履歴**（1 件・2026-06-23）:
+8. **overlap snap が target island の単一 member 辺へ寄る**（CONFIRMED・High）: `CommitTranslate`/`CommitDetach` の overlap 経路は `ResolveNearestFlush(moving, yRect)` に `FindOverlapWindowAtCursor` が返す **cursor 直下の frontmost 単一 member rect**（`yRect`）を渡していた。正本（§4 / 本 findings の `resolveNearestFlush(I₁.bbox + offset, Y.bbox)` / `resolveNearestFlush(A.rect, Y.bbox)`）は **target island の外側 bbox**（`Y.bbox`）が flush 基準。多窓 island に drop すると island 内部の member 辺（内部シーム）へ snap し、`CommitMergeWithTarget` が membership を正しく結合しても最終位置だけが内部 member に重なる誤配置になる。**修正**: `FindOverlapWindowAtCursor` の `out groupId`（従来 call site では `out _` で破棄）を受け、`ResolveTargetIslandBbox(yGroup, yRect)` で Y の groupId を共有する visible/live 全窓の union bbox（≥2 で island bbox・singleton/null は yRect へ fallback）を求めて `ResolveNearestFlush` に渡す。union 計算は純関数 `FloatingWindowMath.UnionBbox(IList<DockRect>)` へ分離（テスト可能な純幾何）。**S37f** で検証（2 member 縦 island の下段 Y2 上で drop → 内部シーム y[-180,0] ではなく外側 bbox 上端へ flush。RED: got (200,0) → GREEN: anchoredPosition (200,180)）。
+
+再走: 第3ラウンド 1 件修正後も AFK GREEN（exit 0・error CS 0）。S37f 追加で回帰網拡張。

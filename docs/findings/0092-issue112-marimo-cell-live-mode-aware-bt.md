@@ -1,4 +1,4 @@
-# findings 0090 — #112 marimo cell を Replay/Auto 両駆動（mode-aware `bt` façade・A-1 ランデブー・granularity 配線）
+# findings 0092 — #112 marimo cell を Replay/Auto 両駆動（mode-aware `bt` façade・A-1 ランデブー・granularity 配線）
 
 方針: [ADR-0025](../adr/0025-marimo-cell-drives-both-replay-and-live-mode-aware-bt.md)（marimo 戦略 cell を Replay と Auto の両方で駆動する）。
 関連: ADR-0016（notebook = backtest・per-cell RUN）／ADR-0012（marimo embed 実行モデル）／ADR-0021（単一 venue 実行時再バインド）／findings 0026（footer LiveAuto）／findings 0046（thin_drain）／findings 0073（Phase 4 `bt.replay()`）。

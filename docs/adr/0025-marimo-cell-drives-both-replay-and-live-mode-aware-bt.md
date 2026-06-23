@@ -5,7 +5,7 @@ status: accepted
 # marimo 戦略 cell を Replay と Auto(LiveAuto) の両方で駆動する（mode-aware `bt` façade・per-cell RUN 一本化）
 
 `/grill-with-docs`（2026-06-23・#112・owner HITL Q1–Q6）で導出。設計正本: 本 ADR ＋
-[findings 0090](../findings/0090-issue112-marimo-cell-live-mode-aware-bt.md)。ADR-0016 / ADR-0012 /
+[findings 0092](../findings/0092-issue112-marimo-cell-live-mode-aware-bt.md)。ADR-0016 / ADR-0012 /
 ADR-0021 / ADR-0006 / ADR-0007 は別 decision の固定 oracle として（本 ADR が明示拡張する範囲を除き）踏襲し編集しない。
 
 > **実装状態**: 本 ADR は #112 で **accepted**（decision 確定）。実 cell-facing 配線（mode-aware `bt`・
@@ -95,7 +95,7 @@ nautilus skill が明示警告する罠（live-loop self-deadlock）を契約化
 
 **なぜ ADR か**: 現状 granularity は live 経路で一度も参照されず（`python/engine/live/` に "granularity" の語が無い）、`v19` が `"Minute"` だから 60s と**偶然一致して動くだけ**＝parity が wired ではなく accidental。`"Daily"` cell を Auto にすると黙って 1 分足で駆動＝**silently wrong**（#112 が殺すべきバグの同類）。本 ADR で「granularity は両モードで同一 source of truth から駆動」を不変条件に格上げする。**却下＝最小（60s 固定・granularity != Minute なら明示エラー）**: v19 出荷には足りるが issue の telos「どの cell もシームレス」に反する（owner「理想的な完成形」）。
 
-下位機構（per-run aggregator 供給 vs multi-interval 集約＋`KlineUpdate` に `interval_ns` タグ追加して driver が filter）は findings 0090 で pin する。
+下位機構（per-run aggregator 供給 vs multi-interval 集約＋`KlineUpdate` に `interval_ns` タグ追加して driver が filter）は findings 0092 で pin する。
 
 ## Considered Options
 
@@ -119,11 +119,11 @@ nautilus skill が明示警告する罠（live-loop self-deadlock）を契約化
 - **新規 live bridge** が landing する: `LiveCellBridge`（cell ループを worker thread で回し rendezvous で live driver に結線）＋ mode-aware `bt`（Replay/Auto で BarSource/ExecutionSeam を切替）。`Backtester` は thin/marimo-free を保つ（lazy-import 規律・ADR-0012 §4）。
 - **`KernelLiveDriver._consume` に外科的フック**: strategy が bridge（async `drive_bar`）なら `await drive_bar(bar)` → `_drain()`。普通の Strategy は sync `on_bar` → drain で**無改変**＝命令型 parity oracle 無傷。
 - **mode-aware `run_cell`**: Auto + 接続済みで live bt 注入＋engine の live driver を下に register→start→attach（bridge 構築）。per-cell RUN と footer ▶ が 1 本に合流。
-- **footer ▶ 退役**: `LiveAutoTransportViewModel` の起動役を撤去（mode セグメントは存続）。findings 0026 の起動/pause/resume の責務は per-cell ▶→■（stop）へ移送、pause/resume の処遇は findings 0090 で決定。
+- **footer ▶ 退役**: `LiveAutoTransportViewModel` の起動役を撤去（mode セグメントは存続）。findings 0026 の起動/pause/resume の責務は per-cell ▶→■（stop）へ移送、pause/resume の処遇は findings 0092 で決定。
 - **granularity 配線**: `live_orchestrator.py:233` の 60s ハードコードを scenario 由来 interval へ。任意粒度 cell が Replay↔Auto で parity。
 - **parity oracle 戦略**: `v19_morning.py`（命令型）＋`test_v19_auto_live_afk.py` を **退役させず**、cell live 経路が「`v19_morning.py` を Auto で回したのと同一の発注/約定列」を緑にしてから、最後に `v19_morning.py` の退役を判断する（issue の「もう消した」前提のまま進めると唯一の正解定義を失う）。
-- **下位の実装事実**（bridge の正確な class／driver フックの seam／rendezvous queue・完了 future の機構／granularity→interval 供給機構／C# per-cell RUN mode 配線／footer ▶ 退役の cutover／error_code）は本 ADR に書き戻さず **findings 0090** に記録し本 ADR を「方針: ADR-0025」として参照する。
+- **下位の実装事実**（bridge の正確な class／driver フックの seam／rendezvous queue・完了 future の機構／granularity→interval 供給機構／C# per-cell RUN mode 配線／footer ▶ 退役の cutover／error_code）は本 ADR に書き戻さず **findings 0092** に記録し本 ADR を「方針: ADR-0025」として参照する。
 
 ## 自己保護
 
-本 ADR の decision は固定。覆す場合はこのファイルを編集せず、**本 ADR を supersede する新規 ADR** を起こす。ADR-0016 / ADR-0012 / ADR-0021 / ADR-0006 / ADR-0007 / findings 0026 は別 decision の固定 oracle として踏襲し編集しない。下位の実装事実は findings 0090 に記録し本 ADR を「方針: ADR-0025」として参照する。（注: 本 ADR は #112 設計時に 0024 と採番されたが、#108-111 の puzzle-feel-drag ADR-0024 と番号衝突したため、実装着手時（#112）に **ADR-0025** へ採番し直した＝decision 内容は無改変・番号衝突の文書修正のみ。）
+本 ADR の decision は固定。覆す場合はこのファイルを編集せず、**本 ADR を supersede する新規 ADR** を起こす。ADR-0016 / ADR-0012 / ADR-0021 / ADR-0006 / ADR-0007 / findings 0026 は別 decision の固定 oracle として踏襲し編集しない。下位の実装事実は findings 0092 に記録し本 ADR を「方針: ADR-0025」として参照する。（注: 本 ADR は #112 設計時に 0024 と採番されたが、#108-111 の puzzle-feel-drag ADR-0024 と番号衝突したため、実装着手時（#112）に **ADR-0025** へ採番し直した＝decision 内容は無改変・番号衝突の文書修正のみ。）

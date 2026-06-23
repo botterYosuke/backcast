@@ -134,7 +134,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     FloatingWindowController _dockWindows;
     // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating window + ChartView per universe
     // instrument (id "chart:<id>"), membership-synced from _scenario.Universe via InstrumentRegistry.Changed.
-    // Replaces the #60 Hakoniwa chart tile family. #114 (findings 0089): SyncChartWindowsToUniverse now
+    // Replaces the #60 Hakoniwa chart tile family. #114 (findings 0091): SyncChartWindowsToUniverse now
     // grid-allocates each chart's position via ChartGridPlacement.AllocateNonOverlappingTopLefts and spawns
     // via SpawnChartWindowAt → `_dockWindows.Spawn(KIND_CHART, …)`; the per-iid SpawnDockedToFocus cascade
     // that scattered new charts down-right was the cause of the v19_morning_cell staircase.
@@ -955,14 +955,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         foreach (var iid in _chartViews.Keys) if (!desired.Contains(iid)) stale.Add(iid);
         foreach (var iid in stale) DespawnChartWindow(iid);
 
-        // Spawn the missing ones. #114 / findings 0089 F1+F2: the per-iid SpawnDockedToFocus cascade
+        // Spawn the missing ones. #114 / findings 0091 F1+F2: the per-iid SpawnDockedToFocus cascade
         // was replaced with a grid-allocated placement — focus-snap chained each new chart flush to
         // the prior one (whose focus the spawn stole), scattering the cluster down-right into a
         // staircase as the universe grew. Now we collect the unsaved set, compute its avoid set (every
         // chart already placed by RestoreFloating + the 5 base dock windows on the same plane), and
         // ask ChartGridPlacement for the next non-overlapping slot per missing iid. gridCols is
         // ceil(√universeTotal) so an incremental call (missing.Count == 1) still lands in the right
-        // column instead of column 0 (findings 0089 F4 sub-decision 1).
+        // column instead of column 0 (findings 0091 F4 sub-decision 1).
         var missing = new List<string>();
         for (int i = 0; i < ids.Count; i++)
         {
@@ -990,7 +990,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // previously-grid-placed). We filter by `DockShape.IsDockKind(w.kind) && w.kind != KIND_CHART`
     // rather than the base-id set, so a hand-edited sidecar that renames a base id (or any future
     // multi-instance base kind) still contributes its rect — the kind-based filter does not depend on
-    // the `Spawn(id, id, ...)` id-equals-kind invariant. findings 0089 F4 sub-decision 3 (avoid 中身):
+    // the `Spawn(id, id, ...)` id-equals-kind invariant. findings 0091 F4 sub-decision 3 (avoid 中身):
     // order ticket (front plane / _windows) is NOT included — z-stacking lets it sit over a chart
     // harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas top-left (y up-
     // positive) maps to Rect's yMin = bottom edge.

@@ -1,4 +1,6 @@
-# 0089 — issue #114: chart grid placement & cascade kill (grill design tree)
+# 0091 — issue #114: chart grid placement & cascade kill (grill design tree)
+
+> **Numbering note (2026-06-23 post-rebase)**: originally authored as 0089; renumbered to 0091 on rebase onto origin/main since 0089/0090 were claimed by the v19 marimo replay finding pair (#112). All in-text references to `findings 0089` have been updated to `findings 0091` across the runner, helper, and BackcastWorkspaceRoot.cs.
 
 **Status**: GRILL CLOSED — design tree fixed, implementation order S0 → S1 → S2 → S3.
 **Scope**: supersedes issue #114 本文 S1/S2/S3。owner reorg の P1–P15 + S1/S2/S3 を正本。

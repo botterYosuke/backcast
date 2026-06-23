@@ -2,7 +2,7 @@
 
 `ChartPlacementJourneyE2ERunner.cs` が自動検証する **issue #114 (chart grid placement & cascade kill)**
 の Journey E2E 台本。実装者は `.cs` と本 `.md` をセットで読む。設計の木の正本は
-[`docs/findings/0089-issue114-chart-grid-placement-and-cascade-kill.md`](../../../../docs/findings/0089-issue114-chart-grid-placement-and-cascade-kill.md)
+[`docs/findings/0091-issue114-chart-grid-placement-and-cascade-kill.md`](../../../../docs/findings/0091-issue114-chart-grid-placement-and-cascade-kill.md)
 （F0–F6 + 3 note）。Action ID 採番・カバー状態の語彙・責務境界の共通規約は
 [E2E-CONVENTIONS.md](./E2E-CONVENTIONS.md)（命名・配置の上位規約は
 [ADR-0015](../../../../docs/adr/0015-e2e-runner-layout-and-script-convention.md)）。
@@ -19,7 +19,7 @@
 > **戦略 .json を File→Open したとき、saved 位置のある chart は saved 通り honor、saved 位置の無い chart は
 > base cluster 下方の non-overlapping grid に整列し、cascade staircase を作らない。**
 
-15 pattern (P1–P15) の expectation matrix と判断の根拠は findings 0089 に固定。本台本は 19 probe の操作一覧表。
+15 pattern (P1–P15) の expectation matrix と判断の根拠は findings 0091 に固定。本台本は 19 probe の操作一覧表。
 
 ## アーキテクチャ前提
 
@@ -31,9 +31,9 @@
 - 本 issue 修正前は (b) が 1 個ずつ `SpawnDockedToFocus` で focus snap → cascade staircase。修正後は
   `ChartGridPlacement.AllocateNonOverlappingTopLefts(1, ceil(√universe.Count), …)` で 1 件ずつ次スロットへ。
 - pure helper `ChartGridPlacement`（新規 `Assets/Scripts/FloatingWindow/ChartGridPlacement.cs`）は canvas-LOGICAL
-  座標で grid セルを返す。viewport を一切知らない（findings 0089 F6 の β: canvas-bound clamp 採用、viewport 無依存）。
+  座標で grid セルを返す。viewport を一切知らない（findings 0091 F6 の β: canvas-bound clamp 採用、viewport 無依存）。
 - legacy sidecar の `panels` / `hakoniwaProfiles` は ADR-0017 § 6 / `ApplyLayout` docstring (L2083) で IGNORE 既定。
-  read 側 promote は しない (findings 0089 F3-P12)。write 側は `CaptureLayout` (L2055) が常に `panels = []` を書く。
+  read 側 promote は しない (findings 0091 F3-P12)。write 側は `CaptureLayout` (L2055) が常に `panels = []` を書く。
 - Python-FREE（chart placement は kernel / market data を要さない）。`FakeMarimoSynthesizer` で `BuildWorkspace`。
 
 ## 操作一覧表（網羅台帳）
@@ -53,7 +53,7 @@
 | CP-S2-02a | legacy open → Save → reread で `panels=[]` | `OnFileOpen` → `OnFileSave` → `LayoutSidecarStore.TryReadLayout` | 次 Save で legacy panels は物理 0 件化（migration 完了の唯一 signal） | reread した doc.panels.Count == 0、doc.floatingWindows.Count == 52 (grid 配置の chart 群) | 要新規自動化(S2 slice) | — |
 | CP-S2-02b | legacy open → drag 1 件 → Save → reread で `floatingWindows` に drag 後 saved x/y | `RectOf(id)`/`MoveByLogical` → `OnFileSave` | drag した chart の x/y が persist | reread doc.FindWindow(draggedId) の x/y ≈ drag 後座標 | 要新規自動化(S2 slice) | — |
 | CP-S3-01 (**P8**) | corrupted JSON (truncated) → `.bak` 退避 + grid fallback | `LayoutSidecarStore.TryReadLayout` (false) → ApplyLayout skip → `SyncChartWindowsToUniverse` で grid | `.bak` 生成、起動 non-blocking、universe 5 chart は grid 配置 | `File.Exists(path + ".bak")` && live chart 5 件 grid、`Exit(0)` 経路 | 要新規自動化(S3 slice) | — |
-| CP-S3-02 (**P11**) | ghost symbol (saved に居て universe 不在) → spawn 0、`CaptureLayout` で entry 保持 | `RestoreFloating` (universe-membership filter) + `CaptureLayout` (ghost retention) | spawn skip、capture で entry 出現 (TTL 無し永遠保持・findings 0089 F3-P11) | live `_dockWindows.Has(ghostId)` == false、`CaptureLayout().FindWindow(ghostId)` != null | 要新規自動化(S3 slice) | — |
+| CP-S3-02 (**P11**) | ghost symbol (saved に居て universe 不在) → spawn 0、`CaptureLayout` で entry 保持 | `RestoreFloating` (universe-membership filter) + `CaptureLayout` (ghost retention) | spawn skip、capture で entry 出現 (TTL 無し永遠保持・findings 0091 F3-P11) | live `_dockWindows.Has(ghostId)` == false、`CaptureLayout().FindWindow(ghostId)` != null | 要新規自動化(S3 slice) | — |
 | CP-S3-03 (**P14**) | 同 iid x 2 entry → 先頭採用、`CaptureLayout` で de-dup | `RestoreFloating` 重複 guard + `CaptureLayout` de-dup | 2 件目以降は spawn 試行で no-op、capture は 1 件 | live `_dockWindows.Has(id)` == true、`CaptureLayout().floatingWindows` 内同 id 1 件のみ | 要新規自動化(S3 slice) | — |
 | CP-S3-04 (**P15**) | viewport 極小 (canvas zoom-out 状態) → grid は canvas で計算、runaway scroll 不発 | `ChartGridPlacement` (viewport 不参照) + `SyncChartWindowsToUniverse` | grid 配置は canvas-LOGICAL 座標で deterministic、viewport 値に依存しない | viewport (`canvasView.zoom`) を 0.1 にして再計算しても chart の anchoredPosition は変わらず | 要新規自動化(S3 slice) | — |
 | CP-S4-01 (**P1**) | no sidecar (`.py` のみ) → grid placement | `OnFileOpen` (layoutOk=false → ApplyLayout skip) → `SyncChartWindowsToUniverse` grid | 全 chart が grid、ペア 0 overlap | 同 CP-S2-01 と同型 | 要新規自動化(S4 slice) | — |
@@ -80,7 +80,7 @@
 - **実 EventSystem 経由の drag/click**（title bar drag の screen→canvas 論理 delta）。本 Runner は controller API
   (`_dockWindows.ApplyGeometry` / `MoveByLogical` / `RectOf`) を直接駆動 → **HITL専用**。
 - **実 monitor 解像度差** での viewport-relative clamp（F6 α）。canvas-relative β 採用のため probe では不要 →
-  **対象外**（findings 0089 F6 で α 棄却）。
+  **対象外**（findings 0091 F6 で α 棄却）。
 
 ## RED→GREEN litmus (vacuity kill)
 

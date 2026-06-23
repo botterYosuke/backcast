@@ -1,5 +1,5 @@
 // ChartPlacementJourneyE2ERunner.cs — Journey E2E regression gate for issue #114 (台本:
-// same-dir ChartPlacementJourneyE2ERunner.md, design tree: docs/findings/0089).
+// same-dir ChartPlacementJourneyE2ERunner.md, design tree: docs/findings/0091).
 // Replaces the SyncChartWindowsToUniverse focus-snap cascade with a non-overlapping grid;
 // honors saved chart positions; tolerates legacy / corrupted / ghost-symbol / collision sidecars.
 //
@@ -8,7 +8,7 @@
 //   # expect: [E2E CHART PLACEMENT JOURNEY PASS] ... / exit=0  (確認は Bash `grep -a "E2E CHART PLACEMENT"`)
 //   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。
 //
-// SECTIONS (findings 0089 F5):
+// SECTIONS (findings 0091 F5):
 //   S0 — pure helper unit (ChartGridPlacement: ComputeFlushSlots / AllocateNonOverlappingTopLefts)
 //   S1 — saved-honor (P3 full / P4 partial / P9 off-screen clamp / P10 collision / P13 invalid w/h)
 //   S2 — legacy migration + cascade kill (P2 v19-shaped legacy → grid; P12 migration cycle 2-stage)
@@ -53,7 +53,7 @@ public static class ChartPlacementJourneyE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E CHART PLACEMENT JOURNEY PASS] core slice GREEN (S0 4/4 + S1 2/5 P3+P4 + S2 3/3 P2+P12a+P12b + S3 1/4 P15 + S4 2/4 P1+P5+P6+P7-via-P1). Deferred (findings 0089 §S1/S3-deferred): P9 clamp / P10 de-collide / P11 ghost / P13 invalid w/h / P14 dedup / P8 corrupted .bak. issue #114.");
+            Debug.Log("[E2E CHART PLACEMENT JOURNEY PASS] core slice GREEN (S0 4/4 + S1 2/5 P3+P4 + S2 3/3 P2+P12a+P12b + S3 1/4 P15 + S4 2/4 P1+P5+P6+P7-via-P1). Deferred (findings 0091 §S1/S3-deferred): P9 clamp / P10 de-collide / P11 ghost / P13 invalid w/h / P14 dedup / P8 corrupted .bak. issue #114.");
             EditorApplication.Exit(0);
         }
         else
@@ -109,7 +109,7 @@ public static class ChartPlacementJourneyE2ERunner
         if (!Approx2(s52[8].topLeft, s52_expected_8))
             return "CP-S0-01: n=52 slot 8 must wrap to (col=0,row=1)=" + s52_expected_8 + " (got " + s52[8].topLeft + ")";
         // sanity bound from F4: rightmost x at cols=8 is col=7 -> anchor.x + 7*(520+12) = -600 + 3724 = +3124.
-        // (findings 0089 F5 CP-S4-03 cites this same sanity bound.)
+        // (findings 0091 F5 CP-S4-03 cites this same sanity bound.)
         if (s52[7].topLeft.x > 3125f)
             return "CP-S0-01: n=52 rightmost x exceeded sanity bound 3124 (got " + s52[7].topLeft.x + ")";
 
@@ -164,7 +164,7 @@ public static class ChartPlacementJourneyE2ERunner
     // =====================================================================================================
     // Section1 — saved-honor (P3 full / P4 partial). Edge cases P9/P10/P13 are addressed in a follow-up
     // production slice (RestoreFloating pre-pass for clamp / de-collide / invalid w/h) — captured in
-    // findings 0089 F5 row CP-S1-03..05, currently STUB.
+    // findings 0091 F5 row CP-S1-03..05, currently STUB.
     // =====================================================================================================
     static string Section1_SavedHonor()
     {
@@ -320,7 +320,7 @@ public static class ChartPlacementJourneyE2ERunner
                 var s = rt.sizeDelta;
                 rects.Add(new Rect(p.x, p.y - s.y, s.x, s.y));
             }
-            // sanity bound (findings 0089 F5 CP-S4-03 / S0-01 same value): rightmost col=7, max x = -600 + 7*532 = +3124.
+            // sanity bound (findings 0091 F5 CP-S4-03 / S0-01 same value): rightmost col=7, max x = -600 + 7*532 = +3124.
             for (int i = 0; i < rects.Count; i++)
                 if (rects[i].xMin > 3125f)
                     return "CP-S2-01: chart " + iids52[i] + " x=" + rects[i].xMin + " exceeded sanity bound 3124 (cascade not killed)";
@@ -332,7 +332,7 @@ public static class ChartPlacementJourneyE2ERunner
         }
 
         // ── CP-S2-02a: legacy open → Save → reread → panels=[] (migration to modern schema completes
-        //    on the next Save, the only signal). findings 0089 F3-P12 / F5 CP-S2-02. ──
+        //    on the next Save, the only signal). findings 0091 F3-P12 / F5 CP-S2-02. ──
         {
             var root = ComposeRoot(out var ty);
             if (root == null) return "CP-S2-02a: root missing";
@@ -409,7 +409,7 @@ public static class ChartPlacementJourneyE2ERunner
     // Section3 — resilience (P8 / P11 / P14 / P15). P15 is here (viewport-independent — no production
     // change needed since the helper takes no viewport input). P8 (corrupted .bak) / P11 (ghost
     // retention) / P14 (dedup) are STUB pending the follow-up RestoreFloating-pre-pass + LayoutSidecarStore
-    // .bak slice; captured in findings 0089 §S3-deferred.
+    // .bak slice; captured in findings 0091 §S3-deferred.
     // =====================================================================================================
     static string Section3_Resilience()
     {
@@ -584,7 +584,7 @@ public static class ChartPlacementJourneyE2ERunner
 
     // Build a legacy-shaped layout doc: chart entries live in `panels` (dead schema) with normalized
     // rects, NOT in `floatingWindows`. This mirrors the v19_morning_cell.json shape captured in
-    // findings 0089 F0 — ApplyLayout's L2083 docstring confirms these panels are IGNORED, so the
+    // findings 0091 F0 — ApplyLayout's L2083 docstring confirms these panels are IGNORED, so the
     // chart family must come through Sync's grid path on Open.
     static void WriteLayoutWithLegacyPanels(string py, IList<string> iids)
     {

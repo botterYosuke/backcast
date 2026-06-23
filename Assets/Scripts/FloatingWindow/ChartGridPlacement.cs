@@ -1,4 +1,4 @@
-// ChartGridPlacement.cs — issue #114 (findings 0089 F4): pure helper for placing chart windows
+// ChartGridPlacement.cs — issue #114 (findings 0091 F4): pure helper for placing chart windows
 // when they have NO saved x/y. Replaces the SyncChartWindowsToUniverse focus-snap cascade
 // (BackcastWorkspaceRoot.cs:937-942) that scattered chart windows down-right into a staircase as
 // the universe grew.

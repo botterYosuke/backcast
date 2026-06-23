@@ -123,6 +123,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     NotebookCellCoordinator _coordinator;
     FloatingWindowCatalog _catalog;
     Vector2 _cellWindowSize = new Vector2(520f, 380f);   // resolved from the strategy_editor spec at build
+    Vector2 _chartWindowSize = new Vector2(520f, 360f);  // resolved from the chart spec at build (#114 grid)
 
     // ── built widgets ──
     InfiniteCanvasController _canvas;
@@ -133,8 +134,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     FloatingWindowController _dockWindows;
     // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating window + ChartView per universe
     // instrument (id "chart:<id>"), membership-synced from _scenario.Universe via InstrumentRegistry.Changed.
-    // Replaces the #60 Hakoniwa chart tile family — `_dockWindows.SpawnDockedToFocus(KIND_CHART, …)` (#103:
-    // the back plane) is the ONLY chart spawn path. _chartRendered dedups the per-id render by series length.
+    // Replaces the #60 Hakoniwa chart tile family. #114 (findings 0089): SyncChartWindowsToUniverse now
+    // grid-allocates each chart's position via ChartGridPlacement.AllocateNonOverlappingTopLefts and spawns
+    // via SpawnChartWindowAt → `_dockWindows.Spawn(KIND_CHART, …)`; the per-iid SpawnDockedToFocus cascade
+    // that scattered new charts down-right was the cause of the v19_morning_cell staircase.
+    // _chartRendered dedups the per-id render by series length.
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
     // #57 → #99: each chart WINDOW's body is split into a mode-resized chartArea (left) + a
@@ -371,6 +375,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _windows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
         _dockWindows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
+        if (_catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out var chartSpec)) _chartWindowSize = chartSpec.defaultSize;
 
         // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
         // floating windows on the same layer as the strategy editor + order ticket; the magnet-snap
@@ -950,33 +955,73 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         foreach (var iid in _chartViews.Keys) if (!desired.Contains(iid)) stale.Add(iid);
         foreach (var iid in stale) DespawnChartWindow(iid);
 
-        // Spawn the missing ones. #101 (fix #99 regression; findings 0078): NO DockDefaultPlacement.
-        // ComputeRects(N) here — a count-scaled grid cell made each new chart a different SIZE as the
-        // universe grew. Each chart now spawns at the spec-fixed KIND_CHART size and snaps flush to the
-        // focused (or nearest) window via SpawnDockedToFocus.
+        // Spawn the missing ones. #114 / findings 0089 F1+F2: the per-iid SpawnDockedToFocus cascade
+        // was replaced with a grid-allocated placement — focus-snap chained each new chart flush to
+        // the prior one (whose focus the spawn stole), scattering the cluster down-right into a
+        // staircase as the universe grew. Now we collect the unsaved set, compute its avoid set (every
+        // chart already placed by RestoreFloating + the 5 base dock windows on the same plane), and
+        // ask ChartGridPlacement for the next non-overlapping slot per missing iid. gridCols is
+        // ceil(√universeTotal) so an incremental call (missing.Count == 1) still lands in the right
+        // column instead of column 0 (findings 0089 F4 sub-decision 1).
+        var missing = new List<string>();
         for (int i = 0; i < ids.Count; i++)
         {
             string iid = ids[i];
             if (_chartViews.ContainsKey(iid)) continue;
-            SpawnChartWindow(iid);
+            missing.Add(iid);
         }
+        if (missing.Count == 0) return;
+
+        int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
+        var avoid = CollectChartGridAvoidRects();
+        var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
+            missing.Count, gridCols,
+            ChartGridPlacement.DefaultAnchorTopLeft,
+            _chartWindowSize,
+            ChartGridPlacement.DefaultGap,
+            avoid);
+
+        for (int i = 0; i < missing.Count; i++)
+            SpawnChartWindowAt(missing[i], slots[i]);
     }
 
-    // Spawn one chart window (id = "chart:<iid>") at the spec-fixed KIND_CHART size, snapped flush to the
-    // user's focused window (or, with no focus history, the window nearest the viewport centre) — #101 /
-    // findings 0078. Size is INDEPENDENT of the chart count (the #99 bug). Content (ChartView +
-    // DepthLadderView) is injected by the factory's BuildDockContent path during the spawn — by the time
-    // it returns, `_chartViews[iid]` is populated.
-    void SpawnChartWindow(string instrumentId)
+    // Collect the avoid rects for chart grid placement: every back-plane dock window that isn't itself
+    // a chart-to-be-placed — the 5 base dock kinds + every already-live chart (saved-restored or
+    // previously-grid-placed). We filter by `DockShape.IsDockKind(w.kind) && w.kind != KIND_CHART`
+    // rather than the base-id set, so a hand-edited sidecar that renames a base id (or any future
+    // multi-instance base kind) still contributes its rect — the kind-based filter does not depend on
+    // the `Spawn(id, id, ...)` id-equals-kind invariant. findings 0089 F4 sub-decision 3 (avoid 中身):
+    // order ticket (front plane / _windows) is NOT included — z-stacking lets it sit over a chart
+    // harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas top-left (y up-
+    // positive) maps to Rect's yMin = bottom edge.
+    List<Rect> CollectChartGridAvoidRects()
+    {
+        var avoid = new List<Rect>();
+        var cap = _dockWindows.Capture();
+        if (cap?.floatingWindows == null) return avoid;
+        foreach (var w in cap.floatingWindows)
+        {
+            if (w == null) continue;
+            bool isChart = w.kind == FloatingWindowCatalog.KIND_CHART;
+            bool isOtherDockKind = DockShape.IsDockKind(w.kind) && !isChart;
+            if (!isChart && !isOtherDockKind) continue;
+            avoid.Add(new Rect(w.x, w.y - w.h, w.w, w.h));
+        }
+        return avoid;
+    }
+
+    // Spawn one chart window (id = "chart:<iid>") at the spec-fixed KIND_CHART size (`_chartWindowSize`
+    // resolved from the catalog at BuildWorkspace), at the explicit canvas-LOGICAL top-left supplied
+    // by the caller (typically ChartGridPlacement's next non-overlapping slot). #103 (ADR-0018): chart
+    // windows live on the BACK plane (_dockWindows / _dockLayer, 1.0×). Content (ChartView +
+    // DepthLadderView) is injected by the factory's BuildDockContent path during the spawn — by the
+    // time it returns, `_chartViews[iid]` is populated.
+    void SpawnChartWindowAt(string instrumentId, Vector2 topLeft)
     {
         if (string.IsNullOrEmpty(instrumentId) || _chartViews.ContainsKey(instrumentId)) return;
         string windowId = DockShape.ChartId(instrumentId);
-        // #103 (ADR-0018): chart windows live on the BACK plane (_dockWindows / _dockLayer, 1.0×). The
-        // anchor is taken in DOCK-layer coords (the 1.0× layer has zero parallax offset, so it is just
-        // the viewport centre). The #101 spec-fixed size + focus-adjacent snap is unchanged — it now
-        // resolves the focus target WITHIN the back plane, so a chart snaps to a dock window, never the
-        // front-plane editor (cross-plane snap ban).
-        _dockWindows.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, windowId, SpawnAnchorTopLeftIn(_dockLayer), true);
+        _dockWindows.Spawn(FloatingWindowCatalog.KIND_CHART, windowId,
+            topLeft.x, topLeft.y, _chartWindowSize.x, _chartWindowSize.y, true);
     }
 
     // Despawn one chart window and clear its render bookkeeping. The GameObject is destroyed by

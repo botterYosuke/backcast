@@ -25,7 +25,7 @@
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
 | [ReplayRunResultTileE2ERunner](./ReplayRunResultTileE2ERunner.md) ✅ | `RRT-01..05` | 5 | 5 | 0 | 0 | 0 | 0 |
 
-## Journey E2E（4 本・57 行）
+## Journey E2E（5 本・76 行）
 
 `自動(E2E済)` 列は `自動(E2E済・<別Runner>)`（別 Runner が正本のもの）も合算する。
 
@@ -36,6 +36,7 @@
 | [LayoutPersistenceJourneyE2ERunner](./LayoutPersistenceJourneyE2ERunner.md) ✅ | `JOURNEY-LAYOUT-01..15` | 15 | 15 | 0 | 0 | 0 | 0 |
 | [AuthorToRunJourneyE2ERunner](./AuthorToRunJourneyE2ERunner.md) ✅ | `JOURNEY-AUTHOR-01..13` | 13 | 13 | 0 | 0 | 0 | 0 |
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) ✅ | `JOURNEY-LIVE-01..15` | 15 | 14 | 0 | 0 | 1 | 0 |
+| [ChartPlacementJourneyE2ERunner](./ChartPlacementJourneyE2ERunner.md) | `CP-S0-01..04, CP-S1-01..05, CP-S2-01, CP-S2-02a/b, CP-S3-01..04, CP-S4-01..04` | 19 | 11 | 0 | 8 | 0 | 0 |
 
 ※ `ReplayToHakoniwa` は Action-ID 採番より前に書かれた台本で 7 = ストーリーの step 数（Action-ID 行ではない）。
 第二波で他台本と同じ操作一覧表へ整形する際に Action ID を採番する。

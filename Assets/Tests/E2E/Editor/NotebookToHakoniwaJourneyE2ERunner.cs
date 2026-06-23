@@ -44,6 +44,11 @@ public static class NotebookToHakoniwaJourneyE2ERunner
     const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
     const string R1 = NotebookCellCoordinator.AdoptedRegionId;   // strategy_editor:region_001 (== root WINDOW_ID)
     const string FIRST = "8918.TSE";
+    // findings 0089: a per-cell RUN must hand the executor the document's canonical .py path so the
+    // marimo cell globals get the right __file__. Sentinel proves the provider→controller→request→
+    // lane→executor leg (the real BuildNotebookStrategyPath returns null for this unbound-editor
+    // harness, so a real provider would be vacuous — the sentinel gates the wiring, not the #78 read).
+    const string STRAT_PATH = "/fake/strategy/dir/v19_morning_cell.py";
 
     // 走行中スナップショット（get_portfolio_json 形・ReplayPanelDecoder.PortfolioDto に JsonUtility が verbatim bind）。
     // snap1 = 1 建玉 + 1 約定、snap2 = 建玉成長（qty 100→200・equity 変化）で「逐次更新」を非空虚化する。
@@ -142,6 +147,12 @@ public static class NotebookToHakoniwaJourneyE2ERunner
             return "NBHAKO-03: the executor did not receive the committed scenario JSON on a bt.replay press (got [" + exec.LastScenario + "])";
         if (exec.LastScenario != committed)
             return "NBHAKO-03: the scenario the press handed over differs from BuildNotebookScenarioJson()";
+        // findings 0089: the press must also hand the executor the document's .py path (provider →
+        // controller → NotebookRunRequest.StrategyPath → lane → executor) so the marimo cell __file__
+        // resolves cell-adjacent artifacts.  Gates the C# leg the Python inject of __file__ cannot.
+        if (exec.LastStrategyPath != STRAT_PATH)
+            return "NBHAKO-03: the executor did not receive the strategy .py path on a press (got [" +
+                   exec.LastStrategyPath + "]) — the provider→controller→request→lane __file__ leg is broken";
         if (!controller.IsBacktestRunning)
             return "NBHAKO-04: controller not RUNNING after a bt.replay press";
         if (GlyphText(runBtn) != "■")
@@ -389,7 +400,8 @@ public static class NotebookToHakoniwaJourneyE2ERunner
             seams.ScenarioProvider,                          // scenarioJsonProvider = REAL BuildNotebookScenarioJson
             () => { stopCalls[0]++; host.ForceStop(); },     // onStop = record + REAL host.ForceStop (no-op without a server)
             seams.OnRunningChanged,                          // onRunningChanged = REAL SetCellRunButtonState (toggles the real button)
-            seams.OnStale);                                  // onStaleRegionsChanged = REAL SetCellStaleRegions
+            seams.OnStale,                                   // onStaleRegionsChanged = REAL SetCellStaleRegions
+            () => STRAT_PATH);                               // strategyPathProvider (findings 0089): sentinel gates the .py-path leg
 
         seams.Lane = lane;
         ty.GetField("_notebookRunLane", BF).SetValue(root, lane);
@@ -440,11 +452,13 @@ public static class NotebookToHakoniwaJourneyE2ERunner
     {
         public int Calls;
         public string LastScenario;
+        public string LastStrategyPath;
 
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             Calls++;
             LastScenario = scenarioJson;
+            LastStrategyPath = strategyPath;
             return new NotebookRunResult
             {
                 Ok = true,

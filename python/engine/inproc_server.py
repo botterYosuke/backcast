@@ -212,11 +212,15 @@ class InprocLiveServer:
         """Delegate to BackendService.start_engine() for strategy backtest runs."""
         return self._svc.start_engine(cfg)
 
-    def run_cell(self, source: str, pressed_index: int, scenario_json: str = None) -> str:
+    def run_cell(
+        self, source: str, pressed_index: int, scenario_json: str = None, strategy_path: str = None
+    ) -> str:
         """#95 Phase 2/4: per-cell RUN. ``scenario_json`` (Phase 4) is the committed scenario used
-        to build a ``bt`` handle when the notebook drives a backtest. Returns a JSON string
+        to build a ``bt`` handle when the notebook drives a backtest. ``strategy_path`` is the
+        document's canonical on-disk ``.py`` path (#78 provider) so the marimo cell globals get the
+        right ``__file__`` for cell-adjacent artifact resolution. Returns a JSON string
         ``{"ok","ran":[{"index","output","ok"}...],"error","run_summary"?}``."""
-        return self._svc.run_cell(source, pressed_index, scenario_json)
+        return self._svc.run_cell(source, pressed_index, scenario_json, strategy_path)
 
     def notebook_restage(self, source: str) -> str:
         """#95 Phase 6 Slice 4: edit-time stale projection (diff-register the live source WITHOUT

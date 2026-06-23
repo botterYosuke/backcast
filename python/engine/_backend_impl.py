@@ -728,7 +728,7 @@ class DataEngineBackend:
             )
         return self._start_engine_duckdb(strategy_file, duckdb_root)
 
-    def run_cell(self, source, pressed_index, scenario_json=None):
+    def run_cell(self, source, pressed_index, scenario_json=None, strategy_path=None):
         """#95 Phase 2/4/5: run the pressed cell + reactive downstream over the LIVE source.
 
         ``source`` is the LIVE editor content (synthesised marimo ``.py`` text, not a disk path —
@@ -882,6 +882,18 @@ class DataEngineBackend:
             # placeholder so the cell raises a guidance RuntimeError instead of a NameError.
             from engine.strategy_runtime.backtester import NoScenarioBacktester
             inject = {"bt": NoScenarioBacktester()}
+
+        if strategy_path:
+            # Mirror strategy_loader.py's ``module.__file__ = original_path`` for the marimo
+            # per-cell path: set ``__file__`` in the cell globals so a cell's
+            # ``Path(__file__).parent / ...`` resolution (e.g. v19's cell-adjacent ``artifacts``
+            # dir) targets the strategy's on-disk directory, NOT the cwd-derived default the
+            # marimo kernel otherwise assigns.  _apply_inject merges this into k.globals BEFORE
+            # the cold-run, so an artifact-loading cell sees the right ``__file__`` (findings:
+            # restores the invariant ADR-0011 assumed — "``__file__`` 相対は効く").  Set whether
+            # or not the pressed cell drives bt, because the artifact cell runs at cold-run on
+            # every press.
+            inject = {**(inject or {}), "__file__": str(strategy_path)}
 
         pressed_id = f"c{pressed_index}"
         try:

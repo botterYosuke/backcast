@@ -19,10 +19,11 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         _host = host ?? throw new ArgumentNullException(nameof(host));
     }
 
-    public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+    public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
     {
         // GIL acquired inside; worker thread. scenarioJson (#95 Phase 4) lets the backend build a bt
-        // handle when the notebook drives a backtest.
+        // handle when the notebook drives a backtest. strategyPath (the document's canonical .py path,
+        // #78 provider) gives the marimo cell globals the right __file__ for artifact resolution.
         //
         // #100 Slice ① (findings 0077): the run_summary key returned by run_cell is no longer
         // surfaced into a C# field — Python's _finalize_run wrote it to engine.last_run_summary
@@ -31,7 +32,7 @@ public sealed class HostNotebookCellExecutor : INotebookCellExecutor
         // Single source = Python; the set-at-return path that previously lived here was the gap
         // that caused #100 ① (a re-press carried run1's stats through run2's running view because
         // the C# field was set per-press but never cleared at run start).
-        string json = _host.InvokeRunCell(source, pressedIndex, scenarioJson);
+        string json = _host.InvokeRunCell(source, pressedIndex, scenarioJson, strategyPath);
         return Parse(json);
     }
 

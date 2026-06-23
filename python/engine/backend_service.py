@@ -424,14 +424,18 @@ class BackendService:
             "summary_json": result.summary_json if result.success else "",
         }
 
-    def run_cell(self, source: str, pressed_index: int, scenario_json: str = None) -> str:
+    def run_cell(
+        self, source: str, pressed_index: int, scenario_json: str = None, strategy_path: str = None
+    ) -> str:
         """#95 Phase 2/4: delegate per-cell RUN to DataEngineBackend.run_cell.
 
         ``scenario_json`` (Phase 4) is the committed startup-panel scenario; when present and the
-        notebook drives a backtest the backend builds a ``bt`` handle. Returns the backend's JSON
-        string verbatim (``{"ok","ran","error","run_summary"?}``)."""
+        notebook drives a backtest the backend builds a ``bt`` handle. ``strategy_path`` (the
+        document's canonical on-disk ``.py`` path) is forwarded so the marimo cell globals get the
+        right ``__file__`` for cell-adjacent artifact resolution. Returns the backend's JSON string
+        verbatim (``{"ok","ran","error","run_summary"?}``)."""
         try:
-            return self._srv.run_cell(source, pressed_index, scenario_json)
+            return self._srv.run_cell(source, pressed_index, scenario_json, strategy_path)
         except Exception as exc:
             import json as _json
 

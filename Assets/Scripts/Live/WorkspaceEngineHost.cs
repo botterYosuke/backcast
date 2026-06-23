@@ -262,19 +262,22 @@ public sealed class WorkspaceEngineHost
     // `source` is the LIVE synthesised marimo `.py` text (unsaved buffer ok); `pressedIndex` is the
     // cell-order index. Returns the backend JSON string ({"ok","ran":[{"index","output","ok"}...],
     // "error"}), or null on a not-ready server / Python error (the executor maps null to fail-soft).
-    public string InvokeRunCell(string source, int pressedIndex, string scenarioJson = null)
+    public string InvokeRunCell(string source, int pressedIndex, string scenarioJson = null, string strategyPath = null)
     {
         if (!Volatile.Read(ref _serverReady)) return null;
         try
         {
             // An empty scenario string is falsy on the Python side (no bt built) — same as omitting
-            // it — so a pure-compute press needs no None marshaling.
+            // it — so a pure-compute press needs no None marshaling.  An empty strategyPath is
+            // likewise falsy (the backend leaves __file__ at the marimo default — pure-compute or
+            // unbound-editor press), so no None marshaling is needed there either.
             using (Py.GIL())
             using (PyObject res = _server.InvokeMethod(
                 "run_cell",
                 new PyString(source ?? ""),
                 new PyInt(pressedIndex),
-                new PyString(scenarioJson ?? "")))
+                new PyString(scenarioJson ?? ""),
+                new PyString(strategyPath ?? "")))
                 return res.As<string>();
         }
         catch (Exception e)

@@ -20,6 +20,7 @@ public sealed class NotebookRunController
     readonly NotebookRunLane _lane;
     readonly Action<string> _onError;   // optional run-level error surfacer (null-tolerant)
     readonly Func<string> _scenarioJsonProvider;     // #95 P4: committed scenario JSON (null-tolerant)
+    readonly Func<string> _strategyPathProvider;     // canonical .py path (#78 provider) for __file__ (null-tolerant)
     readonly Action _onStop;                         // #95 P4: ■ press → force-stop the running backtest
     readonly Action<string, bool> _onRunningChanged;  // #95 P4: (region, running) → swap ▶/■ on the cell
     readonly Action<IReadOnlyList<string>> _onStaleRegionsChanged;  // #95 P6 S3: regions still stale → amber ▶
@@ -40,13 +41,15 @@ public sealed class NotebookRunController
         Func<string> scenarioJsonProvider = null,
         Action onStop = null,
         Action<string, bool> onRunningChanged = null,
-        Action<IReadOnlyList<string>> onStaleRegionsChanged = null)
+        Action<IReadOnlyList<string>> onStaleRegionsChanged = null,
+        Func<string> strategyPathProvider = null)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _viewFor = viewFor ?? (_ => null);
         _lane = lane ?? throw new ArgumentNullException(nameof(lane));
         _onError = onError;
         _scenarioJsonProvider = scenarioJsonProvider;
+        _strategyPathProvider = strategyPathProvider;
         _onStop = onStop;
         _onRunningChanged = onRunningChanged;
         _onStaleRegionsChanged = onStaleRegionsChanged;
@@ -84,6 +87,10 @@ public sealed class NotebookRunController
         bool drivesStep = source.Contains("bt.step");
         bool drivesBacktest = drivesReplay || drivesStep;
         string scenarioJson = drivesBacktest ? _scenarioJsonProvider?.Invoke() : null;
+        // The strategy's on-disk dir anchors a cell's Path(__file__).parent artifact resolution, and
+        // the _artifacts cell cold-runs on EVERY press (not just backtest presses), so supply the
+        // path unconditionally (null/unbound editor → backend leaves __file__ at the marimo default).
+        string strategyPath = _strategyPathProvider?.Invoke();
         int runId = ++_runSeq;
         _lane.Submit(new NotebookRunRequest
         {
@@ -91,6 +98,7 @@ public sealed class NotebookRunController
             PressedIndex = index,
             Generation = _generation,
             ScenarioJson = scenarioJson,
+            StrategyPath = strategyPath,
             RunId = runId,
         });
 

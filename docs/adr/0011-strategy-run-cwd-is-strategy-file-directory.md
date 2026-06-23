@@ -17,6 +17,7 @@ status: proposed
 - Python は pythonnet で Unity プロセスに埋め込まれ実行される（同一 PID・ADR-0001）。コードのどこにも `os.chdir` は無く、戦略実行時の cwd は **Unity 起動時の cwd（Editor 実行ではプロジェクトルート `<repo>`）のまま**。
 - よって戦略が `df.to_csv('aaa.csv')` のような **裸の相対パス**を書くと、出力は**戦略 `.py` の隣ではなくリポ直下**に落ちる（owner の直感と相違・本 grill の発端）。
 - `Path(__file__).parent / ...` 相対は別経路で正しく戦略の隣を指す（`strategy_loader.py` が `__file__`=source に設定・TTWR ADR-0021 ①の踏襲・v19 の `universe.json` 解決が依存）。つまり **`__file__` 相対は効くが cwd 相対は効かない**という二分が存在していた。
+  - > **訂正注記（2026-06-23・proposed のため in-place）**: この前提は **命令型 strategy 経路でのみ真**。**marimo per-cell `run_cell` 経路は `__file__` を anchor しない**（source をテキストで受け、戦略のディスク位置を渡されない）ため、Unity 埋め込みカーネルでは `__file__=None` となり v19 の `universe.json`/artifact 解決が `TypeError`/`FileNotFoundError` で壊れていた。findings 0089 で per-cell 経路に `strategy_path`→`__file__` 配線を入れて修正し、この前提を marimo 経路でも成立させた。本 ADR の cwd 方針（Decision §1-2）は依然未実装（#79）だが、その前提として「`__file__` 相対が両経路で効く」ことが findings 0089 で担保された。
 - TTWR ADR-0021 は cache≠source の split を前提に「cwd は GUI リポのまま・戦略は `__file__` で解決」と決めていた。一方 **#78（owner 確定 2026-06-17）は cache 機構を採らず、provider が返す本物の `.py` を直接実行**する（dirty なら Run 封鎖）。cache/source の split が無いため、TTWR ADR-0021 の identity 論点は backcast には適用されず、**残る論点は cwd 方針だけ**になった。
 - engine 自身の I/O（`paths.py` の `artifacts_root()` は `REPO_ROOT`=`__file__` 基準の絶対パス）も Unity の I/O（`Application.persistentDataPath`・sidecar の絶対 path）も **すべて cwd 非依存（絶対）**であることを確認済み。よって実行中に cwd を変えても engine/Unity 本体の I/O は壊れない。
 

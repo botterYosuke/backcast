@@ -431,7 +431,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             BuildNotebookScenarioJson,
             () => _host.ForceStop(),
             SetCellRunButtonState,
-            SetCellStaleRegions);
+            SetCellStaleRegions,
+            // #78 EditorFileProvider: the canonical .py path of the document the editor shows, so the
+            // marimo cell globals get the right __file__ for cell-adjacent artifact resolution (e.g.
+            // v19's artifacts dir). Unbound editor → null → backend leaves __file__ at the default.
+            BuildNotebookStrategyPath);
         // #102 findings 0079 §6 D7: every AddCell/DeleteCell/SyncWindowsToNotebook bumps the run
         // controller's generation so an in-flight per-cell RUN whose pressed-index frame predates the
         // mutation is dropped at drain time (the dormant region_001 reuse race — pressing A, deleting A,
@@ -864,6 +868,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             o["initial_cash"] = cash;
         return o.ToString(Newtonsoft.Json.Formatting.None);
     }
+
+    // The canonical on-disk .py path of the document the editor shows (#78 EditorFileProvider), so a
+    // per-cell RUN hands the marimo session the right __file__: a cell's Path(__file__).parent/...
+    // artifact resolution (e.g. v19's cell-adjacent artifacts dir) then targets the strategy's
+    // directory instead of the cwd-derived default the marimo kernel otherwise assigns. Returns null
+    // when the editor is unbound (fresh install / no restore) — the backend then leaves __file__ at
+    // its default (matches the #78 fail-closed gate that blocks Run when nothing is bound).
+    string BuildNotebookStrategyPath()
+        => EditorFileProvider.TryGetStrategyFile(out string strategyPath) ? strategyPath : null;
 
     // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override
     // (2026-06-19): anchored BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate

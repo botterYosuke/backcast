@@ -1316,7 +1316,7 @@ public static class StrategyEditorNotebookE2ERunner
     sealed class _StaleExecutor : INotebookCellExecutor
     {
         public int[] StaleSet = Array.Empty<int>();
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             var remaining = new List<int>();
             foreach (var i in StaleSet) if (i != pressedIndex) remaining.Add(i);
@@ -1423,7 +1423,7 @@ public static class StrategyEditorNotebookE2ERunner
     // S17 fake: a minimal OK executor (one ran cell, no stale) — the running guard is the controller's.
     sealed class _OkExecutor : INotebookCellExecutor
     {
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
             => new NotebookRunResult
             {
                 Ok = true,
@@ -1617,7 +1617,7 @@ public static class StrategyEditorNotebookE2ERunner
     {
         string _output, _mimetype, _data;
         public void Set(string output, string mimetype, string data) { _output = output; _mimetype = mimetype; _data = data; }
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
             => new NotebookRunResult
             {
                 Ok = true,
@@ -1634,7 +1634,7 @@ public static class StrategyEditorNotebookE2ERunner
         public string LastScenarioJson;
         int _stepCounter;
 
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             Calls++;
             LastScenarioJson = scenarioJson;
@@ -1762,7 +1762,7 @@ public static class StrategyEditorNotebookE2ERunner
         readonly Action<string> _onScenario;
         public int Calls;
         public _RecordingExecutor(Action<string> onScenario) { _onScenario = onScenario; }
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             Calls++;
             _onScenario?.Invoke(scenarioJson);
@@ -1784,7 +1784,7 @@ public static class StrategyEditorNotebookE2ERunner
     // backend returns (ran = pressed + reactive descendants), without the embedded interpreter.
     sealed class _FakeCellExecutor : INotebookCellExecutor
     {
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             var ran = new List<NotebookCellOutput>
             {
@@ -1997,7 +1997,7 @@ public static class StrategyEditorNotebookE2ERunner
         public void SetConsole(ConsoleSegment[] console) { _console = console ?? System.Array.Empty<ConsoleSegment>(); }
         public void SetMulti(params (int idx, string output, string mime, string data, ConsoleSegment[] console)[] multi)
             => _multi = (multi != null && multi.Length > 0) ? multi : null;
-        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson)
+        public NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath)
         {
             if (_multi != null)
             {

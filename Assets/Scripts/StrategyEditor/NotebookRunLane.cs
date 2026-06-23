@@ -34,6 +34,10 @@ public struct NotebookRunRequest
     // #95 Phase 4: the committed startup-panel scenario (JSON). Non-null lets the backend build a
     // bt handle when the notebook drives a backtest (ADR-0016 D4). Null = pure-compute 土台 press.
     public string ScenarioJson;
+    // The document's canonical on-disk `.py` path (#78 EditorFileProvider), or null when the editor
+    // is unbound. Forwarded to run_cell so the marimo cell globals get the right `__file__` for a
+    // cell's `Path(__file__).parent / ...` artifact resolution (e.g. v19's cell-adjacent artifacts).
+    public string StrategyPath;
     // Monotonic per-run id so the controller's running guard can correlate THIS run's result and
     // clear the busy flag for the right run (not a faster pure-compute run that drained first).
     public int RunId;
@@ -92,7 +96,7 @@ public sealed class NotebookRunResult
 // scenarioJson (#95 Phase 4) is the committed scenario (null for a pure-compute press).
 public interface INotebookCellExecutor
 {
-    NotebookRunResult Run(string source, int pressedIndex, string scenarioJson);
+    NotebookRunResult Run(string source, int pressedIndex, string scenarioJson, string strategyPath);
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection — diff-register the live
     // source WITHOUT running any cell. Returns the cell-order indices still stale (empty when nothing
     // is stale). Runs on the lane worker thread (same thread discipline as Run).
@@ -165,7 +169,7 @@ public sealed class NotebookRunLane : IDisposable
             }
             else
             {
-                r = _executor.Run(req.Source, req.PressedIndex, req.ScenarioJson)
+                r = _executor.Run(req.Source, req.PressedIndex, req.ScenarioJson, req.StrategyPath)
                     ?? NotebookRunResult.Failure("executor returned null");
             }
         }

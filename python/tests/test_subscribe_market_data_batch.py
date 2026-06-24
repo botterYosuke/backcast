@@ -69,6 +69,7 @@ def test_no_artificial_cap_beyond_50() -> None:
     assert len(runner.subscribed_ids()) == 60
 
 
+@pytest.mark.scenario("SUBWIRE-05")
 def test_venue_limit_surfaces_typed_and_does_not_stop_others() -> None:
     over = "9999.TSE"
     ids = ["1000.TSE", over, "1001.TSE"]
@@ -93,6 +94,7 @@ def test_generic_failure_is_subscribe_failed() -> None:
     assert by_id[bad] == (False, "SUBSCRIBE_FAILED")
 
 
+@pytest.mark.scenario("KABU-LIVE-03")
 def test_kabu_subscribe_translates_register_full_to_typed() -> None:
     """kabu adapter は満杯時 KabuRegisterFullError を venue 非依存 typed 例外へ翻訳する。"""
     from engine.exchanges.kabusapi import KabuStationAdapter

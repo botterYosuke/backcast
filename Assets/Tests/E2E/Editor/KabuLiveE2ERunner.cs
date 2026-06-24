@@ -96,6 +96,7 @@ public static class KabuLiveE2ERunner
         var conn = new VenueConnectionViewModel();
         if (!SpinUntil(() => { conn.ApplyStatePoll(host.LatestStateJson); return conn.IsConnected; }, CONNECT_TIMEOUT_MS))
             return "logged in but venue_state never reached CONNECTED (got " + conn.VenueState + ")";
+        Debug.Log("[E2E KABU-LIVE-01 PASS] venue_login success and CONNECTED reached");
 
         // ── step 2.4: 本番トリガ経由で購読（テスト自身は SubmitSubscribeMarketData を呼ばない・#107） ──
         // 本番と同じ LiveSubscriptionCoordinator + LaneSubscribeSink で universe 一括購読を起動する。kabu は
@@ -111,6 +112,7 @@ public static class KabuLiveE2ERunner
         if (!SpinUntil(() => DepthDecoder.Decode(host.LatestStateJson, INSTRUMENT).HasDepth, BOARD_TIMEOUT_MS))
             return "no live board (depth) for " + INSTRUMENT + " within " + (BOARD_TIMEOUT_MS / 1000) + "s "
                  + "— 本番トリガ購読が走っていない / 場中でない / 本体未配信 を疑う; state=" + host.LatestStateJson;
+        Debug.Log("[E2E KABU-LIVE-02 PASS] live board (depth) arrived");
 
         return null;   // PASS
     }

@@ -43,6 +43,8 @@
 3. 操作一覧表（網羅台帳）— `Action ID / ユーザー行動 / 入口(file:line) / 観測点 / 自動判定 / カバー状態 / 既存Probe`
 4. 観測点（詳細）
 5. 自動判定（合格条件）— `[E2E <NAME> PASS]` ログ・exit 0・`error CS\d+` 0 件・delete-the-logic litmus
+   - **後方互換と詳細化**: 従来の surface 単位の `[E2E <NAME> PASS]` に加え、個別の Action-ID に対応する `[E2E <Action-ID> PASS]` の個別/併記出力を許容・推奨する。これにより、テスト実行ランナー（run-live-e2e.ps1）でのシナリオ単位の rollup 判定を段階的に詳細化できる。
+   - **C# 側 per-Action-ID タグは到達マイルストン（PASS 専用）**: 各ステップの成功地点で `[E2E <id> PASS]` を吐く設計。失敗時は手前で抜けるため**当該 id は出力されず**、surface の `[E2E <NAME> FAIL]` が立つ（rollup では「id 不在＋surface FAIL＝そのステップ未到達」と読む）。明示 FAIL を per-id で出したい runner は失敗分岐で `[E2E <id> FAIL] <msg>` を吐いてもよい。なお **pytest 側（conftest）は実 outcome から PASS/FAIL/SKIP の三状態**を自動出力する（[E2E-INDEX](./E2E-INDEX.md) の pytest 正本行）。
 6. 既存 Probe との対応（昇格元 / 探索用に残す の仕分け）
 7. 将来の `*E2ERunner.cs` 実装方針（第二波の設計メモ）
 

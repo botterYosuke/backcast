@@ -80,8 +80,12 @@ packages = ["engine"]
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--strict-markers"
 markers = [
     # #76: thin-drain runtime gates. marimo is a prod dependency since S3 (ADR-0012), so
     # these run in the default test run; the importorskip is now a defensive no-op.
     "marimo: thin-drain runtime gates (exercise the marimo embed execution model)",
+    # Gap 3: bridge a pytest to an E2E Action-ID so conftest emits the canonical
+    # [E2E <id> PASS/FAIL/SKIP] tag that run-live-e2e.ps1 / run-all-tests.ps1 roll up.
+    "scenario: maps this test to an E2E Action-ID (e.g. scenario('KABU-LIVE-03'))",
 ]

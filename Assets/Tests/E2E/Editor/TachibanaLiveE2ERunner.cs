@@ -77,6 +77,7 @@ public static class TachibanaLiveE2ERunner
 
         if (fail == null)
         {
+            Debug.Log("[E2E SUBWIRE-06 PASS]");   // 立花 leg of subscribe wiring; full prose on the surface tag below
             Debug.Log("[E2E TACHIBANA-LIVE PASS] logged into TACHIBANA demo, placed a 100-share MARKET BUY on " +
                       INSTRUMENT + " (second password answered via urgent-secret lane), and observed the FILLED " +
                       "OrderEvent through the production sink.");

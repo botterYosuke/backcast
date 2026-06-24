@@ -107,6 +107,8 @@ public static class ChartUniverseSyncE2ERunner
 
         string py = WriteDoc("empty", new List<string>(),               // scenario universe = EMPTY
             new[] { ChartWin(IID, CHART_TL) });                          // layout has chart:7203
+        var pc = AssertRestoreActuallySpawns(root, ty, chartViews, py, IID, "S1 CHARTSYNC-01");
+        if (pc != null) return pc;                                        // non-vacuity: the orphan WAS live before reseed
         DriveFileOpen(root, ty, onOpen, py);
 
         // the orphan chart must be GONE and the universe consistently empty (sidebar "No instruments").
@@ -193,6 +195,10 @@ public static class ChartUniverseSyncE2ERunner
 
         string py = WriteDoc("locked", new List<string> { IID },        // sidecar names [7203] but…
             new[] { ChartWin(IID, CHART_TL) });                          // …ReplaceAll no-ops (locked) → universe stays empty
+        // ApplyLayout/RestoreFloating does not consult the registry, so the chart spawns even under the
+        // lock — the positive control proves the orphan was live before the locked reseed despawns it.
+        var pc = AssertRestoreActuallySpawns(root, ty, chartViews, py, IID, "S3 CHARTSYNC-03");
+        if (pc != null) return pc;
         DriveFileOpen(root, ty, onOpen, py);
 
         if (scenario.Universe.Ids.Count != 0)
@@ -295,6 +301,28 @@ public static class ChartUniverseSyncE2ERunner
         if (string.IsNullOrEmpty(bound) ||
             !string.Equals(Path.GetFullPath(bound), Path.GetFullPath(py), StringComparison.OrdinalIgnoreCase))
             throw new Exception("File→Open did not bind _currentLayoutPath to '" + py + "' (got '" + bound + "')");
+    }
+
+    // Positive control (per-section NON-VACUITY) for the orphan-despawn sections (S1/S3). The despawn
+    // assertions only prove the chart is GONE after the reseed; they cannot, on their own, distinguish
+    // "RestoreFloating spawned it then the tail sync despawned it" (the real fix) from "RestoreFloating
+    // silently never spawned it" (e.g. a kind-routing regression → the despawn passes VACUOUSLY). So
+    // before the real File→Open, invoke the SAME production spawn path (ApplyLayout → RestoreFloating)
+    // on this doc and assert chart:<iid> actually landed in _chartViews. The subsequent real OnFileOpen
+    // re-applies geometry idempotently (RestoreFloating's Has(id) branch → ApplyGeometry, no respawn)
+    // and the reseed tail despawns it — so this control changes NOTHING about the end-to-end outcome,
+    // it only pins that there WAS a live orphan to despawn.
+    static string AssertRestoreActuallySpawns(BackcastWorkspaceRoot root, Type ty, IDictionary chartViews, string py, string iid, string tag)
+    {
+        var applyLayout = ty.GetMethod("ApplyLayout", BF);
+        if (applyLayout == null) return tag + ": ApplyLayout not found (renamed?)";
+        if (!LayoutSidecarStore.TryReadLayout(py, out var doc) || doc == null)
+            return tag + ": positive-control could not read the layout back from " + py;
+        applyLayout.Invoke(root, new object[] { doc });
+        if (!chartViews.Contains(iid))
+            return tag + ": positive-control FAILED — RestoreFloating did not spawn chart:" + iid
+                 + " from the layout entry, so the despawn assertions below would pass vacuously";
+        return null;
     }
 
     // Edit-mode compose: OpenScene does NOT run Awake, so ResumeLastDocumentOrDefault is NEVER auto-invoked

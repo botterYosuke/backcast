@@ -408,9 +408,10 @@ public sealed class UniverseSidebarView : MonoBehaviour
     // [picker { search label ROW_H + InputField ROW_H + PickerListScroll [variable] }] | FocusLabel (pinned).
     //
     // 余高 = container.h − (TITLE_H + ROW_H_add + ROW_H_focus + 4*GAP); when picker is closed, RowsScroll
-    // takes all of 余高. When open, the picker header reserves 2*ROW_H (label + input + GAP between picker
-    // header and list) and the candidate list takes min(natural, remaining/2) — so the picker can't
-    // starve the rows even with hundreds of candidates.
+    // takes all of 余高. When open, the picker header reserves 2*ROW_H (label + input + GAP before the
+    // list) and the candidate list takes ALL the leftover so it reaches the footer; the ROWS pane is the
+    // one capped at half (SidebarPaneSplit) — a big curated universe can't starve the picker, and a small
+    // rows pane frees the rest for the picker (findings 0101: list height should reach the footer).
     const float PICKER_HEADER_H = 2f * ROW_H;   // search label + InputField
     void Relayout()
     {
@@ -421,23 +422,15 @@ public sealed class UniverseSidebarView : MonoBehaviour
         float pinned = TITLE_H + ROW_H + ROW_H + 4f * GAP;   // title + add + focus + 4 separator gaps
         float available = Mathf.Max(0f, containerH - pinned);
 
-        float pickerListH = 0f;
         bool pickerOpen = _ctrl != null && _ctrl.Picker.Visible && _pickerListScrollContainer != null;
-        if (pickerOpen)
-        {
-            float roomAfterHeader = Mathf.Max(0f, available - PICKER_HEADER_H - GAP);
-            float naturalListH = _pickerListContent != null ? _pickerListContent.sizeDelta.y : 0f;
-            pickerListH = Mathf.Min(naturalListH, roomAfterHeader * 0.5f);
-            available -= PICKER_HEADER_H + GAP + pickerListH + GAP;
-        }
-        // Cap the rows viewport to the natural list height (bounded by 余高). The viewport Image is a
-        // raycastTarget (catches the wheel for scroll), so a full-余高 viewport would blanket the visually
-        // EMPTY band below the last instrument and steal canvas pan-drags there. Sizing it to the content
-        // leaves that empty band raycast-free → pan falls through to the InfiniteCanvasInputSurface, while
-        // the list band still captures wheel/scroll/selection ("list priority"). Overflow (content > 余高)
-        // still gets the full 余高 → scroll works unchanged.
+        // The rows viewport is capped to its natural height so the EMPTY band below the last instrument
+        // stays raycast-free (its viewport Image catches the wheel; a full-余高 viewport would steal canvas
+        // pan-drags there). Overflow (content > 余高) still scrolls. When the picker is open the split
+        // gives ROWS at most half and the PICKER list the rest (down to the footer) — SidebarPaneSplit.
         float naturalRowsH = _rowsContent != null ? _rowsContent.sizeDelta.y : available;
-        float rowsViewportH = Mathf.Clamp(naturalRowsH, 0f, available);
+        float naturalListH = _pickerListContent != null ? _pickerListContent.sizeDelta.y : 0f;
+        SidebarPaneSplit.Compute(available, PICKER_HEADER_H + GAP, naturalRowsH, naturalListH, pickerOpen,
+                                 out float rowsViewportH, out float pickerListH);
 
         // Title sits at y=0 with height TITLE_H (MakeText). Start below it.
         float y = -(TITLE_H + GAP);

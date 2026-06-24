@@ -84,7 +84,8 @@ public static class UniverseSidebarE2ERunner
                 ?? Section11_PickerContextDrivenByScenarioEnd()
                 ?? Section12_PickerListGuiRendersCandidatesAndPlaceholder()
                 ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves()
-                ?? Section14_FullUniverseNoCapVirtualizedRender();
+                ?? Section14_FullUniverseNoCapVirtualizedRender()
+                ?? Section15_PickerListFillsToFooter();
         }
         catch (Exception e)
         {
@@ -93,7 +94,7 @@ public static class UniverseSidebarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized verified");
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized + list-fills-to-footer verified");
             EditorApplication.Exit(0);
         }
         else
@@ -782,4 +783,43 @@ public static class UniverseSidebarE2ERunner
     // The SAME buffer the view uses — both read PickerListWindow.DefaultBuffer (single source of truth),
     // so the scrolled-window assert above tracks the real window policy and cannot drift from the view.
     const int PickerListWindowBuffer = PickerListWindow.DefaultBuffer;
+
+    // ---- 15. the open candidate list height reaches the FOOTER (owner 2026-06-24, findings 0101): when
+    // the picker is open the list takes ALL the leftover room down to the footer, not just half — the ROWS
+    // pane is the one capped at half so it can't starve the picker. SidebarPaneSplit is pure math (the real
+    // Relayout early-returns headless at rect.height==0), so this gates the split deterministically.
+    // RED→GREEN litmus: cap the PICKER at half instead of the rows → the empty-universe case (b) returns
+    // ~half and the ">60% of the room" assert FAILs (the exact behavior the owner reported: list stops
+    // mid-sidebar with scroll instead of reaching the footer).
+    // Covers: SIDEBAR-19 (展開した候補一覧の高さが footer まで届く)
+    static string Section15_PickerListFillsToFooter()
+    {
+        const float gap = 2f;                          // mirrors UniverseSidebarView.GAP
+        const float pickerHeaderH = 2f * ROW_H + gap;  // search label + InputField + gap before the list
+        const float available = 900f;
+        float roomForLists = available - pickerHeaderH;
+
+        // (a) picker closed → rows take their natural height, no picker list.
+        SidebarPaneSplit.Compute(available, pickerHeaderH, 300f, 0f, false, out float rClosed, out float pClosed);
+        if (pClosed != 0f) return $"closed picker still allocated a list ({pClosed})";
+        if (Mathf.Abs(rClosed - 300f) > 0.5f) return $"closed rows height {rClosed} != natural 300";
+
+        // (b) THE FIX: open picker + near-empty universe (1 'No instruments' row) → the list fills the
+        // leftover toward the footer (>> half); rows keep only their tiny natural height.
+        SidebarPaneSplit.Compute(available, pickerHeaderH, ROW_H, 99999f, true, out float rEmpty, out float pEmpty);
+        if (Mathf.Abs(rEmpty - ROW_H) > 0.5f) return $"empty-universe rows height {rEmpty} != natural {ROW_H}";
+        if (pEmpty <= roomForLists * 0.6f)
+            return $"picker list {pEmpty} did not fill toward the footer (<=60% of {roomForLists}) — capped at half?";
+        if (pEmpty > roomForLists + 0.5f) return $"picker list {pEmpty} overflowed the available room {roomForLists}";
+
+        // (c) open picker + huge universe → rows capped at half so the picker isn't starved (both ~half).
+        SidebarPaneSplit.Compute(available, pickerHeaderH, 99999f, 99999f, true, out float rBig, out float pBig);
+        if (Mathf.Abs(rBig - roomForLists * 0.5f) > 0.5f) return $"big-universe rows {rBig} not capped at half {roomForLists * 0.5f}";
+        if (Mathf.Abs(pBig - roomForLists * 0.5f) > 0.5f) return $"big-universe picker {pBig} not the other half";
+
+        // (d) the two lists never exceed the shared room (no overrun of the pinned focus label / footer).
+        if (rEmpty + pEmpty > roomForLists + 0.5f || rBig + pBig > roomForLists + 0.5f)
+            return "rows + picker list exceed the shared room (would overrun the footer)";
+        return null;
+    }
 }

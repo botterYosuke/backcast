@@ -47,6 +47,7 @@ text editor が**同じ SoT に差し込む**。picker は `InstrumentPickerCont
 | SIDEBAR-16 | [+ Add] の供給結果が picker リストとして uGUI 描画される（候補行／placeholder） | `UniverseSidebarView.cs:270`（`PopulatePickerListContent`）→`_pickerListContent` | Ready ids → `cand:<id>` GameObject ＋ `+ <id>` ラベルを描画。status（Empty 等）→ placeholder Text を描画。開く前は不在・Empty に flip で候補消滅＝非空虚 | `Section12`：`_pickerListContent` の子を反射（開く前不在→Ready で `cand:7203.TSE`/`cand:1301.TSE`＋`+ 1301.TSE`→Empty で消滅し `No instruments for this date`）。RED 実証済み（候補描画を skip すると `did not render candidate rows` で FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
 | SIDEBAR-17 | 非同期供給が open 後に解決したら picker が自動再描画（初回 "Loading..." 固着の解消） | `UniverseSidebarView.cs:Update`→`PollOpenPickerForAsyncSupply`→`RebuildPickerList` | `BackendAvailableInstrumentsProvider` は背景 fetch 中 `Loading` を返す。view は open 中毎フレーム poll し、**cheap な supply revision（`CurrentSupplyRevision`＝(kind, 件数) ValueTuple）**が変わったら repaint＝fetch 着地で再オープン無しに一覧表示（全件 sort を毎フレームしない・findings 0101） | `Section13`：StubProvider を Loading→Ready に flip し `Update()` を 1 tick 駆動（reflection）。open 直後は Loading・候補不在 → Ready 化 → `Update()` で `cand:7203.TSE` 出現・Loading 消滅。RED 実証済み（`PollOpenPickerForAsyncSupply()` を消すと `did not auto-refresh` で FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
 | SIDEBAR-18 | [+ Add] が listed_info.duckdb の **全銘柄**を仮想スクロールで一覧表示（先頭 15 件で打ち切らない） | `InstrumentPickerController.cs:BuildList`（cap 撤廃）＋`UniverseSidebarView.cs:PopulatePickerListContent`→`RenderPickerWindow`→`PickerListWindow.Compute` | `BuildList` は全候補を返す。view は `_pickerListContent` を**全件分の論理高さ**（`count*ROW_H`＝スクロールで全銘柄に到達可）にしつつ、可視窓 +buffer 行だけ GameObject を mount（~4400 行でも UI が固まらない）。窓算術は純関数 `PickerListWindow.Compute` | `Section14`：(a) controller が 4424 件を全件返す (b) `PickerListWindow.Compute` の窓（top/scroll/小リスト）(c) view の content 高さ＝全件・mount 数は窓のみ。RED 実証済み（cap 復活で (a)＝Section3 が `capped the universe` FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
+| SIDEBAR-19 | 展開した候補一覧の高さが **footer まで届く**（半分で止まってスクロールにならない） | `UniverseSidebarView.cs:Relayout`→`SidebarPaneSplit.Compute` | picker open 時、候補リストは余白を全部使って footer まで伸びる。ROWS ペインの方を半分に cap（大きな curated universe が picker を押し出さない）。純関数 `SidebarPaneSplit.Compute(available, headerH, naturalRows, naturalList, open)→(rowsH, listH)` | `Section15`：(a) closed=rows のみ (b) 空 universe→list が余白の >60% を占有（footer 到達）(c) 巨大 universe→rows/list 折半 (d) 合計が余白を超えない。RED 実証済み（picker を半分 cap に戻すと (b)＝`did not fill toward the footer` で FAIL） | 自動(E2E済) | `UniverseSidebarE2ERunner` |
 
 > focus→depth ラベル・行ハイライト（`▶`/`element_selected`）・ボタンラベルは入力のない**表示**なので独立行にせず、
 > SIDEBAR-01/05 の観測点として併せて確認する（`UniverseSidebarView.Rebuild` の合成）。
@@ -92,6 +93,8 @@ text editor が**同じ SoT に差し込む**。picker は `InstrumentPickerCont
     `capped the universe` で落ちる＝findings 0101 の不具合そのもの。AFK 実証済み（RED `15/30`→GREEN）。
   - `UniverseSidebarView.RenderPickerWindow` の窓化を外して全件 mount すると SIDEBAR-18（`Section14` (c)）の bounded-mount
     assert が落ちる。`_pickerListContent.sizeDelta` を窓分だけにすると全件到達不能で full-height assert が落ちる。
+  - `SidebarPaneSplit.Compute` で picker を半分 cap に戻す（rows でなく picker を `roomForLists*0.5` で頭打ち）と SIDEBAR-19
+    （`Section15` (b)）が `did not fill toward the footer` で落ちる＝owner 報告の不具合そのもの。AFK 実証済み（RED `427/854`→GREEN）。
 
 ## カバー状態の語彙
 

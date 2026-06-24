@@ -2216,10 +2216,87 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // #69: merge the current layout into `path`'s <strategy>.json, logging (not throwing) on failure.
     // Shared by Save / Save As / quit autosave so the capture + try/catch + log live in one place.
+    // #124: just before persisting, drop chart:<iid> windows that are NOT in the document's
+    // persisted-resolved universe (PruneOrphanChartWindowsForPersistence) so the two sidecar keys
+    // (layout.floatingWindows ↔ scenario universe) are NEVER written mutually inconsistent — the
+    // write-side complement to #123's restore-side self-heal (defense-in-depth, findings 0097).
     bool TryWriteLayout(string path)
     {
-        try { LayoutSidecarStore.WriteLayout(path, CaptureLayout()); return true; }
+        try
+        {
+            LayoutDocument doc = CaptureLayout();
+            PruneOrphanChartWindowsForPersistence(doc, path);
+            LayoutSidecarStore.WriteLayout(path, doc);
+            return true;
+        }
         catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout write failed: " + e.Message); return false; }
+    }
+
+    // #124 (findings 0097): write-side defense-in-depth for the chart⟷universe invariant (#123 /
+    // findings 0095 is the RESTORE-side backstop, kept). layout.floatingWindows (TryWriteLayout — written
+    // whenever a document is bound) and the scenario universe (UniverseWriteback.Flush — Replay + Editable
+    // + complete-sidecar + content-change gated; mutate-existing-only #67) are written by ASYMMETRIC,
+    // non-atomic gates, so a chart:<iid> can get baked into the layout key while its instrument is ABSENT
+    // from the universe the SAME document resolves to on reopen — an on-disk orphan (the sidebar reads
+    // "No instruments" yet a Chart floats). Before persisting, drop every chart:<iid> whose instrument is
+    // absent from that PERSISTED-RESOLVED universe — resolved the SAME way SeedScenarioFromEditor does on
+    // reopen (the scenario sidecar key if present, ELSE the inline .py SCENARIO; NOT the sidecar key alone
+    // — an inline-.py instrument WILL be in the reopened universe, so filtering it would lose its chart
+    // geometry and reseed would respawn it at a default grid slot = a position-persistence regression).
+    //
+    // READ-ONLY w.r.t. the scenario: this never writes the universe, so mutate-existing-only (#67 /
+    // findings 0042), the inline-shadow ban, and D5 (Live universe is venue-driven / non-persistent) are
+    // all untouched. A Live-only / sidebar-added-but-uncommitted instrument is NOT in the resolved
+    // universe, so its chart is dropped — that is CONSISTENT (the instrument itself was not persisted),
+    // not a regression. FAIL-OPEN: prune ONLY when the universe was CONFIDENTLY resolved; an unreadable
+    // sidecar or a present-but-unparseable inline SCENARIO leaves it UNKNOWN → keep every chart and let
+    // #123's restore-side sync clean up, rather than nuke restored geometry on a transient read failure.
+    // Filters the captured DTO only — live windows are NOT despawned (Save converges live via the
+    // ReseedFromEditor tail; quit autosave simply ends). Touches ONLY the chart family (DockShape.IsChartId);
+    // the 5 base dock windows / Order ticket / editor shells ride floatingWindows unconditionally.
+    void PruneOrphanChartWindowsForPersistence(LayoutDocument doc, string path)
+    {
+        if (doc?.floatingWindows == null || doc.floatingWindows.Count == 0 || string.IsNullOrEmpty(path)) return;
+        if (!TryResolvePersistedUniverse(path, out var persisted)) return;   // fail-open: unknown universe → keep all charts
+        var keep = new HashSet<string>(persisted);
+
+        int removed = doc.floatingWindows.RemoveAll(w =>
+        {
+            if (w == null || !DockShape.IsChartId(w.id)) return false;
+            return !keep.Contains(DockShape.InstrumentOfChartId(w.id));
+        });
+        if (removed > 0)
+            Debug.Log("[BackcastWorkspaceRoot] #124: pruned " + removed + " orphan chart window(s) from the persisted layout of "
+                    + Path.GetFileName(path) + " (absent from the document's resolved universe).");
+    }
+
+    // #124: resolve the universe a document presents on reopen, following SeedScenarioFromEditor's
+    // precedence (sidecar wins, ELSE inline .py SCENARIO), but with a DELIBERATELY STRICTER error policy:
+    // returns FALSE (caller fails open = keep all charts) whenever the universe could not be CONFIDENTLY
+    // resolved — an unreadable sidecar (TryReadScenario false: corrupt JSON / structurally-wrong value /
+    // I/O lock) OR a present-but-unparseable inline SCENARIO. SeedScenarioFromEditor instead DEGRADES such
+    // errors to inline/empty (it must seed SOMETHING to open the doc); here we must NOT, because acting on
+    // a degraded/empty resolution could prune a chart whose instrument is really there (e.g. a transient
+    // I/O lock on a valid sidecar) = a position-persistence regression. Failing open is strictly more
+    // conservative (it only ever LEAVES orphans, which #123's restore-side sync cleans on reopen) — so the
+    // two methods must NOT be collapsed into one shared resolver. On success `universe` is the instrument-id
+    // set, possibly EMPTY (a confident empty universe: no sidecar scenario key AND no inline SCENARIO node →
+    // every chart is a true orphan to prune, the path-① core case).
+    bool TryResolvePersistedUniverse(string path, out IReadOnlyList<string> universe)
+    {
+        universe = Array.Empty<string>();
+        // Sidecar wins (the going-forward source). false = unreadable → NOT confident (fail open).
+        // true + non-null = present (Instruments is never null — ScenarioSnapshot seeds an empty list).
+        // true + null = absent (no scenario key) → fall to inline.
+        if (!ScenarioSidecarStore.TryReadScenario(path, out var sidecar)) return false;
+        if (sidecar != null) { universe = sidecar.Instruments; return true; }
+
+        // No sidecar scenario key → the inline .py SCENARIO is the reopen fallback (#66).
+        ScenarioSnapshot inline = ScenarioInlineReader.Read(path, out ScenarioReadStatus status);
+        if (status == ScenarioReadStatus.Unparseable) return false;   // present-but-unreadable → NOT confident
+        // Found → its instruments; Absent → a confident EMPTY universe (inline == null).
+        universe = inline?.Instruments ?? (IReadOnlyList<string>)Array.Empty<string>();
+        return true;
     }
 
     // restore order canvas → floating(non-cell) → Strategy Editor (findings 0025 §8 — Hakoniwa step

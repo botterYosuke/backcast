@@ -1,4 +1,11 @@
-# 0095 — issue #123: Instruments 空でも `chart:<iid>` フローティング窓が残る（layout 復元が universe-sync をバイパス）
+# 0100 — issue #123: Instruments 空でも `chart:<iid>` フローティング窓が残る（layout 復元が universe-sync をバイパス）
+
+> **採番経緯**: 本ファイルは元 `0095-issue123-chart-orphan-on-empty-universe.md`。#123 は 2 本の findings を同番号
+> `0095-` に衝突採番していた（本ファイル＝`CHART-ORPHAN` Journey gate と、`0095-issue123-chart-window-universe-sync-on-restore.md`
+> ＝`CHARTSYNC` slice gate）。#124 レビュー（2026-06-24）で曖昧さ根治のため本ファイルを振り直した。`0095` は
+> `chart-window-universe-sync-on-restore`（#124 / findings 0099 が継ぐ側）を正本として残す。両者は同一 fix（`ReseedFromEditor`
+> 末尾の `SyncChartWindowsToUniverse`）を別ゲートから記録したもの。なお当初 `0098-` を割り当てたが、push 前の rebase で
+> sibling `#113`（`0098-issue113-open-layer-marimo-only.md`）と再衝突したため最終的に `0100-` とした。
 
 - **状態**: 実装＋AFK ゲート GREEN（owner 実機 HITL は任意 — 純 C# / Python-FREE の決定論ゲートで挙動が閉じる）
 - **gate**: `Assets/Tests/E2E/Editor/ChartOrphanSyncJourneyE2ERunner.{cs,md}`（CHART-ORPHAN-01..04）

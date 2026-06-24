@@ -2,7 +2,7 @@
 
 `ChartOrphanSyncJourneyE2ERunner.cs` が自動検証する issue **#123「Instruments 空でも `chart:<iid>`
 フローティング窓が残る」** の release gate。実装者は `.cs` と本 `.md` をセットで読む。
-下位事実: [findings 0095](../../../../docs/findings/0095-issue123-chart-orphan-on-empty-universe.md)。
+下位事実: [findings 0100](../../../../docs/findings/0100-issue123-chart-orphan-on-empty-universe.md)（元 `0095-`・#124 レビューで採番衝突を解消しリネーム）。
 採番・カバー語彙・責務境界の共通規約は [E2E-CONVENTIONS.md](./E2E-CONVENTIONS.md)、配置は
 [ADR-0015](../../../../docs/adr/0015-e2e-runner-layout-and-script-convention.md)。
 

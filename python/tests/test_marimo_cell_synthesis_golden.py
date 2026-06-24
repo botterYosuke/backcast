@@ -240,12 +240,46 @@ def test_entry_point_named_cell_round_trip_is_byte_idempotent():
     assert py2 == py1
 
 
-def test_entry_point_decompose_fail_soft_on_broken_py():
+def test_entry_point_decompose_non_marimo_returns_none():
+    # #113: a NON-MARIMO `.py` (loadable Python without `app = marimo.App()`) returns None — the C#
+    # aggregate turns that into an explicit NOT_A_MARIMO_NOTEBOOK Open failure (the 1-cell auto-wrap
+    # of findings 0054 §D1 is retired). Mirrors the run layer (#112 ADR-0025 D4) so the editor is
+    # "marimo or error" at Open time, consistent with run/materialize.
+    import pytest
+
     from engine.strategy_runtime.cell_synthesis import decompose_json
 
-    # A non-marimo / broken source must return None (fail-soft), never raise — the aggregate
-    # keeps the live buffer + shows a notice instead of wiping it (findings 0044).
-    assert decompose_json("this is (not valid python at all") is None
+    # an imperative Strategy subclass: valid Python, but not a marimo notebook → None.
+    assert decompose_json("class V19MorningStrategy:\n    def on_bar(self, bar):\n        pass\n") is None
+    # an empty / comment-only file is also not a notebook → None.
+    assert decompose_json("# just a comment\n") is None
+
+    # #113 AC#2: a BROKEN-SYNTAX source raises SyntaxError (a DISTINCT failure) rather than being
+    # silently masked as None — the Open layer surfaces it as a clear parse error.
+    # LITMUS: revert decompose_json's `raise_syntax_error=True` and this raise turns back into None.
+    with pytest.raises(SyntaxError):
+        decompose_json("this is (not valid python at all")
+
+
+def test_entry_point_decompose_for_open_envelope():
+    # #113: the C# Open seam reads a STRUCTURED envelope (no PythonException message parsing) so the
+    # failure KIND is classified in Python. ok -> cells; not_marimo -> non-marimo/empty; syntax_error
+    # -> broken syntax with a detail. The C# aggregate maps these to "<cells>" / "not a marimo
+    # notebook" / "syntax error: <detail>" respectively.
+    import json
+
+    from engine.strategy_runtime.cell_synthesis import decompose_for_open, synthesize_json
+
+    ok = decompose_for_open(synthesize_json(json.dumps([{"body": "x = 1", "name": "_", "config": {}}])))
+    assert ok["status"] == "ok"
+    assert json.loads(ok["cells"])[0]["body"] == "x = 1"
+
+    assert decompose_for_open("class Foo:\n    pass\n") == {"status": "not_marimo"}
+    assert decompose_for_open("# comment only\n") == {"status": "not_marimo"}
+
+    broken = decompose_for_open("this is (not valid python at all")
+    assert broken["status"] == "syntax_error"
+    assert broken["detail"]   # carries the parse-error detail for the user
 
 
 def test_entry_point_new_cell_is_anonymous_default():

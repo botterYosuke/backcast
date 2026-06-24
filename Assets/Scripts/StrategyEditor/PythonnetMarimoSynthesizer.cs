@@ -27,9 +27,22 @@ public sealed class PythonnetMarimoSynthesizer : IMarimoSynthesizer
         return _host.SynthesizeCells(CellJson.ToArray(cells).ToString(Formatting.None));
     }
 
-    public IReadOnlyList<Cell> Decompose(string py)
+    public IReadOnlyList<Cell> Decompose(string py, out string error)
     {
-        if (_host == null) return null;
-        return CellJson.TryParse(_host.DecomposeCells(py));   // null -> fail-soft (broken/non-marimo .py)
+        if (_host == null) { error = "python not ready"; return null; }
+        // #113: the host distinguishes "not a marimo notebook" (decompose_json -> None) from a broken
+        // -syntax parse error and hands back the reason; the aggregate surfaces it as the Open error
+        // (no 1-cell wrap). A non-null JSON still means success even though `error` is threaded out.
+        string json = _host.DecomposeCells(py, out error);
+        if (json == null) return null;            // host already set `error` (not-marimo / syntax / engine fault)
+        var cells = CellJson.TryParse(json);
+        if (cells == null)
+            // status=="ok" but the cells array failed to parse — a marshalling/seam fault, NOT a content
+            // verdict. Give it a DISTINCT reason (mirrors WorkspaceEngineHost's "engine error" leg) so the
+            // aggregate's `?? "not a marimo notebook"` fallback can't mislabel a valid notebook hit by a
+            // transient marshalling glitch as "not a marimo notebook" (honours the IMarimoSynthesizer
+            // contract: `error` is non-null whenever the result is null).
+            error = "notebook decode failed (cell parse error)";
+        return cells;
     }
 }

@@ -1881,14 +1881,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (string.IsNullOrEmpty(py)) { _menuBarView?.ShowMessage("Open: cancelled."); return; }
         // #87: a dirty document asks Save/Discard/Cancel before the picked .py replaces the buffer. The
         // picker runs FIRST (a cancelled picker is a no-op with nothing to guard); the guard defers the
-        // load behind the modal. On Discard the load passes discardDirty:true (DoFileOpen) so even a
-        // non-marimo wrap may replace dirty cells — the guard IS the discard authorization (#86 F1).
+        // load behind the modal. The guard is the dirty-loss protection; #113 retired the aggregate's
+        // wrap-specific discard-authorization (a non-marimo Open now fails without touching the buffer).
         GuardThenProceed(() => DoFileOpen(py));
     }
 
     // The actual File→Open load — run immediately on a clean document, or after the SaveGuard authorizes it
-    // (clean / saved / explicit Discard). discardDirty:true is always correct here: control only reaches
-    // this point once the guard has authorized losing any unsaved work.
+    // (clean / saved / explicit Discard). #113: a non-marimo / broken `.py` Open fails WITHOUT touching the
+    // buffer (marimo-or-error), so reaching here with unsaved work cannot silently lose it — a failed Open
+    // surfaces LastError and leaves the document unchanged.
     void DoFileOpen(string py)
     {
         // Layout is OPTIONAL (#80 intent / findings 0051). A valid "layout" key RESTORES the saved
@@ -1898,21 +1899,28 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // touched ONLY by ApplyLayout below, which a bare open skips (so a bad sidecar can't wipe the work).
         bool layoutOk = LayoutSidecarStore.TryReadLayout(py, out var doc);
 
-        // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load (findings 0017 §1).
-        // FileOpenModeSideEffect returns null in Replay / when disconnected (gap② guard) → no host touch.
-        // `?.` — the mode side-effect is OPTIONAL (the headless AFK gate drives Open with no menu VM wired).
-        SendModeSideEffect(_menuBar?.FileOpenModeSideEffect());
-
         // #81: the picked .py IS the notebook document — decompose it into N cell windows (saved
-        // cellPositions when we have a layout, else auto-cascade). #86 widened Open so a non-marimo
-        // `.py` BOOTSTRAPS as one anonymous cell (raw file text as body) — the only Open failures
-        // now are path/IO errors (missing file / unreadable / wrong extension). On any failure the
-        // workspace is untouched and we surface LastError.
-        if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null, discardDirty: true))
+        // cellPositions when we have a layout, else auto-cascade). #113: Open is "marimo or error" —
+        // a non-marimo `.py` ("not a marimo notebook") or a broken-syntax source ("syntax error: ...")
+        // FAILS, as do path/IO errors (missing file / unreadable / wrong extension). On any failure the
+        // workspace is untouched and we surface LastError. The decompose/bind is mode-independent, so it
+        // runs BEFORE the LiveAuto mode side-effect below — #113 makes Open-failure a common path (picking
+        // a non-marimo file), and the mode transition MUST NOT fire on a failed Open (it would flip a Live
+        // session to LiveAuto and auto-run the OLD strategy while the document never changed).
+        if (!_coordinator.Open(py, layoutOk ? ToVectors(doc.cellPositions) : null))
         {
             _menuBarView?.ShowMessage("Open: '" + Path.GetFileName(py) + "' " + (_notebook.LastError ?? "could not be opened"));
             return;   // fail-soft: the notebook is UNCHANGED, so an in-flight run is still valid — do NOT invalidate
         }
+
+        // TTWR: opening a layout WHILE Live transitions to LiveAuto, BEFORE the load TAKES EFFECT (findings
+        // 0017 §1 — here = before ApplyLayout/ReseedFromEditor, which is what the host observes). Moved
+        // below the Open-success guard (#113): the transition is gated on a successful document change so a
+        // rejected non-marimo Open leaves the execution mode untouched. FileOpenModeSideEffect is a pure
+        // query (returns null in Replay / disconnected → no host touch); `?.` — OPTIONAL (headless AFK
+        // drives Open with no menu VM wired).
+        SendModeSideEffect(_menuBar?.FileOpenModeSideEffect());
+
         _notebookRun?.Invalidate();   // #95 Phase 2: notebook replaced — drop any in-flight per-cell run against the old one
         // #100 Slice ① (findings 0077): document boundary — drop the prior doc's Replay tile state
         // (portfolio AND run-summary) so the new doc's tiles start honest-empty.  Called AFTER the
@@ -1923,12 +1931,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _currentLayoutPath = py;
         PersistResumePointer(py);
         ReseedFromEditor();
-        // F3 (#86, findings 0054 §D2a): a non-marimo `.py` wrap-Open looks identical to a clean
-        // marimo Open in the menu toast; users then Ctrl+S into the destructive marimo conversion
-        // (§D2) blind. Surface the wrap state on the same toast line so the conversion is informed.
-        string wrapHint = _notebook.WrapMode ? " (wrap mode — Save will convert to marimo)" : "";
+        // #113: only a valid marimo notebook reaches here (a non-marimo / broken Open fails above), so
+        // the toast no longer needs a wrap-mode hint — the opened document is always a real marimo file.
         string layoutHint = layoutOk ? "" : " (no saved layout)";
-        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + wrapHint + layoutHint);
+        _menuBarView?.ShowMessage("Opened " + Path.GetFileName(py) + layoutHint);
     }
 
     // SetExecutionMode for a File-op side-effect, with the standard worker→main reject marshalling. No-op

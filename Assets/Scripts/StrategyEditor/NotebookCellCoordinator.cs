@@ -124,12 +124,14 @@ public sealed class NotebookCellCoordinator
     // The aggregate replaces the cell list; this rebuilds the windows to match, applying the
     // sidecar positions (cell-order parallel; null/short -> auto-cascade). Returns false (and shows
     // nothing) when the aggregate's Open fails — the caller reads Notebook.LastError for the notice.
-    // #87 slice 3: a caller that already obtained the user's discard consent (the SaveGuard "Discard"
-    // verdict on File→Open) passes discardDirty:true to RELAX the aggregate's #86 F1 dirty-refuse. The
-    // default false keeps F1 intact for every other caller (restore / probes / clean opens).
-    public bool Open(string path, IReadOnlyList<Vector2> positions, bool discardDirty = false)
+    // #113: the aggregate's Open is now "marimo or error" — a non-marimo / broken `.py` fails WITHOUT
+    // touching the buffer (no 1-cell wrap), so the dirty buffer is intrinsically safe and the old
+    // #86 F1 dirty-refuse / #87 discardDirty discard-authorization seam is gone (the SaveGuard modal
+    // still gives the Save/Discard/Cancel choice before a valid-marimo switch — that protection is at
+    // the root, not here).
+    public bool Open(string path, IReadOnlyList<Vector2> positions)
     {
-        if (!_notebook.Open(path, discardDirty)) return false;
+        if (!_notebook.Open(path)) return false;
         SyncWindowsToNotebook(positions);
         return true;
     }

@@ -15,9 +15,13 @@ slice); it captures them on decompose and writes them back on synthesise — `sy
 is byte-idempotent for named files too (proven by the golden gate, the round-trip the bodies-only
 signature got wrong, findings 0050).
 
-`decompose_json` returns ``None`` on a broken / non-marimo `.py` (fail-soft): the aggregate keeps
-the live buffer untouched and shows a notice rather than wiping it (findings 0044). `synthesize_json`
-never raises on a malformed body — marimo's `safe_serialize_cell` emits an unparsable-cell marker.
+`decompose_json` (the Open direction) enforces "marimo or error" the same way the run layer does
+(#113 / #112 ADR-0025 D4, `build_live_marimo_loader`): a **non-marimo** `.py` (loadable Python that
+is not a marimo app) returns ``None`` — the aggregate turns that into an explicit
+``NOT_A_MARIMO_NOTEBOOK`` Open failure — while a **broken-syntax** `.py` propagates as ``SyntaxError``
+so a parse error surfaces as a distinct, clear error instead of a silent 1-cell wrap (the auto-wrap
+of findings 0054 §D1 was retired by #113). `synthesize_json` never raises on a malformed body —
+marimo's `safe_serialize_cell` emits an unparsable-cell marker.
 """
 from __future__ import annotations
 
@@ -45,13 +49,20 @@ def synthesize_json(cells_json: str) -> str:
     return generate_filecontents(codes=codes, names=names, cell_configs=configs, config=None)
 
 
-def load_app_from_text(py: str) -> Any:
+def load_app_from_text(py: str, *, raise_syntax_error: bool = False) -> Any:
     """Parse marimo ``.py`` SOURCE TEXT into an App, or ``None`` when it is not a loadable marimo app.
 
     ``load_app`` takes a path, so the text is written to a temp file (the proven golden path) and
     removed. Shared by ``decompose_json`` (Open) and the #95 Phase 2 notebook_session (per-cell RUN),
     so the temp-file dance lives in ONE place. marimo is imported lazily here (this module stays
     marimo-free at load time).
+
+    Failure modes (mirrors ``marimo._ast.load.load_app``): a **non-marimo** file (a plain Python
+    script — ``NonMarimoPythonScriptError``/``MarimoFileError``) or an empty/comment-only file maps
+    to ``None``; a **broken-syntax** file raises ``SyntaxError``. ``raise_syntax_error`` controls the
+    latter: the per-cell-RUN callers keep the historical fail-soft ``None`` (default ``False``); the
+    Open seam (``decompose_json``) passes ``True`` so #113 can surface a parse error distinctly from
+    "not a marimo notebook".
     """
     from marimo._ast.load import load_app
 
@@ -61,7 +72,13 @@ def load_app_from_text(py: str) -> Any:
             f.write(py or "")
         try:
             return load_app(path)
+        except SyntaxError:
+            if raise_syntax_error:
+                raise
+            return None
         except Exception:
+            # Non-marimo (NonMarimoPythonScriptError / MarimoFileError) and any other load failure
+            # are "not a marimo notebook" → None. SyntaxError is handled above as a DISTINCT failure.
             return None
     finally:
         try:
@@ -74,10 +91,13 @@ def decompose_json(py: str) -> Optional[str]:
     """Decompose a marimo ``.py`` into an ordered list of cells (the Open direction).
 
     Returns a JSON array of ``{"body", "name", "config"}`` in ``.py`` cell order, or ``None`` when
-    the source is not a loadable marimo app (broken syntax / not a marimo file) — the fail-soft
-    signal the aggregate turns into "keep the buffer + notice" (findings 0044).
+    the source is **not a marimo notebook** (a loadable non-marimo Python script / empty file) — the
+    aggregate turns that ``None`` into an explicit ``NOT_A_MARIMO_NOTEBOOK`` Open failure (#113, the
+    1-cell auto-wrap of findings 0054 §D1 retired). A **broken-syntax** source raises ``SyntaxError``
+    (``raise_syntax_error=True``) so the Open layer surfaces it as a distinct, clear error instead of
+    masking it — matching the run layer (#112 ADR-0025 D4) so "marimo or error" is consistent open〜run.
     """
-    app = load_app_from_text(py)
+    app = load_app_from_text(py, raise_syntax_error=True)
     if app is None:
         return None
 
@@ -90,3 +110,26 @@ def decompose_json(py: str) -> Optional[str]:
         for i in range(len(codes))
     ]
     return json.dumps(cells)
+
+
+def decompose_for_open(py: str) -> dict[str, Any]:
+    """C#↔Python **Open-layer** seam (#113): classify the source into a robust, pythonnet-version-
+    independent envelope so the C# notebook aggregate gets the failure KIND WITHOUT parsing a
+    ``PythonException`` message. Returns a dict the host reads under the GIL:
+
+      * ``{"status": "ok", "cells": "<json array>"}``      — a valid marimo notebook;
+      * ``{"status": "not_marimo"}``                       — a non-marimo / empty `.py`
+        (→ aggregate ``"not a marimo notebook"``);
+      * ``{"status": "syntax_error", "detail": "<msg>"}``  — broken syntax (→ aggregate
+        ``"syntax error: <detail>"``, a DISTINCT failure, #113 AC#2).
+
+    This wraps ``decompose_json`` (which keeps its pure contract: non-marimo → ``None``, broken →
+    raises ``SyntaxError``) and turns the SyntaxError into structured data at the boundary.
+    """
+    try:
+        cells = decompose_json(py)
+    except SyntaxError as exc:
+        return {"status": "syntax_error", "detail": str(exc)}
+    if cells is None:
+        return {"status": "not_marimo"}
+    return {"status": "ok", "cells": cells}

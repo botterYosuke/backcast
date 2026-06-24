@@ -21,7 +21,7 @@
 // delete-the-production-logic litmus:
 //   * OnFileNew の GuardThenProceed を外し DoFileNew を直呼び → FILEGUARD-01/02/03 FAIL（defer/Cancel/Discard 区別が消える）。
 //   * OnFileOpen の GuardThenProceed を外し DoFileOpen 直呼び → FILEGUARD-05/07 FAIL（dirty Open が黙って切替）。
-//   * DoFileOpen の coordinator.Open(..., discardDirty:true) を discardDirty 無し（既定 false）に戻す → FILEGUARD-06 FAIL（F1 refuse で buffer 据え置き）。
+//   * MarimoNotebookDocument.Open に 1-cell wrap leg を戻す（#113 退役分）→ FILEGUARD-06 FAIL（非marimo が拒否されず buffer が file body に置換）。
 //   * OnGuardSave のデータ保護（ResolveSaveAs(false)→Abort）を「常に proceed」に壊す → FILEGUARD-09 FAIL（編集を失って Open が走る）。
 
 using System;
@@ -49,7 +49,7 @@ public static class FileNavGuardE2ERunner
                 ?? FileGuard03_NewDiscardProceeds()
                 ?? FileGuard04_NewSavePersistsThenProceeds()
                 ?? FileGuard05_OpenCancelPreserves()
-                ?? FileGuard06_OpenDiscardRelaxesF1()
+                ?? FileGuard06_OpenNonMarimoRejected()
                 ?? FileGuard07_OpenValidMarimoStillGuarded()
                 ?? FileGuard08_CleanPassesThrough()
                 ?? FileGuard09_OpenSaveCancelledAborts();
@@ -59,7 +59,7 @@ public static class FileNavGuardE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E FILE-NAV-GUARD PASS] dirty File→New/Open defer behind the SaveGuard; Cancel preserves the document, Discard proceeds (discardDirty relaxes #86 F1), Save persists-then-proceeds, a cancelled Save aborts (data protection), a clean document passes through, and even a valid-marimo switch is guarded (owner-veto).");
+            Debug.Log("[E2E FILE-NAV-GUARD PASS] dirty File→New/Open defer behind the SaveGuard; Cancel preserves the document, Discard proceeds, a non-marimo File→Open is rejected (#113 marimo-or-error, buffer preserved), Save persists-then-proceeds, a cancelled Save aborts (data protection), a clean document passes through, and even a valid-marimo switch is guarded (owner-veto).");
             EditorApplication.Exit(0);
         }
         else
@@ -164,10 +164,13 @@ public static class FileNavGuardE2ERunner
         return null;
     }
 
-    // ── FILEGUARD-06: Discard on a dirty File→Open of a NON-MARIMO .py (FailDecompose) RELAXES the #86 F1
-    //   refuse via discardDirty:true — the buffer is replaced (1-cell wrap of the file). LITMUS: without
-    //   discardDirty:true the aggregate F1-refuses a dirty non-marimo open and the buffer is preserved. ──
-    static string FileGuard06_OpenDiscardRelaxesF1()
+    // ── FILEGUARD-06: #113 marimo-or-error at the root. A dirty File→Open of a NON-MARIMO .py
+    //   (FailDecompose) STILL prompts (dirty-loss protection survives), but on Discard the marimo-only
+    //   Open REJECTS the file ("not a marimo notebook") — it never binds and the buffer is preserved
+    //   (the work survives precisely because the target was not a notebook; the old 1-cell wrap is
+    //   retired). LITMUS: re-add the `?? new List<Cell> { new Cell(content,...) }` wrap leg to
+    //   MarimoNotebookDocument.Open and the buffer is replaced by the file body → FILEGUARD-06 FAIL. ──
+    static string FileGuard06_OpenNonMarimoRejected()
     {
         var h = Compose(out string err, failDecompose: true); if (err != null) return "FILEGUARD-06: " + err;
         h.Nb.Cells[0].SetBody("dirty_work = 1\n");         // dirty the untitled doc
@@ -178,9 +181,9 @@ public static class FileNavGuardE2ERunner
         if (!h.Sgc.IsOpen) return "FILEGUARD-06: dirty non-marimo File→Open did not prompt";
         h.OnGuardDiscard();
         if (h.Sgc.IsOpen) return "FILEGUARD-06: Discard left the SaveGuard open";
-        if (!SamePath(Current(h), tgt)) return "FILEGUARD-06: Discard did not load the picked .py (discardDirty did not relax F1)";
-        if (!h.Nb.WrapMode) return "FILEGUARD-06: the non-marimo open was not a 1-cell wrap (WrapMode)";
-        if (!h.Nb.Cells[0].Body.Contains("imperative_strategy")) return "FILEGUARD-06: the wrapped cell does not carry the file body";
+        if (SamePath(Current(h), tgt)) return "FILEGUARD-06: a non-marimo .py was BOUND (it must be rejected — marimo-or-error, no wrap)";
+        if (h.Nb.LastError != "not a marimo notebook") return "FILEGUARD-06: non-marimo Open LastError should be 'not a marimo notebook' (" + (h.Nb.LastError ?? "<null>") + ")";
+        if (!h.Nb.Cells[0].Body.Contains("dirty_work")) return "FILEGUARD-06: the rejected Open mutated the buffer (unsaved work must be preserved)";
         return null;
     }
 
@@ -197,7 +200,6 @@ public static class FileNavGuardE2ERunner
         h.Root.SetFileDialog(new StubFileDialog { NextResult = marimoPy });
         h.OnFileOpen();
         if (!h.Sgc.IsOpen) return "FILEGUARD-07: a dirty switch to a valid-marimo .py was NOT guarded (owner-veto regression — old silent-switch behaviour resurfaced)";
-        if (h.Nb.WrapMode) return "FILEGUARD-07: precondition — the default synth open should NOT be a wrap (must exercise the silent-switch path)";
         h.OnGuardDiscard();
         if (!SamePath(Current(h), marimoPy)) return "FILEGUARD-07: Discard did not switch to the picked notebook";
         if (!h.Nb.Cells[0].Body.Contains("switched_body")) return "FILEGUARD-07: the switched buffer does not carry the new file body";

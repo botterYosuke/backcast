@@ -21,8 +21,10 @@
 // also changes the `.py`), so "added a window but didn't save" correctly falls to not-supplyable.
 //
 // >=1 INVARIANT (marimo canDelete=!hasOnlyOneCell): the notebook is ALWAYS >=1 cell; RemoveCell
-// refuses the last cell. The 0-cell transient (File->New / opening an empty `.py`) is resolved by
-// bootstrapping one empty cell. UnityEngine-FREE so the layer-1 AFK gate drives the whole model.
+// refuses the last cell. The 0-cell transient is bootstrapped to one empty cell by the constructor and
+// ResetUnboundEmpty (File->New). #113: Open no longer bootstraps — opening an empty/0-cell-but-valid
+// marimo `.py` is REJECTED as "not a marimo notebook" (Open upholds >=1 by rejection, not by seeding a
+// synthetic cell). UnityEngine-FREE so the layer-1 AFK gate drives the whole model.
 
 using System;
 using System.Collections.Generic;
@@ -36,8 +38,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     string _path;                 // null = unbound; otherwise canonical absolute .py
     bool _dirty;
     bool _openedOrSaved;          // last Open OR Save succeeded (provider condition 3)
-    bool _wrapMode;               // F3 (#86): last Open took the non-marimo 1-cell wrap leg (findings 0054 §D2a)
-    string _lastError;            // last Open fail-soft reason (the caller surfaces it)
+    string _lastError;            // last Open failure reason (the caller surfaces it)
 
     public MarimoNotebookDocument(IMarimoSynthesizer synthesizer)
     {
@@ -51,11 +52,6 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     public bool IsDirty => _dirty;
     public bool IsBound => _path != null;
     public string LastError => _lastError;
-    // F3 (#86, findings 0054 §D2a): true between a non-marimo 1-cell wrap Open and the next
-    // Save / SaveAs / valid-marimo Open / File→New. Surfaced by BackcastWorkspaceRoot.OnFileOpen
-    // as "(wrap mode — Save will convert to marimo)" so the user does not mistake the wrap-Open
-    // toast for a clean marimo Open and Ctrl+S into the destructive marimo conversion (§D2) blind.
-    public bool WrapMode => _wrapMode;
     public int IndexOf(Cell cell) => _cells.IndexOf(cell);
 
     void MarkDirty() => _dirty = true;
@@ -105,7 +101,6 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         if (!AtomicPyFile.Write(_path, py)) return false;   // replace-failure preserves on-disk
         _dirty = false;
         _openedOrSaved = true;
-        _wrapMode = false;          // F3: post-Save the on-disk is now marimo form (§D2)
         return true;
     }
 
@@ -126,20 +121,22 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         _path = full;
         _dirty = false;
         _openedOrSaved = true;
-        _wrapMode = false;          // F3: post-SaveAs the new on-disk is marimo form (§D2)
         return true;
     }
 
-    // Open an existing `.py`: read -> decompose -> REPLACE the cell list. The notebook is unchanged
-    // ONLY for path/IO failures (bad path / wrong extension / missing file / read error); those set
-    // LastError and the caller shows a notice. The synthesiser's fail-soft null (non-marimo or broken
-    // source) is NOT an Open failure: per #86 the file content is BOOTSTRAPPED as a single anonymous
-    // cell (body = the raw file text verbatim, name = "_", default config) so any `.py` File->Open
-    // picks opens. This makes the editor a general Python editor at Open time; Save then synthesises
-    // through `generate_filecontents` (owner: destructive overwrite into marimo form is OK), so a
-    // non-marimo `.py` opened + saved is a ONE-WAY migration into the cell-DAG model. A VALID but
-    // empty/0-cell marimo `.py` opens with one bootstrapped empty cell (>=1 invariant).
-    public bool Open(string path, bool discardDirty = false)
+    // Open an existing `.py`: read -> decompose -> REPLACE the cell list. The notebook is UNCHANGED
+    // on EVERY failure (path/IO error OR a non-marimo / broken source): the failing leg sets LastError
+    // and returns false WITHOUT touching `_cells` / `_path` / `_dirty`, so an in-flight buffer (even a
+    // dirty one) is never wiped by a failed Open. The caller surfaces LastError.
+    //
+    // #113 (reverses findings 0054 §D1): the editor is a MARIMO notebook editor — Open is "marimo or
+    // error". A non-marimo `.py` (`_synth.Decompose` -> null with "not a marimo notebook") is NO
+    // LONGER bootstrapped into a 1-cell wrap; it is an explicit Open failure. A broken-syntax source
+    // surfaces as a DISTINCT "syntax error: ..." (AC#2), never masked. This makes the Open layer
+    // consistent with the run/materialize contract (#112 ADR-0025 D4 NOT_A_MARIMO_NOTEBOOK). A VALID
+    // marimo `.py` opens unchanged; an empty/0-cell-but-valid marimo header is rejected too (Decompose
+    // returns an empty list -> not a notebook).
+    public bool Open(string path)
     {
         _lastError = null;
         if (string.IsNullOrEmpty(path)) return Fail("no path");
@@ -155,29 +152,15 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         try { content = File.ReadAllText(full, Encoding.UTF8); }
         catch { return Fail("read failed"); }
 
-        // #86: non-marimo / unparseable `.py` (Decompose -> null) is wrapped as one anonymous cell so
-        // the editor opens it as-is; valid marimo notebooks pass through unchanged.
-        // #86 F1: REFUSE the wrap when the notebook is dirty (= unsaved work in `_cells`). Otherwise
-        // Open(non-marimo `.py`) would silently overwrite the user's in-progress edits with a 1-cell
-        // wrap of an unrelated file. Fail-soft: set LastError and return WITHOUT touching `_cells` /
-        // `_path` / `_dirty`. Valid marimo `.py` (Decompose != null) still replaces a dirty notebook
-        // — that's the explicit "switch notebook" intent.
-        // #87 slice 2 (discard-authorization seam): a caller that has ALREADY obtained the user's
-        // consent to lose the unsaved work — the higher-layer SaveGuard "Discard" verdict on
-        // File→Open — passes discardDirty:true to RELAX the F1 refuse, so the wrap discards `_cells`
-        // and binds the new file. discardDirty:false (default) keeps F1 intact for every other caller.
-        IReadOnlyList<Cell> decomposed = _synth.Decompose(content);
-        bool wrapLeg;
-        if (decomposed == null)
-        {
-            if (_dirty && !discardDirty) return Fail("dirty workspace — Save or File→New before opening a non-marimo .py");
-            decomposed = new List<Cell> { new Cell(content, "_", "{}") };
-            wrapLeg = true;
-        }
-        else
-        {
-            wrapLeg = false;
-        }
+        // #113: Decompose returns the ordered cells for a valid marimo notebook, or null with a
+        // user-facing reason ("not a marimo notebook" / "syntax error: ...") otherwise. Reject the
+        // non-marimo / broken source as an Open failure — no 1-cell wrap, buffer untouched.
+        IReadOnlyList<Cell> decomposed = _synth.Decompose(content, out string decErr);
+        if (decomposed == null) return Fail(decErr ?? "not a marimo notebook");
+        // A valid marimo header (`app = marimo.App()`) with zero `@app.cell` defs decomposes to an
+        // EMPTY list — that is not a usable notebook, so reject it rather than binding a 0-cell doc
+        // (the >=1 invariant must never be satisfied by a synthetic empty cell on the Open path).
+        if (decomposed.Count == 0) return Fail("not a marimo notebook");
 
         _cells.Clear();
         foreach (var c in decomposed)
@@ -185,15 +168,10 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
             c.BindBodyChanged(MarkDirty);
             _cells.Add(c);
         }
-        // Reachable only when Decompose returns a non-null but empty list — a VALID marimo header
-        // (`app = marimo.App()`) with zero `@app.cell` defs. The non-marimo / unparseable case takes
-        // the wrap above (always >=1 cell); a 0-byte non-marimo `.py` becomes a 1-cell wrap of body="".
-        if (_cells.Count == 0) _cells.Add(NewCell("", "_", "{}"));
 
         _path = full;
         _dirty = false;
         _openedOrSaved = true;
-        _wrapMode = wrapLeg;        // F3: surface wrap leg vs valid-marimo Open to the toast (§D2a)
         return true;
     }
 
@@ -206,7 +184,6 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         _path = null;
         _dirty = false;
         _openedOrSaved = false;
-        _wrapMode = false;          // F3: File→New clears the wrap-mode signal
     }
 
     // IStrategyFileProvider — supplyable iff ALL 5 conditions hold (findings 0010 §5, moved up here):

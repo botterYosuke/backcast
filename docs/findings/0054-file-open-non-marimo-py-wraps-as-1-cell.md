@@ -3,6 +3,14 @@
 owner-locked 2026-06-19 (grill-with-docs). 関連: #86 / #80 (CLOSED) / findings 0050（cell-as-floating-window）/
 0051（File→Open bare strategy・layout 有無分岐）/ ADR-0013（notebook aggregate）.
 
+> ⚠️ **この決定は #113 で反転（2026-06-24）。** 本 findings の中心決定（§D1「非 marimo `.py` を 1-cell 自動 wrap
+> して開く」§D2「Save で marimo 形式に破壊的変換」§D2a「WrapMode signal」）は **退役**した。#112（ADR-0025 D4）の
+> 「marimo or error」run/materialize 契約を **Open 層へ前倒し**し、非 marimo `.py` は 1-cell wrap せず明示エラー
+> （`"not a marimo notebook"`）、broken syntax は SyntaxError 由来の別エラーにする。正本は
+> **[findings 0098](./0098-issue113-open-layer-marimo-only.md)**。以下の §D1–§D3a・テスト方針は **履歴**として残す
+> （現行挙動ではない）。§D3a の Run-time SyntaxError surface（imperative load 経路）と §D4 の path/IO fail-soft の
+> 表だけは #113 後も有効。
+
 ## 背景 — UI と実体の食い違い
 
 `File→Open` のダイアログ filter は `Strategy (*.py)` で「Python ファイル全般」を選べるように見えるが、

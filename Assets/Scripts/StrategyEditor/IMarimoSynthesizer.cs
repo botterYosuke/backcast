@@ -26,8 +26,12 @@ public interface IMarimoSynthesizer
     // an unparsable-cell marker); returns null only on an unexpected seam failure.
     string Synthesize(IReadOnlyList<Cell> cells);
 
-    // Decompose a `.py` back into ordered cells (body + name + config). Returns null on a broken /
-    // non-marimo `.py` (FAIL-SOFT, findings 0044): the aggregate keeps the live buffer untouched and
-    // the caller shows a notice — a parse failure never wipes the editor.
-    IReadOnlyList<Cell> Decompose(string py);
+    // Decompose a `.py` back into ordered cells (body + name + config). Returns null when the source
+    // is NOT a marimo notebook (#113: the editor is "marimo or error" at Open time — the 1-cell
+    // auto-wrap of findings 0054 was retired), setting `error` to a user-facing reason:
+    //   * "not a marimo notebook"  — a loadable non-marimo `.py` (no `app = marimo.App()`);
+    //   * "syntax error: <detail>" — a broken-syntax source (a DISTINCT failure, #113 AC#2);
+    //   * a seam-unavailable reason — the Python owner is not ready (pre-init).
+    // `error` is null on success. The aggregate surfaces `error` as its Open LastError (no wrap).
+    IReadOnlyList<Cell> Decompose(string py, out string error);
 }

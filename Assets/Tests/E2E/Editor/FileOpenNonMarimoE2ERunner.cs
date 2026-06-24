@@ -1,25 +1,25 @@
-// FileOpenNonMarimoE2ERunner.cs — issue #86 release-gate（台本: 同ディレクトリの
-// FileOpenNonMarimoE2ERunner.md / 設計正本: docs/findings/0054-file-open-non-marimo-py-wraps-as-1-cell.md）
+// FileOpenNonMarimoE2ERunner.cs — issue #113 release-gate（台本: 同ディレクトリの
+// FileOpenNonMarimoE2ERunner.md / 設計正本: docs/findings/0098-issue113-open-layer-marimo-only.md）
 //
 //   <Unity> -batchmode -nographics -quit -projectPath C:\Users\sasai\Documents\backcast \
 //           -executeMethod FileOpenNonMarimoE2ERunner.Run -logFile <log>
 //   # expect: [E2E FILE OPEN NONMARIMO PASS] ... / exit=0
 //   # compile-only ゲート: -executeMethod を外した同コマンドで error CS\d+ が 0 件。ログは UTF-8 = ripgrep で grep。
 //
-// THE NON-VACUOUS KILL（OPEN-NM-01）: 合成 fixture ではなく **実 on-disk** の
-// `python/strategies/v19/v19_morning.py`（imperative `class V19MorningStrategy(Strategy):` を持つ
-// 非 marimo `.py`）を集約に開かせ、wrap された body を **テスト側で独立に読んだ生本文と byte-for-byte 等値**で
-// assert する。MarimoNotebookDocument.Open:149-150 の `?? new List<Cell> { NewCell(content, "_", "{}") }` を
-// 消すと Open() が false になり、本 section が「Open returned false」で確定的に落ちる
-// （= production の wrap policy が無いと release-gate が割れる、を delete-the-logic で固定）。
+// #113（findings 0054 §D1 の自動 wrap を反転）: editor は marimo notebook 専用。File→Open は「marimo or error」で、
+// 非 marimo `.py` を 1-cell に自動 wrap せず **明示エラー**にする。本 runner は #86 の wrap release-gate を
+// 反転し、(1) 実 on-disk の非 marimo v19_morning.py が拒否される、(2) broken-syntax が SyntaxError 由来の
+// 別エラーになる、(3) 正常な marimo notebook は無回帰で開けて Run-gate を通す、(4) path/IO は従来どおり
+// fail-soft、を gate する。run/materialize 契約（#112 ADR-0025 D4 NOT_A_MARIMO_NOTEBOOK）と open〜run で一貫。
 //
-// 「Run-gate 解禁」（OPEN-NM-02）の意味: production の Run/Step/LiveAuto は BackcastWorkspaceRoot.cs:272 の
-// `RegistryStrategyFileProvider(_registry, NOTEBOOK_ID)` から path を引いて start_engine に渡す。本 runner は
-// **同じ NOTEBOOK_ID 文字列**で `StrategyProviderRegistry` を構築し、wrap 直後の集約が registry-resolved
-// provider 経由で v19_morning.py の絶対パスを返すことを assert する（≒ ▶ ボタンが押せる状態）。
-// 実 pythonnet 実 Run は HITL 領域（layer-3 pytest golden が seam を担う）。
+// THE NON-VACUOUS KILL（OPEN-NM-01）: 合成 fixture ではなく **実 on-disk** の
+// `python/strategies/v19/v19_morning.py`（imperative `class V19MorningStrategy(Strategy):` を持つ非 marimo `.py`）
+// を集約に開かせ、**Open が false** で **buffer 非破壊**であることを assert する。
+// delete-the-logic litmus: MarimoNotebookDocument.Open の null 分岐に `?? new List<Cell> { new Cell(content,…) }`
+// の wrap leg を戻すと Open() が true になり、本 section が確定的に落ちる（= wrap を退役させた事実を固定）。
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -40,9 +40,9 @@ public static class FileOpenNonMarimoE2ERunner
             if (Directory.Exists(TempDir)) Directory.Delete(TempDir, true);
             Directory.CreateDirectory(TempDir);
 
-            fail = Section1_OpenRealV19MorningWrapsAs1Cell()
-                ?? Section2_RunGateOpensAfterWrap()
-                ?? Section3_SaveAsRoundTripIsLossless()
+            fail = Section1_RealV19MorningRejected()
+                ?? Section2_BrokenSyntaxIsDistinctError()
+                ?? Section3_ValidMarimoOpensAndRunGate()
                 ?? Section4_FailSoftOnlyOnPathIO();
         }
         catch (Exception e)
@@ -52,7 +52,7 @@ public static class FileOpenNonMarimoE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E FILE OPEN NONMARIMO PASS] real v19_morning.py wrapped as 1 cell + run-gate open + lossless SaveAs + path/IO fail-soft preserved");
+            Debug.Log("[E2E FILE OPEN NONMARIMO PASS] real v19_morning.py rejected (not a marimo notebook) + broken-syntax distinct error + valid marimo opens & run-gate + path/IO fail-soft preserved");
             EditorApplication.Exit(0);
         }
         else
@@ -62,11 +62,12 @@ public static class FileOpenNonMarimoE2ERunner
         }
     }
 
-    // ---- 1. open the REAL on-disk python/strategies/v19/v19_morning.py and assert the 1-cell wrap.
-    // Covers: OPEN-NM-01. THE non-vacuous kill is comparing the wrap body byte-for-byte against the
-    // file text read independently from disk — a writer that drops content or seeds an empty body
-    // would pass a naive "Open succeeded + CellCount == 1" check but FAILS here.
-    static string Section1_OpenRealV19MorningWrapsAs1Cell()
+    // ---- 1. open the REAL on-disk python/strategies/v19/v19_morning.py and assert it is REJECTED.
+    // Covers: OPEN-NM-01. The non-vacuous kill: we read the real file independently to prove it IS a
+    // non-marimo imperative strategy (`class V19MorningStrategy`), then assert the aggregate refuses it
+    // (marimo-or-error) WITHOUT touching the buffer. The fake's FailDecompose=true models production
+    // PythonnetMarimoSynthesizer.Decompose for a non-marimo .py (decompose_json -> None).
+    static string Section1_RealV19MorningRejected()
     {
         if (!File.Exists(V19MorningPath))
             return "v19_morning.py not found at " + V19MorningPath + " (repo invariant)";
@@ -74,119 +75,105 @@ public static class FileOpenNonMarimoE2ERunner
         string rawOnDisk = File.ReadAllText(V19MorningPath, System.Text.Encoding.UTF8);
         if (string.IsNullOrEmpty(rawOnDisk))
             return "v19_morning.py is empty (repo invariant: real imperative strategy)";
+        if (!rawOnDisk.Contains("class V19MorningStrategy"))
+            return "v19_morning.py no longer carries 'class V19MorningStrategy' (oracle drifted — this gate assumes a non-marimo imperative strategy)";
 
-        // Models production PythonnetMarimoSynthesizer.Decompose for a non-marimo .py (findings 0054 D5):
-        // load_app returns None -> C# receives null -> aggregate WRAPs (instead of fail-soft abort).
         var synth = new FakeMarimoSynthesizer { FailDecompose = true };
         var nb = new MarimoNotebookDocument(synth);
+        string seedBody = nb.Cells[0].Body;   // the fresh untitled doc's one empty cell
 
-        if (!nb.Open(V19MorningPath))
-            return "Open returned false on real v19_morning.py (LastError=" + (nb.LastError ?? "<null>") +
-                   "); the #86 1-cell wrap is NOT engaging — delete-the-logic litmus is live";
+        // #113: Open of a non-marimo .py must FAIL — no 1-cell wrap. delete-the-logic litmus is live here.
+        if (nb.Open(V19MorningPath))
+            return "Open returned TRUE on real non-marimo v19_morning.py (the retired 1-cell wrap leg is back — #113 broken)";
+        if (nb.LastError != "not a marimo notebook")
+            return "non-marimo Open LastError='" + (nb.LastError ?? "<null>") + "' (expected 'not a marimo notebook')";
+        if (nb.IsBound) return "rejected Open bound the document to v19_morning.py (must stay unbound)";
+        if (nb.CurrentPath != null) return "rejected Open set CurrentPath (must stay null)";
+        if (nb.CellCount != 1 || nb.Cells[0].Body != seedBody)
+            return "rejected Open mutated the buffer (must leave the untitled doc untouched)";
 
-        if (nb.CellCount != 1) return "wrap produced " + nb.CellCount + " cells, expected exactly 1";
-
-        // BYTE-FOR-BYTE equality with the on-disk file text (the non-vacuous kill).
-        if (nb.Cells[0].Body != rawOnDisk)
-            return "wrap body != raw v19_morning.py text (writer is lossy or seeded an empty body)";
-
-        // The body MUST contain the imperative-strategy signature — proves we wrapped the REAL file,
-        // not a synthesized blank, and that the file on disk is still imperative (the case #86 fixes).
-        if (!nb.Cells[0].Body.Contains("class V19MorningStrategy"))
-            return "wrap body missing 'class V19MorningStrategy' (signature non-vacuous kill)";
-
-        if (nb.Cells[0].Name != "_") return "wrap cell name '" + nb.Cells[0].Name + "' != '_' (anonymous, findings 0054 D1)";
-        if (!nb.IsBound) return "wrap notebook not bound to v19_morning.py";
-        if (nb.IsDirty) return "wrap notebook is dirty immediately after Open";
-        if (nb.LastError != null) return "wrap Open set LastError='" + nb.LastError + "' (the wrap is success, not fail-soft)";
-        if (nb.CurrentPath == null || !nb.CurrentPath.EndsWith("v19_morning.py", StringComparison.Ordinal))
-            return "wrap notebook path '" + nb.CurrentPath + "' is not v19_morning.py";
-
+        Debug.Log("[E2E OPEN-NM-01 PASS] real non-marimo v19_morning.py rejected (not a marimo notebook), buffer untouched");
         return null;
     }
 
-    // ---- 2. Run-gate opens via RegistryStrategyFileProvider exactly as production does, and flips
-    // false when the wrap cell is edited (dirty) / true again after SaveAs (clean).
-    // Covers: OPEN-NM-02. Uses the SAME NOTEBOOK_ID constant production wires under
-    // (BackcastWorkspaceRoot.cs:47 / :272 / :409). If production renames or skips the Register call,
-    // the registry-resolved provider returns false here.
-    static string Section2_RunGateOpensAfterWrap()
+    // ---- 2. a BROKEN-SYNTAX source surfaces as a DISTINCT 'syntax error: ...' (never masked as a silent
+    // wrap or conflated with not-a-marimo). Covers: OPEN-NM-02 (#113 AC#2). The fake's SyntaxErrorDetail
+    // models decompose_json letting load_app's SyntaxError propagate (cell_synthesis raise_syntax_error=True).
+    static string Section2_BrokenSyntaxIsDistinctError()
     {
-        var synth = new FakeMarimoSynthesizer { FailDecompose = true };
+        var synth = new FakeMarimoSynthesizer { SyntaxErrorDetail = "invalid syntax (broken.py, line 1)" };
         var nb = new MarimoNotebookDocument(synth);
-        if (!nb.Open(V19MorningPath))
-            return "run-gate setup: Open of v19_morning.py failed (LastError=" + (nb.LastError ?? "<null>") + ")";
+        string seedBody = nb.Cells[0].Body;
 
+        string brokenPath = Path.Combine(TempDir, "broken_marimo.py");
+        File.WriteAllText(brokenPath, "import marimo\napp = marimo.App(\n");   // unbalanced paren
+        if (nb.Open(brokenPath))
+            return "Open returned TRUE on a broken-syntax .py (must fail)";
+        if (nb.LastError == null || !nb.LastError.StartsWith("syntax error", StringComparison.Ordinal))
+            return "broken-syntax Open LastError='" + (nb.LastError ?? "<null>") + "' should start with 'syntax error' (distinct from 'not a marimo notebook' — AC#2)";
+        if (nb.LastError == "not a marimo notebook")
+            return "broken-syntax was conflated with not-a-marimo (AC#2 wants a distinct SyntaxError-derived error)";
+        if (nb.IsBound) return "rejected broken-syntax Open bound the document (must stay unbound)";
+        if (nb.CellCount != 1 || nb.Cells[0].Body != seedBody)
+            return "rejected broken-syntax Open mutated the buffer";
+
+        Debug.Log("[E2E OPEN-NM-02 PASS] broken-syntax surfaces as a distinct syntax error (not conflated with not-a-marimo)");
+        return null;
+    }
+
+    // ---- 3. a VALID marimo notebook still Opens with no regression (AC#4) and unblocks the Run-gate via
+    // the SAME RegistryStrategyFileProvider production uses. Covers: OPEN-NM-03. The path round-trips
+    // through the fake's marker so Decompose succeeds the regular way (not a wrap, not a fail).
+    static string Section3_ValidMarimoOpensAndRunGate()
+    {
+        var synth = new FakeMarimoSynthesizer();   // FailDecompose=false: valid marimo decode path
+        // Build a real (fake-)marimo file on disk: synthesise 2 cells, then write the blob.
+        string marimoPy = Path.Combine(TempDir, "valid_marimo.py");
+        string blob = synth.Synthesize(new List<Cell> { new Cell("a = 1", "_config", "{}"), new Cell("b = a + 1", "_strat", "{}") });
+        File.WriteAllText(marimoPy, blob);
+
+        var nb = new MarimoNotebookDocument(synth);
+        if (!nb.Open(marimoPy))
+            return "valid marimo Open failed (LastError=" + (nb.LastError ?? "<null>") + ") — #113 must not regress valid notebooks";
+        if (nb.LastError != null) return "valid marimo Open set LastError='" + nb.LastError + "' (success must clear it)";
+        if (nb.CellCount != 2) return "valid marimo Open produced " + nb.CellCount + " cells, expected 2";
+        if (nb.Cells[0].Name != "_config" || nb.Cells[1].Name != "_strat")
+            return "valid marimo Open dropped cell names (seam carries body+name+config)";
+        if (!nb.IsBound || nb.IsDirty) return "valid marimo Open should bind + be clean";
+
+        // Run-gate: production Run/Step/LiveAuto pulls the path through RegistryStrategyFileProvider under
+        // NOTEBOOK_ID (BackcastWorkspaceRoot.cs:47/:272/:409). The opened notebook must supply its path.
         var registry = new StrategyProviderRegistry();
         registry.Register(NOTEBOOK_ID, nb);
         var provider = new RegistryStrategyFileProvider(registry, NOTEBOOK_ID);
-
         if (!provider.TryGetStrategyFile(out string runPath))
-            return "run-gate: registry-resolved provider returned false right after wrap (Run blocked)";
-        if (string.IsNullOrEmpty(runPath) || !runPath.EndsWith("v19_morning.py", StringComparison.Ordinal))
-            return "run-gate: provider returned wrong path '" + runPath + "' (expected v19_morning.py absolute path)";
-        if (!Path.IsPathRooted(runPath)) return "run-gate: provider path is not absolute (5-condition contract)";
+            return "run-gate: registry-resolved provider returned false right after a valid Open (Run blocked)";
+        if (!Path.IsPathRooted(runPath) || !runPath.EndsWith("valid_marimo.py", StringComparison.Ordinal))
+            return "run-gate: provider returned wrong path '" + runPath + "'";
 
-        // Editing the wrap cell flips supplyable → false (dirty source = body edit, findings 0010 §5).
-        nb.Cells[0].SetBody(nb.Cells[0].Body + "# edited\n");
-        if (!nb.IsDirty) return "run-gate: wrap body edit did not dirty the notebook (BindBodyChanged lost)";
-        if (provider.TryGetStrategyFile(out _))
-            return "run-gate: provider still supplies path while notebook is dirty (5-condition broken)";
+        // a body edit dirties → not supplyable; Save re-clears → supplyable (5-condition contract intact).
+        nb.Cells[0].SetBody("a = 2");
+        if (!nb.IsDirty || provider.TryGetStrategyFile(out _))
+            return "run-gate: dirty notebook still supplies a path (5-condition broken)";
+        if (!nb.Save()) return "run-gate: Save failed";
+        if (!provider.TryGetStrategyFile(out _)) return "run-gate: provider false after Save (Run re-blocked)";
 
-        // SaveAs to a NEW temp path (NEVER overwrite the real v19_morning.py) re-clears dirty + rebinds.
-        string savedPath = Path.Combine(TempDir, "v19_morning_saved.py");
-        if (!nb.SaveAs(savedPath)) return "run-gate: SaveAs to temp failed";
-        if (nb.IsDirty) return "run-gate: SaveAs did not clear dirty";
-        if (!provider.TryGetStrategyFile(out string reboundPath))
-            return "run-gate: provider returned false after SaveAs (Run re-blocked)";
-        if (!string.Equals(Path.GetFullPath(reboundPath), Path.GetFullPath(savedPath), StringComparison.OrdinalIgnoreCase))
-            return "run-gate: provider path '" + reboundPath + "' != saved-as path '" + savedPath + "'";
-
+        Debug.Log("[E2E OPEN-NM-03 PASS] valid marimo notebook opens with no regression + run-gate supplyable");
         return null;
     }
 
-    // ---- 3. SaveAs from a wrapped notebook produces a marimo-form file that, when re-Opened by a
-    // fresh aggregate with a NORMAL (non-failing) synthesizer, reproduces the original v19_morning.py
-    // body verbatim. Loss-less one-way migration into the cell-DAG model (findings 0054 D2).
-    // Covers: OPEN-NM-03.
-    static string Section3_SaveAsRoundTripIsLossless()
-    {
-        string rawOnDisk = File.ReadAllText(V19MorningPath, System.Text.Encoding.UTF8);
-
-        var synth1 = new FakeMarimoSynthesizer { FailDecompose = true };   // production null leg
-        var nb1 = new MarimoNotebookDocument(synth1);
-        if (!nb1.Open(V19MorningPath)) return "round-trip: initial Open failed";
-
-        string savedPath = Path.Combine(TempDir, "v19_morning_roundtrip.py");
-        if (!nb1.SaveAs(savedPath)) return "round-trip: SaveAs failed";
-        if (!File.Exists(savedPath)) return "round-trip: SaveAs produced no file";
-
-        // Re-open the saved file with a NEW aggregate and a NORMAL synthesizer (FailDecompose=false):
-        // because the file now carries the synthesizer's marker, Decompose succeeds the regular way —
-        // proving the wrap survives a synthesise -> decompose round-trip without loss.
-        var synth2 = new FakeMarimoSynthesizer { FailDecompose = false };
-        var nb2 = new MarimoNotebookDocument(synth2);
-        if (!nb2.Open(savedPath)) return "round-trip: re-Open of saved file failed (LastError=" + (nb2.LastError ?? "<null>") + ")";
-        if (nb2.CellCount != 1) return "round-trip: re-Open produced " + nb2.CellCount + " cells, expected 1";
-        if (nb2.Cells[0].Body != rawOnDisk)
-            return "round-trip: re-Open body != original v19_morning.py text (migration is lossy)";
-        if (nb2.Cells[0].Name != "_") return "round-trip: re-Open cell name '" + nb2.Cells[0].Name + "' != '_'";
-        if (nb2.IsDirty) return "round-trip: re-Open notebook is dirty";
-
-        return null;
-    }
-
-    // ---- 4. findings 0054 D4: the wrap downgraded Decompose-null from fail-soft to policy, but the
-    // path/IO failure modes are STILL fail-soft (false + LastError, buffer unchanged). Guards against
-    // widening the wrap to swallow IO errors too — a regression that would silently bind to garbage.
-    // Covers: OPEN-NM-04.
+    // ---- 4. path/IO failure modes are STILL fail-soft (false + the specific LastError, buffer unchanged).
+    // Covers: OPEN-NM-04. Guards against the rejection logic widening to swallow / mislabel IO errors —
+    // an empty path / wrong extension / missing file must keep their OWN reasons, distinct from the
+    // marimo-or-error reasons. The seed is a VALID marimo open (no wrap exists anymore).
     static string Section4_FailSoftOnlyOnPathIO()
     {
-        var synth = new FakeMarimoSynthesizer { FailDecompose = true };
-        var nb = new MarimoNotebookDocument(synth);
+        var synth = new FakeMarimoSynthesizer();
+        string marimoPy = Path.Combine(TempDir, "failsoft_seed.py");
+        File.WriteAllText(marimoPy, synth.Synthesize(new List<Cell> { new Cell("seed = 1", "_", "{}") }));
 
-        // Seed a known good open so we can prove buffer non-destructive on each subsequent failure.
-        if (!nb.Open(V19MorningPath)) return "fail-soft setup: initial Open of v19_morning.py failed";
+        var nb = new MarimoNotebookDocument(synth);
+        if (!nb.Open(marimoPy)) return "fail-soft setup: initial valid marimo Open failed";
         int seedCount = nb.CellCount;
         string seedBody = nb.Cells[0].Body;
         string seedPath = nb.CurrentPath;
@@ -197,7 +184,7 @@ public static class FileOpenNonMarimoE2ERunner
         if (nb.CellCount != seedCount || nb.Cells[0].Body != seedBody || nb.CurrentPath != seedPath)
             return "fail-soft: empty path Open mutated the buffer";
 
-        // wrong extension -> "not a .py".
+        // wrong extension -> "not a .py" (NOT "not a marimo notebook").
         string txtPath = Path.Combine(TempDir, "not_a_python_file.txt");
         File.WriteAllText(txtPath, "irrelevant");
         if (nb.Open(txtPath)) return "fail-soft: .txt Open should fail";
@@ -212,6 +199,7 @@ public static class FileOpenNonMarimoE2ERunner
         if (nb.CellCount != seedCount || nb.Cells[0].Body != seedBody || nb.CurrentPath != seedPath)
             return "fail-soft: missing .py Open mutated the buffer";
 
+        Debug.Log("[E2E OPEN-NM-04 PASS] path/IO failures stay fail-soft with their own reasons (no path / not a .py / file missing)");
         return null;
     }
 }

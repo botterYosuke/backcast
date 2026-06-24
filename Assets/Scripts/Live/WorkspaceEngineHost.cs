@@ -235,22 +235,55 @@ public sealed class WorkspaceEngineHost
         }
     }
 
-    // One `.py` -> N cells (body+name+config JSON array) via load_app; null when the source is not a
-    // loadable marimo app (Python returns None -> fail-soft, the aggregate keeps the buffer).
-    public string DecomposeCells(string py)
+    // One `.py` -> N cells (body+name+config JSON array) via load_app. Returns null with a user-facing
+    // `error` when the source is NOT a marimo notebook (#113 "marimo or error" at Open time):
+    //   * decompose_json returns None (loadable non-marimo `.py` / empty file) -> "not a marimo notebook";
+    //   * decompose_json raises SyntaxError (broken syntax) -> "syntax error: <detail>" (a DISTINCT
+    //     failure, #113 AC#2 — never masked as a silent wrap);
+    //   * Python not ready -> "python not ready".
+    // `error` is null on success. Mirrors the run layer (live_cell_runtime: NOT_A_MARIMO_NOTEBOOK vs
+    // raw SyntaxError) so the editor surfaces the same distinction open〜run.
+    public string DecomposeCells(string py, out string error)
     {
-        if (!PythonInitialized) return null;
+        error = null;
+        if (!PythonInitialized) { error = "python not ready"; return null; }
         try
         {
+            // #113: decompose_for_open returns a STRUCTURED envelope ({"status","cells"/"detail"}) so the
+            // failure KIND is classified in Python (version-independent) — no PythonException message
+            // parsing. status: ok -> cells JSON; not_marimo -> "not a marimo notebook"; syntax_error ->
+            // "syntax error: <detail>" (a DISTINCT failure, AC#2). Mirrors the run layer's NOT_A_MARIMO_
+            // NOTEBOOK vs raw SyntaxError so the editor surfaces the same distinction open〜run.
             using (Py.GIL())
             using (PyObject mod = Py.Import("engine.strategy_runtime.cell_synthesis"))
-            using (PyObject fn = mod.GetAttr("decompose_json"))
+            using (PyObject fn = mod.GetAttr("decompose_for_open"))
             using (PyObject res = fn.Invoke(new PyString(py ?? "")))
-                return res.IsNone() ? null : res.As<string>();
+            using (PyObject statusObj = res.GetItem("status"))
+            {
+                string status = statusObj.As<string>();
+                if (status == "ok")
+                {
+                    using (PyObject cells = res.GetItem("cells"))
+                        return cells.As<string>();
+                }
+                if (status == "syntax_error")
+                {
+                    using (PyObject detail = res.GetItem("detail"))
+                        error = "syntax error: " + detail.As<string>();
+                    return null;
+                }
+                error = "not a marimo notebook";   // status == "not_marimo"
+                return null;
+            }
         }
         catch (Exception e)
         {
-            Debug.LogWarning("[WorkspaceEngineHost] decompose_json failed: " + e.Message);
+            // An UNEXPECTED seam failure (pythonnet marshalling fault / import error / transient engine
+            // hiccup) — NOT a content verdict. Fail closed (Open fails rather than wrapping), but give it a
+            // DISTINCT message so a valid notebook hit by a transient fault is not misdiagnosed as "not a
+            // marimo notebook" (which would send the user to edit a file that is actually fine).
+            error = "notebook decode failed (engine error)";
+            Debug.LogWarning("[WorkspaceEngineHost] decompose_for_open failed: " + e.Message);
             return null;
         }
     }

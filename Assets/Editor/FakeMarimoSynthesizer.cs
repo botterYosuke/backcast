@@ -10,11 +10,15 @@
 //
 // Encoding: a marker line + a JSON array of {body,name,config}. The "py" it writes is NOT real Python
 // (it never runs through marimo here) — it is a reversible blob. Decompose of ARBITRARY text (no
-// marker — e.g. a real strategy `.py` a seeding probe opens) leniently wraps the whole text as ONE
-// anonymous cell, so the notebook binds. FailDecompose forces the seam's null return (the non-marimo
-// leg the production PythonnetMarimoSynthesizer also produces). Per #86 the aggregate's Open now
-// WRAPS that null into a 1-cell raw-content notebook (instead of failing fail-soft), so this fake
-// leg exercises the same wrap policy — production and fake stay aligned.
+// marker — e.g. a real strategy `.py` a SEEDING probe opens) leniently wraps the whole text as ONE
+// anonymous cell, so the notebook binds (this is a TEST-DOUBLE seeding convenience, NOT production
+// policy — the seeding probes only need a bound document, they do not assert marimo detection).
+//
+// #113: the production aggregate is now "marimo or error" at Open time (the 1-cell auto-wrap of
+// findings 0054 was retired). The two PRODUCTION decompose-failure legs are modelled explicitly so
+// the #113 AFK gates can drive them: FailDecompose => the non-marimo leg (Decompose -> null,
+// error="not a marimo notebook"); SyntaxErrorDetail != null => the broken-syntax leg (Decompose ->
+// null, error="syntax error: <detail>"). The aggregate surfaces `error` as its Open LastError.
 
 using System.Collections.Generic;
 using Newtonsoft.Json;
@@ -23,20 +27,28 @@ public sealed class FakeMarimoSynthesizer : IMarimoSynthesizer
 {
     const string Marker = "# fake-marimo-notebook";
 
-    // Layer-1 fail-soft leg: when true, Decompose returns null (a broken / non-marimo `.py`).
+    // Production non-marimo leg: when true, Decompose returns null with "not a marimo notebook"
+    // (PythonnetMarimoSynthesizer's decompose_json -> None case).
     public bool FailDecompose;
+
+    // Production broken-syntax leg (#113 AC#2): when non-null, Decompose returns null with
+    // "syntax error: <SyntaxErrorDetail>" (decompose_json raising SyntaxError). DISTINCT from the
+    // non-marimo leg so a parse error is never masked. Takes precedence over FailDecompose.
+    public string SyntaxErrorDetail;
 
     public string Synthesize(IReadOnlyList<Cell> cells)
         => Marker + "\n" + CellJson.ToArray(cells).ToString(Formatting.None);
 
-    public IReadOnlyList<Cell> Decompose(string py)
+    public IReadOnlyList<Cell> Decompose(string py, out string error)
     {
-        if (FailDecompose) return null;
-        if (py == null) return null;
+        if (SyntaxErrorDetail != null) { error = "syntax error: " + SyntaxErrorDetail; return null; }
+        if (FailDecompose) { error = "not a marimo notebook"; return null; }
+        if (py == null) { error = "not a marimo notebook"; return null; }
 
+        error = null;
         int nl = py.IndexOf('\n');
         if (nl >= 0 && py.Substring(0, nl).Trim() == Marker)
-            return CellJson.TryParse(py.Substring(nl + 1));   // null on a corrupt fake blob -> fail-soft
+            return CellJson.TryParse(py.Substring(nl + 1));   // null on a corrupt fake blob
 
         // arbitrary real `.py` (no marker): wrap the whole text as one anonymous cell so the notebook
         // can bind to it (the seeding probes read the file off disk, independent of cell decomposition).

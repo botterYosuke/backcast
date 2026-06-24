@@ -97,7 +97,7 @@ public static class StrategyEditorNotebookE2ERunner
                       "textInfo.meshInfo[].colors32 by full-source index, Default unchanged, no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
                       "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
                       "+ #81 notebook aggregate (fresh=1 empty cell, AddCell dirties, body-edit dirties, SaveAs/Save->Open " +
-                      "round-trip preserves body+name+config, >=1 delete guard, non-marimo Open wraps as 1 cell (#86), supplyable " +
+                      "round-trip preserves body+name+config, >=1 delete guard, non-marimo/broken Open REJECTED (marimo-or-error, #113), supplyable " +
                       "5-condition, ResetUnboundEmpty) + SpawnPlacement (anchor-start, diagonal cascade, overlap-allowed, " +
                       "<10 threshold, full-chain clear) + NotebookCellCoordinator (cell0->region_001, AddCell->region_002 spawn, " +
                       "DeleteCell despawn region_002 / hide-dormant region_001, >=1 guard, dormant reuse, CapturePositions cell-order) " +
@@ -744,8 +744,6 @@ public static class StrategyEditorNotebookE2ERunner
         if (!nb2.Open(py)) return "S10: Open failed";
         if (nb2.CellCount != 2) return "S10: round-trip lost a cell";
         if (nb2.Cells[0].Body != "x = 1" || nb2.Cells[1].Body != "y = x + 1") return "S10: round-trip body mismatch";
-        // F3: a valid-marimo Open is NOT wrap mode (the toast must stay "Opened X" with no wrap hint).
-        if (nb2.WrapMode) return "S10/F3: valid-marimo Open should not set WrapMode (toast would falsely warn about marimo conversion)";
         // F4 (#86 review): lock the foreach bind loop on the REAL Decompose leg too. FakeMarimoSynthesizer.Decompose
         // returns `new Cell(...)` instances WITHOUT a MarkDirty hook, so Open()'s foreach is the SINGLE bind site —
         // editing nb2's body after a clean valid-marimo Open MUST flip IsDirty. If a refactor drops the per-cell
@@ -771,82 +769,56 @@ public static class StrategyEditorNotebookE2ERunner
         if (!nb2.RemoveCell(nb2.Cells[0])) return "S10: RemoveCell on a 2-cell notebook failed";
         if (nb2.CellCount != 1) return "S10: RemoveCell did not shrink";
 
-        // #86: Open of a non-marimo `.py` (Decompose returns null) BOOTSTRAPS a 1-cell wrap whose body
-        // is the raw file content verbatim — Open SUCCEEDS, the notebook binds, and Run becomes possible
-        // (the on-disk file is still imperative, so Run goes through the imperative branch until Save).
-        // The synthesiser's null contract is unchanged; the wrap is the aggregate's policy.
+        // #113 (reverses findings 0054 §D1): the editor is "marimo or error" at Open time. Open of a
+        // NON-MARIMO `.py` (Decompose -> null, "not a marimo notebook") is NO LONGER wrapped into a
+        // 1-cell notebook — it is an explicit Open FAILURE that leaves the buffer untouched.
+        // delete-the-production-logic litmus: re-add the `?? new List<Cell> { new Cell(content,...) }`
+        // wrap leg to MarimoNotebookDocument.Open and THIS section goes RED (Open returns true).
         var failSynth = new FakeMarimoSynthesizer { FailDecompose = true };
         var nb3 = new MarimoNotebookDocument(failSynth);
         string rawPath = Path.Combine(TempDir, "nb_nonmarimo.py");
         string rawContent = "class V19MorningStrategy(Strategy):\n    def on_bar(self, bar):\n        pass\n";
         File.WriteAllText(rawPath, rawContent);
-        if (!nb3.Open(rawPath)) return "S10: Open of a non-marimo .py should succeed via 1-cell wrap";
-        if (nb3.CellCount != 1) return "S10: non-marimo wrap should produce exactly 1 cell";
-        if (nb3.Cells[0].Body != rawContent) return "S10: 1-cell wrap body != raw file content";
-        if (nb3.Cells[0].Name != "_") return "S10: 1-cell wrap should use anonymous name '_'";
-        if (!nb3.IsBound || nb3.IsDirty) return "S10: 1-cell wrap should bind + not be dirty";
-        if (!nb3.TryGetStrategyFile(out _)) return "S10: 1-cell wrap notebook not supplyable";
-        // F3 (#86, findings 0054 §D2a): the wrap leg MUST surface WrapMode=true so OnFileOpen can
-        // warn "Save will convert to marimo" — without this the destructive §D2 conversion is silent.
-        if (!nb3.WrapMode) return "S10/F3: wrap-Open did not set WrapMode (toast cannot distinguish wrap from clean marimo Open)";
-        // Lock the wrap-cell dirty hook: editing the wrapped body must flip IsDirty (a future refactor
-        // that drops the per-cell BindBodyChanged loop would otherwise pass S10 yet break supplyable).
-        nb3.Cells[0].SetBody(rawContent + "# edited\n");
-        if (!nb3.IsDirty) return "S10: wrap cell body edit did not dirty the notebook (BindBodyChanged lost)";
+        string nb3Before = nb3.Cells[0].Body;
+        if (nb3.Open(rawPath)) return "S10/#113: Open of a non-marimo .py should FAIL (marimo-or-error), not wrap as 1 cell";
+        if (nb3.LastError != "not a marimo notebook") return "S10/#113: non-marimo Open LastError should be 'not a marimo notebook' (got '" + (nb3.LastError ?? "<null>") + "')";
+        if (nb3.IsBound) return "S10/#113: a failed non-marimo Open must NOT bind the document";
+        if (nb3.CellCount != 1 || nb3.Cells[0].Body != nb3Before) return "S10/#113: a failed non-marimo Open mutated the buffer (must leave it untouched)";
 
-        // F1 (#86 review): a wrap Open MUST NOT silently overwrite an unsaved notebook. With IsDirty=true
-        // the Open of a non-marimo `.py` is REFUSED (fail-soft) and the existing cell list is PRESERVED
-        // verbatim — discard-confirm is a higher-layer UX slice; the aggregate just guards the invariant.
+        // #113 AC#2: a BROKEN-SYNTAX source surfaces as a DISTINCT 'syntax error: ...' (never masked as
+        // a silent wrap). The fake models decompose_json raising SyntaxError via SyntaxErrorDetail.
+        var synSynth = new FakeMarimoSynthesizer { SyntaxErrorDetail = "invalid syntax (line 1)" };
+        var nbSyn = new MarimoNotebookDocument(synSynth);
+        string brokenPath = Path.Combine(TempDir, "nb_broken.py");
+        File.WriteAllText(brokenPath, "def (:\n");
+        if (nbSyn.Open(brokenPath)) return "S10/#113: Open of a broken-syntax .py should FAIL";
+        if (nbSyn.LastError == null || !nbSyn.LastError.StartsWith("syntax error")) return "S10/#113: broken-syntax Open LastError should start with 'syntax error' (distinct from not-a-marimo), got '" + (nbSyn.LastError ?? "<null>") + "'";
+        if (nbSyn.IsBound) return "S10/#113: a failed broken-syntax Open must NOT bind the document";
+
+        // #113: a non-marimo Open is REFUSED regardless of dirty state — and because it fails before
+        // touching `_cells`, an unsaved (dirty) buffer is intrinsically preserved (the old #86 F1
+        // dirty-refuse / #87 discardDirty seam is gone; protection is now structural).
         var nb5 = new MarimoNotebookDocument(failSynth);
         nb5.AddCell();                                            // 2 cells
         nb5.Cells[0].SetBody("unsaved_work = 42");                // dirty
-        if (!nb5.IsDirty) return "S10/F1: precondition — nb5 should be dirty";
+        if (!nb5.IsDirty) return "S10/#113: precondition — nb5 should be dirty";
         int beforeCount = nb5.CellCount;
         string beforeBody0 = nb5.Cells[0].Body;
         string beforeBody1 = nb5.Cells[1].Body;
         string rawPath2 = Path.Combine(TempDir, "nb_nonmarimo_dirty.py");
         File.WriteAllText(rawPath2, "class Other(Strategy):\n    pass\n");
-        if (nb5.Open(rawPath2)) return "S10/F1: dirty notebook Open(non-marimo) should fail-soft (must refuse to overwrite)";
-        if (nb5.LastError == null) return "S10/F1: refused Open did not set LastError";
-        if (nb5.CellCount != beforeCount) return "S10/F1: refused Open mutated cell count";
-        if (nb5.Cells[0].Body != beforeBody0 || nb5.Cells[1].Body != beforeBody1) return "S10/F1: refused Open mutated cell bodies";
-        if (!nb5.IsDirty) return "S10/F1: refused Open cleared the dirty flag";
+        if (nb5.Open(rawPath2)) return "S10/#113: dirty notebook Open(non-marimo) must fail (marimo-or-error)";
+        if (nb5.LastError != "not a marimo notebook") return "S10/#113: dirty non-marimo Open LastError mismatch";
+        if (nb5.CellCount != beforeCount) return "S10/#113: refused Open mutated cell count";
+        if (nb5.Cells[0].Body != beforeBody0 || nb5.Cells[1].Body != beforeBody1) return "S10/#113: refused Open mutated cell bodies";
+        if (!nb5.IsDirty) return "S10/#113: refused Open cleared the dirty flag";
 
-        // F1-DISCARD (#87 slice 2 — MarimoNotebookDocument discard-authorization seam): the F1 refuse
-        // above is the DEFAULT (discardDirty:false). When the caller AUTHORIZES a discard via
-        // discardDirty:true (the higher-layer SaveGuard "Discard" verdict, wired in a later slice),
-        // a dirty notebook DISCARDS its unsaved cells and wraps the new non-marimo `.py` as 1 cell,
-        // binding clean — this is the exact aggregate seam the SaveGuard→Discard→Open(discardDirty:true)
-        // path will call. Non-vacuous litmus (two stakes, mutually protective): deleting the
-        // `&& !discardDirty` relaxation makes THIS section RED (Open refuses an authorized discard),
-        // while removing the `_dirty` guard entirely makes the nb5 F1-refuse section above RED.
-        var nb7 = new MarimoNotebookDocument(failSynth);
-        nb7.AddCell();                                            // 2 cells
-        nb7.Cells[0].SetBody("unsaved_work = 99");                // dirty
-        if (!nb7.IsDirty) return "S10/F1-DISCARD: precondition — nb7 should be dirty";
-        if (!nb7.Open(rawPath2, discardDirty: true))
-            return "S10/F1-DISCARD: dirty Open(non-marimo, discardDirty:true) should succeed (authorized discard, LastError=" + (nb7.LastError ?? "<null>") + ")";
-        if (nb7.CellCount != 1) return "S10/F1-DISCARD: authorized-discard wrap should produce exactly 1 cell (dirty cells not discarded)";
-        if (nb7.Cells[0].Body != "class Other(Strategy):\n    pass\n")
-            return "S10/F1-DISCARD: authorized-discard wrap body != the new file content (stale dirty cell survived)";
-        if (nb7.Cells[0].Name != "_") return "S10/F1-DISCARD: authorized-discard wrap should use anonymous name '_'";
-        if (!nb7.IsBound || nb7.IsDirty) return "S10/F1-DISCARD: authorized-discard wrap should bind + be clean";
-        if (!nb7.WrapMode) return "S10/F1-DISCARD: authorized-discard wrap did not set WrapMode (toast cannot warn about §D2 conversion)";
-        if (nb7.LastError != null) return "S10/F1-DISCARD: authorized-discard wrap set LastError (it is success, not fail-soft)";
-        if (!nb7.TryGetStrategyFile(out _)) return "S10/F1-DISCARD: authorized-discard wrap notebook not supplyable";
-
-        // Sanity: a CLEAN notebook still wraps (F1 only guards the dirty case — the happy path above stays green).
-        var nb6 = new MarimoNotebookDocument(failSynth);
-        if (!nb6.Open(rawPath2)) return "S10/F1: clean notebook should still wrap-Open a non-marimo .py";
-        if (nb6.CellCount != 1) return "S10/F1: clean wrap should produce 1 cell";
-        // F3: clean wrap-Open also lights WrapMode (same invariant as nb3, locked separately so a
-        // future split of the wrap path under F1 dirty gating cannot regress the clean leg silently).
-        if (!nb6.WrapMode) return "S10/F3: clean wrap-Open did not set WrapMode";
-        // F3: SaveAs converts the on-disk to marimo form (§D2) so WrapMode MUST clear — otherwise
-        // the toast would keep warning about a conversion that already happened.
-        string saveAsPath = Path.Combine(TempDir, "nb_wrap_saveas.py");
-        if (!nb6.SaveAs(saveAsPath)) return "S10/F3: SaveAs after wrap-Open failed";
-        if (nb6.WrapMode) return "S10/F3: SaveAs did not clear WrapMode (stale wrap warning after marimo conversion)";
+        // A valid marimo notebook still opens cleanly after the rejections above (no regression, AC#4):
+        // bind the prior round-tripped `py` (a real fake-marimo blob) and confirm it replaces the buffer.
+        var nb6 = new MarimoNotebookDocument(synth);
+        if (!nb6.Open(py)) return "S10/#113: a VALID marimo Open should still succeed (LastError=" + (nb6.LastError ?? "<null>") + ")";
+        if (nb6.LastError != null) return "S10/#113: a successful marimo Open must clear LastError";
+        if (!nb6.IsBound || nb6.IsDirty) return "S10/#113: a valid marimo Open should bind + be clean";
 
         // ResetUnboundEmpty = one empty cell, unbound (File→New).
         nb2.ResetUnboundEmpty();

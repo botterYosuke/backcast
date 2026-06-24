@@ -2,8 +2,9 @@
 //
 // Presentation logic for the venue connect/disconnect menu (findings 0012 D4/D6/D7).
 // The menu owns NO credential form: connect just fires venue_login with
-// credentials_source="prompt" for BOTH venues — the Python login_dialog_runner tkinter
-// subprocess collects the credentials (D4). The badge is derived from the
+// credentials_source="prompt" for BOTH venues — the Python tkinter dialog collects the
+// credentials in-process (#122 removed the subprocess; findings 0093 supersedes 0012 D4).
+// The badge is derived from the
 // VenueConnectionViewModel poll (D6 canonical), and disconnect is gated by the
 // LiveLogoutCoordinator so it is disabled while a write is in flight (D7 Wall 1).
 //
@@ -93,7 +94,8 @@ public class VenueMenuViewModel
     }
 
     // Build a connect request for an explicit (venue, env) — the prod-aware path. The env hint
-    // flows straight through to venue_login; the prompt subprocess owns credential entry (D4).
+    // flows straight through to venue_login; the in-process prompt dialog owns credential entry
+    // (#122/findings 0093, supersedes 0012 D4).
     public VenueConnectRequest BuildConnectRequest(string venue, string env) => new VenueConnectRequest
     {
         Venue = venue,
@@ -105,7 +107,7 @@ public class VenueMenuViewModel
     // (D7 Wall 1). This is the UI half of the two-layer logout defense.
     public bool CanDisconnect => _conn.IsConnected && _coord.CanUserLogout;
 
-    /// Both venues use the prompt path — the tkinter subprocess owns credential entry.
+    /// Both venues use the prompt path — the in-process tkinter dialog owns credential entry.
     public string CredentialsSourceFor(string venue) => "prompt";
 
     public string EnvironmentHintFor(string venue)

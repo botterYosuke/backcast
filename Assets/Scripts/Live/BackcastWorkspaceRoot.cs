@@ -1483,7 +1483,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!CanConnectConfigured()) return;
         string env = _venueMenu.EnvironmentHintFor(_venue);
         VenueConnectRequest req = _venueMenu.BuildConnectRequest(_venue, env);
-        if (_venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt subprocess)
+        if (_venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt dialog)
         _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint, (ok, ec) =>
         {
             _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;   // marshalled to Conn in Update

@@ -158,7 +158,7 @@ async def test_submit_order_does_not_log_second_password(
 async def test_auth_login_does_not_log_credentials_without_adapter(
     httpx_mock, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """adapter を経由しない直接 login (login dialog subprocess 経路) でも creds を
+    """adapter を経由しない直接 login (login dialog 経路・#122 で in-process tkinter) でも creds を
     ログに出さない。v4r9: R2 により sAuthId は URL に乗るため、httpx INFO の request
     ログ抑制が login() 自身でも効いている必要がある (#19 Finding 1 / ADR-0023)。"""
     from Cryptodome.PublicKey import RSA

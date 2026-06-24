@@ -7,8 +7,9 @@
 // What it copies into <exe>_Data/StreamingAssets/PythonRuntime/:
 //
 //   cpython/                              ← uv-managed CPython root, verbatim copy
-//     python.exe                          ← subprocess resolver step 1/4 + TTWR_PYTHON_BIN
-//     python313.dll                       ← Locator binds as PythonDLL
+//     python.exe                          ← part of the verbatim CPython copy (the #122-removed
+//                                            login-subprocess resolver / TTWR_PYTHON_BIN no longer uses it)
+//     python313.dll                       ← Locator binds as PythonDLL (the embedded interpreter)
 //     vcruntime140.dll / msvcp140.dll     ← uv-bundled (Locator's AddDllDirectory makes them
 //                                            reachable to transitive .pyd loads → no VC++ Redist
 //                                            precondition; #33 grill)
@@ -27,8 +28,9 @@
 //     venv root, so the venv root's pyvenv.cfg never appears in the bundle. The explicit
 //     File.Delete is a defensive net for a future change that ever does copy the full venv
 //     (a dev-machine pyvenv.cfg `home=` would point at the per-user uv install directory
-//     and conflict with the Locator's explicit PYTHONHOME on subprocess-spawned python.exe
-//     invocations). Today the delete is a no-op; tomorrow it's the guardrail.
+//     and conflict with the Locator's explicit PYTHONHOME if any future code ever spawns the
+//     bundled python.exe — #122 removed the only such caller, the login subprocess). Today the
+//     delete is a no-op; tomorrow it's the guardrail.
 //   * compileall --invalidation-mode unchecked-hash: post-process file copies reset .py
 //     mtime → timestamp-validated .pyc are treated as stale → every cold start re-compiles
 //     the entire venv (~marimo/scikit-learn are huge). unchecked-hash makes .pyc usable as
@@ -43,7 +45,8 @@
 //     is throwaway, tests run in CI.
 //   * DuckDB market data root (/Volumes/StockData/...) — env BACKCAST_JQUANTS_DUCKDB_ROOT.
 //   * VC++ Redistributable installer — uv ships the DLLs; Locator's AddDllDirectory wires them.
-//   * Job Object for login subprocess hygiene → #82.
+//   * Job Object for login subprocess hygiene → #82 (moot since #122 removed the login
+//     subprocess; the dialog now runs in-process — findings 0093).
 //   * Mac standalone verification gate — code paths exist for symmetry, Windows is the
 //     deploy target (cutover #5).
 

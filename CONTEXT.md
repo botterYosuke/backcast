@@ -164,7 +164,8 @@ backcast に `VenueLoggedIn`/`VenueLoggedOut` という push event は**無い**
 （接続中のみ載る）= **唯一の継続 canonical state**、(3) `VenueLogoutDetected` backend event = health watchdog 由来の
 外部切断を知らせ**再ログインを促す通知**。UI badge は **(2) の poll から導出**する（接続中＝`CONNECTED/SUBSCRIBED/
 RECONNECTING` のみ venue_id を載せる既存規律で stale バッジを防ぐ）。**(3) は badge を直接 `DISCONNECTED` へ
-変える権威ではない**——通知後も badge は poll の収束を待つ。secret flow とは独立。記録: findings 0012・#21。
+変える権威ではない**——通知後も badge は poll の収束を待つ。secret flow とは独立。記録: findings 0012・#21
+（login UI 所有 = D4 は #122/findings 0093 が supersede: subprocess 廃止・in-process tkinter）。
 _Avoid_: `VenueLoggedIn`/`VenueLoggedOut` push event を新設すること（存在しない）／`VenueLogoutDetected` を
 badge 変更の権威 state として扱うこと（通知であって canonical は (2) の poll）
 

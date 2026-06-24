@@ -1,5 +1,7 @@
 # findings 0016 — login subprocess の Python resolver が uv install root を見ない（実バグ修正）
 
+> ⚠️ **HISTORICAL（#122 で前提コード撤去・2026-06-24）**: 本 findings が扱う login subprocess・`login_dialog_runner`・`_resolve_python_executable()` は #122/findings 0093 で in-process tkinter 化に伴い撤去済み。以下は当時のバグ修正の記録で、現行コードに対応物は無い。
+
 ## 症状（ハード証拠・確認済み）
 
 ProductionLiveShell Connect（kabu Verify）が `login failed: LOGIN_SUBPROCESS_CRASHED`。Unity Editor.log の

@@ -10,7 +10,8 @@
 // It reuses the SAME durable pieces the production Live panel will: LiveRpcLanes (3 lanes),
 // VenueConnectionViewModel (poll badge), SecretModalController (char[] keyboard drain),
 // VenueMenuViewModel (connect/disconnect gating). Credentials are collected by the Python
-// login_dialog_runner tkinter subprocess (D4) — this harness builds NO credential form.
+// in-process tkinter dialog (#122/findings 0093, supersedes 0012 D4) — this harness builds
+// NO credential form.
 //
 // PLAY OWNERSHIP: spawned ONLY via Tools > Backcast > Venue Login Secret HITL (Tachibana
 // demo / Kabu verify); never auto-bootstraps, so it never collides with the single Play
@@ -286,8 +287,8 @@ public class VenueLoginSecretHitlHarness : MonoBehaviour
             if (_lanes != null && !_lanes.StopAndJoin())
                 Debug.LogWarning("[VENUE LOGIN SECRET HITL] teardown: a lane did not join in time");
             // Let an open login dialog settle before reclaiming the GIL — venue_login
-            // blocks on the tkinter subprocess (which has its own timeout); joining
-            // here avoids EndAllowThreads contending with a live login thread on exit.
+            // blocks on the in-process tkinter dialog thread (which has its own timeout);
+            // joining here avoids EndAllowThreads contending with a live login thread on exit.
             if (_login != null) _login.Join(2000);
             if (_engineStarted)
             {

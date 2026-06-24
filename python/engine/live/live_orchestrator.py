@@ -7,13 +7,8 @@ extracted from DataEngineBackend.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
-import re
-import subprocess
 import sys
-import tempfile
 import threading
 import time
 from concurrent import futures
@@ -47,7 +42,6 @@ from engine.live.health_watchdog import VenueHealthWatchdog
 from engine.live.instruments_scheduler import InstrumentsScheduler
 from engine.live import instruments_store
 from engine.live.logging import mask_secrets
-from engine.paths import PYTHON_SRC_ROOT
 from engine.live.event_wire import _backend_event_to_wire_dict
 
 # re-exported result types from _backend_impl (used by LiveLoopManager methods)
@@ -63,11 +57,35 @@ from engine._backend_impl import (
     _ACCOUNT_REFETCH_STATUSES,
     _ADAPTER_ERROR_CODES,
     _LiveSessionView,
-    _resolve_python_executable,
-    _login_subprocess_env,
     _live_login_timeout_s,
-    _sweep_stale_cred_files,
 )
+
+
+# --- in-process venue-login dialog (#122) ------------------------------------
+# Login runs the tkinter dialog IN-PROCESS (no subprocess). The bug class this
+# removes: the embedded marimo server installs WindowsSelectorEventLoopPolicy
+# globally, and a SelectorEventLoop cannot spawn subprocesses on Windows — so the
+# old create_subprocess_exec login path raised NotImplementedError, which the
+# orchestrator swallowed into the catch-all VENUE_LOGIN_FAILED. These validators
+# (relocated from the retired login_dialog_runner) now gate the in-proc dispatch.
+# See docs/findings/0093 (supersedes findings 0012 D4).
+_VALID_LOGIN_VENUES = ("tachibana", "kabu")
+_ENV_PER_VENUE: dict[str, frozenset[str]] = {
+    "tachibana": frozenset({"demo", "prod"}),
+    "kabu": frozenset({"verify", "prod"}),
+}
+
+
+def _try_create_tk() -> bool:
+    """tkinter import + Tk() probe. False on headless hosts (no display)."""
+    try:
+        import tkinter
+        root = tkinter.Tk()
+        root.withdraw()
+        root.destroy()
+        return True
+    except Exception:
+        return False
 
 
 @dataclass
@@ -191,7 +209,19 @@ class LiveLoopManager:
         if self._live_loop is not None:
             return self._live_loop
 
-        loop = asyncio.new_event_loop()
+        # Windows: the embedded marimo server sets WindowsSelectorEventLoopPolicy
+        # globally (marimo/_server/utils.py), and SelectorEventLoop has no
+        # subprocess support — create_subprocess_exec raises NotImplementedError.
+        # That trap used to break venue_login(source="prompt") with
+        # VENUE_LOGIN_FAILED; #122 removed the login subprocess (it now runs the
+        # dialog in-process), so this is no longer load-bearing for login. We keep
+        # forcing the ProactorEventLoop as defense-in-depth: it restores Windows'
+        # default loop that marimo clobbered, so any future async subprocess on
+        # this loop stays safe. See docs/findings/0093.
+        if sys.platform == "win32" and hasattr(asyncio, "ProactorEventLoop"):
+            loop = asyncio.ProactorEventLoop()
+        else:
+            loop = asyncio.new_event_loop()
 
         def _loop_exception_handler(_loop, ctx):
             # Post-merge fix (MEDIUM-5): mask any secrets that may have ended up
@@ -323,9 +353,6 @@ class LiveLoopManager:
             return
         if self._live_adapter_factory is None:
             return
-        # PermissionError on Windows can leak ttwr_cred_*.json from a prior
-        # venue_login; sweep here where no concurrent login holds the file.
-        _sweep_stale_cred_files()
         adapter = self._live_adapter_factory(environment_hint)
         loop = self._ensure_live_loop()
         future = asyncio.run_coroutine_threadsafe(
@@ -525,134 +552,88 @@ class LiveLoopManager:
     async def _handle_prompt_login(
         self, venue_id: str, env_hint: str
     ) -> tuple[bool, str, Optional[str]]:
-        """Spawn login_dialog_runner subprocess and handle cross-platform IPC.
+        """Run the login tkinter dialog IN-PROCESS on a dedicated thread.
 
         Returns (success, error_code, token_or_none).
         Tachibana: token_or_none is always None (uses session_cache on disk).
-        Kabu: token_or_none is the bearer token from cred-path file.
+        Kabu: token_or_none is the bearer token returned by run_dialog directly.
+
+        No subprocess (#122): the dialog runs on a private single-use thread —
+        a shared executor pool would be exhausted by the dialog's long human-input
+        block — and its result is awaited on the live loop. The API password stays
+        in the embedded Python's memory, and login no longer depends on the live
+        loop being subprocess-capable (the marimo SelectorEventLoop trap that used
+        to surface as VENUE_LOGIN_FAILED). See docs/findings/0093.
         """
-        cred_path = ""
-        if venue_id.upper() == "KABU":
-            fd, cred_path = tempfile.mkstemp(prefix="ttwr_cred_", suffix=".json")
-            os.close(fd)
-            if os.name == "posix":
-                os.chmod(cred_path, 0o600)
-        args = [
-            _resolve_python_executable(), "-m", "engine.live.login_dialog_runner",
-            "--venue", venue_id.lower(),
-            "--env", env_hint,
-        ]
-        if cred_path:
-            args.extend(["--cred-path", cred_path])
-        stderr_drain = None
+        venue = venue_id.lower()
+        if venue not in _VALID_LOGIN_VENUES:
+            return False, "UNKNOWN_VENUE", None
+        if env_hint not in _ENV_PER_VENUE.get(venue, frozenset()):
+            return False, "INVALID_ENV", None
+        if env_hint == "prod":
+            from engine.exchanges._env_guard import require_prod_env
+            allow_flag = "TACHIBANA_ALLOW_PROD" if venue == "tachibana" else "KABU_ALLOW_PROD"
+            try:
+                require_prod_env(allow_flag)
+            except RuntimeError:
+                return False, "PROD_NOT_ALLOWED", None
+
+        # Cross-thread cancel: on timeout we cannot kill the dialog thread, but we
+        # can ask the Tk dialog to close itself (it polls this event via root.after,
+        # which is Tk-thread-safe). Without it a timed-out login would leave an
+        # orphan window that stacks on the next Connect.
+        cancel_event = threading.Event()
+
+        def _run() -> dict:
+            # All tkinter touches happen on this one dedicated thread (Tk() and
+            # mainloop() must share a thread; the Tk-probe runs here too).
+            if not _try_create_tk():
+                return {"success": False, "error_code": "NO_DISPLAY_AVAILABLE", "token": None}
+            if venue == "tachibana":
+                from engine.exchanges.tachibana_login_flow import run_dialog
+                return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
+            from engine.exchanges.kabusapi_login_flow import run_dialog
+            return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
+
+        loop = asyncio.get_running_loop()
+        # Dedicated single-use executor: the dialog blocks on human input for up
+        # to the login timeout, so it must NOT share the default thread pool
+        # (which would starve other live work). Torn down in finally.
+        executor = futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="venue-login-dialog"
+        )
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=_login_subprocess_env(),
+            result = await asyncio.wait_for(
+                loop.run_in_executor(executor, _run),
+                timeout=_live_login_timeout_s(),
             )
-            stderr_drain = asyncio.ensure_future(proc.stderr.read())
-
-            async def _drain_stderr_text() -> str:
-                try:
-                    data = await asyncio.wait_for(stderr_drain, timeout=5.0)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    data = b""
-                return data.decode("utf-8", errors="replace")
-
-            try:
-                line = await asyncio.wait_for(
-                    proc.stdout.readline(),
-                    timeout=_live_login_timeout_s(),
-                )
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                stderr_drain.cancel()
-                return False, "LOGIN_TIMEOUT", None
-
-            if not line:
-                logging.error(
-                    "login_dialog_runner exited without result: %s",
-                    await _drain_stderr_text(),
-                )
-                await proc.wait()
-                return False, "LOGIN_SUBPROCESS_CRASHED", None
-
-            try:
-                result = json.loads(line)
-            except json.JSONDecodeError:
-                proc.kill()
-                await proc.wait()
-                logging.error(
-                    "login_dialog_runner emitted non-JSON stdout: %s",
-                    await _drain_stderr_text(),
-                )
-                return False, "LOGIN_INVALID_RESPONSE", None
-
-            if not result.get("success"):
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    proc.kill()
-                    await proc.wait()
-                return False, result.get("error_code") or "AUTH_FAILED", None
-
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=10.0)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await proc.wait()
-                return False, "LOGIN_TIMEOUT", None
-
-            if proc.returncode != 0:
-                logging.warning(
-                    "login_dialog_runner exited rc=%d after success-line: %s",
-                    proc.returncode,
-                    await _drain_stderr_text(),
-                )
-                return False, result.get("error_code") or "LOGIN_NONZERO_EXIT", None
-
-            token: Optional[str] = None
-            if cred_path:
-                try:
-                    with open(cred_path, "rb") as f:
-                        blob = f.read()
-                except OSError as exc:
-                    logging.warning("cred_path read failed: %s", exc)
-                    return False, "LOGIN_INVALID_RESPONSE", None
-                if not blob:
-                    return False, "LOGIN_INVALID_RESPONSE", None
-                try:
-                    payload = json.loads(blob.decode("utf-8"))
-                except (json.JSONDecodeError, UnicodeDecodeError):
-                    return False, "LOGIN_INVALID_RESPONSE", None
-                if not isinstance(payload, dict):
-                    return False, "LOGIN_INVALID_RESPONSE", None
-                tok = payload.get("token")
-                if not isinstance(tok, str) or not tok:
-                    return False, "LOGIN_INVALID_RESPONSE", None
-                token = tok
-            return True, "", token
+        except asyncio.TimeoutError:
+            # Inner timeout (the subprocess path used to proc.kill() here). Report a
+            # distinct LOGIN_TIMEOUT instead of the generic VENUE_LOGIN_FAILED; the
+            # finally block signals the dialog to close.
+            logging.warning("venue login dialog timed out (venue=%s)", venue)
+            return False, "LOGIN_TIMEOUT", None
+        except Exception:
+            # The one tradeoff of dropping the subprocess is losing crash
+            # isolation: a Tk()/mainloop blow-up must degrade to an error_code,
+            # never take down the host process.
+            logging.exception("venue login dialog crashed (venue=%s)", venue)
+            return False, "VENUE_LOGIN_FAILED", None
         finally:
-            if stderr_drain is not None and not stderr_drain.done():
-                stderr_drain.cancel()
-                try:
-                    await stderr_drain
-                except (asyncio.CancelledError, Exception):
-                    pass
-            if cred_path:
-                try:
-                    os.unlink(cred_path)
-                except FileNotFoundError:
-                    pass
-                except PermissionError:
-                    logging.warning(
-                        "cred_path leak (Windows handle race): %s — "
-                        "stale file will be swept on next _start_live_components",
-                        cred_path,
-                    )
+            # Signal the dialog to close on EVERY exit path — including a live-loop
+            # teardown CancelledError (BaseException, not caught above) and the
+            # success path (no-op: the dialog already returned). Without this a
+            # cancelled login leaves a non-daemon executor worker stuck in
+            # mainloop() → atexit join hang.
+            cancel_event.set()
+            executor.shutdown(wait=False)
+
+        if not result.get("success"):
+            return False, result.get("error_code") or "AUTH_FAILED", None
+        token: Optional[str] = result.get("token") if venue == "kabu" else None
+        if venue == "kabu" and (not isinstance(token, str) or not token):
+            return False, "LOGIN_INVALID_RESPONSE", None
+        return True, "", token
 
     def venue_login(self, venue_id, credentials_source, environment_hint):
         cred_source = credentials_source or "prompt"

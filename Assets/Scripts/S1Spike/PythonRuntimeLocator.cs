@@ -16,10 +16,10 @@
 //                       the single source of truth for PYTHONHOME in deploy (#33 grill 2026-06-18).
 //
 // Build-branch additions (#33):
-//   * ConfigureBeforeInitialize sets TTWR_PYTHON_BIN env (deploy only — Editor's dev
-//     workflows have their own resolver fallbacks) so engine._backend_impl
-//     _resolve_python_executable() hits step 1 deterministically in the shipped exe
-//     (findings 0016 "better seam" wired here for deploy).
+//   * (#122 removed) ConfigureBeforeInitialize used to set TTWR_PYTHON_BIN for the
+//     login-subprocess Python resolver; that subprocess and engine._backend_impl
+//     _resolve_python_executable() were removed in #122/findings 0093, so the env is
+//     no longer set (no Python reader remains).
 //   * On Windows (Editor AND Player), P/Invoke AddDllDirectory + SetDefaultDllDirectories
 //     so the loader can find vcruntime140.dll (uv-bundled, sibling to python313.dll) when
 //     LoadLibrary resolves transitive .pyd dependencies (pyarrow / duckdb / marimo /
@@ -67,9 +67,10 @@ public static class PythonRuntimeLocator
 
     // Performs the pre-Initialize pythonnet wiring the probes used to do inline:
     // sets the libpython to dlopen, PYTHONHOME (env + PythonEngine), PYTHONPATH
-    // (venv site-packages + project root), and in deploy (build branch) also
-    // TTWR_PYTHON_BIN (subprocess resolver) + Windows DLL search path. MUST be
+    // (venv site-packages + project root), and the Windows DLL search path. MUST be
     // called on the Unity MAIN thread BEFORE PythonEngine.Initialize().
+    // (#122 removed the login subprocess and its TTWR_PYTHON_BIN resolver, so no
+    // Python reader of that env remains and it is no longer set here.)
     public static void ConfigureBeforeInitialize()
     {
         EnsureResolved();
@@ -78,18 +79,6 @@ public static class PythonRuntimeLocator
         Environment.SetEnvironmentVariable("PYTHONHOME", _pythonHome);
         Environment.SetEnvironmentVariable("PYTHONPATH", _venvSite + Path.PathSeparator + _projectRoot);
         PythonEngine.PythonHome = _pythonHome;
-
-        if (!Application.isEditor)
-        {
-            // Deploy: pin the BASE CPython executable so _resolve_python_executable()
-            // (engine/_backend_impl.py) hits step 1 (env override) and never needs
-            // fallback chain. findings 0016 §"better seam" — wired here for deploy.
-            // Editor-skip: dev workflows resolve Python via venv-activated shells, IDE
-            // configs, etc.; deploy is the case where the resolver chain matters.
-            string pyExe = Path.Combine(_pythonHome,
-                Application.platform == RuntimePlatform.WindowsPlayer ? "python.exe" : "bin/python3");
-            Environment.SetEnvironmentVariable("TTWR_PYTHON_BIN", pyExe);
-        }
 
         // Windows: uv-bundled vcruntime140.dll / msvcp140.dll live next to python313.dll
         // under PythonHome. Without expanding the loader search path, transitive .pyd

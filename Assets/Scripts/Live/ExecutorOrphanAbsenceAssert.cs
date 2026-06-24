@@ -15,8 +15,9 @@
 // Scope (#33 grill 2026-06-18):
 //   * In scope: executor PID identity + no multiprocessing children at startup. This
 //     verifies the in-proc embedding is real for the bundled venv.
-//   * NOT in scope: login subprocess hygiene (login_dialog_runner spawned by #16 is a
-//     non-executor short-lived subprocess; host-crash hygiene there is #82).
+//   * NOT in scope: login subprocess hygiene — moot since #122 removed the login subprocess
+//     (the dialog now runs in-process on a dedicated thread; findings 0093). The old #82
+//     host-crash hygiene for that subprocess no longer applies.
 
 using System;
 using System.Diagnostics;

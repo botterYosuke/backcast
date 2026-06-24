@@ -61,7 +61,7 @@ ADR-0002 が「基準は StreamingAssets、sidecar は保険」と既決。本 i
 ### 2.4 Locator 改修（`Assets/Scripts/S1Spike/PythonRuntimeLocator.cs`）
 
 - **build 分岐に OS split を追加**: Windows = `cpython/python313.dll` + `python/.venv/Lib/site-packages` / Mac = `cpython/lib/libpython3.13.dylib` + `python/.venv/lib/python3.13/site-packages`。verification gate は Windows のみ（cutover #5 が「本番 = Windows」）。
-- **`TTWR_PYTHON_BIN` env を `ConfigureBeforeInitialize()` で set**: deploy では `_resolve_python_executable()`（`engine/_backend_impl.py:207-220`）の step 1 で確定する（findings 0016 §"より堅牢な seam" を deploy で本実装）。Editor / `python.exe` 直起動経路にも恩恵。
+- ⚠️ **OBSOLETE（#122・2026-06-24）**: 旧「`TTWR_PYTHON_BIN` env を `ConfigureBeforeInitialize()` で set」項。login subprocess と `_resolve_python_executable()` は #122/findings 0093 で in-process tkinter 化に伴い撤去され、`TTWR_PYTHON_BIN` の Python 読者は消滅した（C# producer も `PythonRuntimeLocator.cs` から撤去）。本項は historical。
 - **Windows loader hygiene（Editor + Player）**: uv 同梱 `vcruntime140.dll` / `msvcp140.dll` が transitive `.pyd` load から見える。VC++ Redistributable 事前 install を**前提から外せる**（新規 Win10 LTSC / 領域制限環境）。**Editor と Player で API を分割**:
   - **Player**: `SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS | LOAD_LIBRARY_SEARCH_USER_DIRS)` + `AddDllDirectory(_pythonHome)`（modern・process-wide で PATH-based DLL search を disable=shipped self-contained app では secure default）。
   - **Editor**: `SetDllDirectory(_pythonHome)`（legacy・cpython/ を System32 の前に挿入するが **PATH search は preserve**）。Editor は third-party plugin（analytics SDK / profiler / VCS integration 等）が lazy LoadLibrary で PATH 依存している可能性があり、modern API の process-wide PATH disable が silent breakage を起こすリスクを避ける。Single-dir 制限は問題なし（cpython/ のみ追加すれば足りる）。

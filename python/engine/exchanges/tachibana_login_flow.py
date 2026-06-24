@@ -1,10 +1,10 @@
 """Tachibana login tkinter dialog (Phase 8 §3.2.1 Step 2 / v4r9 ADR-0023).
 
-Subprocess entry point: login_dialog_runner invokes run_dialog() after
-try_create_tk() returns True. Returns a dict that is emitted as NDJSON
-on stdout. No secrets are emitted; on success the session URLs are
-persisted via tachibana_file_store.save_session() and the cred-path is
-unused on the Tachibana path.
+In-process entry point (#122): ``LiveLoopManager._handle_prompt_login`` runs
+run_dialog() on a dedicated thread after ``_try_create_tk()`` returns True.
+Returns ``{"success", "error_code"}``. No secrets are returned; on success the
+session URLs are persisted via tachibana_file_store.save_session() (the
+Tachibana path uses session_cache on disk, not an in-memory token).
 
 v4r9 公開鍵認証: パスワード欄は廃止。利用者は **認証ID** と **秘密鍵 PEM ファイル** を
 指定する（ファイル選択ダイアログ付き）。本人性は「秘密鍵で復号できること」で証明する。
@@ -28,13 +28,14 @@ from engine.exchanges.tachibana_login_form_state import (
     build_form_init,
     validate_submission,
 )
+from engine.exchanges._login_dialog import apply_cancel_timeout
 from engine.live._build_mode import IS_DEBUG_BUILD
 
 log = logging.getLogger(__name__)
 
 
 def _map_exception(exc: BaseException) -> str:
-    """Map tachibana_auth exceptions to subprocess NDJSON error_code strings."""
+    """Map tachibana_auth exceptions to login error_code strings."""
     # Lazy imports so module import does not require httpx/tachibana_auth.
     try:
         from engine.exchanges.tachibana_auth import (
@@ -70,15 +71,16 @@ def _map_exception(exc: BaseException) -> str:
     return AUTH_FAILED
 
 
-def run_dialog(env_hint: str) -> dict:
+def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> dict:
     """Open the Tachibana login dialog and return {"success", "error_code"}."""
     import tkinter as tk
     from tkinter import filedialog
 
     init = build_form_init(env_hint=env_hint, is_debug_build=IS_DEBUG_BUILD)
     if env_hint == "prod" and not init.allow_prod:
-        # Defensive: login_dialog_runner front-stops this, but if a caller
-        # bypasses the gate we still refuse without prompting the user.
+        # Defensive: _handle_prompt_login front-stops prod without the allow
+        # flag, but if a caller bypasses the gate we still refuse without
+        # prompting the user.
         return {"success": False, "error_code": "PROD_NOT_ALLOWED"}
 
     from engine.exchanges.tachibana_auth import PNoCounter
@@ -224,9 +226,16 @@ def run_dialog(env_hint: str) -> dict:
                         p_no_counter=p_no_counter,
                     )
                 )
-                root.after(0, _on_auth_done, ("ok", session))
+                payload: tuple[str, Any] = ("ok", session)
             except BaseException as exc:  # noqa: BLE001 - propagate via callback
-                root.after(0, _on_auth_done, ("err", exc))
+                payload = ("err", exc)
+            try:
+                root.after(0, _on_auth_done, payload)
+            except Exception:
+                # The dialog was already torn down (user cancel / timeout cancel):
+                # the auth result is moot, so drop it instead of letting this
+                # daemon thread die with a TclError on the destroyed root.
+                pass
 
         threading.Thread(target=_run_auth, daemon=True).start()
 
@@ -243,5 +252,15 @@ def run_dialog(env_hint: str) -> dict:
     else:
         auth_id_entry.focus_set()
 
+    def _poll_cancel() -> None:
+        # Tk-thread-safe close on an external timeout (#122 in-proc login).
+        if cancel_event is not None and cancel_event.is_set():
+            apply_cancel_timeout(result)
+            root.destroy()
+            return
+        root.after(200, _poll_cancel)
+
+    if cancel_event is not None:
+        root.after(200, _poll_cancel)
     root.mainloop()
     return {"success": bool(result["success"]), "error_code": str(result["error_code"])}

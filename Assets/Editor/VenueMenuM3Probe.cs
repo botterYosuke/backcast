@@ -49,8 +49,8 @@ public static class VenueMenuM3Probe
         return (new VenueMenuViewModel(conn, coord), conn, coord);
     }
 
-    // D4: the menu never builds a credential form — both venues fire prompt; the
-    // tkinter subprocess collects credentials. Env hints are demo/verify.
+    // D4 (superseded by #122/findings 0093): the menu never builds a credential form — both
+    // venues fire prompt; the in-process tkinter dialog collects credentials. Env hints are demo/verify.
     static void BothVenuesUsePrompt()
     {
         var (m, _, _) = Make();

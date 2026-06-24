@@ -1,15 +1,15 @@
 """kabuStation login tkinter dialog (Phase 8 §3.2.1 Step 3).
 
-Subprocess entry point: login_dialog_runner invokes run_dialog() after
-try_create_tk() returns True. The bearer token is written to ``cred_path``
-(O_WRONLY|O_TRUNC) as JSON {"token": "..."} on success; never to stdout.
+In-process entry point (#122): ``LiveLoopManager._handle_prompt_login`` runs
+run_dialog() on a dedicated thread after ``_try_create_tk()`` returns True. The
+bearer token is returned in the result dict (``{"success", "error_code",
+"token"}``) and kept in the embedded Python's memory — never written to a
+cred-path file, never emitted to stdout.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import os
 import threading
 from typing import Any, Optional
 
@@ -24,6 +24,7 @@ from engine.exchanges.kabusapi_login_form_state import (
     probe_station,
     validate_submission,
 )
+from engine.exchanges._login_dialog import apply_cancel_timeout
 from engine.live._build_mode import IS_DEBUG_BUILD
 
 log = logging.getLogger(__name__)
@@ -54,15 +55,19 @@ def _map_exception(exc: BaseException) -> str:
     return AUTH_FAILED
 
 
-def run_dialog(env_hint: str, cred_path: str) -> dict:
-    """Open the kabuStation login dialog and return {"success", "error_code"}."""
+def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> dict:
+    """Open the kabuStation login dialog and return {"success", "error_code", "token"}.
+
+    On success the bearer token is returned in ``token`` (in-memory, #122). On
+    failure/cancel ``token`` is None.
+    """
     import tkinter as tk
 
     init = build_form_init(env_hint=env_hint, is_debug_build=IS_DEBUG_BUILD)
     if env_hint == "prod" and not init.allow_prod:
-        return {"success": False, "error_code": "PROD_NOT_ALLOWED"}
+        return {"success": False, "error_code": "PROD_NOT_ALLOWED", "token": None}
 
-    result: dict[str, Any] = {"success": False, "error_code": USER_CANCELLED}
+    result: dict[str, Any] = {"success": False, "error_code": USER_CANCELLED, "token": None}
 
     root = tk.Tk()
     root.title("kabuStation ログイン")
@@ -136,21 +141,9 @@ def run_dialog(env_hint: str, cred_path: str) -> dict:
     def _on_auth_done(payload: tuple[str, Any]) -> None:
         kind, value = payload
         if kind == "ok":
-            token = value
-            try:
-                fd = os.open(cred_path, os.O_WRONLY | os.O_TRUNC)
-                try:
-                    os.write(fd, json.dumps({"token": token}).encode("utf-8"))
-                finally:
-                    os.close(fd)
-            except OSError:
-                log.exception("kabu_login_flow: cred-path write failed")
-                result["success"] = False
-                result["error_code"] = AUTH_FAILED
-                root.destroy()
-                return
             result["success"] = True
             result["error_code"] = ""
+            result["token"] = value  # bearer token, returned in-memory (#122)
             root.destroy()
         else:
             exc = value
@@ -186,9 +179,16 @@ def run_dialog(env_hint: str, cred_path: str) -> dict:
             from engine.exchanges.kabusapi_auth import fetch_token
             try:
                 token = asyncio.run(fetch_token(api_password, env=env_arg))
-                root.after(0, _on_auth_done, ("ok", token))
+                payload: tuple[str, Any] = ("ok", token)
             except BaseException as exc:  # noqa: BLE001
-                root.after(0, _on_auth_done, ("err", exc))
+                payload = ("err", exc)
+            try:
+                root.after(0, _on_auth_done, payload)
+            except Exception:
+                # The dialog was already torn down (user cancel / timeout cancel):
+                # the auth result is moot, so drop it instead of letting this
+                # daemon thread die with a TclError on the destroyed root.
+                pass
 
         threading.Thread(target=_run_auth, daemon=True).start()
 
@@ -199,8 +199,22 @@ def run_dialog(env_hint: str, cred_path: str) -> dict:
     root.bind("<Return>", _on_ok)
     root.bind("<Escape>", _on_cancel)
 
+    def _poll_cancel() -> None:
+        # Tk-thread-safe close on an external timeout (#122 in-proc login).
+        if cancel_event is not None and cancel_event.is_set():
+            apply_cancel_timeout(result)
+            root.destroy()
+            return
+        root.after(200, _poll_cancel)
+
     _refresh_station_status()
     pw_entry.focus_set()
 
+    if cancel_event is not None:
+        root.after(200, _poll_cancel)
     root.mainloop()
-    return {"success": bool(result["success"]), "error_code": str(result["error_code"])}
+    return {
+        "success": bool(result["success"]),
+        "error_code": str(result["error_code"]),
+        "token": result["token"],
+    }

@@ -4,7 +4,6 @@ import os
 import re
 import sys
 import asyncio
-import tempfile
 import threading
 import time
 from concurrent import futures
@@ -46,7 +45,6 @@ from dataclasses import dataclass, field
 
 from .replay import BaseReplayProvider
 from .jquants_loader import JQuantsLoader
-from .paths import PYTHON_SRC_ROOT
 from .jquants_listed_info import read_listed_snapshot
 # normalize_granularity は nautilus 非依存の kernel 側（DuckDB 直読み reader）から取得。
 from engine.kernel.duckdb_bars import normalize_granularity
@@ -207,76 +205,6 @@ _ACCOUNT_REFETCH_STATUSES: frozenset[str] = frozenset(
 )
 
 
-def _resolve_python_executable() -> str:
-    """Return the Python interpreter path for subprocess spawn.
-
-    In PyO3 in-proc mode sys.executable is the host exe (e.g. backcast.exe),
-    not a Python interpreter. Spawning it with -m would launch another Bevy
-    app instead of the dialog. Detect this case and fall back to a real Python.
-
-    Resolution order:
-      1. TTWR_PYTHON_BIN env var (set by run_inproc.ps1 via _pyenv.ps1)
-      2. sys.executable if it looks like a Python interpreter
-      3. Scripts/python.exe or bin/python relative to sys.base_prefix
-      4. python.exe in the install ROOT (base_prefix / prefix) — uv layout
-    """
-    env_override = os.environ.get("TTWR_PYTHON_BIN")
-    if env_override and os.path.isfile(env_override):
-        return env_override
-    exe = sys.executable
-    if os.path.basename(exe).lower().startswith("python"):
-        return exe
-    # In-proc mode: sys.executable is the host exe. Find real Python via base_prefix.
-    for script_dir in ("Scripts", "bin"):
-        for name in ("python.exe", "python3.exe", "python"):
-            candidate = os.path.join(sys.base_prefix, script_dir, name)
-            if os.path.isfile(candidate):
-                return candidate
-    # uv-style installs place python.exe in the install ROOT (Scripts/ empty),
-    # so probe base_prefix / prefix directly before falling back to the host exe.
-    for root in (sys.base_prefix, sys.prefix):
-        for name in ("python.exe", "python3.exe", "python"):
-            candidate = os.path.join(root, name)
-            if os.path.isfile(candidate):
-                return candidate
-    return exe
-
-
-def _login_subprocess_env() -> dict[str, str]:
-    """Build the environment for the login_dialog_runner subprocess.
-
-    In PyO3 in-proc mode the `engine` package is placed on `sys.path` at runtime
-    by the Rust host (`transport.rs`), and that injection does NOT propagate to
-    child processes. A bare-inherited env therefore makes
-    `python -m engine.live.login_dialog_runner` fail with
-    `No module named 'engine'`. The out-of-proc supervisor avoids this by setting
-    `PYTHONPATH=<cwd>/python` (`supervisor.rs`); mirror that here so the dialog
-    subprocess can import `engine` regardless of how the parent acquired it.
-    """
-    env = os.environ.copy()
-    src_root = str(PYTHON_SRC_ROOT)  # `<repo>/python` — must be importable for `import engine`
-    # Propagate the venv site-packages too (#23 Windows HITL fix). Under embedded Python
-    # (Unity/pythonnet) `_resolve_python_executable()` returns the BASE CPython — `sys.executable`
-    # is the host exe — which lacks the venv's third-party deps (httpx, …). Those live on the
-    # embedded interpreter's `sys.path` (host-injected VenvSite) but do NOT propagate to children,
-    # so the dialog subprocess crashes with `ModuleNotFoundError: httpx` → LOGIN_SUBPROCESS_CRASHED
-    # (tachibana_login_flow → tachibana_auth imports httpx). Mirror the parent's site-packages onto
-    # PYTHONPATH so any resolved interpreter can import them. Harmless when the resolved python
-    # already owns them (venv-activated / PyO3 in-proc).
-    site_dirs = [
-        p for p in sys.path if p and ("site-packages" in p or "dist-packages" in p)
-    ]
-    existing = env.get("PYTHONPATH", "")
-    seen: set[str] = set()
-    parts: list[str] = []
-    for p in [src_root, *site_dirs, *existing.split(os.pathsep)]:
-        if p and p not in seen:
-            seen.add(p)
-            parts.append(p)
-    env["PYTHONPATH"] = os.pathsep.join(parts)
-    return env
-
-
 class _LiveSessionView:
     """`LiveStrategyHost` が借用する live session の read-only ビュー (Phase 10 §1.1)。
 
@@ -289,21 +217,6 @@ class _LiveSessionView:
 
     def __init__(self, is_logged_in: bool) -> None:
         self.is_logged_in = is_logged_in
-
-
-def _sweep_stale_cred_files(max_age_s: float = 60.0) -> None:
-    """Delete leftover ttwr_cred_*.json files older than ``max_age_s`` seconds."""
-    try:
-        tmp_dir = Path(tempfile.gettempdir())
-        now = time.time()
-        for stale in tmp_dir.glob("ttwr_cred_*.json"):
-            try:
-                if now - stale.stat().st_mtime > max_age_s:
-                    stale.unlink()
-            except OSError:
-                continue
-    except OSError:
-        pass
 
 
 _ADAPTER_ERROR_CODES = frozenset({

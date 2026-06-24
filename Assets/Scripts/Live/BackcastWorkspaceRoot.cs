@@ -473,7 +473,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             onLiveStop: () => { if (_footerAuto != null && _footerAuto.HasActiveRun)
                                     _host.StopLiveStrategy(_footerAuto.ActiveRunId, _ => { }); },
             liveRunActive: () => _footerAuto != null
-                && (_footerAuto.HasActiveRun || _footerAuto.IsStartInFlight));
+                && (_footerAuto.HasActiveRun || _footerAuto.IsStartInFlight),
+            // #116 edge 1 — the CONFIRMED-active signal (run_id known). A ■ pressed during the
+            // register→start in-flight window (HasActiveRun==false) is DEFERRED by the controller and
+            // applied here once HasActiveRun flips true, so the stop is never lost. onLiveStop already
+            // guards HasActiveRun, so the deferred apply lands exactly when the stop can take effect.
+            liveRunConfirmed: () => _footerAuto != null && _footerAuto.HasActiveRun);
         // #102 findings 0079 §6 D7: every AddCell/DeleteCell/SyncWindowsToNotebook bumps the run
         // controller's generation so an in-flight per-cell RUN whose pressed-index frame predates the
         // mutation is dropped at drain time (the dormant region_001 reuse race — pressing A, deleting A,

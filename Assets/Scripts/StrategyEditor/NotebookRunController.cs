@@ -30,6 +30,10 @@ public sealed class NotebookRunController
     readonly Action<string> _onLiveLaunch;  // (region) → host register→start (the root marshals the RPC)
     readonly Action _onLiveStop;            // ■ on a live cell → host.StopLiveStrategy(activeRunId)
     readonly Func<bool> _liveRunActive;     // live run active OR start-in-flight (drives the live ■→▶)
+    // #116 edge 1: the CONFIRMED-active signal (HasActiveRun only — run_id known, so a stop will land).
+    // Distinct from _liveRunActive (which also covers the start-in-flight window where a stop no-ops):
+    // a ■ pressed before this turns true must be DEFERRED, not dropped. Null ⇒ legacy immediate-stop.
+    readonly Func<bool> _liveRunConfirmed;
     int _generation;                    // notebook epoch; bumped by Invalidate to drop stale in-flight runs
 
     int _runSeq;                        // monotonic run id source
@@ -37,6 +41,10 @@ public sealed class NotebookRunController
     int _btRunId = -1;                  // the in-flight backtest's run id (correlates its result)
     string _runningRegion;              // the cell whose ▶ is currently showing ■
     string _liveRunRegion;              // #112: the cell whose press launched the active live run (■)
+    Cell _liveRunCell;                  // #116 edge 2: the launching cell's IDENTITY (not just its region),
+                                        // so a structural list change that DELETES it or REPLACES its region
+                                        // (File→New reuses region_001 for a NEW cell) reconciles the tracking.
+    bool _pendingLiveStop;              // #116 edge 1: a ■ pressed during start-in-flight, applied once confirmed.
 
     public bool IsBacktestRunning => _btRunActive;
     public bool IsLiveRunLaunched => _liveRunRegion != null;  // #112: a cell launched a live run (showing ■)
@@ -54,7 +62,8 @@ public sealed class NotebookRunController
         Func<bool> liveLaunchActive = null,
         Action<string> onLiveLaunch = null,
         Action onLiveStop = null,
-        Func<bool> liveRunActive = null)
+        Func<bool> liveRunActive = null,
+        Func<bool> liveRunConfirmed = null)
     {
         _coordinator = coordinator ?? throw new ArgumentNullException(nameof(coordinator));
         _viewFor = viewFor ?? (_ => null);
@@ -69,6 +78,7 @@ public sealed class NotebookRunController
         _onLiveLaunch = onLiveLaunch;
         _onLiveStop = onLiveStop;
         _liveRunActive = liveRunActive;
+        _liveRunConfirmed = liveRunConfirmed;
     }
 
     // A RUN press on the cell in `regionId`: synthesise the LIVE source (unsaved buffer ok — owner
@@ -182,6 +192,8 @@ public sealed class NotebookRunController
         var cell = _coordinator.CellOf(regionId);
         if (cell == null) return;
         _liveRunRegion = regionId;
+        _liveRunCell = cell;                          // #116 edge 2: remember WHICH cell launched (identity)
+        _pendingLiveStop = false;                     // #116 edge 1: a fresh launch starts with no deferred stop
         _onRunningChanged?.Invoke(regionId, true);   // ▶ → ■ (optimistic; SyncLiveRunButton reconciles)
         _onLiveLaunch?.Invoke(regionId);
     }
@@ -192,11 +204,23 @@ public sealed class NotebookRunController
     public void SyncLiveRunButton()
     {
         if (_liveRunRegion == null) return;
+        // #116 edge 1: a ■ pressed during the register→start in-flight window was DEFERRED (a stop then
+        // would have no-op'd against an unconfirmed run_id). Apply it the moment the run is confirmed
+        // active — the run_id now exists, so stop_live_strategy lands. Keep ■ until the stop terminals
+        // the run; the next sync sees neither-active-nor-in-flight and restores ▶.
+        if (_pendingLiveStop && _liveRunConfirmed != null && _liveRunConfirmed())
+        {
+            _pendingLiveStop = false;
+            _onLiveStop?.Invoke();
+            return;
+        }
         bool active = _liveRunActive != null && _liveRunActive();
         if (!active)
         {
+            _pendingLiveStop = false;   // a start that failed before the deferred stop could apply: drop it
             string region = _liveRunRegion;
             _liveRunRegion = null;
+            _liveRunCell = null;
             _onRunningChanged?.Invoke(region, false);   // ■ → ▶
         }
     }
@@ -206,14 +230,53 @@ public sealed class NotebookRunController
     // through ApplyResult / SyncLiveRunButton, which restores ▶. No-op when nothing is running.
     public void StopRunning()
     {
-        if (_liveRunRegion != null) { _onLiveStop?.Invoke(); return; }  // live ■ → stop_live_strategy
+        if (_liveRunRegion != null)
+        {
+            // #116 edge 1: during the register→start in-flight window the run_id is not confirmed yet,
+            // so stop_live_strategy would no-op (HasActiveRun==false) and the press would be LOST. If the
+            // run is confirmed active, stop now; otherwise DEFER — SyncLiveRunButton applies it the moment
+            // the run is confirmed. A null _liveRunConfirmed means a caller opted out of the distinction
+            // (legacy / a fake without the signal) → behave as before (immediate stop).
+            bool confirmed = _liveRunConfirmed == null || _liveRunConfirmed();
+            if (confirmed) _onLiveStop?.Invoke();   // live ■ → stop_live_strategy
+            else _pendingLiveStop = true;           // in-flight ■ → apply once the run is confirmed
+            return;
+        }
         if (_btRunActive) _onStop?.Invoke();                            // backtest ■ → ForceStop
     }
 
     // Bump the notebook epoch so any in-flight run's result is dropped at drain time — call when the
     // cell list is structurally REPLACED (File→Open / File→New / restore), so a run queued against the
     // OLD document never paints its output into the same-index cell of the NEW one.
-    public void Invalidate() => _generation++;
+    //
+    // #116 edge 2: the bump above only reconciles the REPLAY lane (drops stale backtest results). The
+    // LIVE lane must reconcile too: if the cell that launched the live run is gone — DELETED, or its
+    // region REUSED for a different cell (File→New rebinds region_001 to a new cell 0) — the ▶/■ tracking
+    // would dangle (IsLiveRunLaunched stuck true → blocks a new launch; SyncLiveRunButton paints ▶/■ onto
+    // a region whose view is gone or now hosts an unrelated cell). Drop the dead button tracking, keyed on
+    // the launching cell's IDENTITY (RegionOf(cell)==null ⇒ untracked = deleted OR replaced). We do NOT
+    // stop the run — a live run is a venue session (findings 0026), torn down only by leaving the mode;
+    // the dual-launch guard still holds because LaunchLive also checks _liveRunActive() (the venue run is
+    // still active). Best-effort: never throw, never stop the venue session.
+    public void Invalidate()
+    {
+        _generation++;
+        if (_liveRunRegion != null && (_liveRunCell == null || _coordinator.RegionOf(_liveRunCell) == null))
+        {
+            string region = _liveRunRegion;
+            // If the user had a stop DEFERRED (■ pressed in the start-in-flight window) when the cell was
+            // reconciled away, honor that intent best-effort rather than silently dropping it — otherwise
+            // the same lost-stop this issue fixes re-opens for the delete-during-in-flight race. _onLiveStop
+            // is self-guarded by HasActiveRun (prod) so it stops a confirmed run and no-ops an unconfirmed
+            // one (no double-stop). A reconcile WITHOUT a pending stop still leaves the venue run running
+            // (findings 0026 — cell deletion alone never stops a venue session; mode-leave does).
+            if (_pendingLiveStop) _onLiveStop?.Invoke();
+            _liveRunRegion = null;
+            _liveRunCell = null;
+            _pendingLiveStop = false;
+            _onRunningChanged?.Invoke(region, false);   // best-effort ■ → ▶ (no-op if the window is gone)
+        }
+    }
 
     // Drain every completed run and route each ran cell's output to its window. Called per frame by
     // the root (and directly by the AFK gate after a synchronous Submit).

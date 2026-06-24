@@ -69,7 +69,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section20_PlaceholderHint(spawned)
                 ?? Section21_ConsoleAndDynamicLayout(spawned)
                 ?? Section22_ConsoleAuditGaps(spawned)
-                ?? Section23_ModeAwareLiveLaunch(spawned);
+                ?? Section23_ModeAwareLiveLaunch(spawned)
+                ?? Section24_LiveLifecycleEdges(spawned);
         }
         catch (Exception e)
         {
@@ -132,6 +133,12 @@ public static class StrategyEditorNotebookE2ERunner
                       "a 2nd press while live-active is rejected; ■ routes to the LIVE stop (not backtest " +
                       "ForceStop) and SyncLiveRunButton restores ▶ when the run terminals; the SAME press in " +
                       "Replay drives a backtest — mode-conditional dispatch) " +
+                      "+ #116 live lifecycle edges (STRATEGY-51 start-in-flight deferred-stop: a ■ pressed " +
+                      "before the run_id is confirmed is NOT lost — it is deferred and applied once " +
+                      "HasActiveRun flips true, then ▶ restores on terminal; STRATEGY-52 dangling reconcile: " +
+                      "deleting the launching cell OR File→New (region reuse) drops the ▶/■ tracking without " +
+                      "stopping the venue run, a new launch stays blocked by the still-active run, and a deferred " +
+                      "stop pending at reconcile time is honored not dropped) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1235,6 +1242,201 @@ public static class StrategyEditorNotebookE2ERunner
 
         lane.Dispose();
         return null;
+    }
+
+    // ======================================================================
+    // Section 24: #116 — live cell run lifecycle edges (control-logic hardening)
+    //     Covers STRATEGY-51 (start-in-flight deferred-stop: a ■ pressed in the register→start window —
+    //     before the run_id is confirmed, when a direct stop would no-op and be LOST — is DEFERRED and
+    //     applied the moment HasActiveRun flips true, then ▶ restores on terminal), STRATEGY-52 (dangling
+    //     reconcile: deleting the launching cell [52a] OR File→New which REUSES region_001 for a new cell
+    //     [52b] drops the ▶/■ tracking — keyed on the launching cell's IDENTITY, not its region — WITHOUT
+    //     stopping the venue run [findings 0026], and a relaunch stays blocked by the still-active run; a
+    //     deferred stop PENDING at reconcile time is honored not dropped [52c — the delete-during-in-flight race]).
+    //     Python-FREE: the fake models HasActiveRun and IsStartInFlight SEPARATELY (Section23 collapses
+    //     them into one bool, which cannot express the in-flight window). The REAL register→start + venue
+    //     teardown are pinned in python (test_v19_cell_auto_parity / test_live_stop_wedged_consumer); the
+    //     S7 HITL (#115) closes the live-venue leg. RED litmus per assert below.
+    // ======================================================================
+    static string Section24_LiveLifecycleEdges(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+
+        // ---- STRATEGY-51: start-in-flight deferred-stop ----
+        // RED litmus: drop the deferred-stop in StopRunning (always call _onLiveStop directly) → the
+        // in-flight ■ no-ops against the unconfirmed run_id and is never retried → LiveStops stays 0 →
+        // the "deferred stop applied once confirmed" assert goes RED.
+        var f1 = BuildLiveEdgeFixture(spawned, 1);
+        if (f1.Glyph(R1) != "▶") return "S24/STRATEGY-51: precondition — RUN button does not start as ▶";
+
+        f1.Run.RunCell(R1);   // launch: register→start ISSUED, run_id not yet confirmed (start-in-flight)
+        if (f1.Launches.Count != 1) return "S24/STRATEGY-51: per-cell RUN did not launch a live run in Auto";
+        if (!f1.Run.IsLiveRunLaunched) return "S24/STRATEGY-51: live-run flag not set on launch";
+        if (f1.Glyph(R1) != "■") return "S24/STRATEGY-51: ▶ did not toggle to ■ on launch";
+
+        // ■ pressed DURING the in-flight window: a direct stop_live_strategy would no-op (run_id
+        // unconfirmed) and be LOST, so it must be DEFERRED — not fired now.
+        f1.Run.StopRunning();
+        if (f1.LiveStops != 0) return "S24/STRATEGY-51: in-flight ■ fired a stop that would no-op (it must defer)";
+        f1.Run.SyncLiveRunButton();   // still in-flight: ■ stays, the deferred stop is not yet applicable
+        if (f1.LiveStops != 0) return "S24/STRATEGY-51: deferred stop applied before the run was confirmed";
+        if (f1.Glyph(R1) != "■") return "S24/STRATEGY-51: ■ reverted while the start was still in flight";
+        if (!f1.Run.IsLiveRunLaunched) return "S24/STRATEGY-51: live-run flag lost during the in-flight window";
+
+        // the run becomes CONFIRMED active (run_id known) → the deferred stop now lands.
+        f1.StartInFlight = false; f1.HasActiveRun = true;
+        f1.Run.SyncLiveRunButton();
+        if (f1.LiveStops != 1) return "S24/STRATEGY-51: deferred stop was not applied once the run was confirmed";
+        if (f1.Glyph(R1) != "■") return "S24/STRATEGY-51: ■ reverted before the stop terminated the run";
+
+        // the stop terminals the run → ▶ restores.
+        f1.HasActiveRun = false;
+        f1.Run.SyncLiveRunButton();
+        if (f1.Glyph(R1) != "▶") return "S24/STRATEGY-51: ▶ did not restore after the deferred stop terminated the run";
+        if (f1.Run.IsLiveRunLaunched) return "S24/STRATEGY-51: live-run flag not cleared after terminal";
+        if (!f1.RunningEvents.Contains(R1 + ":False")) return "S24/STRATEGY-51: ▶ restore event not fired";
+        f1.Lane.Dispose();
+
+        // ---- STRATEGY-52a: deleting the launching cell reconciles the tracking (venue run NOT stopped) ----
+        // RED litmus: revert Invalidate to a bare `_generation++` (no live-lane reconcile) → _liveRunRegion
+        // dangles onto the deleted cell → IsLiveRunLaunched stays true → the "dangled after delete" assert
+        // goes RED.
+        var f2 = BuildLiveEdgeFixture(spawned, 2);   // 2 cells so the >=1 delete guard allows deleting cell 0
+        string r2 = f2.Region(1);                     // the surviving cell's region (captured BEFORE delete)
+        f2.Run.RunCell(R1);                           // launch from cell 0 (R1)
+        f2.StartInFlight = false; f2.HasActiveRun = true;   // run confirmed active
+        f2.Run.SyncLiveRunButton();
+        if (!f2.Run.IsLiveRunLaunched) return "S24/STRATEGY-52a: precondition — live run not active before delete";
+
+        if (!f2.Coord.DeleteCell(R1)) return "S24/STRATEGY-52a: could not delete the launching cell";   // → ListMutated → Invalidate
+        if (f2.Run.IsLiveRunLaunched) return "S24/STRATEGY-52a: _liveRunRegion dangled after the launching cell was deleted";
+        if (f2.LiveStops != 0) return "S24/STRATEGY-52a: deleting the cell wrongly STOPPED the venue run (it is a venue session)";
+
+        // a relaunch is still blocked — the venue run is still active (dual-launch guard via _liveRunActive).
+        f2.Run.RunCell(r2);
+        if (f2.Launches.Count != 1) return "S24/STRATEGY-52a: a 2nd live run launched while the venue run was still active";
+        if (f2.Errors.Count == 0) return "S24/STRATEGY-52a: the blocked relaunch surfaced no message";
+        f2.Lane.Dispose();
+
+        // ---- STRATEGY-52b: File→New (region_001 REUSE) reconciles by cell IDENTITY, not region ----
+        // RED litmus: a region-only reconcile (`CellOf(_liveRunRegion)==null`) would PASS 52a but FAIL here —
+        // SyncWindowsToNotebook rebinds region_001 to a NEW cell 0, so CellOf(region_001) is non-null after
+        // File→New and the stale tracking survives. Keying on the launching cell's identity catches it.
+        var f3 = BuildLiveEdgeFixture(spawned, 1);
+        f3.Run.RunCell(R1);
+        f3.StartInFlight = false; f3.HasActiveRun = true;
+        f3.Run.SyncLiveRunButton();
+        if (!f3.Run.IsLiveRunLaunched) return "S24/STRATEGY-52b: precondition — live run not active before File→New";
+
+        f3.Coord.New();   // ResetUnboundEmpty + SyncWindowsToNotebook → region_001 rebinds to a NEW cell 0 → ListMutated → Invalidate
+        if (f3.Run.IsLiveRunLaunched) return "S24/STRATEGY-52b: _liveRunRegion dangled after File→New reused region_001 for a new cell";
+        if (f3.LiveStops != 0) return "S24/STRATEGY-52b: File→New wrongly STOPPED the venue run";
+        f3.Lane.Dispose();
+
+        // ---- STRATEGY-52c: a deferred stop PENDING at reconcile time is HONORED, not dropped ----
+        // The delete-during-in-flight race (■ deferred, then the launching cell deleted before the next
+        // SyncLiveRunButton) must NOT re-open the lost-stop this issue fixes. RED litmus: drop the
+        // `if (_pendingLiveStop) _onLiveStop()` from Invalidate → LiveStops stays 0 → this assert goes RED.
+        var f4 = BuildLiveEdgeFixture(spawned, 2);     // 2 cells so deleting the launching cell 0 is allowed
+        f4.Run.RunCell(R1);                            // launch from cell 0 → start-in-flight
+        f4.Run.StopRunning();                          // ■ in-flight → DEFERRED (pending), not fired
+        if (f4.LiveStops != 0) return "S24/STRATEGY-52c: in-flight ■ fired immediately (it must defer)";
+        f4.StartInFlight = false; f4.HasActiveRun = true;   // run confirms, but SyncLiveRunButton has not run yet
+        if (!f4.Coord.DeleteCell(R1)) return "S24/STRATEGY-52c: could not delete the launching cell";   // reconcile while pending
+        if (f4.LiveStops != 1) return "S24/STRATEGY-52c: a deferred stop pending at reconcile was DROPPED (lost-stop re-opened)";
+        if (f4.Run.IsLiveRunLaunched) return "S24/STRATEGY-52c: tracking not cleared after the reconcile";
+        f4.Lane.Dispose();
+
+        return null;
+    }
+
+    // Python-FREE fixture for the #116 live-lifecycle edges: a real NotebookRunController + coordinator
+    // over a FakeMarimoSynthesizer, with the live callbacks wired to a mutable state holder that models
+    // HasActiveRun and IsStartInFlight SEPARATELY (the distinction Section23 cannot express). ListMutated→
+    // Invalidate is wired AFTER the controller exists, exactly as the production root does.
+    sealed class _LiveEdgeFixture
+    {
+        public bool AutoMode = true;     // LiveAuto + venue connected (liveLaunchActive)
+        public bool StartInFlight;       // register→start issued, run_id not yet confirmed
+        public bool HasActiveRun;        // run_id confirmed (a stop will land) — liveRunConfirmed
+        public int LiveStops;            // host.StopLiveStrategy calls that actually landed
+        public readonly List<string> Launches = new List<string>();
+        public readonly List<string> Errors = new List<string>();
+        public readonly List<string> RunningEvents = new List<string>();
+        public NotebookRunController Run;
+        public NotebookCellCoordinator Coord;
+        public MarimoNotebookDocument Notebook;
+        public NotebookRunLane Lane;
+        public readonly Dictionary<string, Button> Buttons = new Dictionary<string, Button>();
+        public string Region(int cellIndex) => Coord.RegionOf(Notebook.Cells[cellIndex]);
+        public string Glyph(string region) => Buttons.TryGetValue(region, out var b) && b != null ? GlyphText(b) : null;
+    }
+
+    static _LiveEdgeFixture BuildLiveEdgeFixture(List<GameObject> spawned, int cellCount)
+    {
+        const string SCN = "{\"instruments\":[\"8918.TSE\"],\"granularity\":\"Daily\"}";
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var views = new Dictionary<string, StrategyEditorView>();
+        var fx = new _LiveEdgeFixture();
+
+        var layerGo = new GameObject("FWLayer24", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body);   // #119: TMP/SDF — `font` param removed
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(NotebookCellCoordinator.AdoptedRegionId, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);   // #119: TMP/SDF — `font` param removed
+        if (view1 != null) views[NotebookCellCoordinator.AdoptedRegionId] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, NotebookCellCoordinator.AdoptedRegionId, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        nb.Cells[0].SetBody("for bar in bt.replay():\n    bt.submit_market(100)\n");
+        for (int i = 1; i < cellCount; i++) nb.AddCell();
+        fx.Notebook = nb;
+
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);   // binds cells to regions (fires ListMutated, but nothing is wired yet)
+        fx.Coord = coord;
+
+        // a RUN button per bound region (the ▶/■ glyph readback target).
+        for (int i = 0; i < nb.Cells.Count; i++)
+        {
+            string region = coord.RegionOf(nb.Cells[i]);
+            var rect = region != null ? controller.RectOf(region) : null;
+            if (rect != null) fx.Buttons[region] = StrategyEditorWindowFrame.EnsureRunButton(rect, font);
+        }
+
+        fx.Lane = new NotebookRunLane(new _RecordingExecutor(_ => { }), startWorker: false);
+        fx.Run = new NotebookRunController(
+            coord, r => views.TryGetValue(r, out var v) ? v : null, fx.Lane,
+            msg => fx.Errors.Add(msg),
+            () => SCN,
+            () => { },   // onStop (backtest ForceStop) — unused by the live edges
+            (region, running) =>
+            {
+                fx.RunningEvents.Add(region + ":" + running);
+                if (fx.Buttons.TryGetValue(region, out var b) && b != null) StrategyEditorWindowFrame.SetRunButtonGlyph(b, running);
+            },
+            null, null,
+            liveLaunchActive: () => fx.AutoMode,
+            onLiveLaunch: region => { fx.Launches.Add(region); fx.StartInFlight = true; },   // register→start issued (run_id pending)
+            onLiveStop: () => { if (fx.HasActiveRun) fx.LiveStops++; },                       // mirrors prod: stop no-ops if run_id unconfirmed
+            liveRunActive: () => fx.StartInFlight || fx.HasActiveRun,
+            liveRunConfirmed: () => fx.HasActiveRun);
+
+        coord.ListMutated += () => fx.Run.Invalidate();   // production path: ListMutated → Invalidate (wired after the controller, like the root)
+        return fx;
     }
 
     // ======================================================================

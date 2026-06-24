@@ -344,6 +344,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // so the fix is structural, not point. Idempotent + geometry-preserving: RestoreFloating's chart
         // Spawn already populated _chartViews via the factory (§746), so an iid that IS in the universe is
         // a no-op (keeps its restored x/y/w/h) and only true orphans are despawned / true gaps spawned.
+        // ORDER matters: this MUST run AFTER the seed above — ordering it before (e.g. right after
+        // ApplyLayout) would misjudge the just-restored chart as orphaned and re-spawn it at a default grid
+        // slot, destroying the restored geometry (the alternative the issue rejected). Gates:
+        // CHART-ORPHAN-01..04 (journey) + CHARTSYNC-01..04 / CHARTSYNC-05 HITL (findings 0095).
         SyncChartWindowsToUniverse();
     }
 

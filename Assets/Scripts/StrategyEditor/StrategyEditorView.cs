@@ -32,6 +32,7 @@
 using System;
 using System.Text;
 using System.Text.RegularExpressions;
+using TMPro;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.UI;
@@ -70,11 +71,11 @@ public class StrategyEditorView : MonoBehaviour
     // when no restage consumer is attached (e.g. an unbound shell before the root wires it).
     public Action EditCommitted;
 
-    InputField _input;
+    TMP_InputField _input;      // #119: TMP(SDF) editing surface (was UnityEngine.UI.InputField)
     PythonSyntaxMeshEffect _effect;
     EditHistory _history;
-    Text _placeholder;          // host-API hint shown when this is the only cell and it is empty
-    Text _output;               // #95 Phase 2 土台: per-cell RUN output text (in the rich block)
+    TMP_Text _placeholder;      // #119: host-API hint shown when this is the only cell and it is empty (TMP_Text)
+    TMP_Text _output;           // #95 Phase 2 土台 / #118: per-cell RUN output text (TMP_Text/SDF, rich block)
     RawImage _image;            // #95 Phase 6 Slice 5: image/png|jpeg sibling inside the rich block
     LayoutElement _imageLE;     // image's per-child LayoutElement (drives Content height when active)
     Texture2D _tex;             // #95 Phase 6 Slice 5: the decoded image texture we own (freed on replace/clear/destroy)
@@ -90,7 +91,7 @@ public class StrategyEditorView : MonoBehaviour
     RectTransform _consoleBlock;
     RectTransform _consoleViewport;
     RectTransform _consoleContent;
-    Text _consoleText;
+    TMP_Text _consoleText;      // #118: console stdout/stderr (TMP_Text/SDF)
     LayoutElement _consoleLE;
     ScrollRect _consoleScroll;
     LayoutElement _editorLE;
@@ -105,13 +106,13 @@ public class StrategyEditorView : MonoBehaviour
     // (an unbound shell — e.g. the adopted region_001 before the notebook binds cell 0); Bind() points
     // it at a real cell later. `placeholder` is optional (the single-cell host-API hint).
     public void Initialize(
-        InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
-        Cell cell, Text placeholder,
-        Text output, RawImage image, LayoutElement imageLE,
+        TMP_InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
+        Cell cell, TMP_Text placeholder,
+        TMP_Text output, RawImage image, LayoutElement imageLE,
         RectTransform richBlock, RectTransform richViewport, RectTransform richContent,
         LayoutElement richLE, ScrollRect richScroll,
         RectTransform consoleBlock, RectTransform consoleViewport, RectTransform consoleContent,
-        Text consoleText, LayoutElement consoleLE, ScrollRect consoleScroll,
+        TMP_Text consoleText, LayoutElement consoleLE, ScrollRect consoleScroll,
         LayoutElement editorLE)
     {
         _input = input;
@@ -212,7 +213,7 @@ public class StrategyEditorView : MonoBehaviour
             if (_image != null) _image.gameObject.SetActive(false);
             if (_output != null)
             {
-                _output.supportRichText = true;
+                _output.richText = true;
                 _output.text = RichToUnity(mt, string.IsNullOrEmpty(data) ? text : data);
                 _output.gameObject.SetActive(true);
             }
@@ -226,7 +227,7 @@ public class StrategyEditorView : MonoBehaviour
         if (_image != null) _image.gameObject.SetActive(false);
         if (_output != null)
         {
-            _output.supportRichText = false;
+            _output.richText = false;   // plain: TMP renders everything literally (no tag parse) — no escaping needed
             bool unknown = !string.IsNullOrEmpty(mt) && mt != "text/plain";
             string body = text ?? string.Empty;
             _output.text = unknown ? "[" + mt + "]\n" + body : body;
@@ -253,8 +254,8 @@ public class StrategyEditorView : MonoBehaviour
         }
         if (_consoleText != null)
         {
+            _consoleText.richText = true;
             _consoleText.text = BuildConsoleRichText(segments);
-            _consoleText.supportRichText = true;
         }
         if (_consoleBlock != null) _consoleBlock.gameObject.SetActive(true);
         ApplyBlockSize(_consoleLE, _consoleContent);
@@ -275,9 +276,12 @@ public class StrategyEditorView : MonoBehaviour
     // Build the console pane's rich-text string: per-stream colour tags + arrival order preserved.
     // amber-12 ≈ #ffa01c per Radix (marimo Outputs.css references the var directly); we hardcode the
     // hex so the console paints amber even when ThemeService has not loaded an amber-typed palette.
-    // ``supportRichText=true`` on the Text means a raw ``<`` from the user's stdout would be parsed
-    // as a tag (``print("<EOF>")`` would vanish entirely or open an unbalanced tag that swallows the
-    // rest of the buffer), so each segment's payload is escaped first — only OUR colour tag survives.
+    // #118: with TMP `richText=true`, a raw ``<`` from the user's stdout would still be parsed as a tag
+    // (``print("<color=red>")`` would recolour the buffer; ``print("<EOF>")`` shows nothing for an
+    // unknown tag), so each segment's payload is wrapped in TMP's ``<noparse>…</noparse>`` so NOTHING
+    // inside is interpreted — only OUR amber ``<color>`` (placed OUTSIDE the noparse) survives.  TMP
+    // does NOT decode HTML entities, so the UGUI ``&lt;`` trick would have painted a literal ``&lt;`` on
+    // screen (a regression); ``<noparse>`` keeps the user's ``<`` visible AND inert (findings 0096 D3).
     static string BuildConsoleRichText(ConsoleSegment[] segments)
     {
         var sb = new StringBuilder();
@@ -286,22 +290,29 @@ public class StrategyEditorView : MonoBehaviour
             var s = segments[i];
             string body = s.Text ?? string.Empty;
             if (body.Length == 0) continue;
-            string safe = EscapeForUguiRichText(body);
+            string safe = NoParse(body);
             if (s.Stream == "stderr") { sb.Append("<color=#ffa01c>"); sb.Append(safe); sb.Append("</color>"); }
             else { sb.Append(safe); }
         }
         return sb.ToString();
     }
 
-    // Escape user-supplied text for a UGUI Text with supportRichText=true. UGUI parses ``<...>``
-    // sequences as tags (color/b/i/size/material/quad); the only tag-trigger char is ``<``, so the
-    // safest neutralisation is to break the tag open by replacing ``<`` with the entity ``&lt;``.
-    // UGUI does NOT decode entities, so the output renders as ``&lt;`` literally — visually
-    // distinguishable from a real tag and stable across versions.  ``&`` is NOT escaped: UGUI never
-    // decodes ``&amp;`` either, so a Replace("&","&amp;") would paint user's ``print("a & b")`` as
-    // ``a &amp; b`` on screen — a pure regression for any user printing ``&`` (#102 findings 0079 D6).
-    static string EscapeForUguiRichText(string s)
-        => s == null ? string.Empty : s.Replace("<", "&lt;");
+    // Wrap user-supplied text so a TMP_Text with richText=true interprets NONE of it as a tag.  TMP's
+    // ``<noparse>`` disables all tag parsing for its span (color/b/i/size/sprite/link/…), so the user's
+    // ``<``/``>`` render literally and inertly.  ``&`` is NOT escaped: TMP never decodes ``&amp;`` either,
+    // so a Replace would paint user's ``print("a & b")`` as ``a &amp; b`` — a regression (findings 0079
+    // D6, carried to TMP).  A literal ``</noparse>`` in the payload would close the guard early, so a
+    // zero-width space is inserted into that token to neutralise it without altering the visible glyphs.
+    const string Zwsp = "​";   // zero-width space — invisible, breaks a literal closing token
+    static readonly Regex _noparseClose = new Regex("</noparse>", RegexOptions.IgnoreCase);
+    static string NoParse(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return string.Empty;
+        // The closing token is essentially never present in real stdout — skip the regex on the common path.
+        if (s.IndexOf("</noparse>", StringComparison.OrdinalIgnoreCase) >= 0)
+            s = _noparseClose.Replace(s, "</" + Zwsp + "noparse>");
+        return "<noparse>" + s + "</noparse>";
+    }
 
     // Set the block's LayoutElement.preferredHeight = clamp(Content.preferredHeight, body * cap).
     // The ScrollRect's Content (VLG+CSF) reports its preferred height via LayoutUtility — that is

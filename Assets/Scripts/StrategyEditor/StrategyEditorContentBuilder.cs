@@ -25,6 +25,7 @@
 // persistence schema established by findings 0075).  stderr segments paint amber via UGUI
 // rich-text colour tags (marimo `Outputs.css .stderr { color: var(--amber-12); }` parity).
 
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -41,11 +42,12 @@ public static class StrategyEditorContentBuilder
 
     public static StrategyEditorView Build(
         RectTransform body,
-        EditHistory history = null, Font font = null, Cell cell = null)
+        EditHistory history = null, Cell cell = null)
     {
         if (body == null) return null;
         history ??= new EditHistory();
-        font ??= BuiltinFont();
+        // #119: the editor + placeholder now render through EditorTmpFont() (Cascadia SDF); the legacy
+        // `Font font` parameter (and BuiltinFont fallback) is gone — the surface is TMP/SDF end-to-end.
 
         // VerticalLayoutGroup on the body: children stack top→bottom, child-controlled height + width
         // so each LayoutElement's preferredHeight (set by SetOutput/SetConsole) is honoured.  Spacing
@@ -60,7 +62,10 @@ public static class StrategyEditorContentBuilder
         layout.childForceExpandWidth = true;
         layout.padding = new RectOffset(0, 0, 0, 0);
 
-        // ---- 1) Editor block (StrategyCodeInput) — top, min-height + flex ----
+        // ---- 1) Editor block (StrategyCodeInput) — top, min-height + flex.  #119 (findings 0096 D5):
+        // the editing surface is TMP_InputField + TMP_Text/SDF so the InfiniteCanvas zoom (0.2–5×)
+        // stays crisp — the shader reconstructs glyph outlines instead of stretching the dynamic-font
+        // atlas bitmap the legacy uGUI Text did (the migration's root cause). ----
 
         var inputGo = new GameObject("StrategyCodeInput",
             typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(StrategyInputField), typeof(LayoutElement));
@@ -71,33 +76,43 @@ public static class StrategyEditorContentBuilder
         inputLE.flexibleHeight = 1f;            // absorbs all space the output blocks do not claim
         inputLE.minHeight = EditorMinFloor;     // updated by _Relayout when the body's height changes
 
-        // Text component (the editing surface) + the syntax mesh effect.
-        var textGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text), typeof(PythonSyntaxMeshEffect));
-        var textRt = (RectTransform)textGo.transform;
-        textRt.SetParent(inputRt, false);
-        Stretch(textRt);
-        var text = textGo.GetComponent<Text>();
-        text.font = font;
-        text.fontSize = 14;
-        text.color = ThemeService.Current.colors.text;     // base (Default) colour — issue #44
-        text.supportRichText = false;                       // colouring is per-vertex, NOT tags
-        text.alignment = TextAnchor.UpperLeft;
-        text.horizontalOverflow = HorizontalWrapMode.Overflow;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
+        // TextArea viewport (RectMask2D): TMP_InputField scrolls the text WITHIN this masked area by
+        // offsetting the (full) text component rather than truncating it to the visible line window the
+        // way the legacy InputField did — so characterInfo[i].index stays the full-source index and the
+        // syntax recolour needs no displayStart offset (findings 0096 §#120 refinement).
+        var areaGo = new GameObject("TextArea", typeof(RectTransform), typeof(RectMask2D));
+        var areaRt = (RectTransform)areaGo.transform;
+        areaRt.SetParent(inputRt, false);
+        Stretch(areaRt);
 
-        // Placeholder (#81): the single-cell host-API hint. uGUI shows the placeholder Graphic only
-        // while the field is empty; the coordinator sets the hint text for the only cell and clears it
-        // otherwise (marimo showPlaceholder = hasOnlyOneCell). Hidden by default.
-        var phGo = new GameObject("Placeholder", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        // Text component (the editing surface) + the per-glyph syntax recolour driver. TMP_Text/SDF.
+        var textGo = new GameObject("Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI), typeof(PythonSyntaxMeshEffect));
+        var textRt = (RectTransform)textGo.transform;
+        textRt.SetParent(areaRt, false);
+        Stretch(textRt);
+        var text = textGo.GetComponent<TextMeshProUGUI>();
+        text.font = EditorTmpFont();                        // Cascadia Mono SDF (#117), default-fallback
+        text.fontSize = 14;
+        text.color = ThemeService.Current.colors.text;      // base (Default) colour — issue #44
+        text.richText = false;                              // colouring is per-vertex, NOT tags
+        text.alignment = TextAlignmentOptions.TopLeft;
+        text.textWrappingMode = TextWrappingModes.NoWrap;   // code editor: no wrap (parity w/ legacy Overflow)
+        text.overflowMode = TextOverflowModes.Overflow;     // the TextArea RectMask2D clips overflow
+
+        // Placeholder (#81): the single-cell host-API hint. TMP_InputField shows the placeholder Graphic
+        // only while the field is empty; the coordinator sets the hint text for the only cell and clears
+        // it otherwise (marimo showPlaceholder = hasOnlyOneCell). Hidden by default.
+        var phGo = new GameObject("Placeholder", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
         var phRt = (RectTransform)phGo.transform;
-        phRt.SetParent(inputRt, false);
+        phRt.SetParent(areaRt, false);
         Stretch(phRt);
-        var placeholder = phGo.GetComponent<Text>();
-        placeholder.font = font;
+        var placeholder = phGo.GetComponent<TextMeshProUGUI>();
+        placeholder.font = EditorTmpFont();
         placeholder.fontSize = 14;
-        placeholder.alignment = TextAnchor.UpperLeft;
-        placeholder.horizontalOverflow = HorizontalWrapMode.Overflow;
-        placeholder.verticalOverflow = VerticalWrapMode.Overflow;
+        placeholder.richText = false;   // host-API hint is literal text; never parse '<...>' as a TMP tag (parity w/ editor)
+        placeholder.alignment = TextAlignmentOptions.TopLeft;
+        placeholder.textWrappingMode = TextWrappingModes.NoWrap;
+        placeholder.overflowMode = TextOverflowModes.Overflow;
         var phColor = ThemeService.Current.colors.text; phColor.a = 0.4f;
         placeholder.color = phColor;
         phGo.SetActive(false);
@@ -105,18 +120,16 @@ public static class StrategyEditorContentBuilder
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
         var input = inputGo.GetComponent<StrategyInputField>();
+        input.textViewport = areaRt;
         input.textComponent = text;
         input.placeholder = placeholder;
-        input.lineType = InputField.LineType.MultiLineNewline;
+        input.lineType = TMP_InputField.LineType.MultiLineNewline;
         input.characterLimit = 0;
-
-        // Live display offset: when a focused multiline field scrolls, the Text shows only the
-        // visible line window starting at VisibleDrawStart; the effect reads it at mesh-build time.
-        effect.SetDisplayStartProvider(() => input.VisibleDrawStart);
+        input.richText = false;   // user code may contain '<...>'; never parse it as a TMP tag
 
         // ---- 2) Rich output block — middle, ScrollRect (findings 0079 §6 D5) ----
 
-        var rich = BuildOutputBlock(body, "RichOutputBlock", font, fontSize: 12, supportRichText: false);
+        var rich = BuildOutputBlock(body, "RichOutputBlock", fontSize: 12, richText: false);
         // Rich Content hosts Text (from BuildOutputBlock) + a RawImage SIBLING for image/png|jpeg.
         // Both children live INSIDE the ScrollRect's Content so the VerticalLayoutGroup +
         // ContentSizeFitter on Content size it from whichever child is active (the other is
@@ -135,7 +148,7 @@ public static class StrategyEditorContentBuilder
 
         // ---- 3) Console output block — bottom, ScrollRect ----
 
-        var console = BuildOutputBlock(body, "ConsoleOutputBlock", font, fontSize: 12, supportRichText: true);
+        var console = BuildOutputBlock(body, "ConsoleOutputBlock", fontSize: 12, richText: true);
         console.Block.gameObject.SetActive(false);  // hidden until a press emits stdout/stderr
 
         var view = inputGo.AddComponent<StrategyEditorView>();
@@ -164,7 +177,7 @@ public static class StrategyEditorContentBuilder
     // The view's ApplyBlockSize sets Block.LayoutElement.preferredHeight = min(Content.preferredHeight,
     // body*cap). When Content <= cap, Block sized to Content and no scroll is needed; when Content
     // > cap, Block sized to cap and the ScrollRect makes the residual scrollable.
-    static OutputBlock BuildOutputBlock(RectTransform body, string name, Font font, int fontSize, bool supportRichText)
+    static OutputBlock BuildOutputBlock(RectTransform body, string name, int fontSize, bool richText)
     {
         // ---- Block: ScrollRect host ----
         var blockGo = new GameObject(name,
@@ -220,20 +233,23 @@ public static class StrategyEditorContentBuilder
         csf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
         csf.horizontalFit = ContentSizeFitter.FitMode.Unconstrained;
 
-        // ---- Text: child of Content ----
-        var textGo = new GameObject(name + "Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
+        // ---- Text: child of Content ----  (#118: TMP_Text / SDF so the output pane stays crisp across
+        // the whole zoom range — the shader reconstructs glyph outlines instead of stretching an atlas
+        // bitmap.  TMP implements ILayoutElement so the VLG + ContentSizeFitter on Content size to its
+        // preferredHeight exactly as the legacy Text did.)
+        var textGo = new GameObject(name + "Text", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
         var textRt = (RectTransform)textGo.transform;
         textRt.SetParent(contentRt, false);
         Stretch(textRt);
-        var text = textGo.GetComponent<Text>();
-        text.font = font;
+        var text = textGo.GetComponent<TextMeshProUGUI>();
+        text.font = EditorTmpFont();
         text.fontSize = fontSize;
         var col = ThemeService.Current.colors.text; col.a = 0.85f;
         text.color = col;
-        text.alignment = TextAnchor.UpperLeft;
-        text.horizontalOverflow = HorizontalWrapMode.Wrap;
-        text.verticalOverflow = VerticalWrapMode.Overflow;
-        text.supportRichText = supportRichText;
+        text.alignment = TextAlignmentOptions.TopLeft;
+        text.textWrappingMode = TextWrappingModes.Normal;        // wrap (parity with HorizontalWrapMode.Wrap)
+        text.overflowMode = TextOverflowModes.Overflow;          // vertical overflow (Content/ScrollRect clips)
+        text.richText = richText;
         text.raycastTarget = false;
 
         // ---- Vertical Scrollbar: gutter on the right edge of Block ----
@@ -292,11 +308,21 @@ public static class StrategyEditorContentBuilder
         rt.offsetMax = Vector2.zero;
     }
 
-    static Font BuiltinFont()
+    // #117/#118: the editor's SDF font asset (Cascadia Mono, OFL — committed by TmpFoundationSetup).
+    // Loaded from Resources so a runtime build and the AFK probes resolve the same asset.  Falls back
+    // to the TMP project default (LiberationSans SDF) if the Cascadia asset is somehow absent, so a
+    // missing-foundation project still renders text instead of throwing.
+    public const string EditorSdfFontResourcesPath = "Fonts & Materials/CascadiaMono SDF";
+
+    // Cached so a multi-cell restore (ApplyLayout / File→Open spawns K cell windows) does one resource
+    // lookup for the whole process, not 2×K (two output blocks per Build).  The asset never changes at
+    // runtime; the field harmlessly pins it against UnloadUnusedAssets.
+    static TMP_FontAsset _editorTmpFont;
+    static TMP_FontAsset EditorTmpFont()
     {
-        // Unity 6 ships the builtin legacy font as "LegacyRuntime.ttf" (Arial was removed).
-        var f = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        return f != null ? f : Resources.GetBuiltinResource<Font>("Arial.ttf");
+        if (_editorTmpFont != null) return _editorTmpFont;
+        var fa = Resources.Load<TMP_FontAsset>(EditorSdfFontResourcesPath);
+        return _editorTmpFont = (fa != null ? fa : (TMP_Settings.instance != null ? TMP_Settings.defaultFontAsset : null));
     }
 
     // The pieces of an output block the StrategyEditorView holds to drive its dynamic layout.
@@ -307,7 +333,7 @@ public static class StrategyEditorContentBuilder
         public RectTransform Block;
         public RectTransform Viewport;
         public RectTransform Content;
-        public Text Text;
+        public TMP_Text Text;
         public LayoutElement LayoutElement;
         public ScrollRect ScrollRect;
     }

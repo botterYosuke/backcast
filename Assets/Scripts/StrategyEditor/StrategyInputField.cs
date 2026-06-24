@@ -1,23 +1,25 @@
 // StrategyInputField.cs — issue #16 "Strategy Editor" (DURABLE tier, Unity boundary)
+//                       + #119 TMP(SDF) editing-surface migration (findings 0096 D5)
 //
-// A one-line InputField subclass that exposes the VISIBLE display-window start so the syntax
-// mesh effect can offset full-source token spans onto the truncated displayed substring
-// (findings 0010 §1, the owner-approved fallback the HITL Step-5 scroll failure triggered).
+// The named code-editing surface. Since #119 it derives from TMP_InputField (was UnityEngine.UI.
+// InputField) so the editor renders through the TMP SDF pipeline — the shader reconstructs glyph
+// outlines, so the InfiniteCanvas zoom (Content.localScale 0.2–5×) stays crisp instead of
+// stretching a dynamic-font atlas bitmap (findings 0096 root cause).
 //
-// WHY: while focused, legacy InputField scrolls a MULTILINE field by setting its text component
-// to `fullText.Substring(m_DrawStart, m_DrawEnd - m_DrawStart)` (InputField.cs UpdateLabel) — so
-// the Text the mesh effect colours is only the visible LINE window, starting at m_DrawStart in
-// the full document. m_DrawStart changes on scroll WITHOUT an onValueChanged, so it must be read
-// LIVE at mesh-build time. m_DrawStart is `protected`, so a subclass reads it directly — NO
-// reflection (findings 0010 §1). When unfocused, InputField resets m_DrawStart=0 (whole text),
-// so VisibleDrawStart is naturally 0 then.
+// WHY a named subclass rather than a bare TMP_InputField: the builder/probe address the editing
+// surface by THIS type (a stable seam for future editor-specific input behaviour — e.g. tab/indent
+// handling), and the syntax recolour pipeline reads its textComponent's full source directly.
+//
+// The legacy `VisibleDrawStart`/`m_DrawStart` display-window machinery is GONE: a focused legacy
+// multiline InputField truncated its text component to the visible line window [m_DrawStart,
+// m_DrawEnd) and scrolled by re-substringing, so the mesh effect had to offset displayed glyphs
+// back onto the full source. TMP_InputField keeps the FULL text in its textComponent and scrolls
+// by firstVisibleCharacter / vertical offset (it does NOT truncate), so each glyph's
+// characterInfo[i].index IS already the full-source index — the offset mechanism is unneeded
+// (findings 0096 §#119/#120 refinement).
 
-using UnityEngine.UI;
+using TMPro;
 
-public class StrategyInputField : InputField
+public class StrategyInputField : TMP_InputField
 {
-    // UTF-16 index into the FULL text of the first character currently shown in the text
-    // component (0 when unfocused / not scrolled). The mesh effect adds this to each displayed
-    // glyph's local index to recover its full-source index for token lookup.
-    public int VisibleDrawStart => m_DrawStart;
 }

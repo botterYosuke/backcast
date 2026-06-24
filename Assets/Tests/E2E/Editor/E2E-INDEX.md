@@ -18,6 +18,7 @@
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05,PLANE-01..04,GROUP-01,02,04,11,DRAG-01..14` | 45 | 40 | 0 | 0 | 4 | 1 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..50` | 50 | 47 | 0 | 0 | 2 | 1 |
+| [StrategyEditorZoomCrispnessE2ERunner](./StrategyEditorZoomCrispnessE2ERunner.md) ✅ | `ZOOM-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
@@ -38,6 +39,7 @@
 | [LiveManualTradeJourneyE2ERunner](./LiveManualTradeJourneyE2ERunner.md) ✅ | `JOURNEY-LIVE-01..15` | 15 | 14 | 0 | 0 | 1 | 0 |
 | [ChartPlacementJourneyE2ERunner](./ChartPlacementJourneyE2ERunner.md) | `CP-S0-01..04, CP-S1-01..05, CP-S2-01, CP-S2-02a/b, CP-S3-01..04, CP-S4-01..04` | 19 | 11 | 0 | 8 | 0 | 0 |
 | [AddChartLadderJourneyE2ERunner](./AddChartLadderJourneyE2ERunner.md) ✅ | `ADDLADDER-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
+| [ChartOrphanSyncJourneyE2ERunner](./ChartOrphanSyncJourneyE2ERunner.md) ✅ | `CHART-ORPHAN-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |
 
 ※ `ReplayToHakoniwa` は Action-ID 採番より前に書かれた台本で 7 = ストーリーの step 数（Action-ID 行ではない）。
 第二波で他台本と同じ操作一覧表へ整形する際に Action ID を採番する。

@@ -24,6 +24,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -198,7 +199,10 @@ public static class ThemeProbe
 
         // -- 4b PythonSyntaxMeshEffect (syntax) --
         ThemeService.ResetForTests();
-        var sxGo = Spawn("probe_syntax", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text), typeof(PythonSyntaxMeshEffect));
+        // #120: the syntax recolour driver now requires a TMP_Text (was UnityEngine.UI.Text). This
+        // probe only checks the palette fields follow a theme switch, so no font is set (Recolour
+        // no-ops on a fontless TMP_Text).
+        var sxGo = Spawn("probe_syntax", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI), typeof(PythonSyntaxMeshEffect));
         var eff = sxGo.GetComponent<PythonSyntaxMeshEffect>();
         eff.ApplyTheme(); // OnEnable is play-mode-only; apply explicitly for the headless probe
         var dk = Theme.Dark();

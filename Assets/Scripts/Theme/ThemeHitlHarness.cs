@@ -15,6 +15,7 @@
 // its own throwaway graphics.
 
 using System.Collections.Generic;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.InputSystem;
@@ -131,12 +132,16 @@ public class ThemeHitlHarness : MonoBehaviour
         // -- editor snippet (bottom-right) — syntax palette + editor bg/text --
         var editorBg = Panel(parent, "editor", new Vector2(0.36f, 0f), new Vector2(0.78f, 0.28f));
         _samples["editor_bg"] = editorBg.GetComponent<Image>();
-        var codeGo = new GameObject("code", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text), typeof(PythonSyntaxMeshEffect));
+        // #120: the editor snippet is now TMP_Text/SDF (the production editing surface migrated off
+        // legacy uGUI Text), so a theme switch is eyeballed on the SAME pipeline the app ships.
+        var codeGo = new GameObject("code", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI), typeof(PythonSyntaxMeshEffect));
         var codeRt = (RectTransform)codeGo.transform; codeRt.SetParent(editorBg, false);
         codeRt.anchorMin = Vector2.zero; codeRt.anchorMax = Vector2.one; codeRt.offsetMin = new Vector2(6, 6); codeRt.offsetMax = new Vector2(-6, -6);
-        var code = codeGo.GetComponent<Text>();
-        code.font = _font; code.fontSize = 13; code.supportRichText = false; code.alignment = TextAnchor.UpperLeft;
-        code.horizontalOverflow = HorizontalWrapMode.Overflow; code.verticalOverflow = VerticalWrapMode.Overflow;
+        var code = codeGo.GetComponent<TextMeshProUGUI>();
+        var codeFont = Resources.Load<TMP_FontAsset>(StrategyEditorContentBuilder.EditorSdfFontResourcesPath);
+        code.font = codeFont != null ? codeFont : (TMP_Settings.instance != null ? TMP_Settings.defaultFontAsset : null);
+        code.fontSize = 13; code.richText = false; code.alignment = TextAlignmentOptions.TopLeft;
+        code.textWrappingMode = TextWrappingModes.NoWrap; code.overflowMode = TextOverflowModes.Overflow;
         // code base color (PythonSyntaxMeshEffect uses Text.color for uncovered glyphs) must repaint too.
         _samples["code_text"] = code;
         const string sample = "@decorator\ndef strategy(self):  # comment\n    n = 42\n    return \"buy\"";

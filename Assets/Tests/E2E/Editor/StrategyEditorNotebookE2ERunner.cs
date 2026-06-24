@@ -29,6 +29,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using TMPro;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -91,8 +92,8 @@ public static class StrategyEditorNotebookE2ERunner
                       "registry (dup-reject, unregister, ordinal enumeration, multi-instance) + layout round-trip (REAL JsonUtility, " +
                       "additive strategyEditors, on-disk text proof, sanitize null/empty/dup/orphan/missing-path, back-compat, " +
                       "Clone/StructurallyEqual) + restore full-replacement on real windows (state-none->unbound, present->reset+Open, " +
-                      "Open-failure keeps window) + non-scroll mesh colouring (real Text, token glyph vertex colour, Default unchanged, " +
-                      "no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
+                      "Open-failure keeps window) + #120 TMP per-glyph syntax recolour (real TextMeshProUGUI, OnPreRenderText " +
+                      "textInfo.meshInfo[].colors32 by full-source index, Default unchanged, no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
                       "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
                       "+ #81 notebook aggregate (fresh=1 empty cell, AddCell dirties, body-edit dirties, SaveAs/Save->Open " +
                       "round-trip preserves body+name+config, >=1 delete guard, non-marimo Open wraps as 1 cell (#86), supplyable " +
@@ -605,7 +606,8 @@ public static class StrategyEditorNotebookE2ERunner
     }
 
     // ======================================================================
-    // 8. non-scroll mesh colouring (real Text component + synthetic base mesh)
+    // 8. TMP per-glyph syntax recolour (#120 / findings 0096 D4): real TextMeshProUGUI + the
+    //    OnPreRenderText recolour hook, asserting textInfo.meshInfo[].colors32 per glyph.
     // Covers: STRATEGY-05 (実 mesh 着色の non-scroll 部 — scroll 着色は HITL専用)
     // ======================================================================
     static string Section8_MeshColoring(List<GameObject> spawned)
@@ -613,63 +615,84 @@ public static class StrategyEditorNotebookE2ERunner
         const string src = "def f(): return 1  # c";
         var tokens = PythonHighlighter.Tokenize(src);
 
-        var go = new GameObject("MeshProbeText", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text), typeof(PythonSyntaxMeshEffect));
+        var go = new GameObject("MeshProbeText", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI), typeof(PythonSyntaxMeshEffect));
         spawned.Add(go);
-        var text = go.GetComponent<Text>();
-        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        var text = go.GetComponent<TextMeshProUGUI>();
         Color baseColor = new Color(0.9f, 0.9f, 0.9f, 1f);
         text.color = baseColor;
-        text.text = src;
         var effect = go.GetComponent<PythonSyntaxMeshEffect>();
         effect.SetTokens(tokens);
 
-        // Build a synthetic base mesh with one white quad per glyph-producing char (the real
-        // TextGenerator's whitespace-skipping is cross-checked separately below). Map char index
-        // -> quad rank so we can read back a known glyph's colour after ModifyMesh.
-        var vh = new VertexHelper();
-        var rankOf = new Dictionary<int, int>();
+        // Build a SYNTHETIC TMP_TextInfo (one visible glyph per glyph-producing char, all on material 0,
+        // colours pre-seeded to base) and drive the recolour DIRECTLY.  Headless -batchmode -nographics
+        // does not run TMP's canvas-driven mesh generation (text.textInfo stays empty), so — exactly as
+        // the legacy probe fed a synthetic VertexHelper to ModifyMesh — we feed a deterministic textInfo
+        // and assert the per-glyph colours32 the recolour writes.  characterInfo[i].index IS the
+        // full-source index (TMP keeps the full text — findings 0096 §#120).  #121 separately gates the
+        // real SDF render path (font/material) on the production editor.
+        var ti = new TMP_TextInfo();
+        ti.characterInfo = new TMP_CharacterInfo[src.Length];
+        ti.characterCount = src.Length;
         int rank = 0;
-        var quad = new UIVertex[4];
-        for (int i = 0; i < 4; i++) quad[i] = UIVertex.simpleVert;
         for (int j = 0; j < src.Length; j++)
         {
-            if (src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r') continue;
-            rankOf[j] = rank++;
-            vh.AddUIVertexQuad(quad);
+            bool vis = !(src[j] == ' ' || src[j] == '\t' || src[j] == '\n' || src[j] == '\r');
+            ti.characterInfo[j] = new TMP_CharacterInfo
+            {
+                index = j,
+                isVisible = vis,
+                materialReferenceIndex = 0,
+                vertexIndex = vis ? rank * 4 : 0,
+            };
+            if (vis) rank++;
         }
+        var colors = new Color32[rank * 4];
+        for (int k = 0; k < colors.Length; k++) colors[k] = baseColor;   // pre-seed base (recolour overrides covered glyphs)
+        ti.meshInfo = new[] { new TMP_MeshInfo { colors32 = colors } };
 
-        effect.ModifyMesh(vh);
+        effect.ApplyTokenColours(ti);   // the production recolour hook, fed our synthetic textInfo
 
         // 'd'(0)=keyword, 'f'(4)=definition, 'r'(9)=keyword, '1'(16)=number, '#'(19)=comment,
-        // '('(5)=Default(unchanged base).
-        if (!GlyphColor(vh, rankOf, 0, effect.keyword)) return "S8: 'def' keyword glyph not keyword-coloured";
-        if (!GlyphColor(vh, rankOf, 4, effect.definition)) return "S8: definition name glyph not definition-coloured";
-        if (!GlyphColor(vh, rankOf, 9, effect.keyword)) return "S8: 'return' glyph not keyword-coloured";
-        if (!GlyphColor(vh, rankOf, 16, effect.number)) return "S8: number glyph not number-coloured";
-        if (!GlyphColor(vh, rankOf, 19, effect.comment)) return "S8: comment glyph not comment-coloured";
-        if (!GlyphColor(vh, rankOf, 5, baseColor)) return "S8: Default glyph '(' was recoloured";
+        // '('(5)=Default(unchanged base).  token lookup is by FULL-source index directly.
+        int checkedGlyphs = 0;
+        string err =
+            TmpGlyphColor(ti, 0, effect.keyword, ref checkedGlyphs) ??
+            TmpGlyphColor(ti, 4, effect.definition, ref checkedGlyphs) ??
+            TmpGlyphColor(ti, 9, effect.keyword, ref checkedGlyphs) ??
+            TmpGlyphColor(ti, 16, effect.number, ref checkedGlyphs) ??
+            TmpGlyphColor(ti, 19, effect.comment, ref checkedGlyphs) ??
+            TmpGlyphColor(ti, 5, baseColor, ref checkedGlyphs);   // '(' -> Default unchanged
+        if (err != null) return err;
+        if (checkedGlyphs == 0)
+            return "S8: no visible glyphs were colour-checked (synthetic textInfo had no glyphs)";
 
-        // No tag injection: the source string the editor holds is never mutated by colouring.
-        if (text.text != src) return "S8: colouring mutated the source text (tag injection)";
-
-        // Cross-check the whitespace-skipping premise against the REAL TextGenerator when fonts are
-        // available; otherwise HITL (findings 0010 §9 fallback).
-        try
-        {
-            var settings = text.GetGenerationSettings(new Vector2(2000f, 2000f));
-            text.cachedTextGenerator.Populate(src, settings);
-            int visible = text.cachedTextGenerator.vertexCount / 4;
-            if (visible > 0 && visible != rank)
-                Debug.LogWarning($"[E2E STRATEGY NOTEBOOK] S8: real TextGenerator visible glyphs {visible} != synthetic {rank} " +
-                                 "-> whitespace-skipping premise needs the HITL check.");
-            else if (visible == 0)
-                Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S8: TextGenerator produced no glyphs in batchmode -> glyph-count cross-check HITL-only.");
-        }
-        catch (Exception e)
-        {
-            Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S8: TextGenerator unavailable in batchmode (" + e.Message + ") -> glyph-count cross-check HITL-only.");
-        }
+        // No tag injection by construction: ApplyTokenColours writes ONLY meshInfo.colors32 — it has no
+        // path that mutates the source string (the property the legacy ModifyMesh probe asserted).
         return null;
+    }
+
+    // Assert the 4 verts of the glyph at FULL-source index `srcIndex` carry `expected`. null = pass
+    // (or the char produces no glyph — whitespace, which TMP gives no quad); increments checkedGlyphs
+    // only for a real visible glyph so the caller catches a fully-empty mesh.
+    static string TmpGlyphColor(TMP_TextInfo ti, int srcIndex, Color expected, ref int checkedGlyphs)
+    {
+        for (int i = 0; i < ti.characterCount; i++)
+        {
+            var ci = ti.characterInfo[i];
+            if (ci.index != srcIndex) continue;
+            if (!ci.isVisible) return null;   // not a glyph-producing char at this index
+            int matIdx = ci.materialReferenceIndex;
+            if (matIdx < 0 || matIdx >= ti.meshInfo.Length) return $"S8: glyph[{srcIndex}] material index out of range";
+            var colors = ti.meshInfo[matIdx].colors32;
+            int vi = ci.vertexIndex;
+            if (colors == null || vi + 3 >= colors.Length) return $"S8: glyph[{srcIndex}] mesh not populated";
+            for (int k = 0; k < 4; k++)
+                if (!ColorApprox(colors[vi + k], expected))
+                    return $"S8: glyph[{srcIndex}] vert{k} colour {(Color)colors[vi + k]} != expected {expected}";
+            checkedGlyphs++;
+            return null;
+        }
+        return $"S8: source index {srcIndex} not found in textInfo (characterCount {ti.characterCount})";
     }
 
     // ======================================================================
@@ -945,7 +968,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rootRt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rootRt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rootRt;
             },
@@ -954,7 +977,7 @@ public static class StrategyEditorNotebookE2ERunner
         // adopt the scene-authored region_001 shell — a real frame + view (so it owns an output pane).
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S13: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1040,7 +1063,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1048,7 +1071,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S14: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1135,7 +1158,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1143,7 +1166,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S23: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1241,7 +1264,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1249,7 +1272,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S15: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1357,7 +1380,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rootRt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rootRt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rootRt;
             },
@@ -1365,7 +1388,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S16: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1472,7 +1495,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1480,7 +1503,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S17: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1625,7 +1648,6 @@ public static class StrategyEditorNotebookE2ERunner
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
         // a real 1x1 PNG (valid header so Texture2D.LoadImage decodes it).
         const string PNG_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var views = new Dictionary<string, StrategyEditorView>();
 
         var layerGo = new GameObject("FWLayer19", typeof(RectTransform));
@@ -1636,7 +1658,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1644,7 +1666,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S19: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1790,7 +1812,6 @@ public static class StrategyEditorNotebookE2ERunner
     {
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
         const string R2 = "strategy_editor:region_002";
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var views = new Dictionary<string, StrategyEditorView>();
 
         var layerGo = new GameObject("FWLayer20", typeof(RectTransform));
@@ -1801,7 +1822,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1809,7 +1830,7 @@ public static class StrategyEditorNotebookE2ERunner
 
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S20: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -1848,10 +1869,10 @@ public static class StrategyEditorNotebookE2ERunner
     }
 
     static FieldInfo s_placeholderField;
-    static Text Placeholder(StrategyEditorView v)
+    static TMPro.TMP_Text Placeholder(StrategyEditorView v)   // #119: placeholder is now a TMP_Text
     {
         s_placeholderField ??= typeof(StrategyEditorView).GetField("_placeholder", BindingFlags.NonPublic | BindingFlags.Instance);
-        return s_placeholderField?.GetValue(v) as Text;
+        return s_placeholderField?.GetValue(v) as TMPro.TMP_Text;
     }
     static string PlaceholderText(StrategyEditorView v) { var t = Placeholder(v); return t != null ? t.text : null; }
     static bool PlaceholderActive(StrategyEditorView v) { var t = Placeholder(v); return t != null && t.gameObject.activeSelf; }
@@ -1912,14 +1933,6 @@ public static class StrategyEditorNotebookE2ERunner
 
     // ---- helpers ----
 
-    static bool GlyphColor(VertexHelper vh, Dictionary<int, int> rankOf, int charIndex, Color expected)
-    {
-        if (!rankOf.TryGetValue(charIndex, out int r)) return false;
-        var v = new UIVertex();
-        vh.PopulateUIVertex(ref v, r * 4);
-        return ColorApprox(v.color, expected);
-    }
-
     static bool ColorApprox(Color a, Color b)
         => Mathf.Abs(a.r - b.r) <= 0.02f && Mathf.Abs(a.g - b.g) <= 0.02f
         && Mathf.Abs(a.b - b.b) <= 0.02f && Mathf.Abs(a.a - b.a) <= 0.02f;
@@ -1973,7 +1986,6 @@ public static class StrategyEditorNotebookE2ERunner
     static string Section21_ConsoleAndDynamicLayout(List<GameObject> spawned)
     {
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var views = new Dictionary<string, StrategyEditorView>();
 
         var layerGo = new GameObject("FWLayer20", typeof(RectTransform));
@@ -1984,7 +1996,7 @@ public static class StrategyEditorNotebookE2ERunner
             {
                 var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
                 spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -1996,7 +2008,7 @@ public static class StrategyEditorNotebookE2ERunner
         // dynamic layout reads body.rect.height to compute editor-min and per-block-max.
         adoptRoot.sizeDelta = new Vector2(400f, 400f);
         UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(adoptRoot);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S20: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -2040,14 +2052,17 @@ public static class StrategyEditorNotebookE2ERunner
         if (oIdx < 0 || eIdx < 0 || o2Idx < 0) return "S21/STRATEGY-34: arrival order not preserved (o1/e1/o2 missing), got [" + ctext + "]";
         if (!(oIdx < eIdx && eIdx < o2Idx)) return "S21/STRATEGY-34: arrival order broken (expected o1<e1<o2), got [" + ctext + "]";
 
-        // STRATEGY-34 (UGUI rich-text escape regression): a stdout segment containing `<EOF>` MUST
-        // survive — UGUI Text with supportRichText=true would otherwise treat `<EOF>` as an unknown
-        // tag and strip it (`print("<EOF>")` would silently vanish). BuildConsoleRichText escapes `<`
-        // to `&lt;` BEFORE concatenating with the color tag, so the user sees the literal characters.
+        // STRATEGY-34 (#118 TMP rich-text escape regression): a stdout segment containing `<EOF>` MUST
+        // survive AND stay inert — TMP_Text with richText=true would otherwise treat `<EOF>` as an
+        // unknown tag (`print("<EOF>")` shows nothing). BuildConsoleRichText wraps the payload in TMP's
+        // `<noparse>…</noparse>` so the user's literal `<EOF>` renders verbatim and is NOT parsed. We do
+        // NOT entity-escape: TMP would paint a literal `&lt;` (a regression), so `&lt;` must NOT appear.
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "<EOF>" } });
         run.RunCell(R1); run.DrainAndRoute();
         ctext = view.CurrentConsoleText ?? string.Empty;
-        if (!ctext.Contains("&lt;EOF")) return "S21/STRATEGY-34: literal '<' from stdout was not escaped — UGUI would strip the tag, got [" + ctext + "]";
+        if (!ctext.Contains("<noparse>")) return "S21/STRATEGY-34: stdout payload not wrapped in <noparse> — TMP would parse the user's `<` as a tag, got [" + ctext + "]";
+        if (!ctext.Contains("<EOF")) return "S21/STRATEGY-34: literal '<EOF>' from stdout did not survive verbatim, got [" + ctext + "]";
+        if (ctext.Contains("&lt;")) return "S21/STRATEGY-34: payload was entity-escaped (&lt;) — TMP renders that literally (regression), got [" + ctext + "]";
 
         // STRATEGY-37 (both populated): rich block + console block both visible, capped under body * 0.45.
         exec.SetOutput("hello", "text/plain", null);
@@ -2163,7 +2178,7 @@ public static class StrategyEditorNotebookE2ERunner
     //         STRATEGY-44 first-frame bodyH==0: paint must still produce a visible block with
     //         preferredHeight > 0 (no `ForceRebuildLayoutImmediate` priming);
     //         STRATEGY-45 `</color>` injection-resistance: a stderr segment containing `</color>`
-    //         must be escaped to `&lt;/color>` so it cannot close our amber wrapper;
+    //         must be guarded inside a TMP `<noparse>` span so it cannot close our amber wrapper (#118);
     //         STRATEGY-46 dormant-reuse race: a press → DeleteCell → AddCell that reuses dormant
     //         R1 must NOT paint the prior cell's stdout onto the rebound view (ListMutated bumps
     //         the run controller's generation, identical to how Open/New already drops stale).
@@ -2174,7 +2189,6 @@ public static class StrategyEditorNotebookE2ERunner
     {
         const string R1 = NotebookCellCoordinator.AdoptedRegionId;
         const string R2 = "strategy_editor:region_002";
-        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         var views = new Dictionary<string, StrategyEditorView>();
 
         var layerGo = new GameObject("FWLayer21", typeof(RectTransform));
@@ -2190,7 +2204,7 @@ public static class StrategyEditorNotebookE2ERunner
                 // calls our factory and never sets a sizeDelta — pin it so the dynamic layout works.
                 rt.sizeDelta = new Vector2(400f, 400f);
                 UnityEngine.UI.LayoutRebuilder.ForceRebuildLayoutImmediate(rt);
-                var v = StrategyEditorContentBuilder.Build(body, font: font);
+                var v = StrategyEditorContentBuilder.Build(body);
                 if (v != null) views[id] = v;
                 return rt;
             },
@@ -2201,7 +2215,7 @@ public static class StrategyEditorNotebookE2ERunner
         // resize the root to 400 for stable layout.
         var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody, font: font);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
         if (view1 == null) return "S21: adopted view build failed";
         views[R1] = view1;
         controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
@@ -2244,9 +2258,9 @@ public static class StrategyEditorNotebookE2ERunner
         if (!ctext.Contains("a & b"))
             return "S22/STRATEGY-39: literal '&' missing — payload not preserved verbatim, got [" + ctext + "]";
         if (ctext.Contains("&amp;"))
-            return "S22/STRATEGY-39: '&' was double-escaped to '&amp;' — UGUI would paint the entity literally, got [" + ctext + "]";
+            return "S22/STRATEGY-39: '&' was double-escaped to '&amp;' — TMP would paint the entity literally, got [" + ctext + "]";
 
-        // ---- STRATEGY-45: `</color>` in stderr must not close our amber wrapper ----
+        // ---- STRATEGY-45 (#118 TMP): `</color>` in stderr must not close our amber wrapper ----
         exec.SetConsole(new[] {
             new ConsoleSegment { Stream = "stderr", Text = "start" },
             new ConsoleSegment { Stream = "stderr", Text = "</color>middle" },
@@ -2254,20 +2268,17 @@ public static class StrategyEditorNotebookE2ERunner
         });
         run.RunCell(R1); run.DrainAndRoute();
         ctext = view.CurrentConsoleText ?? string.Empty;
-        // BuildConsoleRichText wraps EACH stderr segment in its own <color>...</color> pair, so the
-        // safety property is "wrapper balance" — every <color=#ffa01c> open has its own </color>
-        // close, and the user's `</color>` cannot leak past escape.  An unescaped `</color>` would
-        // close our most recent open prematurely, breaking the balance (more closes than opens).
-        if (!ctext.Contains("&lt;/color>"))
-            return "S22/STRATEGY-45: user's '</color>' was not escaped — UGUI would close our amber tag, got [" + ctext + "]";
-        if (ctext.Contains("</color>middle"))
-            return "S22/STRATEGY-45: user's '</color>middle' rendered literally — escape did not run before paint, got [" + ctext + "]";
+        // #118: BuildConsoleRichText wraps EACH segment's payload in <noparse>…</noparse> and puts OUR
+        // amber <color=#ffa01c>…</color> OUTSIDE it.  TMP does not parse anything inside <noparse>, so
+        // the user's literal `</color>` is inert — it cannot close our wrapper.  The TMP safety property
+        // is therefore "the user's </color> is guarded inside a noparse span", not UGUI's string-balance.
+        if (ctext.Contains("&lt;"))
+            return "S22/STRATEGY-45: user's '</color>' was entity-escaped — TMP renders &lt; literally (regression), got [" + ctext + "]";
+        if (!ctext.Contains("<noparse></color>middle</noparse>"))
+            return "S22/STRATEGY-45: user's '</color>middle' is not guarded inside a <noparse> span (could close our amber tag), got [" + ctext + "]";
         int opens = CountSubstring(ctext, "<color=#ffa01c>");
-        int closes = CountSubstring(ctext, "</color>");
-        if (opens != closes)
-            return "S22/STRATEGY-45: amber wrapper unbalanced (opens=" + opens + " closes=" + closes + ") — user's </color> may have leaked, got [" + ctext + "]";
         if (opens != 2)
-            return "S22/STRATEGY-45: expected 2 amber wrapper pairs (one per stderr segment), got opens=" + opens;
+            return "S22/STRATEGY-45: expected 2 amber opens (one per stderr segment), got opens=" + opens;
 
         // ---- STRATEGY-41: re-press REPLACES (does not append) ----
         exec.SetConsole(new[] { new ConsoleSegment { Stream = "stdout", Text = "round1\n" } });

@@ -332,6 +332,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         SeedScenarioFromEditor();
         _tile?.SyncFieldsFromController();
         _sidebarCtrl?.PrimeWritebackFromCurrent();
+        // #123: re-assert "universe is the SoT for chart windows" at the canonical reseed tail. The bug:
+        // RestoreFloating (ApplyLayout) spawns saved `chart:<iid>` windows from the layout sidecar's
+        // floatingWindows list WITHOUT a universe check — a SECOND spawn path beside the Changed-driven
+        // SyncChartWindowsToUniverse. When the just-seeded universe is set-EQUAL to the prior one (empty→
+        // empty; or Editable=false / instruments_ref lock making ReplaceAll a no-op), InstrumentRegistry
+        // .ReplaceAll's SequenceEqual short-circuit does NOT fire Changed, so the Sync subscription never
+        // runs and the restored chart floats on as an orphan while the sidebar reads "No instruments".
+        // Calling Sync UNCONDITIONALLY here (Changed-INDEPENDENT) closes that gap on EVERY reseed entry —
+        // this method is the shared tail of ApplyLayout/Resume/File→Open/Save (see the §324-329 contract),
+        // so the fix is structural, not point. Idempotent + geometry-preserving: RestoreFloating's chart
+        // Spawn already populated _chartViews via the factory (§746), so an iid that IS in the universe is
+        // a no-op (keeps its restored x/y/w/h) and only true orphans are despawned / true gaps spawned.
+        SyncChartWindowsToUniverse();
     }
 
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
@@ -417,7 +430,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
         // #81: the adopted window's content is a Cell fragment view (no Document / no registry — the
         // notebook aggregate, registered above under NOTEBOOK_ID, is the sole provider).
-        var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody, font: _font);
+        var editorView = StrategyEditorContentBuilder.Build(_strategyEditorBody);
         if (editorView != null)
         {
             _editors[WINDOW_ID] = editorView;
@@ -645,7 +658,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             // #81: a spawned cell window — a Cell fragment view (the coordinator binds its cell right
             // after the spawn) + a title-bar X wired to delete that cell.
-            var view = StrategyEditorContentBuilder.Build(body, font: _font);
+            var view = StrategyEditorContentBuilder.Build(body);
             if (view != null)
             {
                 _editors[id] = view;

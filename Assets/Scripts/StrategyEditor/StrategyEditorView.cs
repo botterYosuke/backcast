@@ -173,7 +173,7 @@ public class StrategyEditorView : MonoBehaviour
     // #95 Phase 6 Slice 5 (findings 0075 P6-2): render this cell's per-cell RUN output by mimetype.
     //   * image/png | image/jpeg → decode `data` (a `data:` URL or raw base64) into the sibling
     //     RawImage (Texture2D.LoadImage); the Text pane hides.
-    //   * text/markdown | text/html → the legacy Text with supportRichText, converting the HTML/
+    //   * text/markdown | text/html → the TMP_Text with richText=true, converting the HTML/
     //     markdown subset (headings/bold/italic/bullets, <table>→pipe rows) to Unity rich-text tags.
     //   * text/plain | unsupported | no mimetype → the plain `text` projection (tag-stripped by the
     //     backend), with an unsupported mimetype labelled for debug visibility.
@@ -467,7 +467,7 @@ public class StrategyEditorView : MonoBehaviour
 
     // ---- rich-text projection (findings 0075 P6-2) ----
 
-    // Convert a text/markdown or text/html payload into the legacy Text rich-text SUBSET (<b>/<i>).
+    // Convert a text/markdown or text/html payload into the TMP rich-text SUBSET (<b>/<i> — both TMP-native).
     // P6-2 keeps this deliberately small: headings/bold/italic/bullets for markdown, and for HTML a
     // <table>→pipe-row projection with the rest tag-stripped (general HTML is NOT reproduced — owner:
     // that is a separate project). marimo emits text/markdown as rendered HTML, so a payload with

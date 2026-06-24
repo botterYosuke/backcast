@@ -105,7 +105,10 @@ pass に化けない。CHARTSYNC-02/04 はジオメトリ一致まで assert す
 # ランチャ: scripts/run-live-e2e.ps1 -Method ChartUniverseSyncE2ERunner.Run
 ```
 
-CHARTSYNC-05（実ブートで sidebar「No instruments」と Chart 窓ゼロを目視整合）は実ウィンドウ・実ピクセルが要るため HITL専用。
+CHARTSYNC-05（実ブートで sidebar「No instruments」と Chart 窓ゼロを目視整合）は実ウィンドウ・実ピクセルが要るため
+HITL専用。**2026-06-24 owner HITL で PASS 実走確認済み**: `Tools ▸ Backcast ▸ Issue123 ChartSync - Generate + arm
+boot-resume fixture`（`Assets/Editor/ChartUniverseSyncHitlFixture.cs`）が layout=`chart:7203`／universe=空の mismatch
+文書を実 store で書き出し resume ポインタに arm → Play 起動で sidebar「No instruments」＋ Chart 窓ゼロを目視確認。
 
 ## 関連
 

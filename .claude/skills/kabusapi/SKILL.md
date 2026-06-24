@@ -108,7 +108,7 @@ REST/WebSocket サーバは kabuステーション本体プロセスが立てる
 
 ### S2. ビルドは **debug** を使う（release では自動ログイン不可）
 
-`DEV_KABU_API_PASSWORD` / `DEV_KABU_PROD` による自動ログインは **Python 側 `python/engine/exchanges/kabusapi_login_flow.py`** が読む（**将来実装予定**）。Rust 側に env 取込みコードは追加しない（経路が Python に閉じる）。release では Python パスでガードし常にユーザー入力（tkinter ダイアログ）を要求する。
+`DEV_KABU_API_PASSWORD` / `DEV_KABU_PROD` による自動ログインは **Python 側 `python/engine/exchanges/kabusapi_login_flow.py`** が読む（**#122 で in-process tkinter として実装済み**）。Rust 側に env 取込みコードは追加しない（経路が Python に閉じる）。release では Python パスでガードし常にユーザー入力（tkinter ダイアログ）を要求する。
 
 | ビルド | 自動ログイン | 本番/検証切替 | 用途 |
 | :--- | :--- | :--- | :--- |

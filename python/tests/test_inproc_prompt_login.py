@@ -13,10 +13,12 @@ These tests pin the death-angle the bug slipped through: every *other* login
 test drives ``credentials_source="env"`` and never touches the dialog seam, and
 no test exercised the (selector-loop × prompt-path) intersection.
 
-RED on the pre-#122 subprocess code: the in-test monkeypatch of ``run_dialog``
-cannot cross the subprocess boundary, so the real dialog runs (headless →
-NO_DISPLAY_AVAILABLE, or NotImplementedError on a Windows selector loop) and the
-token never comes back.
+Forward guard, not a mechanical RED: these tests monkeypatch the NEW in-process
+``run_dialog`` seam, so they cannot be made RED by simply running them against the
+old subprocess code (a monkeypatch never reaches across a subprocess boundary).
+They lock the post-#122 behaviour going forward. The genuine RED *was* observed
+during #122 development: on a Windows selector loop the (selector-loop × prompt)
+path raised NotImplementedError before the in-process seam landed.
 """
 from __future__ import annotations
 
@@ -74,6 +76,35 @@ def test_tachibana_prompt_login_succeeds_on_selector_loop(monkeypatch):
     )
     assert (success, ec) == (True, "")
     assert token is None  # tachibana uses session_cache on disk, no token return
+
+
+def test_kabu_prompt_login_auth_failed_returns_error_code(monkeypatch):
+    # A dialog reporting a failed auth must surface its error_code verbatim
+    # (not be remapped) — the orchestrator owns the run_dialog result contract.
+    monkeypatch.setattr(live_orchestrator, "_try_create_tk", lambda: True, raising=False)
+    monkeypatch.setattr(
+        kabusapi_login_flow,
+        "run_dialog",
+        lambda env_hint, cancel_event=None: {"success": False, "error_code": "AUTH_FAILED", "token": None},
+    )
+    success, ec, token = _run_on_selector_loop(
+        _bare_manager()._handle_prompt_login("KABU", "verify")
+    )
+    assert (success, ec, token) == (False, "AUTH_FAILED", None)
+
+
+def test_kabu_prompt_login_user_cancelled_returns_error_code(monkeypatch):
+    # A user-cancelled dialog degrades to its USER_CANCELLED code, not a crash.
+    monkeypatch.setattr(live_orchestrator, "_try_create_tk", lambda: True, raising=False)
+    monkeypatch.setattr(
+        kabusapi_login_flow,
+        "run_dialog",
+        lambda env_hint, cancel_event=None: {"success": False, "error_code": "USER_CANCELLED", "token": None},
+    )
+    success, ec, token = _run_on_selector_loop(
+        _bare_manager()._handle_prompt_login("KABU", "verify")
+    )
+    assert (success, ec, token) == (False, "USER_CANCELLED", None)
 
 
 def test_prompt_login_dialog_crash_degrades_to_error_code(monkeypatch):

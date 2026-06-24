@@ -240,25 +240,18 @@ class TachibanaAdapter:
             self._ensure_ec_stream()
             return
         if source == "prompt":
-            # run_dialog() persists the session to disk on success so we reload
-            # from the file (session_cache path). Offloaded to a thread because
-            # tkinter mainloop blocks — keeping the asyncio loop responsive.
-            from engine.exchanges import tachibana_login_flow
-            from engine.exchanges.tachibana_file_store import is_session_valid_for_today, load_session
-            result = await asyncio.to_thread(
-                tachibana_login_flow.run_dialog, env_hint=self._env
+            # The prompt UI is owned by the ORCHESTRATOR, not the adapter:
+            # LiveLoopManager._handle_prompt_login runs the tkinter dialog
+            # in-process on a dedicated thread and persists the session to disk,
+            # then re-invokes this adapter with credentials_source="session_cache".
+            # The adapter must NOT launch the dialog itself — doing so via
+            # asyncio.to_thread on the shared default executor reintroduced the
+            # pool-exhaustion + close-on-timeout hang that #122 removed. Mirrors
+            # the kabu adapter, which also rejects "prompt" at this boundary.
+            raise NotImplementedError(
+                "prompt credentials_source is owned by the orchestrator, not the "
+                "tachibana adapter (use session_cache)"
             )
-            if not result.get("success"):
-                error_code = str(result.get("error_code") or "USER_CANCELLED")
-                raise ValueError(error_code)
-            data = load_session()
-            if data is None or not is_session_valid_for_today(data):
-                # run_dialog reported success but save_session did not land —
-                # defensive guard against an unexpected race / file-system failure.
-                raise ValueError("PROMPT_SESSION_MISSING")
-            self._apply_session_from_data(data)
-            self._ensure_ec_stream()
-            return
         if source != "env":
             raise ValueError(f"unknown credentials_source: {source!r}")
 

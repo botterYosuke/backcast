@@ -83,7 +83,8 @@ public static class UniverseSidebarE2ERunner
                 ?? Section10_ViewEmptyUniverseLabel()
                 ?? Section11_PickerContextDrivenByScenarioEnd()
                 ?? Section12_PickerListGuiRendersCandidatesAndPlaceholder()
-                ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves();
+                ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves()
+                ?? Section14_FullUniverseNoCapVirtualizedRender();
         }
         catch (Exception e)
         {
@@ -92,7 +93,7 @@ public static class UniverseSidebarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh verified");
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized verified");
             EditorApplication.Exit(0);
         }
         else
@@ -205,12 +206,14 @@ public static class UniverseSidebarE2ERunner
         rows = ctrl.PickerList(UniverseSourceMode.Replay);
         if (rows.Count != 1 || !rows[0].IsPlaceholder || rows[0].Label != "No matches") return "no-matches placeholder wrong";
 
-        // take(15) cap.
+        // NO take(15) cap (owner 2026-06-24, findings 0101): the picker exposes the WHOLE universe — the
+        // view virtualizes the render, so all candidates are returned, not the first 15. Section14 scales
+        // this to a listed_info-sized universe and gates the virtualized view render.
         ctrl.Picker.SetQuery("");
         provider.Next = AvailableInstrumentsResult.Ready(
             Enumerable.Range(0, 30).Select(i => $"{1000 + i}.TSE").ToArray());
         rows = ctrl.PickerList(UniverseSourceMode.Replay);
-        if (rows.Count != InstrumentPickerController.MaxRows) return "take(15) cap not applied";
+        if (rows.Count != 30) return $"picker capped the universe ({rows.Count}/30) — take(15) not removed";
         return null;
     }
 
@@ -708,4 +711,75 @@ public static class UniverseSidebarE2ERunner
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }
     }
+
+    // UniverseSidebarView.ROW_H is private const 22f; mirror it here for the content-height assert
+    // (the window math itself is row-height-agnostic, so any value drives PickerListWindow correctly).
+    const float ROW_H = 22f;
+
+    // ---- 14. the bug report: opening [+ Add] in Replay showed only the first 15 instruments (TTWR
+    // take(15) cap), not the whole listed_info.duckdb universe (~4400). Owner decision (2026-06-24):
+    // show ALL instruments, with the view VIRTUALIZING the render so thousands of rows don't freeze the
+    // UI. Three legs: (a) the controller returns the FULL filtered list (no cap); (b) PickerListWindow
+    // computes a bounded visible window; (c) the view sizes _pickerListContent to the FULL universe
+    // height (every instrument reachable by scroll) while mounting only a window of GameObjects.
+    // RED→GREEN litmus: re-introduce the take(15) cap in BuildList → (a) FAILs; render every row instead
+    // of the window → (c)'s bounded-mount assert FAILs; size the content to the mounted-window height
+    // instead of the full count → (c)'s full-height assert FAILs (the universe stops being reachable).
+    // Covers: SIDEBAR-06 (cap 撤廃＝全件供給), SIDEBAR-18 (仮想スクロール: 論理高さ全件・mount は窓のみ)
+    static string Section14_FullUniverseNoCapVirtualizedRender()
+    {
+        // (a) controller: BuildList returns ALL filtered candidates — listed_info-sized, no take(15).
+        var provider = new StubProvider();
+        var ctrl = NewController(out _, out _, provider);
+        ctrl.TogglePicker(UniverseSourceMode.Replay, "2025-12-04");
+        var ids = Enumerable.Range(0, 4424).Select(i => $"{10000 + i}.TSE").ToArray();
+        provider.Next = AvailableInstrumentsResult.Ready(ids);
+        var rows = ctrl.PickerList(UniverseSourceMode.Replay);
+        if (rows.Count != ids.Length)
+            return $"controller capped the universe ({rows.Count}/{ids.Length}) — take(15) not removed";
+
+        // (b) pure window math: bounded at the top, offset correctly when scrolled, full mount for a tiny
+        // list. headless the viewport is 0, so this is the deterministic gate for the virtualization rule.
+        PickerListWindow.Compute(ids.Length, 0f, 0f, ROW_H, PickerListWindowBuffer, out int f0, out int c0);
+        if (f0 != 0 || c0 <= 0 || c0 >= ids.Length)
+            return $"window at top not bounded (first={f0} count={c0}, total={ids.Length})";
+        PickerListWindow.Compute(ids.Length, 100f * ROW_H, 20f * ROW_H, ROW_H, PickerListWindowBuffer, out int f1, out int c1);
+        if (f1 != 100 - PickerListWindowBuffer || (f1 + c1) <= 100)
+            return $"scrolled window wrong (first={f1} count={c1}; expected to straddle row 100)";
+        PickerListWindow.Compute(2, 0f, 0f, ROW_H, PickerListWindowBuffer, out int f2, out int c2);
+        if (f2 != 0 || c2 != 2) return $"small list must mount all (first={f2} count={c2})";
+
+        // (c) view: content height spans the WHOLE universe (every instrument reachable by scroll), but
+        // only a bounded window of GameObjects is mounted (not 4424).
+        var go = new GameObject("universe_sidebar_virt_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        var vreg = new InstrumentRegistry();
+        var vprovider = new StubProvider { Next = AvailableInstrumentsResult.Ready(ids) };
+        var vctrl = new UniverseSidebarController(vreg, new SelectedSymbol(), new UniverseWriteback(), vprovider);
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        try
+        {
+            view.Bind(vctrl, new StubStrategyProvider { Path = null }, font);
+            view.SetContext(UniverseSourceMode.Replay, "2025-12-04");
+            var addBtn = AddButton(view);
+            var pickerContent = PickerListContent(view);
+            if (addBtn == null || pickerContent == null) return "view: _addBtn/_pickerListContent not reflectable";
+
+            addBtn.onClick.Invoke();   // open → PopulatePickerListContent → RenderPickerWindow
+
+            float expectedH = ids.Length * ROW_H;
+            if (Mathf.Abs(pickerContent.sizeDelta.y - expectedH) > 0.5f)
+                return $"picker content height {pickerContent.sizeDelta.y} != full {expectedH} (universe not all reachable by scroll)";
+            if (pickerContent.childCount == 0)
+                return "view: picker mounted nothing (virtualization window empty)";
+            if (pickerContent.childCount >= ids.Length)
+                return $"view: picker mounted {pickerContent.childCount} rows for {ids.Length} ids (no virtualization)";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // The SAME buffer the view uses — both read PickerListWindow.DefaultBuffer (single source of truth),
+    // so the scrolled-window assert above tracks the real window policy and cannot drift from the view.
+    const int PickerListWindowBuffer = PickerListWindow.DefaultBuffer;
 }

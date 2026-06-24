@@ -35,7 +35,11 @@ public struct PickerRow
 
 public sealed class InstrumentPickerController
 {
-    public const int MaxRows = 15;              // TTWR take(15)
+    // No display cap (owner decision 2026-06-24): the picker exposes the WHOLE listed_info universe
+    // (~4400 instruments), NOT TTWR's take(15) — the user opens [+ Add] to browse/scroll every stock,
+    // not just the first 15 ordinal codes. The view (UniverseSidebarView) VIRTUALIZES the render
+    // (PickerListWindow) so returning thousands of candidates here does not freeze the UI. Divergence
+    // from TTWR is justified by the owner ("listed_info の銘柄が一覧に表示される") — see findings 0101.
     public const long DebounceMs = 100;         // TTWR §3.4 same-id debounce
 
     public bool Visible { get; private set; }
@@ -78,7 +82,8 @@ public sealed class InstrumentPickerController
 
     // Build the rendered list from the supply status + the universe (for already-added flags).
     // Order: status placeholders first (EndUnset/Loading/Error/NotConnected), then empty-source,
-    // then query filter + sort + take(15), then no-matches. Mirrors picker_list_rebuild_system.
+    // then query filter + sort (ALL matches — no take(15) cap; the view virtualizes), then no-matches.
+    // Mirrors picker_list_rebuild_system except the cap (owner 2026-06-24 — see the no-cap note above).
     public IReadOnlyList<PickerRow> BuildList(
         IAvailableInstrumentsProvider provider, InstrumentRegistry registry, UniverseSourceMode mode)
     {
@@ -105,19 +110,25 @@ public sealed class InstrumentPickerController
         IReadOnlyList<string> ids = result.Ids ?? Array.Empty<string>();
         if (ids.Count == 0) return One(EmptyMessage(mode));
 
-        string q = (Query ?? "").ToLowerInvariant();
+        string q = Query ?? "";
         List<string> filtered = ids
-            .Where(id => q.Length == 0 || id.ToLowerInvariant().Contains(q))
+            .Where(id => q.Length == 0 || id.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
             .ToList();
         filtered.Sort(StringComparer.Ordinal);
 
         if (filtered.Count == 0) return One("No matches");
 
-        var rows = new List<PickerRow>(Math.Min(filtered.Count, MaxRows));
-        for (int i = 0; i < filtered.Count && i < MaxRows; i++)
+        // Hoist the already-added lookup OUT of the per-candidate loop. registry.Ids allocates a fresh
+        // ReadOnlyCollection wrapper on every get AND .Contains is an O(curated) linear scan — over the
+        // now-uncapped ~4400-id universe (findings 0101) that was ~4400 wrappers × O(n) compares PER
+        // keystroke. A HashSet built once makes the per-candidate check O(1). (case-insensitive substring
+        // is OrdinalIgnoreCase IndexOf — no per-id ToLowerInvariant() allocation over the full universe.)
+        var owned = registry != null ? new HashSet<string>(registry.Ids) : null;
+        var rows = new List<PickerRow>(filtered.Count);
+        for (int i = 0; i < filtered.Count; i++)
         {
             string id = filtered[i];
-            bool already = registry != null && registry.Ids.Contains(id);
+            bool already = owned != null && owned.Contains(id);
             rows.Add(PickerRow.Candidate(id, already));
         }
         return rows;

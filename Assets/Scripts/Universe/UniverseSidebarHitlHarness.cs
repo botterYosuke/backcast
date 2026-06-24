@@ -109,6 +109,11 @@ public class UniverseSidebarHitlHarness : MonoBehaviour
             string q = GUILayout.TextField(_ctrl.Picker.Query ?? "");
             _ctrl.Picker.SetQuery(q);
 
+            // NOTE: PickerList is now UNBOUNDED (the take(15) cap was removed — findings 0101). This IMGUI
+            // harness mounts one button per row with NO virtualization and is only safe because it drives
+            // a 6-id MockAvailable provider. Do NOT repoint it at the real BackendAvailableInstrumentsProvider
+            // (~4400 ids) — OnGUI would emit 4400 buttons per pass and freeze the editor. The virtualized
+            // path is UniverseSidebarView.RenderPickerWindow; mirror it here before scaling this harness up.
             foreach (PickerRow pr in _ctrl.PickerList(_mode))
             {
                 if (pr.IsPlaceholder) { GUILayout.Label("  " + pr.Label, muted); continue; }

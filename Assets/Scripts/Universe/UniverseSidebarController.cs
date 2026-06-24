@@ -77,6 +77,25 @@ public sealed class UniverseSidebarController
     public IReadOnlyList<PickerRow> PickerList(UniverseSourceMode mode) =>
         Picker.BuildList(_provider, _registry, mode);
 
+    // Cheap async-supply revision for the view's per-frame poll: the supply STATUS (kind + id count)
+    // WITHOUT the filter/sort/already-added work PickerList does. The view polls this while the picker
+    // is open to catch a Loading→Ready/Empty transition that has no discrete event (the production
+    // BackendAvailableInstrumentsProvider resolves on a background thread) — WITHOUT re-sorting the
+    // whole listed_info universe (~4400 ids) every frame now that the take(15) cap is gone (findings 0101).
+    // A ValueTuple key so the per-frame compare is allocation-free and value-equal out of the box
+    // (no hand-rolled equality boilerplate). NOTE: this gate is strictly WEAKER than the per-row
+    // signature it replaced — a supply that resolves to a DIFFERENT id set with the SAME (Kind, Count)
+    // under a stable key would not repaint. The shipping BackendAvailableInstrumentsProvider caches
+    // per (mode, end) and only transitions Loading→Ready/Empty/Error (always changing Kind or Count),
+    // so this holds today; an in-place equal-count universe swap would need a richer revision.
+    public (UniverseStatusKind Kind, int Count) CurrentSupplyRevision(UniverseSourceMode mode)
+    {
+        var r = _provider != null
+            ? _provider.Query(mode, Picker.ReplayEndSnapshot)
+            : AvailableInstrumentsResult.Empty;
+        return (r.Kind, r.Ids != null ? r.Ids.Count : 0);
+    }
+
     // Click a picker candidate → add to the universe + flush the writeback (Replay-gated).
     // #107: in Live, a newly added instrument must also be market-data subscribed (AC#2 [+ Add]).
     // Same DEFERRED seam as row-select (LiveSubscribeHook) so the production trigger is one place;

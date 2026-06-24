@@ -7,12 +7,12 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（14 本・222 行）
+## Surface E2E（14 本・223 行）
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
 | [MenuBarE2ERunner](./MenuBarE2ERunner.md) | `MENU-01..19` | 19 | 0 | 8 | 5 | 2 | 4 |
-| [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..17` | 17 | 15 | 0 | 0 | 2 | 0 |
+| [UniverseSidebarE2ERunner](./UniverseSidebarE2ERunner.md) ✅ | `SIDEBAR-01..18` | 18 | 16 | 0 | 0 | 2 | 0 |
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..13` | 13 | 11 | 0 | 0 | 1 | 1 |
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |

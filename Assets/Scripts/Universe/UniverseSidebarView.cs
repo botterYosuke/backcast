@@ -22,6 +22,12 @@
 // override-sorting Canvas above the sidebar — two independent guarantees so #84 cannot regress
 // from either side of the contract.
 //
+// VIRTUALIZATION SCOPE (findings 0101): only the PICKER list is virtualized (RenderPickerWindow) —
+// it draws the whole listed_info universe (~4400). The ROWS list (the user's curated universe) mounts
+// every row because it is user-curation-bounded (v19_morning_cell.json's 150 is a realistic max). If
+// curated universes ever grow into the thousands, apply the same PickerListWindow pattern to the rows
+// list (extract a shared VirtualScrollWindow at that point rather than now, for one caller).
+//
 // Python-FREE: the controller drives SelectedSymbol (the depth-target focus) and the universe writeback;
 // the candidate source is injected by the root (a separate issue owns the real DuckDB/venue universe).
 //
@@ -31,6 +37,7 @@
 // RebuildPickerList() preserve the rows scroll (typing in the picker must not jump the rows view). The
 // search field is built once while the picker is open so per-keystroke list rebuilds never steal focus.
 
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -72,12 +79,22 @@ public sealed class UniverseSidebarView : MonoBehaviour
     RectTransform _pickerListScrollContainer, _pickerListContent;
     ScrollRect _pickerListScroll;
     InputField _searchInput;
-    // signature of the candidate list currently painted into _pickerListContent. The picker supply is
-    // ASYNC (BackendAvailableInstrumentsProvider fetches on a background thread and returns Loading until
-    // the cache fills), and the provider is designed to be polled every tick while visible. Update()
-    // re-polls the open picker and repaints only when this signature changes — so a fetch that lands
-    // after the open frame appears without the user re-opening (findings 0084: stuck "Loading..." on 1st open).
-    string _pickerSig;
+    // CHEAP async-supply revision (kind + id-count) of the list currently painted into _pickerListContent.
+    // The picker supply is ASYNC (BackendAvailableInstrumentsProvider fetches on a background thread and
+    // returns Loading until the cache fills) and is polled every tick while visible: Update() repaints only
+    // when this revision changes — a fetch that lands after the open frame appears without re-opening
+    // (findings 0084: stuck "Loading..."). We poll the cheap CurrentSupplyRevision (NOT a full PickerList
+    // sort) because the universe is now uncapped (~4400 ids) and re-sorting every frame would be wasteful;
+    // it is a ValueTuple so the per-frame compare is allocation-free and value-equal (0101).
+    (UniverseStatusKind Kind, int Count) _pickerSig;
+
+    // Virtualized picker list (findings 0101): the full candidate list referenced once per content change;
+    // _pickerListContent keeps the FULL logical height (count*ROW_H) but only the rows in the visible scroll
+    // window (+buffer) are mounted as GameObjects. Without this, listed_info's ~4400 instruments would mount
+    // ~8800 GameObjects per keystroke and freeze the UI.
+    IReadOnlyList<PickerRow> _pickerRows;
+    const int PICKER_WINDOW_BUFFER = PickerListWindow.DefaultBuffer;   // off-screen rows per side (single SoT)
+    int _pickerWinFirst = -1, _pickerWinCount = -1;   // last rendered window (skip re-mount when unchanged)
 
     public void Bind(UniverseSidebarController ctrl, IStrategyFileProvider strategyProvider, Font font, string replayEnd = null)
     {
@@ -273,20 +290,55 @@ public sealed class UniverseSidebarView : MonoBehaviour
         RestoreRowsScroll(prevRowsScroll);
     }
 
+    // Materialize the full candidate list (one PickerList build) and size the content to the WHOLE
+    // universe so the scrollbar can reach every instrument — then mount only the visible window
+    // (RenderPickerWindow). findings 0101: the take(15) cap is gone, so this list can be ~4400 long;
+    // virtualization keeps the mounted GameObject count bounded to a viewport-worth of rows.
     void PopulatePickerListContent()
     {
+        // PickerList()/BuildList() returns a fresh List nothing else aliases — hold it directly (no copy;
+        // RenderPickerWindow only does .Count and [idx]). Avoids a full ~4400-element copy per keystroke.
+        _pickerRows = _ctrl.PickerList(_mode);
+        if (_pickerListContent != null)
+            _pickerListContent.sizeDelta = new Vector2(0f, _pickerRows.Count * ROW_H);
+        // Reset the picker to the TOP whenever the list is (re)built — a fresh open, a new search, or an
+        // async Loading→Ready landing should all show the first instrument. The ScrollRect is reused
+        // across open/close, and with the universe now scrollable (~4400 rows, findings 0101) a persisted
+        // offset would reopen MID-universe. The window math is scroll-driven, so reset BEFORE the first
+        // window mount. (A stable Ready list is not re-populated, so user scrolling is preserved.)
+        if (_pickerListScroll != null) _pickerListScroll.verticalNormalizedPosition = 1f;
+        RenderPickerWindow(force: true);
+        // Remember the cheap supply revision we just painted (async-poll change gate). The full list
+        // identity (query filter / already-added) is driven by discrete events (onValueChanged /
+        // Registry.Changed→Rebuild), so the per-frame poll only needs the supply STATUS.
+        _pickerSig = _ctrl.CurrentSupplyRevision(_mode);
+    }
+
+    // Mount ONLY the candidate rows inside the current scroll window (+buffer); the rest stay virtual.
+    // Each mounted row sits at its ABSOLUTE position (-idx*ROW_H) within the full-height content, so
+    // scrolling reveals the correct rows. Skips the re-mount when the window is unchanged (the per-frame
+    // Update poll calls this with force=false, so a stable open picker costs only the window math).
+    void RenderPickerWindow(bool force = false)
+    {
+        if (_pickerListContent == null || _pickerRows == null) return;
+        int total = _pickerRows.Count;
+        float viewportH = (_pickerListScroll != null && _pickerListScroll.viewport != null)
+            ? _pickerListScroll.viewport.rect.height : 0f;
+        float scrollTopPx = PickerScrollTopPx(total, viewportH);
+        PickerListWindow.Compute(total, scrollTopPx, viewportH, ROW_H, PICKER_WINDOW_BUFFER, out int first, out int count);
+        if (!force && first == _pickerWinFirst && count == _pickerWinCount) return;
+        _pickerWinFirst = first; _pickerWinCount = count;
+
         ClearChildren(_pickerListContent);
         var t = ThemeService.Current;
-        // Build the async-poll change signature inline as we render (one PickerList enumeration, not two).
-        var sig = new System.Text.StringBuilder();
-        int i = 0;
-        foreach (PickerRow pr in _ctrl.PickerList(_mode))
+        for (int k = 0; k < count; k++)
         {
-            AppendRowSig(sig, pr);
+            int idx = first + k;
+            PickerRow pr = _pickerRows[idx];
+            float y = -idx * ROW_H;   // absolute position within the full-height content
             if (pr.IsPlaceholder)
             {
-                MakeText(_pickerListContent, "  " + pr.Label, 11, t.colors.text_muted, TextAnchor.MiddleLeft, -i * ROW_H, ROW_H);
-                i++;
+                MakeText(_pickerListContent, "  " + pr.Label, 11, t.colors.text_muted, TextAnchor.MiddleLeft, y, ROW_H);
                 continue;
             }
             string id = pr.Id;
@@ -294,7 +346,7 @@ public sealed class UniverseSidebarView : MonoBehaviour
             var go = new GameObject("cand:" + id, typeof(RectTransform), typeof(Image), typeof(Button));
             var rt = (RectTransform)go.transform; rt.SetParent(_pickerListContent, false);
             rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(1f, 1f); rt.pivot = new Vector2(0f, 1f);
-            rt.sizeDelta = new Vector2(0f, ROW_H - 1f); rt.anchoredPosition = new Vector2(0f, -i * ROW_H);
+            rt.sizeDelta = new Vector2(0f, ROW_H - 1f); rt.anchoredPosition = new Vector2(0f, y);
             go.GetComponent<Image>().color = t.colors.element_background;
             go.GetComponent<Button>().onClick.AddListener(() =>
             {
@@ -302,33 +354,32 @@ public sealed class UniverseSidebarView : MonoBehaviour
                 _ctrl.AddFromPicker(id, _mode, _strategyProvider, nowMs);
             });
             AddLabel(rt, lbl, TextAnchor.MiddleLeft, t.colors.text_accent);
-            i++;
         }
-        _pickerListContent.sizeDelta = new Vector2(0f, i * ROW_H);
-        _pickerSig = sig.ToString();   // remember what we just painted (async-poll change gate)
     }
 
-    // Append a row's signature directly into `sb` (no intermediate strings) — placeholder vs candidate,
-    // the label/id, and the already-added flag, terminated by '|' so adjacent rows can't merge ambiguously.
-    static void AppendRowSig(System.Text.StringBuilder sb, PickerRow pr) =>
-        sb.Append(pr.IsPlaceholder ? 'P' : 'C').Append(pr.Label).Append(pr.AlreadyAdded ? '+' : '-').Append('|');
-
-    // Cheap signature of the current candidate list. Enumerating PickerList re-runs the provider's Query
-    // (cached per its per-tick design), so this is safe to call every frame while the picker is open.
-    string PickerSignature()
+    // Pixels the picker content is scrolled down from the top. verticalNormalizedPosition is 1 at the
+    // top / 0 at the bottom; NaN when the content fits the viewport (treat as top). Multiplying by the
+    // scrollable span (contentH - viewportH) converts it to an absolute pixel offset for the window math.
+    float PickerScrollTopPx(int total, float viewportH)
     {
-        var sb = new System.Text.StringBuilder();
-        foreach (PickerRow pr in _ctrl.PickerList(_mode)) AppendRowSig(sb, pr);
-        return sb.ToString();
+        if (_pickerListScroll == null) return 0f;
+        // The content height is owned by PopulatePickerListContent (_pickerListContent.sizeDelta.y); read
+        // it as the single source of truth rather than recomputing total*ROW_H, so the scroll-offset math
+        // and the actual content size can never silently disagree.
+        float contentH = _pickerListContent != null ? _pickerListContent.sizeDelta.y : total * ROW_H;
+        float scrollableH = Mathf.Max(0f, contentH - viewportH);
+        float vnp = _pickerListScroll.verticalNormalizedPosition;
+        if (float.IsNaN(vnp)) return 0f;
+        return (1f - Mathf.Clamp01(vnp)) * scrollableH;
     }
 
     // Re-poll the open picker so an ASYNC supply that resolves after the open frame (Loading→Ready) is
-    // repainted without the user re-opening. Rebuilds ONLY when the live signature differs from what is
-    // painted, so a stable list costs one cached Query enumeration per frame (no GameObject churn).
+    // repainted without the user re-opening. Rebuilds ONLY when the cheap supply revision changes, so a
+    // stable list costs one cached Query (no sort, no GameObject churn).
     void PollOpenPickerForAsyncSupply()
     {
         if (!_built || _ctrl == null || !_ctrl.Picker.Visible) return;
-        if (PickerSignature() != _pickerSig) RebuildPickerList();
+        if (_ctrl.CurrentSupplyRevision(_mode) != _pickerSig) RebuildPickerList();
     }
 
     // F4 (#84 review): NaN guard. ScrollRect.verticalNormalizedPosition returns NaN when content fits
@@ -425,6 +476,9 @@ public sealed class UniverseSidebarView : MonoBehaviour
         }
         // findings 0084: poll the open picker so an async supply resolving after the open frame repaints.
         PollOpenPickerForAsyncSupply();
+        // findings 0101: re-window the virtualized picker as the user scrolls / once the viewport height
+        // resolves after layout. Cheap when the window is unchanged (skips the re-mount).
+        if (_built && _ctrl != null && _ctrl.Picker.Visible) RenderPickerWindow();
     }
 
     // ── uGUI builders ──

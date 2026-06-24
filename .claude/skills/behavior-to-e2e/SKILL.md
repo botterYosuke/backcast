@@ -66,6 +66,13 @@ description: >-
 大多数の unit/contract pytest は従来どおり **findings ゲート**のままでよい——`scenario` を付けるのは**台帳の
 Action-ID 行を正本として持つテストだけ**（台帳を薄めない）。
 
+> ⚠️ **rollup の正規表現は Action-ID を *単一トークン*（`[A-Z0-9][A-Z0-9-]*` ＝空白なし）でしか拾わない**（`scripts/E2ERollup.ps1`）。
+> ＝Journey/Surface の**人間向け verdict 行**（`[E2E ADD CHART LADDER JOURNEY PASS]` のように**空白入りの NAME**）は rollup に
+> **載らない**（"no tags found" になる）。完了基準「Action-ID が rollup に PASS で現れる」を満たすには、その NAME タグ*とは別に*
+> **per-Action-ID の単一トークンタグ**（`[E2E ADDLADDER-04 PASS]` 等）を到達マイルストンで吐くこと（E2E-CONVENTIONS §5）。
+> 失敗時は手前で抜けるので当該 id タグは出ず、rollup は「id 不在＝そのステップ未到達」と読む（実例 2026-06-24 / findings 0094：
+> NAME タグだけ吐いて rollup が空になり、per-id タグを足して `5 PASS` に解消）。
+
 > **挙動が C#→Python を跨ぐとき＝「Python-FREE fake で C# 配線、pytest で engine 正しさ」の 2 ゲート分割**（#95 Phase 2
 > per-cell RUN 実例 2026-06-20）。AFK probe から実埋め込みインタプリタを起こそうとせず、**host-bridge を interface
 > 化してその AFK section に Python-FREE な fake executor を注入**し、C# 側（ボタン presence・index→窓 routing・stale

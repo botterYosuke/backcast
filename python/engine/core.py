@@ -119,7 +119,15 @@ class DataEngine:
         apply_event(self._rs, event, primary_id=self._replay_primary_id or None)
 
     def _prime_provider_locked(self, provider: BaseReplayProvider) -> None:
+        # Skip leading no-trade days (OHLCV all zero) so priming on a market-halt first bar
+        # doesn't crash via OhlcPoint(price>0) (#58). The tick carries OHLC only (no volume),
+        # so the OHLC-all-zero form of the canonical guard applies here. Imported lazily to
+        # keep `duckdb` off the module-top import path (mirrors load_replay_data).
+        from engine.kernel.duckdb_bars import is_no_trade_bar
+
         tick = provider.get_next_tick()
+        while tick is not None and is_no_trade_bar(tick[1], tick[2], tick[3], tick[4]):
+            tick = provider.get_next_tick()
         if not tick:
             raise ValueError("Replay provider returned no data for priming")
         self._replay_provider = provider

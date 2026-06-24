@@ -109,13 +109,16 @@ def test_five_digit_localcode_excluded() -> None:
     assert all(b.instrument_id == scenario.INSTRUMENT for b in bars)
     con = duckdb.connect(str(_DB_PATH), read_only=True)
     try:
+        # Count 4-digit rows EXCLUDING no-trade days (OHLCV all zero): the loader drops those
+        # so a market-halt bar doesn't crash the run (#58), so the expected count must too.
         four_digit = con.execute(
-            "SELECT count(*) FROM stocks_daily WHERE Code = ?",
+            "SELECT count(*) FROM stocks_daily WHERE Code = ? "
+            "AND NOT (Open=0 AND High=0 AND Low=0 AND Close=0 AND Volume=0)",
             [scenario.INSTRUMENT.split(".")[0]],
         ).fetchone()[0]
     finally:
         con.close()
-    assert len(bars) == four_digit, "read must return exactly the 4-digit Code rows"
+    assert len(bars) == four_digit, "read must return exactly the 4-digit Code rows (no-trade days dropped)"
 
 
 def _load_minute_window() -> list:

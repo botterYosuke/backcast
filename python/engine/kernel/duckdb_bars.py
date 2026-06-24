@@ -26,6 +26,7 @@ parquet catalog を持たず・**nautilus を一切 import しない**経路で 
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date as date_cls, datetime, time as dt_time
@@ -33,6 +34,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import duckdb
+
+logger = logging.getLogger(__name__)
 
 # Close-of-period conventions, identical to engine/jquants_loader.py (the catalog build
 # source). Reproduced so DuckDB-sourced ts_event matches the frozen golden / catalog-gen
@@ -52,6 +55,23 @@ class Bar:
     low: float
     close: float
     volume: float
+
+
+def is_no_trade_bar(
+    open_: float, high: float, low: float, close: float, volume: float = 0.0
+) -> bool:
+    """A market-halt / no-trade day: J-Quants records it as OHLCV all zero (#58).
+
+    The canonical no-trade signature is **every** field zero — e.g. 2020-10-01, the TSE
+    system outage that suspended trading in all names. Such a bar has no valid price
+    (``close == 0``) and would fail ``OhlcPoint``'s ``price > 0`` invariant, halting the run.
+    It is dropped at the loader (and skipped at priming) so the run completes.
+
+    Fail-loud is deliberate: a partially-corrupt row (e.g. ``close == 0`` but ``volume > 0``)
+    is NOT matched and still surfaces as a validation error, so genuine data corruption is not
+    silently swallowed. ``volume`` defaults to 0 for the priming tick, which carries OHLC only.
+    """
+    return open_ == 0 and high == 0 and low == 0 and close == 0 and volume == 0
 
 
 def _symbol_of(instrument_id: str) -> str:
@@ -268,7 +288,22 @@ def load_bars(
     finally:
         con.close()
 
-    return [g.row_to_bar(instrument_id, row) for row in rows]
+    bars = [g.row_to_bar(instrument_id, row) for row in rows]
+
+    # Drop no-trade days (OHLCV all zero) so a market-halt bar doesn't crash the run via
+    # OhlcPoint(price>0) (#58). Granularity-agnostic: filters Daily and Minute alike. The
+    # exactly-once invariant (ohlc count == streamed bar count) is preserved — the bar never
+    # reaches the kernel/reducer, so both the chart and the stream drop by the same row.
+    kept = [b for b in bars if not is_no_trade_bar(b.open, b.high, b.low, b.close, b.volume)]
+    dropped = len(bars) - len(kept)
+    if dropped:
+        logger.info(
+            "duckdb_bars: dropped %d no-trade day(s) (OHLCV=0) for %s [%s]",
+            dropped,
+            instrument_id,
+            g.name,
+        )
+    return kept
 
 
 def merge_bars_by_ts(bar_lists: Iterable[Sequence[Bar]]) -> list[Bar]:

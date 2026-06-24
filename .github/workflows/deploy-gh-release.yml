@@ -1,4 +1,4 @@
-# shippable-build.yml — CI shippable Windows64 build & draft Release publish (#83)
+# deploy-gh-release.yml — CI shippable Windows64 build & draft Release publish (#83)
 #
 # Wraps Assets/Editor/BackcastShippableBuild.BuildWindows64 on a self-hosted Windows
 # runner (owner's machine) and ships a Sigstore-attested zip to a draft GitHub Release.
@@ -30,7 +30,7 @@ on:
     branches:
       - main
     paths:
-      - '.github/workflows/shippable-build.yml'
+      - '.github/workflows/deploy-gh-release.yml'
       - 'Assets/Editor/BackcastShippableBuild.cs'
       - 'Assets/Scripts/S1Spike/PythonRuntimeLocator.cs'
       - 'Assets/Scripts/Live/WorkspaceEngineHost.cs'
@@ -65,7 +65,7 @@ defaults:
 jobs:
   build:
     name: Build & smoke-gate shippable Windows64
-    runs-on: [self-hosted, Windows, X64]   # ADR-0014: pivot from windows-2022
+    runs-on: windows-2022                  # Reverted to hosted runner
     timeout-minutes: 60                    # expected ~10-15 min on warm self-hosted
 
     steps:
@@ -85,12 +85,12 @@ jobs:
             Remove-Item -Force 'release-body-verify.md' -Confirm:$false
           }
           Remove-Item smoke-try*.log -Force -ErrorAction SilentlyContinue
-          Write-Host "Workspace cleaned (Library/ and python/.venv/ preserved)"
+          Write-Host "Workspace cleaned"
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          clean: false   # don't wipe Library/ or .venv/ — we want them as natural cache
+          clean: false
 
       # ── Resolve artifact version ─────────────────────────────────────────
       - name: Resolve artifact version
@@ -110,20 +110,31 @@ jobs:
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           Write-Host "artifact version: $v"
 
-      # ── Read Unity version + verify Editor installed ────────────────────
-      - name: Read Unity version & verify Editor present
-        id: unity
+      # ── Read Unity version ──────────────────────────────────────────────
+      - name: Read Unity version
+        id: unity-ver
         run: |
           $line = Get-Content ProjectSettings/ProjectVersion.txt | Where-Object { $_ -match '^m_EditorVersion:' } | Select-Object -First 1
           $v = ($line -split '\s+')[1]
           "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          $exe = "C:\Program Files\Unity\Hub\Editor\$v\Editor\Unity.exe"
+          Write-Host "Unity version required: $v"
+
+      # ── Setup Unity via GameCI ──────────────────────────────────────────
+      - name: Setup Unity
+        id: unity-setup
+        uses: game-ci/unity-setup@v2
+        with:
+          version: ${{ steps.unity-ver.outputs.version }}
+          platforms: StandaloneWindows64
+
+      # ── Export Unity Path for subsequent steps ──────────────────────────
+      - name: Export Unity Path
+        id: unity
+        run: |
+          $exe = "${{ steps.unity-setup.outputs.unityPath }}\Editor\Unity.exe"
           "unity_exe=$exe" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
-          if (-not (Test-Path $exe)) {
-            Write-Error "Unity Editor $v not installed at $exe (ADR-0014: self-hosted runner requires local Unity install)"
-            exit 1
-          }
-          Write-Host "Unity version: $v  ($exe)"
+          "version=${{ steps.unity-ver.outputs.version }}" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "Unity version: ${{ steps.unity-ver.outputs.version }}  ($exe)"
 
       # ── Publish path gate (tag push or dispatch) ─────────────────────────
       - name: Determine publish path
@@ -164,39 +175,56 @@ jobs:
         run: uv sync --frozen
         working-directory: python
 
-      # ── Direct Unity build (no GameCI; ADR-0014 dispenses with it) ──────
-      # The build script runs as an IPostprocessBuildWithReport, so the post-process
-      # (cpython + engine + site-packages copy + compileall + manifest) lands as part
-      # of the same Unity invocation.
+      # ── Unity build with Personal License Activation ─────────────────────
       - name: Build (BackcastShippableBuild.BuildWindows64)
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
         run: |
           $unity = "${{ steps.unity.outputs.unity_exe }}"
           $log = "build/unity-build.log"
           New-Item -ItemType Directory -Force -Path build | Out-Null
-          # PowerShell's call operator `& $unity ...` does NOT wait for GUI-subsystem
-          # apps (Unity.exe is GUI subsystem even in -batchmode). It returns 0.6s
-          # later with $LASTEXITCODE empty while Unity is still running in the
-          # background — leading to spurious "Unity build failed exit=" with empty
-          # code and the workspace getting torn down mid-build. Use Start-Process
-          # -Wait to force synchronous execution and capture the real ExitCode.
-          $args = @(
-            '-batchmode','-nographics','-quit',
-            '-projectPath','.',
-            '-buildTarget','StandaloneWindows64',
-            '-executeMethod','BackcastShippableBuild.BuildWindows64',
-            '-logFile', $log
-          )
-          $proc = Start-Process -FilePath $unity -ArgumentList $args -PassThru -NoNewWindow -Wait
-          $code = $proc.ExitCode
-          if ($code -ne 0) {
-            Write-Error "Unity build failed exit=$code"
-            if (Test-Path $log) { Get-Content $log -Tail 80 }
-            exit $code
-          }
-          # Surface the BackcastShippableBuild log lines for quick triage.
-          if (Test-Path $log) {
-            Write-Host "--- BackcastShippableBuild post-process lines ---"
-            Get-Content $log | Where-Object { $_ -match '\[BackcastShippableBuild\]' }
+
+          # 1. Write the license text to a temp file
+          $ulfPath = Join-Path $env:TEMP "unity.ulf"
+          $env:UNITY_LICENSE | Out-File -FilePath $ulfPath -Encoding utf8
+
+          try {
+            # 2. Activate Unity License
+            Write-Host "Activating Unity license..."
+            $actProc = Start-Process -FilePath $unity -ArgumentList "-batchmode", "-manualLicenseFile", $ulfPath, "-logfile", "build/unity-activation.log" -PassThru -NoNewWindow -Wait
+            if ($actProc.ExitCode -ne 0) {
+              Write-Error "Unity activation failed exit=$($actProc.ExitCode)"
+              if (Test-Path "build/unity-activation.log") { Get-Content "build/unity-activation.log" -Tail 50 }
+              exit $actProc.ExitCode
+            }
+            Write-Host "License activated successfully."
+
+            # 3. Execute Unity Build
+            Write-Host "Running Unity Build..."
+            $args = @(
+              '-batchmode','-nographics','-quit',
+              '-projectPath','.',
+              '-buildTarget','StandaloneWindows64',
+              '-executeMethod','BackcastShippableBuild.BuildWindows64',
+              '-logFile', $log
+            )
+            $proc = Start-Process -FilePath $unity -ArgumentList $args -PassThru -NoNewWindow -Wait
+            $code = $proc.ExitCode
+            if ($code -ne 0) {
+              Write-Error "Unity build failed exit=$code"
+              if (Test-Path $log) { Get-Content $log -Tail 80 }
+              exit $code
+            }
+            if (Test-Path $log) {
+              Write-Host "--- BackcastShippableBuild post-process lines ---"
+              Get-Content $log | Where-Object { $_ -match '\[BackcastShippableBuild\]' }
+            }
+          } finally {
+            # 4. Return Unity License (Deactivate)
+            Write-Host "Returning Unity license..."
+            $deactProc = Start-Process -FilePath $unity -ArgumentList "-batchmode", "-returnlicense", "-logfile", "build/unity-deactivation.log" -PassThru -NoNewWindow -Wait
+            if (Test-Path $ulfPath) { Remove-Item -Path $ulfPath -Force }
+            Write-Host "License returned successfully (exit=$($deactProc.ExitCode))."
           }
 
       # ── Verify build output is where BackcastShippableBuild puts it ─────

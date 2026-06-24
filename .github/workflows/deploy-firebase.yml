@@ -1,0 +1,102 @@
+name: Deploy to Firebase
+
+on:
+  push:
+    branches: [game, sasa/pyodide]
+
+concurrency:
+  group: "firebase-deploy"
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install repo
+        uses: ./.github/actions/install
+
+      - name: Generate LLM info TypeScript files
+        run: pnpm --filter @marimo-team/llm-info codegen
+
+      - name: Build marimo wheel
+        run: |
+          pip install hatch "virtualenv<21"
+          hatch build -t wheel
+          echo "Built wheel:"
+          ls -la dist/*.whl
+
+      - name: Build Pyodide frontend
+        working-directory: ./frontend
+        env:
+          NODE_ENV: production
+          PYODIDE: "true"
+          VITE_MARIMO_VERSION: "0.19.2"
+          VITE_USE_CUSTOM_WHEEL: "true"
+        run: pnpm build
+
+      - name: Copy wheel to dist
+        run: |
+          mkdir -p frontend/dist/wheels
+          cp dist/marimo-*.whl frontend/dist/wheels/
+          WHEEL_FILE=$(ls dist/marimo-*.whl | head -1 | xargs basename)
+          echo "$WHEEL_FILE" > frontend/dist/wheels/latest.txt
+          echo "Copied wheel: $WHEEL_FILE"
+
+      - name: Download DuckDB data files
+        run: |
+          mkdir -p frontend/dist/assets/data/stocks_daily
+          API_URL="http://backcast.i234.me:8080"
+          STOCK_CODES="7203 9984 6758 8306 9432 6861 7267 4502 6501 8035"
+          for code in $STOCK_CODES; do
+            echo "Downloading data for stock code: $code"
+            curl -sf \
+              "${API_URL}/jp/stocks_daily/${code}.duckdb" \
+              -o "frontend/dist/assets/data/stocks_daily/${code}.duckdb" \
+              || echo "Failed to download: ${code}.duckdb"
+          done
+          echo "Downloaded files:"
+          find frontend/dist/assets/data -name "*.duckdb" -ls
+
+      - name: Verify DuckDB files before deploy
+        run: |
+          echo "=== Checking DuckDB files ==="
+          ls -la frontend/dist/assets/data/stocks_daily/
+
+          echo "=== Verifying file sizes (must be > 1MB) ==="
+          for f in frontend/dist/assets/data/stocks_daily/*.duckdb; do
+            size=$(stat -c%s "$f")
+            if [ "$size" -lt 1000000 ]; then
+              echo "ERROR: $f is too small ($size bytes)"
+              exit 1
+            fi
+            echo "$f: $size bytes - OK"
+          done
+
+          count=$(find frontend/dist/assets/data -name "*.duckdb" | wc -l)
+          echo "Total DuckDB files: $count"
+          if [ "$count" -lt 10 ]; then
+            echo "ERROR: Expected 10 files, found $count"
+            exit 1
+          fi
+
+      - name: Verify build output
+        run: |
+          echo "Checking build output..."
+          ls -la frontend/dist/
+          test -f frontend/dist/index.html
+          echo "=== Full dist structure (first 50 files) ==="
+          find frontend/dist -type f | head -50
+
+      - name: Setup Firebase credentials
+        run: |
+          echo '${{ secrets.FIREBASE_SERVICE_ACCOUNT }}' > /tmp/firebase-sa.json
+
+      - name: Deploy to Firebase
+        run: |
+          npm install -g firebase-tools
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-sa.json
+          firebase deploy --only hosting --project backcast-tan --debug 2>&1 | tee /tmp/firebase-deploy.log
+          echo "=== Checking for uploaded files ==="
+          grep -E "uploading|\.duckdb" /tmp/firebase-deploy.log || echo "No duckdb upload logs found"

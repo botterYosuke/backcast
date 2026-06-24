@@ -332,6 +332,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         SeedScenarioFromEditor();
         _tile?.SyncFieldsFromController();
         _sidebarCtrl?.PrimeWritebackFromCurrent();
+        // #123: re-assert the chart-window == universe invariant WITHOUT depending on Universe.Changed.
+        // A layout restore (ApplyLayout → RestoreFloating) spawns a saved `chart:<iid>` BEFORE the universe
+        // is seeded, so it is a SECOND spawn path that bypasses SyncChartWindowsToUniverse's subscription.
+        // The seed's ReplaceAll then DOES NOT fire Changed when the set is unchanged — `SequenceEqual` on an
+        // empty→empty reseed, or `!Editable` (instruments_ref lock) returns false (InstrumentRegistry
+        // :85/:98) — so the subscribed sync never runs and a restored chart whose instrument is absent from
+        // the (re)seeded universe survives as an ORPHAN. This explicit, Changed-independent call at the
+        // canonical reseed tail (the SINGLE point every restore→reseed entry passes — Resume / File→Open /
+        // Save / New) despawns the orphan and spawns any missing one. It MUST run AFTER the seed: ordering
+        // it before (e.g. right after ApplyLayout) would misjudge the just-restored chart as orphaned and
+        // re-spawn it at a default grid slot, destroying the restored geometry (the alternative the issue
+        // rejected). Idempotent on the Changed-fired happy path (missing 0 / stale 0 → early return :989).
+        SyncChartWindowsToUniverse();
     }
 
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----

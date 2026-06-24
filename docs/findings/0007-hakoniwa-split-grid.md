@@ -32,6 +32,10 @@ window」という旧 ADR 0011 初版の前提は stale）。
     `HakoniwaGridLayout { cols, rows }` 等を `LayoutDocument` に additive 追加（slot のみ決定と整合）。
   - **box 移動 / root の canvas 位置・サイズ永続化**（TTWR drag-handle・ADR 0016 の box 共有）→ root の canvas 論理
     座標を表す専用 persist field が要るため。drag-handle 自体も #14 では付けない。
+    - 〔後日訂正 2026-06-24〕この「将来 slice」は #63（findings 0027 stage④）として起票されたが **ボツ**。
+      [ADR-0017](../adr/0017-hakoniwa-dockable-floating-windows.md) が本 findings（split-grid）ごと **SUPERSEDED** にし
+      （`HakoniwaRoot` bounded box・box-grow を退役）、box 移動/リサイズと geometry 永続化は floating window の
+      自由配置＋geometry（x/y/w/h）保存＋磁石スナップ（[ADR-0024](../adr/0024-puzzle-feel-drag-magnetic-snap-swap-translate-detach-merge.md)）で達成した。実装下位事実は findings 0075。
   - 実 Replay データ（Python / adapter / `ReplayPanelsHarness` / Replay lifecycle）の tile への統合。
 
 ## 1. tile セット・グリッド（owner 確定 2026-06-13）

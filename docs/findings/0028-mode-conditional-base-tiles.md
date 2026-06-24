@@ -21,7 +21,7 @@ stage② = 2 つの capability:
 - **採用**: base tile を `[startup]` 固定（#60）から **mode 別 tile kinds** へ拡張／`hakoniwa_tile_kinds(mode)` port／base 集合変化時のみ base-only retile／chart identity 保持・新 grid 後半へ再配置／order 不変条件 `[base…, chart…]`／grid = n_base+n_chart（既存 `_hako.Count` 経由で box-grow 済み）／4 base tile の中身は **既存データのみ配線**（下記 §3）／AFK 権威ゲート + owner HITL。
 - **不採用（= 後続 stage の additive）**:
   - **per-mode profile**（Replay/Live で別レイアウト保存）→ stage③ #62。**#61 は単一共有レイアウト**のまま（startup の出入りは既存 `DeriveOrder`/`NormalizeOrder` tolerance が吸収）。
-  - **box 位置/サイズ永続化＋drag-handle 移動/リサイズ・divider resize** → stage④ #63。#61 の box は #60 の derived-grow（n_total から導出）を維持。
+  - **box 位置/サイズ永続化＋drag-handle 移動/リサイズ・divider resize** → stage④ ~~#63~~ **ボツ**（#63 close 2026-06-24・[ADR-0017](../adr/0017-hakoniwa-dockable-floating-windows.md) が split-grid を退役し floating window の自由配置＋geometry 永続化＝[ADR-0024](../adr/0024-puzzle-feel-drag-magnetic-snap-swap-translate-detach-merge.md)で代替）。#61 の box は #60 の derived-grow（n_total から導出）を維持。
   - **Replay パネルの実データ表示** → **別 follow-up issue**（§3・owner 指示「沈黙の欠落にしない」）。#61 は honest empty state（"(no data)"）。
 
 ## 1. モデル（owner 確定 2026-06-16）
@@ -65,7 +65,7 @@ grid         = ceil(√n_total) 等分（既存 HakoniwaGridMath.CellRects）
 
 ## 6. 射程外（#61 に含めない）
 
-- per-mode profile（③ #62）／box 位置・サイズ永続化＋drag-handle・divider resize（④ #63）／Replay パネルの実データ（follow-up）／`ReplayPanelDecoder` リネーム（follow-up）。
+- per-mode profile（③ #62）／box 位置・サイズ永続化＋drag-handle・divider resize（④ ~~#63~~ **ボツ**・ADR-0017 退役で代替）／Replay パネルの実データ（follow-up）／`ReplayPanelDecoder` リネーム（follow-up）。
 
 ## 7. 検証サーフェス（owner 確定 2026-06-16・AFK probe が正本ゲート）
 

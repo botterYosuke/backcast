@@ -244,6 +244,16 @@ class InprocLiveServer:
         both ``last_portfolio`` and ``last_run_summary`` so the 4 Replay tiles drop to honest-empty."""
         return self._svc.clear_run_view()
 
+    def populate_replay_preview(
+        self,
+        instrument_id: str,
+        start: str = "",
+        end: str = "",
+        granularity: str = "Daily",
+    ) -> dict:
+        """#129: see DataEngine.populate_replay_preview."""
+        return self._svc.populate_replay_preview(instrument_id, start, end, granularity)
+
     # ------------------------------------------------------------------
     # Replay transport — RETIRED (#76 S6b-β); only force_stop (teardown) survives
     # ------------------------------------------------------------------

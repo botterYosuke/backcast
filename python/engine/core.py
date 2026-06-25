@@ -15,6 +15,17 @@ from .replay import BaseReplayProvider
 _REPLAY_WARMUP_PRICE = 1.0
 
 
+def _is_valid_iso_date(value: str | None) -> bool:
+    """#129 D3: empty/non-ISO falls back to get_date_range."""
+    if not value:
+        return False
+    try:
+        time.strptime(value, "%Y-%m-%d")
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 class DataEngine:
     def __init__(
         self,
@@ -359,6 +370,92 @@ class DataEngine:
             price = self._rs.price + random.uniform(-0.5, 0.5)
             ts_ms = int(time.time() * 1000)
             self._apply_event_locked(KlineUpdate(timestamp_ms=ts_ms, close=price, open=price, high=price, low=price))
+
+    def populate_replay_preview(
+        self,
+        instrument_id: str,
+        start: str | None,
+        end: str | None,
+        granularity: str = "Daily",
+    ) -> tuple[bool, str, int]:
+        """#129: SoT for the IDLE/Replay guard — C# is a dumb trigger. Returns (ok, err, count)."""
+        from engine.kernel.duckdb_bars import (
+            get_date_range,
+            load_bars,
+            normalize_granularity,
+        )
+        from engine.paths import jquants_duckdb_root
+
+        try:
+            granularity_norm = normalize_granularity(granularity)
+        except ValueError:
+            return False, "BAD_GRANULARITY", 0
+
+        with self._lock:
+            # D0: Replay only — Manual/Auto's chart is driven by venue prices, not preview.
+            # ExecutionMode is the SoT (set by the user / footer / mode_manager). The internal
+            # ``_mode`` flag is "static" until ``load_replay_data`` flips it to "replay", so we
+            # cannot guard on _mode here — the whole point is to preview BEFORE load_replay_data
+            # runs (the user has not yet pressed RUN).
+            mode = self.mode_manager.current_mode if self.mode_manager else "Replay"
+            if mode != "Replay":
+                return False, "UNSUPPORTED_MODE", 0
+            # D2 / S3: any non-IDLE state (LOADED / RUNNING) means an actual run owns _rs.
+            # A no-op here keeps preview from racing the exactly-once streamed accumulation.
+            if self._replay_state != "IDLE":
+                return False, "RUNNING", 0
+
+            root = self._duckdb_root or jquants_duckdb_root()
+            if not root:
+                return False, "NO_DUCKDB_ROOT", 0
+            root_str = str(root)
+
+            # D3: per-instrument range fallback when the scenario didn't supply a valid window.
+            effective_start, effective_end = start, end
+            if not _is_valid_iso_date(start) or not _is_valid_iso_date(end):
+                date_range = get_date_range(root_str, instrument_id, granularity_norm)
+                if date_range is None:
+                    return False, "NO_DATA", 0
+                effective_start, effective_end = date_range
+
+            try:
+                bars = load_bars(
+                    root_str,
+                    instrument_id,
+                    start=effective_start,
+                    end=effective_end,
+                    granularity=granularity_norm,
+                )
+            except FileNotFoundError:
+                # S1 AC: graceful when an iid's DuckDB file is absent. Log so the absence isn't
+                # silent — a single missing iid amid a populated universe is a real ops signal.
+                logging.info(
+                    "preview: no DuckDB %s file for %s, leaving chart empty",
+                    granularity_norm,
+                    instrument_id,
+                )
+                self._rs.per_id_ohlc_points[instrument_id] = []
+                return False, "NO_DATA", 0
+            except Exception as exc:  # malformed parameters from caller — surface as error, not crash
+                logging.warning("preview: load_bars failed for %s: %s", instrument_id, exc)
+                return False, "LOAD_FAILED", 0
+
+            # Mirror the streaming reducer's OhlcPoint shape (reducer.py:90 / core.py:145):
+            # volume is omitted, keeping preview points indistinguishable from streamed ones to
+            # the chart decoder (ChartView reads only OHLC + open_time_ms).
+            points = [
+                OhlcPoint(
+                    timestamp_ms=b.ts_event_ns // 1_000_000,
+                    open_time_ms=b.ts_event_ns // 1_000_000,
+                    open=b.open,
+                    high=b.high,
+                    low=b.low,
+                    close=b.close,
+                )
+                for b in bars
+            ]
+            self._rs.per_id_ohlc_points[instrument_id] = points
+            return True, "", len(points)
 
     def get_replay_last_prices(self) -> dict:
         """D8/D9: Return per-instrument last close prices for Replay mode sidebar."""

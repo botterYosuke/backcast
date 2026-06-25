@@ -422,6 +422,46 @@ public sealed class WorkspaceEngineHost
         finally { _lanes?.ResetReplaySnapshot(); }
     }
 
+    // AFK test seam — Python-FREE probes intercept the RPC here. Null in production.
+    internal Action<string, string, string, string> TestReplayPreviewOverride;
+
+    // Per-iid cold preview; IDLE/Replay guard delegated to Python (populate_replay_preview).
+    // CONTRACT: start/end/granularity MUST be non-null (PyString(null) throws). The sole caller
+    // BackcastWorkspaceRoot.RequestChartPreviewsForAllLiveCharts normalises Params.Start/End via
+    // `?? ""` and maps GranularityChoice to literal "Minute"/"Daily" before calling. New callers
+    // must do the same — null is not coalesced here (review M-S1: caller-side normalisation is SoT).
+    public void RequestReplayChartPreview(string instrumentId, string start, string end, string granularity)
+    {
+        if (string.IsNullOrEmpty(instrumentId)) return;
+
+        var hook = TestReplayPreviewOverride;
+        if (hook != null) { hook(instrumentId, start, end, granularity); return; }
+
+        if (!Volatile.Read(ref _serverReady)) return;
+        try
+        {
+            using (Py.GIL())
+            using (PyString pIid = new PyString(instrumentId))
+            using (PyString pStart = new PyString(start))
+            using (PyString pEnd = new PyString(end))
+            using (PyString pGran = new PyString(granularity))
+            using (PyObject res = _server.InvokeMethod(
+                "populate_replay_preview", pIid, pStart, pEnd, pGran))
+            using (PyObject ok = res["success"])
+            {
+                // Most no-ops (LiveManual/LiveAuto, LOADED, RUNNING, NO_DATA) are expected and
+                // benign — surface only the truly-unexpected ones in DEBUG. error_code is the
+                // single source of truth for "what did the engine do".
+                if (!ok.As<bool>() && Debug.isDebugBuild)
+                {
+                    using (PyObject ec = res["error_code"])
+                        Debug.Log($"[WorkspaceEngineHost] preview {instrumentId}: {ec.As<string>()}");
+                }
+            }
+        }
+        catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] preview error (non-fatal): {e.Message}"); }
+    }
+
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW
     // secret-required appeared (the root opens the secret modal). Called on main each frame. ----
     public bool DrainLiveEvents()

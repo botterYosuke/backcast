@@ -330,3 +330,44 @@ def load_universe_bars(
         load_bars(data_root, instrument_id, start=start, end=end, granularity=granularity)
         for instrument_id in instrument_ids
     )
+
+
+def get_date_range(
+    data_root: str | Path, instrument_id: str, granularity: str = "Daily"
+) -> tuple[str, str] | None:
+    """Return the per-instrument (min_date, max_date) Date string range from its DuckDB file.
+
+    #129 S2: powers the Replay-chart spawn preview's full-range fallback — when the scenario's
+    start/end is empty/invalid the preview RPC queries this to draw the instrument's entire
+    history. Returns None when the file is missing or the file exists but has no rows for the
+    symbol (caller falls through to "leave the chart empty for this iid", never crashes).
+
+    Dates are returned as 'YYYY-MM-DD' strings so they slot straight into ``load_bars``' inclusive
+    ``start`` / ``end`` arguments without further conversion. The 4-digit Code is preferred (#48
+    grill in ``_resolve_code``), so this is the same series the run would stream.
+    """
+    g = _granularity(granularity)
+    symbol = _symbol_of(instrument_id)
+    path = db_path(data_root, instrument_id, granularity)
+    if not path.exists():
+        return None
+
+    con = duckdb.connect(str(path), read_only=True)
+    try:
+        chosen = _resolve_code(con, g.name, symbol)
+        if chosen is None:
+            return None
+        row = con.execute(
+            f"SELECT MIN(Date), MAX(Date) FROM {g.name} WHERE Code = ?",
+            [chosen],
+        ).fetchone()
+    finally:
+        con.close()
+
+    if row is None or row[0] is None or row[1] is None:
+        return None
+
+    def _to_iso(value) -> str:
+        return value.date().isoformat() if isinstance(value, datetime) else value.isoformat()
+
+    return _to_iso(row[0]), _to_iso(row[1])

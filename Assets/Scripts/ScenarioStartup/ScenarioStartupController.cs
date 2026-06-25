@@ -38,6 +38,9 @@ public sealed class ScenarioStartupController
     public InstrumentRegistry Universe { get; } = new InstrumentRegistry();
     public ScenarioStartupErrors Errors { get; private set; } = new ScenarioStartupErrors();
 
+    // #129: fires after Commit succeeds — covers params-only edits that Universe.Changed misses.
+    public event Action Committed;
+
     // ---- POPULATE (read-on-populate; no live watcher in #29). `today` seeds defaults when
     // neither the sidecar nor the .py fallback carries a scenario. `fallback` is the
     // pythonnet load_scenario result for a strategy whose scenario lives in an inline .py
@@ -120,6 +123,7 @@ public sealed class ScenarioStartupController
         ScenarioSidecarStore.SetStartupParamsAndInstruments(strategyPath, forWrite, Universe.Ids);
         Params.Dirty = false;
         Errors = new ScenarioStartupErrors();
+        Committed?.Invoke();  // #129 (findings 0104 F1): Replay chart preview reseeds here
         return true;
     }
 

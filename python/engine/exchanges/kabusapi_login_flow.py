@@ -17,8 +17,9 @@ from typing import Any, Optional
 from engine.exchanges.kabusapi_login_form_state import (
     AUTH_FAILED,
     KABU_API_DISABLED,
+    KABU_AUTH_REJECTED,
+    KABU_STATION_NOT_LOGGED_IN,
     KABU_STATION_NOT_RUNNING,
-    KABU_TOKEN_EXPIRED,
     USER_CANCELLED,
     auth_failure_view,
     build_form_init,
@@ -41,16 +42,26 @@ def _map_exception(exc: BaseException) -> str:
         return AUTH_FAILED
 
     if isinstance(exc, KabuTokenExpiredError):
-        return KABU_TOKEN_EXPIRED
+        # この flow の唯一の auth 呼び出しは /token (fetch_token)。その HTTP 401 は
+        # 失効トークンではなく、body code で意味が分かれる (findings 0106 / D1):
+        #   STATION_LOGGED_OUT_CODES → 本体が口座へ未ログイン (アプリ起動済みでも未ログイン・早朝強制ログアウト)
+        #   4001013 ほか             → ログイン済みだが API パスワード不正
+        # いずれも旧実装は一律「トークン期限切れ」と誤表示していた。
+        from engine.exchanges.kabusapi_auth import STATION_LOGGED_OUT_CODES
+
+        body_code = getattr(exc, "body_code", None)
+        if body_code in STATION_LOGGED_OUT_CODES:
+            return KABU_STATION_NOT_LOGGED_IN
+        return KABU_AUTH_REJECTED
     if isinstance(exc, KabuConnectionError):
         return KABU_STATION_NOT_RUNNING
     if isinstance(exc, KabuApiError):
         code = getattr(exc, "code", None)
         if code in (4001003, "4001003"):
             return KABU_API_DISABLED
-        # 4001005 = パラメータ変換エラー (R7:231)。token-expired ではないので
-        # AUTH_FAILED に落とす (再認証を誘発しない)。token 失効は HTTP 401 →
-        # KabuTokenExpiredError として上の isinstance 分岐で処理 (findings/0009)。
+        # 4001005 = パラメータ変換エラー (R7:231)。AUTH_FAILED に落とす。HTTP 401 は
+        # KabuTokenExpiredError として上の isinstance 分岐で KABU_AUTH_REJECTED に
+        # 処理される (login flow の 401 = /token のパスワード不正・findings/0009, 0106)。
         return AUTH_FAILED
     return AUTH_FAILED
 

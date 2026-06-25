@@ -12,8 +12,15 @@ class FormInit:
 
 
 KABU_STATION_NOT_RUNNING = "KABU_STATION_NOT_RUNNING"
+# ポートは listen しているが本体がブローカーへ未ログイン (kabu code 4001007/4001017)。
+# 「アプリ起動済み」≠「口座ログイン済み」。kabu は早朝に本体を強制ログアウトする (findings 0106)。
+KABU_STATION_NOT_LOGGED_IN = "KABU_STATION_NOT_LOGGED_IN"
 KABU_API_DISABLED = "KABU_API_DISABLED"
-KABU_TOKEN_EXPIRED = "KABU_TOKEN_EXPIRED"
+# login ダイアログの唯一の auth 呼び出しは /token (fetch_token)。その HTTP 401 実体は kabu
+# code 4001013「kabuステーションはログイン済みだが API パスワードが不正」(ptal/error.html) で、
+# トークン失効ではない (発行時点で失効すべき既存トークンは無い)。よって「期限切れ」ではなく
+# 「パスワード不正」として提示する (findings 0106 / D1)。
+KABU_AUTH_REJECTED = "KABU_AUTH_REJECTED"
 AUTH_FAILED = "AUTH_FAILED"
 USER_CANCELLED = "USER_CANCELLED"
 EMPTY_FIELDS = "EMPTY_FIELDS"
@@ -59,9 +66,14 @@ def auth_failure_view(error_code: str) -> AuthFailureView:
             status_text="kabuStation 本体の API 設定を有効化し『再確認』を押してください",
             allow_retry=False,
         )
-    if error_code == KABU_TOKEN_EXPIRED:
+    if error_code == KABU_STATION_NOT_LOGGED_IN:
         return AuthFailureView(
-            status_text="トークン期限切れ。API パスワードを確認して再試行してください",
+            status_text="kabuステーション本体が口座にログインしていません。本体でログインしてから再試行してください",
+            allow_retry=True,
+        )
+    if error_code == KABU_AUTH_REJECTED:
+        return AuthFailureView(
+            status_text="API パスワードが正しくありません。確認して再試行してください",
             allow_retry=True,
         )
     if error_code == KABU_STATION_NOT_RUNNING:

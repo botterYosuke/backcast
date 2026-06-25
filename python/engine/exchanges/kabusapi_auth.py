@@ -18,6 +18,12 @@ from engine.exchanges.kabusapi_url import Env, endpoint
 
 logger = logging.getLogger(__name__)
 
+# kabu code: 本体がブローカー口座へ未ログイン (R7, ptal/error.html)。4001007=ログイン認証エラー /
+# 4001017=未ログイン状態。「アプリ起動済み」≠「口座ログイン済み」で、kabu は早朝に本体を強制ログアウト
+# する。/token の HTTP 401 body code 判別 (findings 0106) と watchdog の logout 検知 (kabusapi.py)
+# の単一正本。
+STATION_LOGGED_OUT_CODES = frozenset({4001007, 4001017})
+
 
 class KabuError(Exception):
     """Base class for all kabu STATION API failures."""
@@ -37,7 +43,15 @@ class KabuTokenExpiredError(KabuApiError):
     R7, ptal/error.html 2026-05-20)。INV-K5-ERRCODE / findings/0009。
     (移植元は body 4001005 を token-expired と誤分類していたが、4001005 は
     「パラメータ変換エラー」であり再認証対象ではない。一次資料に基づき 401 へ訂正。)
+
+    ``.code`` は契約どおり決定的に 401 だが、401 応答の body に載る kabu code は
+    ``.body_code`` に温存する。/token の 401 は body code で意味が分かれる (findings 0106):
+    4001007/4001017=本体未ログイン、4001013=ログイン済みだが API パスワード不正。
     """
+
+    def __init__(self, code: int | str, message: str, *, body_code: int | None = None) -> None:
+        super().__init__(code, message)
+        self.body_code = body_code
 
 
 class KabuRateLimitError(KabuApiError):
@@ -80,7 +94,12 @@ def check_response(payload: dict, http_status: int) -> None:
         # token 失効/未認証 (401)・流量超過 (429) の分類子は HTTP status。body に Code が
         # 混じっても .code は決定的に status とし（docstring 契約）、詳細は message に残す。
         if http_status == 401:
-            raise KabuTokenExpiredError(401, message)
+            raw_code = payload.get("Code") if isinstance(payload, dict) else None
+            try:
+                body_code = int(raw_code) if raw_code is not None else None
+            except (TypeError, ValueError):
+                body_code = None
+            raise KabuTokenExpiredError(401, message, body_code=body_code)
         if http_status == 429:
             raise KabuRateLimitError(429, message)
         raise KabuApiError(code, message)

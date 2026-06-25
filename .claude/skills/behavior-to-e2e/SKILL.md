@@ -12,7 +12,7 @@ description: >-
   `tests/e2e_replay.rs` は backcast に無い**（あれは移植元 TTWR 専用＝`references/ttwr-bevy-legacy.md`）。
   必ず起動する場面: 「この挙動をテスト/ゲートにして」「ユーザーストーリ（台本）をテストに」「台本を書いて」
   「E2E で通したい」「N ステップを通しで確認」「目視の代替」「全行動を網羅したい / 網羅台帳」「テストでカバー
-  されているか確認（カバレッジ照会）」「リプレイ/発注/ポートフォリオ/venue ログインの挙動を保証」。
+  されているか確認（カバレッジ照会）」「リプレイ/発注/ポートフォリオ/venue ログインの挙動を保証」「本番ログインテストを作成して」「ログインテストを作成して」「prod/verify ログインを E2E に」。
   **E2E 監査ハンドオフ（「audit existing E2E coverage」「find at least one bug」「bug hunt」「RED bug
   discovery」「gap-test」「網羅 gap を埋める」「STRATEGY-XX を追加して」「Section21 を作って」**）も同じ
   起動命令——既存 AFK runner に未網羅の AC や潜在バグを足す依頼は本スキルの中核。

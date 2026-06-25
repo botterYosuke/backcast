@@ -13,6 +13,7 @@ import httpx
 from engine.exchanges import kabusapi_orders as _orders
 from engine.exchanges import kabusapi_ws  # patch 対象を module 経由で参照
 from engine.exchanges.kabusapi_auth import (
+    STATION_LOGGED_OUT_CODES,
     KabuApiError,
     KabuRegisterFullError,
     auth_headers,
@@ -46,14 +47,22 @@ from engine.live.order_types import (
 
 logger = logging.getLogger(__name__)
 
+# credentials_source="env" の自動 E2E が読む API パスワード env 名 (ADR-0027 D3: env は
+# 自動テスト専用・手動ダイアログは prefill しない)。prod と verify は kabuステーション本体で
+# 別パスワードなので env を出し分ける (findings 0106 / D2)。verify=DEV_* / prod=PROD_*。
 _ENV_API_PASSWORD = "DEV_KABU_API_PASSWORD"
+_ENV_API_PASSWORD_PROD = "PROD_KABU_API_PASSWORD"
 
 
-# kabuステーション本体がログアウト / 未ログインのときに REST が返す Code (R7、
-# ptal/error.html)。`4001007`=ログイン認証エラー / `4001017`=ログイン認証エラー
-# (本体未ログイン)。Watchdog (Phase 9 §3.5 / Step 7) が check_health() でこれを検出し、
-# 本体早朝強制ログアウト → 再ログイン誘導の起点にする。
-_VENUE_LOGGED_OUT_CODES = frozenset({4001007, 4001017})
+def _env_password_var(env: str) -> str:
+    """credentials_source='env' が読む env 名を環境別に返す (findings 0106 / D2)。"""
+    return _ENV_API_PASSWORD_PROD if env == "prod" else _ENV_API_PASSWORD
+
+
+# kabuステーション本体がログアウト / 未ログインのときに REST が返す Code。Watchdog
+# (Phase 9 §3.5 / Step 7) が check_health() でこれを検出し、本体早朝強制ログアウト →
+# 再ログイン誘導の起点にする。単一正本は kabusapi_auth.STATION_LOGGED_OUT_CODES。
+_VENUE_LOGGED_OUT_CODES = STATION_LOGGED_OUT_CODES
 
 # 発注/取消/口座系 REST のタイムアウト (localhost なので短くて十分)。
 _ORDER_TIMEOUT = httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=5.0)
@@ -161,11 +170,12 @@ class KabuStationAdapter:
         if source != "env":
             raise ValueError(f"unknown credentials_source: {source!r}")
 
-        api_password = os.environ.get(_ENV_API_PASSWORD)
+        env_var = _env_password_var(self._env)
+        api_password = os.environ.get(env_var)
         if not api_password:
             raise ValueError(
-                f"missing env credentials: {_ENV_API_PASSWORD} "
-                f"(credentials_source='env')"
+                f"missing env credentials: {env_var} "
+                f"(credentials_source='env', env={self._env!r})"
             )
 
         from engine.exchanges.kabusapi_auth import fetch_token

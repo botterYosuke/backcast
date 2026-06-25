@@ -31,13 +31,12 @@ public struct PickerRow
         new PickerRow { IsPlaceholder = true, Label = label, Id = null, AlreadyAdded = false };
     // Issue #46 / review finding A5: an optional human-readable name is appended to the label
     // ("<id> <name>") so the picker shows '7203.TSE トヨタ自動車' instead of '7203.TSE' alone.
-    // When name is null/empty/equal-to-id the label collapses back to just the id (the
-    // listed_info CompanyName fallback in `_snapshot_to_list_result` already substitutes the
-    // id, so we de-dup here to avoid '7203.TSE 7203.TSE' rows).
+    // The `<id> <name>` formatter is now shared with the chart-window chrome title (issue #140 /
+    // findings 0112) via InstrumentLabel.Compose so the two surfaces can never drift on the
+    // null/empty/equal-to-id collapse rule. CONTEXT.md "銘柄表示ラベル" enforces this single source.
     public static PickerRow Candidate(string id, string name, bool alreadyAdded)
     {
-        string label = (!string.IsNullOrEmpty(name) && name != id) ? id + " " + name : id;
-        return new PickerRow { IsPlaceholder = false, Label = label, Id = id, AlreadyAdded = alreadyAdded };
+        return new PickerRow { IsPlaceholder = false, Label = InstrumentLabel.Compose(id, name), Id = id, AlreadyAdded = alreadyAdded };
     }
 }
 

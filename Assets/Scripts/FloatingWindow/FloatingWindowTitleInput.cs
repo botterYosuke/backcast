@@ -57,6 +57,23 @@ public class FloatingWindowTitleInput : MonoBehaviour,
         _canvas = canvas;
         _viewport = viewport;
         _windowId = windowId;
+        AttachResizeGrip();
+    }
+
+    // #139 / ADR-0030 §1/§2 / findings 0112: every window grows the always-visible "◢" RESIZE GRIP here,
+    // uniformly (dock / editor / order / HITL), with no per-factory wiring — the same "attach via the title
+    // input" discipline the eject handle uses (Awake). The grip targets the window ROOT (this title bar's
+    // parent), which — unlike the eject handle (attached to the title bar SELF in Awake) — is not available
+    // at Awake time (the title bar is parented AFTER `new GameObject`), so the grip attaches from Initialize,
+    // where the hierarchy is wired and the controller/canvas/viewport/id deps the grip needs are in hand.
+    // Idempotent find-or-create (FloatingWindowResizeHandle.Attach), so a re-Initialize is a no-op.
+    void AttachResizeGrip()
+    {
+        var root = transform.parent as RectTransform;
+        if (root == null) return;   // bare title bar (AFK drives the grip builder directly) — nothing to attach to
+        var gripGo = FloatingWindowResizeHandle.Attach(root, null);
+        var grip = gripGo != null ? gripGo.GetComponent<FloatingWindowResizeGrip>() : null;
+        grip?.Initialize(_windows, _canvas, _viewport, _windowId);
     }
 
     // ADR-0029 §3 / findings 0106 §1: every title bar grows the always-visible "⤴" eject handle here, ONCE,

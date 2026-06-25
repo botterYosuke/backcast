@@ -231,6 +231,115 @@ public static class FloatingWindowMath
         return rects;
     }
 
+    // ADR-0030 §4 / findings 0112: the island-scoped RESIZE push-out (the resize-trigger carve-out of
+    // ADR-0017 "no resize coupling" / ADR-0029 D7 "reflow is swap-only"). DISTINCT from the swap reflow
+    // (ReflowIslandAfterSwap, best-effort magnetic flush that only closes gaps): this is a FORCED flush
+    // FOLLOW along the moving edges — always tile-preserving, symmetric, chained.
+    //
+    // The resized window keeps its TOP-LEFT anchor and takes `newSize` (left/top edges stay put; the
+    // RIGHT and BOTTOM edges move). Every island member FLUSH to a MOVING edge follows it, kissed, by the
+    // SAME signed translation — SYMMETRIC (grow → push out, shrink → pull back) and CHAINED (a member
+    // flush to a translated member follows too). x and y propagate INDEPENDENTLY (the whole seam decides
+    // x/y separately — SnapOffset / ComputeMagneticSnap). Members MOVE ONLY — their own (w,h) is preserved
+    // (the swap size-retain spirit, ADR-0030 §4). Scope is STRICTLY `islandRects` (the caller passes ONLY
+    // the resized window's island; other islands / other planes never appear here and so are never moved —
+    // ADR-0030 §5 island-scope, the negative control).
+    //
+    // Edge convention (top-left pivot, y up-positive): Right = topLeft.x + size.x ; Bottom = topLeft.y -
+    // size.y. Growing width (dW>0) moves the right edge +dW; growing height (dH>0) moves the bottom edge
+    // DOWN by dH (bottom.y -= dH). So a RIGHT-flush member (m.Left ≈ resized.Right) translates (+dW, 0); a
+    // BOTTOM-flush member (m.Top ≈ resized.Bottom) translates (0, -dH). Because every member on a chain
+    // translates by the SAME delta, flush adjacency is read on the REST rects (the relative kiss is
+    // preserved through a uniform translation), so the result is order-independent and deterministic.
+    //
+    // Returns the post-resize rect for EVERY member (id → DockRect): the resized at newSize (top-left
+    // fixed), each followed member translated, everyone else verbatim. `eps` is the flush kiss tolerance
+    // (production passes DEFAULT_FLUSH_EPS = 1px). Null/empty islandRects or an unknown resizedId → a
+    // verbatim copy (degenerate; the controller writes nothing new).
+    public static Dictionary<string, DockRect> ResizeIslandPush(
+        string resizedId, IDictionary<string, DockRect> islandRects, Vector2 newSize, float eps)
+    {
+        var result = new Dictionary<string, DockRect>();
+        if (islandRects == null) return result;
+        foreach (var kv in islandRects) result[kv.Key] = kv.Value;
+        if (string.IsNullOrEmpty(resizedId) || !result.TryGetValue(resizedId, out var R)) return result;
+
+        float dW = newSize.x - R.size.x;
+        float dH = newSize.y - R.size.y;
+        result[resizedId] = new DockRect(R.topLeft, newSize);   // top-left fixed; right/bottom edges move
+
+        // x/y propagate INDEPENDENTLY (mirrors SnapOffset / ComputeMagneticSnap). xMoved = members reached
+        // via a RIGHT-flush chain from the resized window; yMoved = via a BOTTOM-flush chain. Computed on
+        // the REST rects (relative kiss preserved through the uniform per-chain translation).
+        var xMoved = PropagateFlush(resizedId, islandRects, eps, rightEdge: true);
+        var yMoved = PropagateFlush(resizedId, islandRects, eps, rightEdge: false);
+
+        foreach (var id in xMoved)
+        {
+            if (id == resizedId) continue;
+            var r = result[id];
+            result[id] = new DockRect(new Vector2(r.topLeft.x + dW, r.topLeft.y), r.size);   // follow right edge
+        }
+        foreach (var id in yMoved)
+        {
+            if (id == resizedId) continue;
+            var r = result[id];                                                              // read post-x so a
+            result[id] = new DockRect(new Vector2(r.topLeft.x, r.topLeft.y - dH), r.size);   // both-axis member gets both
+        }
+        return result;
+    }
+
+    // ADR-0030 §4 / findings 0112: BFS the island members reachable from `seedId` via a DIRECTIONAL flush
+    // chain on the REST rects. rightEdge=true → "m is flush to the RIGHT edge of n" (m.Left ≈ n.Right ∧
+    // y-overlap > 0); rightEdge=false → "m is flush BELOW n" (m.Top ≈ n.Bottom ∧ x-overlap > 0). The
+    // returned set INCLUDES the seed (the resized window; the caller skips it when translating). Chained:
+    // a member flush to an already-reached member is reached too.
+    static HashSet<string> PropagateFlush(string seedId, IDictionary<string, DockRect> rects, float eps, bool rightEdge)
+    {
+        var moved = new HashSet<string> { seedId };
+        if (!rects.TryGetValue(seedId, out _)) return moved;
+        var frontier = new Queue<string>();
+        frontier.Enqueue(seedId);
+        while (frontier.Count > 0)
+        {
+            var n = rects[frontier.Dequeue()];
+            foreach (var kv in rects)
+            {
+                if (moved.Contains(kv.Key)) continue;
+                bool flush = rightEdge ? IsFlushRightOf(n, kv.Value, eps) : IsFlushBelowOf(n, kv.Value, eps);
+                if (flush) { moved.Add(kv.Key); frontier.Enqueue(kv.Key); }
+            }
+        }
+        return moved;
+    }
+
+    // The kiss semantics MUST match IsFlushAdjacent (post-#104 F6): "flush" means kiss (gap ≈ 0), NOT overlap.
+    // The signed gap may be at most `eps` POSITIVE (a hair of separation) and only a sub-pixel `FLUSH_FP_SLACK`
+    // NEGATIVE (round-off), so a genuine ≥1px overlap is NOT counted as flush — exactly the asymmetric bound
+    // F6 introduced for IsFlushAdjacent (using -eps here would re-introduce the pre-F6 overlap-as-flush bug).
+    const float FLUSH_FP_SLACK = 1e-4f;
+
+    // "m sits flush to the RIGHT edge of n": m.Left kisses n.Right (gap ≈ 0 within eps/slack) AND they overlap
+    // along y (a corner-only touch with y-overlap ≤ 0 is NOT flush — same orthogonal-overlap rule as IsFlushAdjacent).
+    static bool IsFlushRightOf(DockRect n, DockRect m, float eps)
+    {
+        if (!IsFinite(eps) || eps <= 0f) return false;
+        float yOverlap = Math.Min(n.Top, m.Top) - Math.Max(n.Bottom, m.Bottom);
+        if (yOverlap <= 0f) return false;
+        float gap = m.Left - n.Right;
+        return gap >= -FLUSH_FP_SLACK && gap <= eps;
+    }
+
+    // "m sits flush BELOW n" (n above, m below): m.Top kisses n.Bottom (gap ≈ 0) AND they overlap along x.
+    static bool IsFlushBelowOf(DockRect n, DockRect m, float eps)
+    {
+        if (!IsFinite(eps) || eps <= 0f) return false;
+        float xOverlap = Math.Min(n.Right, m.Right) - Math.Max(n.Left, m.Left);
+        if (xOverlap <= 0f) return false;
+        float gap = n.Bottom - m.Top;
+        return gap >= -FLUSH_FP_SLACK && gap <= eps;
+    }
+
     // ADR-0024 §3 / findings 0088 §2: in-drag magnetic snap. Returns the canvas-logical Δ to add to
     // `moving`'s top-left so its outer edge kisses the nearest other window's OPPOSITE edge, within
     // R_SNAP. Only FLUSH pairings count (right↔left / left↔right / top↔bottom — NOT same-edge align,
@@ -477,17 +586,17 @@ public static class FloatingWindowMath
         // The old |gap| <= eps fired symmetrically on a 0.5px genuine overlap; we now require
         // the gap to be non-negative (subject to a tiny FP slack that absorbs round-off from
         // SnapOffset's anchoredPosition adds). eps stays the production-tunable kiss tolerance
-        // (DEFAULT_FLUSH_EPS = 1 px logical); fpSlack is fixed sub-pixel.
-        const float fpSlack = 1e-4f;
+        // (DEFAULT_FLUSH_EPS = 1 px logical); the sub-pixel slack is the shared FLUSH_FP_SLACK (single source —
+        // the resize push's IsFlushRightOf/IsFlushBelowOf use the SAME constant per the "MUST match" note there).
         // Horizontal-axis flush (vertical edge kiss): the SHARED edge runs along y; need y-overlap > 0.
         if (yOverlap > 0f)
         {
             // a.right ↔ b.left: a sits to the LEFT of b, signed gap = b.Left - a.Right (≥ 0 means no overlap).
             float gap1 = b.Left - a.Right;
-            if (gap1 >= -fpSlack && gap1 <= eps) return true;
+            if (gap1 >= -FLUSH_FP_SLACK && gap1 <= eps) return true;
             // a.left ↔ b.right: a sits to the RIGHT of b, signed gap = a.Left - b.Right.
             float gap2 = a.Left - b.Right;
-            if (gap2 >= -fpSlack && gap2 <= eps) return true;
+            if (gap2 >= -FLUSH_FP_SLACK && gap2 <= eps) return true;
         }
         // Vertical-axis flush (horizontal edge kiss): the shared edge runs along x; need x-overlap > 0.
         if (xOverlap > 0f)
@@ -495,10 +604,10 @@ public static class FloatingWindowMath
             // a.bottom ↔ b.top: a sits ABOVE b (y up-positive ⇒ a.Bottom > b.Top means no overlap),
             //                   signed gap = a.Bottom - b.Top.
             float gap3 = a.Bottom - b.Top;
-            if (gap3 >= -fpSlack && gap3 <= eps) return true;
+            if (gap3 >= -FLUSH_FP_SLACK && gap3 <= eps) return true;
             // a.top ↔ b.bottom: a sits BELOW b, signed gap = b.Bottom - a.Top.
             float gap4 = b.Bottom - a.Top;
-            if (gap4 >= -fpSlack && gap4 <= eps) return true;
+            if (gap4 >= -FLUSH_FP_SLACK && gap4 <= eps) return true;
         }
         return false;
     }

@@ -36,6 +36,7 @@ using UnityEngine.UI;
 public static class ReplayRunResultTileE2ERunner
 {
     const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+    const float EPS = 0.01f;   // geometry equality tolerance (anchoredPosition / sizeDelta)
 
     // Self-consistent Replay portfolio snapshot: equity(155321) = cash(54321) + position MV(50×2002),
     // BUY 50 @2000 FILLED. Only needs to be non-empty + recognizable for the running-view render.
@@ -69,6 +70,7 @@ public static class ReplayRunResultTileE2ERunner
         try
         {
             fail = RunSections();
+            if (fail == null) fail = RunModeVisibilitySections();   // #138 second slice (findings 0110 §7)
         }
         catch (Exception e)
         {
@@ -78,7 +80,9 @@ public static class ReplayRunResultTileE2ERunner
         if (fail == null)
         {
             Debug.Log("[REPLAY RUNRESULT TILE PASS] RRT-01 empty / RRT-02 running / RRT-03 full-stats / " +
-                      "RRT-04 #100① rerun→running (not stale) / RRT-05 rerun→full-stats verified.");
+                      "RRT-04 #100① rerun→running (not stale) / RRT-05 rerun→full-stats / " +
+                      "RRT-06 mode→visibility (LiveManual hidden, no collateral) / RRT-07 non-destructive / " +
+                      "RRT-08 self-heal (persisted-hidden boot, no brick) verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -171,6 +175,140 @@ public static class ReplayRunResultTileE2ERunner
             // Leave the probe seam clean for any later runner in the same Unity process.
             pf(null); sm(null);
         }
+        return null;
+    }
+
+    // ── #138 second slice (findings 0110 §7): the Run Result tile is hidden ONLY in LiveManual, the
+    // back-plane mirror of DriveOrderTicket. Drives the REAL root: DriveRunResult + FooterModeViewModel.ApplyPoll
+    // + the real _dockWindows (no Python, no _lanes). A fresh scene build (independent of the content sections'
+    // override seam).
+    //   RRT-06 = mode→visibility: run_result visible in Replay/LiveAuto, hidden in LiveManual; and the sibling
+    //            base tiles (orders/positions/buying_power) stay VISIBLE in LiveManual (only run_result toggles
+    //            — no collateral hiding).
+    //   RRT-07 = non-destructive: Replay→LiveManual→Replay keeps the SAME window instance + geometry + groupId
+    //            (pure SetActive, AC3), restored visible.
+    //   RRT-08 = self-heal (Finding 1 guard): first the PREMISE — run_result RIDES CaptureLayout, so a layout
+    //            saved while hidden in LiveManual persists visible=false (asserted via CaptureLayout(), making the
+    //            SetActive(false) proxy faithful instead of a bare stand-in). Then: ApplyGeometry restores it
+    //            hidden; on a Replay boot the ABSOLUTE toggle MUST re-show it — an in-memory remembered-set would
+    //            leave it permanently invisible (the brick the review caught). Self-heal simulated via SetActive(false).
+    // RED litmus: turn DriveRunResult into a no-op → RRT-06 LiveManual RED. Revert to a remembered-set
+    // (re-show only ids it itself hid) → RRT-08 RED (a restored-hidden run_result is never re-shown = bricked).
+    static string RunModeVisibilitySections()
+    {
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindAnyObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "RRT-06: BackcastWorkspaceRoot missing in scene";
+        var ty = typeof(BackcastWorkspaceRoot);
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        var dockWindows = ty.GetField("_dockWindows", BF)?.GetValue(root) as FloatingWindowController;
+        var footerMode = ty.GetField("_footerMode", BF)?.GetValue(root);
+        var driveRunResult = ty.GetMethod("DriveRunResult", BF);
+        if (dockWindows == null) return "RRT-06: _dockWindows controller not built (renamed?)";
+        if (footerMode == null) return "RRT-06: _footerMode not built (renamed?)";
+        if (driveRunResult == null) return "RRT-06: DriveRunResult not found (renamed? — the back-plane mirror is missing)";
+        var applyPoll = footerMode.GetType().GetMethod("ApplyPoll");
+        if (applyPoll == null) return "RRT-06: FooterModeViewModel.ApplyPoll not found (renamed?)";
+
+        Func<RectTransform> runResult = () => dockWindows.RectOf("run_result");
+        if (runResult() == null) return "RRT-06: run_result base dock window not spawned by BuildWorkspace";
+        // Sibling base tiles that MUST stay visible in LiveManual (manual fills/positions/buying power are live).
+        string[] siblings = { "orders", "positions", "buying_power" };
+        foreach (var s in siblings)
+            if (dockWindows.RectOf(s) == null) return "RRT-06: sibling base tile '" + s + "' not spawned (no-collateral test would be vacuous)";
+
+        void Poll(string mode, string venueState)
+            => applyPoll.Invoke(footerMode, new object[] { "{\"execution_mode\":\"" + mode + "\",\"venue_state\":\"" + venueState + "\"}" });
+        void Drive() => driveRunResult.Invoke(root, null);
+        bool SiblingsVisible()
+        {
+            foreach (var s in siblings)
+            {
+                var rt = dockWindows.RectOf(s);
+                if (rt == null || !rt.gameObject.activeSelf) return false;
+            }
+            return true;
+        }
+
+        // ── RRT-06: mode → run_result visibility + no collateral. ──
+        Poll("Replay", "");
+        Drive();
+        if (!runResult().gameObject.activeSelf) return "RRT-06: run_result hidden under Replay (must be visible — backtest needs Python)";
+        Poll("LiveAuto", "CONNECTED");
+        Drive();
+        if (!runResult().gameObject.activeSelf) return "RRT-06: run_result hidden under LiveAuto (the cell drives the strategy — must stay visible)";
+        Poll("LiveManual", "CONNECTED");
+        Drive();
+        if (runResult().gameObject.activeSelf) return "RRT-06: run_result VISIBLE under LiveManual (must be hidden — strategy-run surface is empty there)";
+        if (!SiblingsVisible()) return "RRT-06: a sibling base tile (orders/positions/buying_power) was hidden under LiveManual — DriveRunResult must toggle ONLY run_result via RectOf(WINDOW_ID_RUN_RESULT) (no collateral)";
+        Debug.Log("[E2E RRT-06 PASS] run_result toggles with mode — visible in Replay/LiveAuto, hidden in LiveManual; Orders/Positions/Buying Power stay visible (no collateral)");
+
+        // ── RRT-07: non-destructive — same instance + geometry + groupId across the round-trip. ──
+        Poll("Replay", "");
+        Drive();
+        var w = runResult();
+        int id = w.GetInstanceID();
+        Vector2 pos = w.anchoredPosition, size = w.sizeDelta;
+        string group = dockWindows.GroupIdOf("run_result");
+        Poll("LiveManual", "CONNECTED");
+        Drive();
+        if (runResult() == null) return "RRT-07: run_result was destroyed on entering LiveManual (must be hide-not-destroy)";
+        if (dockWindows.GroupIdOf("run_result") != group) return "RRT-07: run_result groupId changed while hidden (group membership must be preserved — AC3)";
+        Poll("Replay", "");
+        Drive();
+        var back = runResult();
+        if (back == null || back.GetInstanceID() != id) return "RRT-07: run_result is a new instance after a LiveManual round-trip (must be hide-not-destroy)";
+        if ((back.anchoredPosition - pos).sqrMagnitude > EPS || (back.sizeDelta - size).sqrMagnitude > EPS)
+            return "RRT-07: run_result geometry changed across the hide/show (pos/size not preserved — AC3)";
+        if (dockWindows.GroupIdOf("run_result") != group) return "RRT-07: run_result groupId changed across the round-trip (AC3)";
+        if (!back.gameObject.activeSelf) return "RRT-07: run_result not restored to visible after leaving LiveManual";
+        Debug.Log("[E2E RRT-07 PASS] LiveManual hide is pure visibility — same instance + geometry + groupId preserved across the round-trip");
+
+        // ── RRT-08 (Finding 1 regression guard): run_result rides CaptureLayout, so a layout SAVED while
+        // hidden in LiveManual persists visible=false and ApplyGeometry restores it hidden on the next boot.
+        // Boot mode is Replay (NOT LiveManual), so the absolute toggle MUST self-heal it back to visible — an
+        // in-memory remembered-set would leave it permanently invisible with no recovery path (the brick the
+        // review caught). Simulate the restored-hidden state with a direct SetActive(false). ──
+
+        // RRT-08 PREMISE (proxy-faithfulness guard): the SetActive(false) below only STANDS IN for a
+        // LiveManual-saved layout if run_result genuinely rides CaptureLayout hidden. Prove that first —
+        // hide in LiveManual, capture, and assert run_result is on the captured list with visible==false
+        // (strategy_editor is excluded at :2553; run_result is NOT). If a future change excluded run_result
+        // from capture, a remembered-set would be safe and this whole self-heal section would be over-
+        // constraining against a state that can no longer occur — this premise check makes that rot loud.
+        Poll("LiveManual", "CONNECTED");
+        Drive();   // hides run_result
+        var captureLayout = ty.GetMethod("CaptureLayout", BF);
+        if (captureLayout == null) return "RRT-08 premise: CaptureLayout not found (renamed?)";
+        var doc = captureLayout.Invoke(root, null);
+        var captured = doc?.GetType().GetField("floatingWindows")?.GetValue(doc) as System.Collections.IEnumerable;
+        if (captured == null) return "RRT-08 premise: CaptureLayout().floatingWindows was null (capture path broken?)";
+        bool rrOnList = false, rrCapturedHidden = false;
+        foreach (var entry in captured)
+        {
+            var et = entry.GetType();
+            if ((et.GetField("id")?.GetValue(entry) as string) != "run_result") continue;
+            rrOnList = true;
+            rrCapturedHidden = !(bool)et.GetField("visible").GetValue(entry);
+        }
+        if (!rrOnList)
+            return "RRT-08 premise: run_result is ABSENT from CaptureLayout — it no longer rides capture (added to the :2553 " +
+                   "exclusion?); the persisted-hidden boot can't occur and the absolute-toggle rationale is moot";
+        if (!rrCapturedHidden)
+            return "RRT-08 premise: run_result was captured visible=true while hidden in LiveManual — capture isn't recording " +
+                   "the hide, so ApplyGeometry could never restore it hidden and the SetActive(false) proxy below is unfaithful";
+
+        runResult().gameObject.SetActive(false);   // as ApplyGeometry would restore a LiveManual-saved layout
+        Poll("Replay", "");
+        Drive();
+        if (!runResult().gameObject.activeSelf)
+            return "RRT-08 (Finding 1): a run_result restored hidden (layout saved in LiveManual) was NOT self-healed " +
+                   "by the Replay mode drive — it would be permanently invisible (a remembered-set brick)";
+        Debug.Log("[E2E RRT-08 PASS] run_result rides CaptureLayout hidden (premise) AND a persisted-hidden boot self-heals to visible on Replay — never permanently bricked");
+
         return null;
     }
 

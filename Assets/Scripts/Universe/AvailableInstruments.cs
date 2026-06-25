@@ -77,6 +77,16 @@ public interface IAvailableInstrumentsProvider
     // EndUnset ("Set scenario.end first"); the production Backend falls back to the latest universe
     // (findings 0084, owner request 2026-06-22).
     AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate);
+
+    // #140 / findings 0112: cache-only, mode-agnostic name lookup for the chart-window title.
+    // Returns true with the human-readable name iff a previously-cached Ready snapshot (from ANY
+    // (mode, end) key the picker has Queried) holds this iid; returns false (out name=null) when
+    // no snapshot is cached yet OR this iid is absent from every cached snapshot. The chart-title
+    // resolver calls this from BuildDockWindowFrame — it must NOT trigger a fetch (picker stays the
+    // sole fetch trigger so layout-restore can't race N concurrent PickerInstrumentFetch threads)
+    // and must NOT depend on (mode, end) (the name is a per-instrument property — a Replay→Live
+    // mode flip after a picker open must not discard the cached name).
+    bool TryGetName(string instrumentId, out string name);
 }
 
 // #31's shipped supply: returns Ready{ids} (or Empty when no ids configured). The real
@@ -106,4 +116,8 @@ public sealed class MockAvailableInstrumentsProvider : IAvailableInstrumentsProv
             return AvailableInstrumentsResult.Empty;
         return AvailableInstrumentsResult.Ready(_ids);
     }
+
+    // The Mock doesn't carry names — it returns Ready(ids) with empty Names. The chart-title
+    // resolver will fall back to id alone, matching the picker's id-only Label for the same row.
+    public bool TryGetName(string instrumentId, out string name) { name = null; return false; }
 }

@@ -481,10 +481,29 @@ class DataEngine:
         rs = self._rs
         per_instrument: dict[str, PerInstrumentState] = {}
         if include_per_instrument:
-            for iid, close_px in rs.per_id_close.items():
+            # #129 layer 3: project the *union* of both per-id dicts, not just per_id_close.
+            # どちらの dict も相手を包含しない: per_id_close は iid を持つ全イベントで書かれる
+            # (reducer.py:76 — KlineUpdate も TradeUpdate も) が、per_id_ohlc_points は KlineUpdate
+            # のみ (reducer.py:102-103)。さらに Replay preview（populate_replay_preview）は IDLE 中に
+            # per_id_ohlc_points *だけ* を埋める——last close は RUN を押すまで未確定だから。close キー
+            # だけを iterate すると preview 専用 iid が per_instrument から脱落し、poll JSON が空 →
+            # ChartView が HasSeries=false で描画しない（実機で chart 空の真因）。和集合で回せば preview の
+            # cold chart も surface し、per_id_close の意味（streaming で見た最終 close のみ）は汚さない。
+            # dict.fromkeys = 挿入順保持つき dedup（close キー先・ohlc 専用キー後）で poll の決定性を保つ。
+            for iid in dict.fromkeys((*rs.per_id_close, *rs.per_id_ohlc_points)):
+                close_px = rs.per_id_close.get(iid, 0.0)
+                points = rs.per_id_ohlc_points.get(iid, [])
+                # price = 最新の既知価格。streaming では last close、preview では未確定なので
+                # 最終ローソクの close を採る（OhlcPoint.close は model 検証で gt=0）。両方無ければ None。
+                if close_px > 0:
+                    price = close_px
+                elif points:
+                    price = points[-1].close
+                else:
+                    price = None
                 per_instrument[iid] = PerInstrumentState(
-                    price=close_px if close_px > 0 else None,
-                    ohlc_points=list(rs.per_id_ohlc_points.get(iid, [])),
+                    price=price,
+                    ohlc_points=list(points),
                     depth=None,  # Live depth は GetState 側で per-instrument に注入される
                 )
         return TradingState(

@@ -103,4 +103,52 @@ footer/Settings で Replay⇄LiveManual⇄LiveAuto を切替 → LiveManual で 
 
 ---
 
-> 🤖 `/grill-with-docs`（2026-06-25）セッション記録（Claude Code）。下位事実は本 findings に固定し ADR を「方針」として参照（ADR は編集しない）。
+## 7. 第2スライス — LiveManual で Run Result タイルも非表示（#138 REOPEN・2026-06-25・AFK RED→GREEN）
+
+第1スライス（§6）は front-plane の Strategy Editor authoring 表面を隠した。REOPEN で owner が `/grill-with-docs`（2026-06-25・HITL）により「**Run Result（back-plane base/dock タイル）も同じ理由で LiveManual では空**」を確定し、その対称拡張を実装した。
+
+### 7.0 要件（owner 確定・#138 REOPEN コメント正本）
+- **AC1** — LiveManual で `run_result` タイルを非表示（Replay/LiveAuto は表示維持・離脱で復帰）。
+- **AC2** — 隠す対象は **`run_result` のみ**。Orders / Positions / Buying Power / chart は表示維持（手動発注は `OrderEvent`/`AccountEvent`（adapter EC 経路）を流すのでこの 3 タイルは LiveManual でも生きている。run_result だけが strategy-run 専用で空）。
+- **AC3** — 純可視性トグル（#138 第1スライスと対称・非破壊）。geometry / content / 永続化スキーマ / group 構成は不変。
+
+### 7.1 給餌動線の不在（コードで両端まで裏取り）
+run_result の給餌は 2 系統あり、どちらも LiveManual では中身が出ない:
+- **Replay shape**（`!_lastLiveShape`）= `PushReplayTiles()` ← `get_portfolio_json` poll ＋ `RunSummaryJson`。LiveManual は live shape なので入らない。
+- **Live shape**（`_lastLiveShape`）= `PushLiveTiles()` → `_runResultView.Refresh(vm)` → `FormatRunResult(vm)` ← `vm.HasLifecycle` / `vm.HasTelemetry`。両 flag を立てるのは `LiveStrategyEvent`/`LiveStrategyTelemetry` の 2 イベントのみ（`LivePanelViewModel.Apply`）で、Python 側 `_on_auto_*` callback ＝ **RunRegistry に登録された LiveAuto の strategy run** からしか発火しない。LiveManual には strategy run を register/start する経路が無い（§1 `liveLaunchActive = DisplayMode == LiveAuto`）→ 両 false → `"(no run)"`。加えて LiveAuto→LiveManual と切替えても `Apply` は flag を false に戻さないので **前回 LiveAuto run の telemetry が stale 表示で残る** → 非表示の根拠を補強。
+
+### 7.2 production 変更（**絶対トグル**＝DriveOrderTicket の back-plane 鏡像。当初の remembered-set 案はレビューで否決＝§7.3a Finding 1）
+- `DriveRunResult()`（新規）= **`DriveOrderTicket` の back-plane 鏡像**。`liveManual` のとき run_result 窓を `SetActive(false)`、それ以外で `SetActive(true)`（差分時のみ）。`_dockWindows.RectOf(WINDOW_ID_RUN_RESULT)` 単一窓を直接トグル＝**run_result だけを触る**ので AC2 の no-collateral が機構的に保証される（Orders/Positions/Buying Power/chart には一切触れない）。
+- **なぜ remembered-set（第1スライス流用）ではなく絶対トグルか**: run_result は strategy_editor と違い **CaptureLayout に乗る**（dock plane は verbatim capture・除外は strategy_editor のみ・:2553）。LiveManual 中に layout を save すると run_result は `visible=false` で永続化され、次回 boot で `ApplyGeometry`（:437 `SetActive(w.visible)`）が非表示で復元する。boot mode は Replay で in-memory な remembered-set は空＝**ShowHidden が永久に無効化＝run_result が復旧不能に bricked**（§7.3a Finding 1）。order ticket も同じく capture に乗り mode 条件で隠れるが、`DriveOrderTicket` が**絶対状態を毎フレ駆動**するので boot で self-heal する。run_result は **非 closable な base-dock singleton で独立 hide 状態が無い**（strategy_editor の deletable cell 窓＝dormant 殻のような独立 hide が存在しない・close ボタンは front-plane cell 窓のみ:813）ので、絶対トグルが無条件で正しく self-heal する。
+- `Update()` の `DriveStrategyEditor()` 直後に `DriveRunResult()` を追加（`DriveOrderTicket`/`DriveStrategyEditor` と同 poll サイクル＝同一の ≤1-frame DisplayMode latency・対称）。`RefreshLiveTiles()` が同フレームの手前で content を更新済みなので、復帰フレームで stale が一瞬出ることは基本無い（§7.3 ②）。
+
+### 7.3 §「実装メモ」の未決下位機構の決着
+- **① group の他メンバー drag 時に inactive な run_result の geometry が追従するか（穴あき表示）**: `FloatingWindowController.ResolveIslandIds`（:580）は **`!activeInHierarchy` のメンバーを island から除外**する。よって hidden な run_result は sibling drag に**追従しない**＝勝手に動かない。これは AC3 の「geometry 不変」と**まさに整合**（復帰時に元位置へ戻す／勝手に動かさない）。`groupId` は `SetActive` では不変なので **group 構成も保持**＝復帰後の次 drag で island に再合流する（RRT-07 が `GroupIdOf` 不変を防御的に担保）。穴は「LiveManual 中に base group を動かして Replay へ戻った」稀ケースで一時的に生じるだけで、AC3 の geometry-保持要件の直接の帰結＝復帰時に動かして「埋める」のは逆に AC3 違反になる。
+- **② LiveAuto→LiveManual の stale telemetry**: hide で見えなくなる（実害消滅）。復帰フレームは `RefreshLiveTiles()`（visibility toggle の手前）が content を更新してから `DriveRunResult` が `SetActive(true)` するので基本 stale flash は無い（残る軽微な edge は §7.3a Finding 3）。
+
+### 7.3a レビュー指摘の決着（`code-review(simplify) high`・4軸 subagent・2026-06-25）
+- **【Finding 1・HIGH・修正済】remembered-set だと LiveManual 中 save で run_result が永久非表示**: 上記 §7.2 の通り当初案（第1スライスの `HideKind/ShowHidden` 流用）は run_result が CaptureLayout に乗るため「save→boot で復旧不能 brick」を生む。**絶対トグルに変更して解消**。**RRT-08 を「self-heal from persisted-hidden boot」に書き換えて機械担保**（remembered-set へ戻すと RRT-08 が RED）。
+- **【Finding 2・MEDIUM・既知 edge として受容＋owner 報告】group dissolve quorum**: `DissolveIfShrunkTo` は `activeInHierarchy` メンバーのみ quorum に数える。LiveManual で run_result が hidden の間に **base group の可視 3 タイルのうち 2 つを detach** すると quorum<2 で group が dissolve し run_result の `groupId` が orphan 化（永続化される）。hide しなければ 2 detach 後も可視 2（残タイル＋run_result）で dissolve しない＝この hide が結果を変える。ただし (a) 発生条件が「LiveManual 中に base タイルを 2 つ島から引き剥がす」非定型操作、(b) 帰結は brick でなく run_result が singleton 化する cosmetic な layout 劣化のみ、(c) 真の修正は「mode-hidden と closed/dormant を区別して dissolve quorum を変える」＝group-lifecycle の別 refactor（本スライスの altitude 外）。owner grill が group-hole を「回帰確認で足りる見込み」と既に許容済みの範囲。**本スライスでは受容し owner へ報告**（将来 group-lifecycle 改修時に mode-hidden を quorum に数える検討）。
+- **【Finding 3・LOW・受容】LiveAuto→LiveManual→LiveAuto の stale flash**: `LivePanelViewModel.Apply` が telemetry flag を false に戻さないため、LiveAuto run の stats を出した後 LiveManual 経由で LiveAuto へ戻ると、新 telemetry 到着までの 1〜数フレーム旧 stats が再表示され得る。これは hide の有無に関わらず存在する pre-existing な「Apply が reset しない」性質で、bounded（次 telemetry で更新）。本スライスの非表示はむしろ stale を**減らす**方向。受容。
+- **【AFK wiring・slice1 と同等の既知制約】**: RRT-06/07/08 は `DriveRunResult` を reflection で直駆動し、`Update()` の call-site（:1300）の配線自体は gate しない（#99 型の「re-home で call が落ちる」退行は body の litmus では捕まらない）。これは第1スライス Section25（`DriveStrategyEditor`/`DriveOrderTicket` を直 invoke）と**同一の確立済みパターン**で、実 `Update` の駆動は host/Python を要し Python-FREE AFK の射程外。slice1 と parity を取り受容（call-site は compile-gate＋owner HITL で担保）。
+
+### 7.4 AFK gate（`ReplayRunResultTileE2ERunner.RunModeVisibilitySections`・RRT-06/07/08・実 root・Python-FREE）
+run_result サーフェスの正本 runner を拡張（重複新規しない）。実 root を `BuildWorkspace` で起こし、`DriveRunResult` ＋ `FooterModeViewModel.ApplyPoll` ＋ 実 `_dockWindows` を直駆動（`_lanes`/実 backend 不要）。
+- **RRT-06** = mode→可視性: Replay/LiveAuto で run_result `activeSelf==true`・LiveManual で `false`、かつ orders/positions/buying_power は LiveManual でも `true`（no-collateral）。
+- **RRT-07** = 非破壊: Replay→LiveManual→Replay で同一 `GetInstanceID`・`anchoredPosition`/`sizeDelta` 保持・`GroupIdOf` 不変・復帰で `activeSelf==true`（AC3）。
+- **RRT-08**（Finding 1 ガード）= **premise ＋ self-heal**: まず **premise** ＝ LiveManual で hide 中に `CaptureLayout()` を実呼び出しし、run_result が capture list に `visible==false` で乗ることを assert（strategy_editor のみ :2553 で除外・run_result は乗る）。これで直後の `SetActive(false)` 模擬が「実 `ApplyGeometry` が復元する状態」と bit 一致＝proxy が faithful になる（run_result を将来 capture から外すと premise が RED＝絶対トグルの根拠が腐ったことを知らせる）。次に **self-heal** ＝ その persisted-hidden run_result を Replay drive すると**可視へ自己回復**する（絶対トグル）。remembered-set へ戻すと永久非表示のまま＝RED。
+- **RED→GREEN（実機 AFK・2026-06-25）**: `DriveRunResult` を no-op に潰す → `[REPLAY RUNRESULT TILE FAIL] RRT-06: run_result VISIBLE under LiveManual`・exit 1 で **RED** → 絶対トグルで `[E2E RRT-06/07/08 PASS]`・exit 0・rollup `3 PASS / 0 FAIL`・`error CS` 0 で **GREEN**。remembered-set 案（当初実装）に戻すと **RRT-08 が RED**（persisted-hidden が self-heal せず brick）＝レビュー Finding 1 を機械担保。run_result を `CaptureLayout` の除外（:2553）へ加えると **RRT-08 premise が RED**＝絶対トグルの前提が腐ったことを検出。
+- **回帰**: `StrategyEditorNotebookE2ERunner`（STRATEGY-53/54/55・slice1）／`OrderTicketE2ERunner`（ORDER-14）いずれも exit 0 GREEN＝Update path 追加で退行なし。
+
+### 7.5 台帳更新
+`ReplayRunResultTileE2ERunner.md`（RRT-06/07/08 行＋mode→可視性 litmus）／`E2E-INDEX.md`（RRT-01..08・9/8/HITL1・Surface 232 行）。
+
+### 7.6 ADR を新設しない理由（第2スライスも同条件）
+§4 と同じ: reversible（可視性トグル）／not surprising（order ticket・strategy editor の鏡像）／genuine な対立なし。ADR-0026（mode SoT）・ADR-0017/0018（dock/back-plane）を「方針」として参照（無改変）。
+
+### 7.7 owner-run HITL（pending・任意目視）
+footer/Settings で Replay⇄LiveManual⇄LiveAuto を切替 → LiveManual で Run Result タイルが消え（Orders/Positions/Buying Power/chart は残る）・Replay/LiveAuto で元位置復帰。AFK が可視性・no-collateral・非破壊を担保済みなので目視は最終確認のみ。
+
+---
+
+> 🤖 `/grill-with-docs`（2026-06-25）セッション記録（Claude Code）。下位事実は本 findings に固定し ADR を「方針」として参照（ADR は編集しない）。§7 は同 issue REOPEN（第2スライス）の追記。

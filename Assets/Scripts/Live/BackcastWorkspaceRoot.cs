@@ -162,6 +162,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     MenuBarViewModel _menuBar;
     VenueMenuViewModel _venueMenu;
     UniverseSidebarController _sidebarCtrl;
+    // #140 / findings 0112: the same provider the sidebar picker queries — held as a field so
+    // BuildDockWindowFrame (chart-window factory) can read the cache for the iid's name at spawn
+    // time and compose the `<id> <name>` title. The picker and chart titles SHARE one cache so a
+    // [+ Add] add (which warms the cache via the picker's Query) makes the subsequent chart-window
+    // spawn's title lookup a hit — the "常用パスは温い" property in CONTEXT.md "銘柄表示ラベル".
+    IAvailableInstrumentsProvider _provider;
     LiveSubscriptionCoordinator _subCoord;   // #107: live market-data 購読の本番トリガ (ADR-0022)
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
@@ -413,6 +419,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         ThemeService.Changed += ApplyViewportTheme;
         ApplyViewportTheme();
 
+        // #140 / findings 0112 (review finding #1 + F5 owner decision 2026-06-25):
+        // build the instrument provider BEFORE the dock-window controller, because the
+        // controller's factory delegate (BuildDockWindowFrame) is captured here and is invoked
+        // SYNCHRONOUSLY by every Spawn — including any spawn that happens later inside this same
+        // BuildWorkspace tail. This ordering is the **唯一 defense** for the invariant
+        // "whenever _dockWindows can spawn a chart, _provider is non-null": the F5 owner decision
+        // (2026-06-25) retired the previous defense-in-depth `if (_provider == null) return specTitle;`
+        // guard in ResolveChartTitleForId and its AFK pin CHART-TITLE-09, in favor of letting a
+        // reorder regression fail LOUD with a production NRE (dev-time detection > graceful blank
+        // chrome). Break this ordering and chart spawn NRE's. The provider is re-used by
+        // _sidebarCtrl below; same instance, single id→name cache shared by the picker (write
+        // side: warms _nameByIid on Ready) and the chart factory (read side: TryGetName).
+        _provider = new BackendAvailableInstrumentsProvider(_host);
         _catalog = FloatingWindowCatalog.Default();
         // #103 (ADR-0018): two controllers share the catalog but own SEPARATE layers/planes. _windows
         // = the FRONT plane (strategy_editor + order on _floatingLayer, 1.2×); _dockWindows = the BACK
@@ -679,8 +698,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // as TRANSIENT (not cached, re-fired next tick), so the picker self-heals once Initialize
         // completes (Slice review F1 — earlier versions cached the warmup status and stuck on
         // Loading forever until the user changed scenario.end).
-        var provider = new BackendAvailableInstrumentsProvider(_host);
-        _sidebarCtrl = new UniverseSidebarController(_scenario.Universe, _footerSelected, new UniverseWriteback(), provider);
+        // #140 / findings 0112: the sidebar shares the SAME _provider instance the chart-window
+        // factory reads — one id→name cache, two surfaces (the picker's Query warms _nameByIid; the
+        // chart factory's TryGetName reads it). _provider was built earlier in BuildWorkspace (next
+        // to _dockWindows) so the factory invariant is structural (review finding #1).
+        _sidebarCtrl = new UniverseSidebarController(_scenario.Universe, _footerSelected, new UniverseWriteback(), _provider);
         // #78: at BuildWorkspace the editor is still UNBOUND (the .py binds later in RestoreEditors), so
         // the universe is EMPTY here — this prime is against the empty set. The REAL writeback prime that
         // matches the seeded universe happens at the END of ApplyLayout, right after SeedScenarioFromEditor
@@ -831,7 +853,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             return null;
         }
 
-        var dockRoot = DockWindowFrame.Build(id, spec.title, spec.accent, _font, out var dockTitle, out var dockBody);
+        // #140 / findings 0112: chart windows show `<id> <name>` instead of the spec's fixed "Chart"
+        // caption so two chart windows side-by-side are visually distinguishable. Non-chart dock kinds
+        // (buying_power / orders / positions / run_result) keep their spec.title verbatim. The resolver
+        // reads the SHARED IAvailableInstrumentsProvider cache the picker uses, so a [+ Add] sequence
+        // (picker Query warms the cache → SyncChartWindowsToUniverse spawns the chart with that warm
+        // cache) gets the name on the常用パス; layout-restore cold paths fall back to id alone.
+        string title = ResolveChartTitleForId(spec.kind, id, spec.title);
+        var dockRoot = DockWindowFrame.Build(id, title, spec.accent, _font, out var dockTitle, out var dockBody);
         dockTitle.Initialize(_dockWindows, _canvas, _viewport, id);
         BuildDockContent(spec.kind, id, dockBody);
         return dockRoot;
@@ -1297,6 +1326,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveStrategyEditor();
+        DriveRunResult();      // #138 second slice (findings 0110 §7): back-plane mirror — hide run_result in LiveManual
         DriveFooter();
         DriveSettings();   // #125-#128: ESC toggle (guarded) + reflect open state + live-gated section refresh
         DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
@@ -1307,7 +1337,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // findings 0084: push the sidebar [+ Add] picker's universe scope (mode + scenario.end) so it
     // queries the LIVE universe instead of the Bind-time defaults (Replay + "2024-12-31"). Re-resolved
     // on-demand each tick (mirrors DrivePrune below, same mode/end derivation) — the picker captures
-    // end at open time, so this just keeps the scope it WILL capture current.
+    // end at open time, so this just keeps the scope it WILL capture current. NOTE: the chart-window
+    // title resolver (#140 / findings 0112 / ResolveChartTitleForId) does NOT share this (mode, end)
+    // derivation any more — it uses _provider.TryGetName which is mode-agnostic because the name is
+    // a per-instrument property (review altitude fix 2026-06-25).
     void DriveSidebarContext()
     {
         if (_sidebarView == null) return;
@@ -1315,6 +1348,34 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             ? UniverseSourceMode.Live : UniverseSourceMode.Replay;
         string end = _scenario.Params != null ? _scenario.Params.End : null;
         _sidebarView.SetContext(mode, end);
+    }
+
+    // #140 / findings 0112: resolve the `<id> <name>` title for a chart window whose id is
+    // `chart:<iid>`. Reads the SHARED provider cache that the sidebar picker warms (one cache,
+    // two surfaces — drift is structurally impossible because both go through InstrumentLabel.Compose).
+    // TryGetName is **cache-only and mode-agnostic** (review finding altitude fix):
+    //   * cache-only → the chart spawn site never kicks a background PickerInstrumentFetch (the
+    //     picker remains the sole fetch trigger so layout-restore of N saved charts can't race N
+    //     threads through the host's GIL during warmup).
+    //   * mode-agnostic → the name is a per-instrument property; the provider's id→name index
+    //     accumulates across every Ready snapshot the picker has cached, so a Replay→Live mode
+    //     flip after a picker open doesn't blank chart titles when the name is in the index.
+    // Returns the spec.title fallback (`"Chart"`) for non-chart kinds. Returns `<id> <name>` on a
+    // name-cache hit; id alone on a miss (常用パス: picker [+ Add] warms the cache before the
+    // spawn / cold path: layout restore before the first picker open accepts the id-only fallback,
+    // owner decision 2026-06-25). F5 owner decision 2026-06-25: the previous defense-in-depth
+    // `if (_provider == null) return specTitle;` guard is retired — a `_provider == null` here
+    // (BuildWorkspace ordering regression / teardown race) is now allowed to NRE so the violation
+    // fails LOUD at dev time instead of silently degrading to the spec.title fallback. The
+    // construction-order invariant in BuildWorkspace (build `_provider` BEFORE `_dockWindows`) is
+    // the唯一 defense; CHART-TITLE-09 AFK pin is retired with the guard.
+    string ResolveChartTitleForId(string kind, string id, string specTitle)
+    {
+        if (kind != FloatingWindowCatalog.KIND_CHART) return specTitle;
+        string iid = DockShape.InstrumentOfChartId(id);
+        if (string.IsNullOrEmpty(iid)) return specTitle;    // malformed id — let the fallback render so we can see it
+        string name = _provider.TryGetName(iid, out var n) ? n : null;
+        return InstrumentLabel.Compose(iid, name);
     }
 
     // #41 instruments universe prune: assemble the gate inputs fresh from the current mode + prune
@@ -1540,6 +1601,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         else _windows.ShowHidden(_strategyEditorHiddenByMode);
         bool showAdd = !liveManual;
         if (_addCellOverlay != null && _addCellOverlay.activeSelf != showAdd) _addCellOverlay.SetActive(showAdd);
+    }
+
+    // ── #138 second slice (findings 0110 §7): the Run Result tile — hidden ONLY in LiveManual, the
+    // BACK-plane mirror of DriveOrderTicket (order ticket = a FRONT-plane window visible only in LiveManual;
+    // run_result = the back-plane base tile hidden only in LiveManual). run_result is a strategy-run surface:
+    // its content comes from PushLiveTiles (HasLifecycle/HasTelemetry, set only by a registered LiveAuto run)
+    // or PushReplayTiles — neither path exists in LiveManual, so the tile is "(no run)" there and would
+    // otherwise show STALE LiveAuto telemetry (LivePanelViewModel.Apply never resets the flags). Replay
+    // (backtest needs Python) and LiveAuto (the cell drives the strategy) keep it visible. ONLY run_result is
+    // hidden — Orders/Positions/Buying Power/chart stay live in LiveManual via the adapter EC (OrderEvent/
+    // AccountEvent). ABSOLUTE toggle, NOT a remembered-set (the strategy editor uses one because its cell
+    // windows can be hidden for an independent reason — a deleted cell's dormant region_001 shell; run_result
+    // is a NON-closable base-dock SINGLETON with no such independent hide state). Crucially, run_result RIDES
+    // CaptureLayout (the dock plane is captured verbatim; strategy_editor is the only kind excluded — :2553),
+    // so a layout saved while hidden in LiveManual persists visible=false and ApplyGeometry restores it
+    // hidden. Driving the absolute mode state every frame SELF-HEALS that on the next boot (Replay →
+    // SetActive(true)); an in-memory remembered-set would leave it PERMANENTLY hidden (it only records ids it
+    // itself hid, never an already-hidden one). This is exactly why DriveOrderTicket (also captured, also
+    // mode-conditional) drives absolute state. Pure SetActive — geometry/content/persistence/groupId
+    // unchanged. Same poll cycle as DriveOrderTicket (≤1-frame DisplayMode latency, symmetric). One way it
+    // is NOT symmetric with the order ticket: run_result is a base-group member (order ticket is a free
+    // singleton), so a base-group drag while it is hidden leaves it at a stale spot until the next drag —
+    // an accepted cosmetic edge, see findings 0110 §7.3①. ──
+    void DriveRunResult()
+    {
+        var rt = _dockWindows?.RectOf(WINDOW_ID_RUN_RESULT);
+        if (rt == null) return;
+        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
+        bool show = !liveManual;
+        if (rt.gameObject.activeSelf != show) rt.gameObject.SetActive(show);
     }
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
@@ -1774,12 +1865,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb != null && kb.escapeKey.wasPressedThisFrame)
         {
-            // ESC guard inputs queried fresh: any window drag in flight (front OR back plane) keeps the
-            // drag-revert owner (ADR-0024 §8); secret(1000)/save-guard open consume ESC so Settings can't
-            // open behind them. IsDragging stays true across an ESC-cancel until mouse-up, so this never
-            // races the title-input's own ESC handler regardless of Update ordering.
-            bool dragging = (_windows != null && _windows.IsDragging)
-                         || (_dockWindows != null && _dockWindows.IsDragging);
+            // ESC guard inputs queried fresh: any window drag OR resize in flight (front OR back plane) keeps
+            // the geometry-revert owner (ADR-0024 §8 drag / ADR-0030 §6 resize); secret(1000)/save-guard open
+            // consume ESC so Settings can't open behind them. IsDragging / IsResizing stay true across an
+            // ESC-cancel until mouse-up (CancelDrag/CancelResize don't null the session), so this never races
+            // the title-input's / resize-grip's own ESC handler regardless of Update ordering.
+            bool dragging = (_windows?.IsGestureActive ?? false) || (_dockWindows?.IsGestureActive ?? false);
             bool blocking = (_host != null && _host.Modal != null && _host.Modal.IsOpen)
                          || (_saveGuardController != null && _saveGuardController.IsOpen)
                          || (_menuBarView != null && _menuBarView.IsMenuOpen);   // open menu dropdown consumes ESC too

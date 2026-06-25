@@ -36,29 +36,52 @@ Help→Settings の deferred stub を実体化し、**3 つの既存機能を単
 ADR-0026 は **`KIND_STARTUP` を catalog `Default()` から除去**するよう要求する（これが saved layout の `"startup"` を
 forward-compat で skip させる唯一の手＝`catalog.TryGet("startup")=false`）。これにより 2 つの sibling 契約が動く：
 
-- **ADR-0019 §2「core kinds = {startup, run_result}（FIXED）」の波及**: startup が dock window でなくなったので core 集合は
-  **{run_result} に縮小**。これは ADR-0019 の decision の逆転ではなく**配置 supersession（ADR-0026）の帰結**——ADR-0019
-  ファイルは無改変。`DockShape.IsCoreKind` から KIND_STARTUP を外し、本 findings に帰結を記録（ADR-0019 自己保護条項を尊重）。
-  factory group の promoting core は run_result が継承。
+- **core-kind 概念の波及**: かつて findings 0082 §2 が「core kinds = {startup, run_result}（FIXED）」と定めたが、
+  **その core member / Hakoniwa group 概念は ADR-0024（D1）で既に退役済み**（startup / run_result を他 window と特別扱いしない・
+  CONTEXT.md「Hakoniwa group」「core kind set」を SUPERSEDED と明記）。よって `DockShape.IsCoreKind` は **drag 判定からは参照されない
+  dead helper**（全リポジトリで呼び出し元ゼロ）であり、ADR-0020 first-launch base 窓 ID 列挙の residual としてのみ存在しうる。
+  ADR-0026 で startup が base から退役したため、この residual helper からも KIND_STARTUP を外し `{run_result}` に縮小した
+  （ADR-0019/0024 ファイルは無改変・自己保護条項を尊重）。**注意: `IsCoreKind` は呼び出し元が無いので、その値を変えても
+  PLANE/GROUP の AFK assert は RED にならない**（下の litmus ⑤ 参照）。factory base group の flush 化は kind 非依存。
 - **`FloatingWindowE2ERunner` の KIND_STARTUP フィクスチャ 11 箇所を移行（削除ではなく契約の保持）**: startup を generic
   dock/core テストの fixture に使っていた。core が要る箇所（S23d/S26e/S27）→ `KIND_RUN_RESULT`、plain dock の箇所
   （S23f/S30/S40）→ `KIND_BUYING_POWER`、S12a の catalog-resolves チェックから startup を除去、S17 の startup-routes 行を削除
   （chart が dock-routing を既にカバー）、S18 は hidden window round-trip を run_result で保持。**S32（factory base group）は
-  5→4 に書き換え＝GROUP-14/DRAG-14 を新 4-window クラスタで再固定**（dock-count 5→4 の AFK 表現の一つ）。
+  5→4 に書き換え＝DRAG-14 を新 4-window クラスタで再固定**（dock-count 5→4 の AFK 表現の一つ・旧名 GROUP-14 は ADR-0024 で
+  DRAG-14 へ改名済み）。
+- **ADR-0018 への波及（forward-pointer）**: ADR-0018 §dock プレーン列挙「元箱庭 6 種（…+startup）」は startup 退役で **5 種**へ。
+  ADR-0018 ファイルは自己保護で無改変、本 findings に帰結を記録。`FloatingWindowE2ERunner.md` の DOCK-01/02・PLANE-01/03・
+  DRAG-13/14 の startup/6 種記述も同 sweep で 5 種・4 base へ現行化（review 2026-06-25）。
+- **棚卸し漏れだった startup base-id assert（review 2026-06-25 で発見・修正）**: 当初の移行は FloatingWindow/FooterMode/
+  ScenarioStartup の 3 runner のみで、`ChartPlacementJourneyE2ERunner`（CP-S4-01）と `BackcastWorkspaceProbe`（chartwin）の
+  `baseIds = {"startup", …}` を見落としていた。CP-S4-01 は back-plane に `dockWindows.Has("startup")` を assert するため
+  **startup 退役後は必ず RED**（5 再走ゲートに本 runner が含まれず GREEN 確認をすり抜けていた）。CP-S4-01 を 4 窓へ修正。
+  `BackcastWorkspaceProbe` chartwin は front plane `_windows` を読む pre-existing broken（startup 以前に buying_power で落ちる）
+  ため別 issue 扱い。
 
 ## E2E ゲート（RED→GREEN・rollup タグ）
 
-- **新 `SettingsDialogE2ERunner`（SETTINGS-01..08）** — modal shell open/close・ESC guard 3 分岐・`[x]`+SetVisible・z-order・
-  chrome+3 section 非空虚・Venue section gating＋menu Venue 退役（`OpenMenu` enum に Venue 無し）。per-Action-ID タグ
-  `[E2E SETTINGS-0N PASS]`（rollup の単一トークン規約）。GREEN・exit 0。
+- **新 `SettingsDialogE2ERunner`（SETTINGS-01..09・AFK は 01..08／09=HITL）** — modal shell open/close・ESC guard 3 分岐・
+  `[x]`+SetVisible・z-order・chrome+3 section 非空虚・Venue section gating＋menu Venue 退役（`OpenMenu` enum に Venue 無し）。
+  per-Action-ID タグ `[E2E SETTINGS-0N PASS]`（rollup の単一トークン規約）。GREEN・exit 0。SETTINGS-09（second password で secret が
+  Settings の上に実描画で重なり・送信後 Settings 残存）は実 overlay 重畳が要るため HITL 専用。
+  **AFK カバレッジ（review 2026-06-25 で強化）**: 当初 SETTINGS-08 は Venue gating（interactable）のみで button `onClick`→
+  `_onConnect/_onDisconnect` を Invoke していなかった（配線が外れても緑）。→ **修正済み**: SETTINGS-08(c) で connect/Disconnect の
+  `onClick.Invoke()` を回し、capturing ラムダで `_onConnect(venue,env)`/`_onDisconnect` 発火を assert（`[x]`=SETTINGS-05 と同手法・
+  plain C# view の onClick は EventSystem 不要）。**ESC 優先順位**も SETTINGS-02 に `OnEscape(true,true)==DeferToDrag`（drag>blocking）を
+  追加し段間順位を pin。**残る follow-up**: ① mode segment の onClick→`_onMode`→`OnFooterMode`（FOOTER-06/07 は表示反映のみ）、
+  ② menu Settings 項目→`OpenSettings`→`controller.Open` と host `DriveSettings` の drag/blocking 集約＋`IsOpen→SetVisible` 鏡映は
+  なお AFK 未検証（host を直接駆動する runner が無い・menu→open は HITL 専用）。
 - **`FooterModeE2ERunner`** — FOOTER-06/07 の view section を `SettingsModeSegmentView` に retarget（footer の `_modeSegs` 退役）。
   **FOOTER-13 を反転**: 旧「footer に 3 segment ＋ transport 無し」→ 新「footer は **ボタン 0**（segment は Settings へ移設）」。
   非空虚化: Settings mode view が segment を持つことを先に assert。37 pass / 0 fail。
 - **`ScenarioStartupE2ERunner`** — SCENARIO-16（`BaseDockWindowIds.Length==4` ＆ no "startup"）/ SCENARIO-17（catalog が
   "startup" を resolve しない＝forward-compat skip の litmus）を追加。tile ロジック（SCENARIO-01..15）は不変。
 - RED→GREEN litmus: ① `SETTINGS_SORT` を ≥1000 にすると SETTINGS-06 RED（secret が前面でなくなる）。② startup spec を
-  catalog に戻すと SCENARIO-17 RED。③ `BaseDockWindowIds` に startup を戻すと SCENARIO-16 / S32 RED。④ footer に AddModeSeg
-  を戻すと FOOTER-13 RED。⑤ `IsCoreKind` から run_result を外す/`IsDockKind` を壊すと FloatingWindow PLANE/GROUP RED。
+  catalog に戻すと SCENARIO-17 RED。③ `BaseDockWindowIds` に startup を戻すと SCENARIO-16 RED（**正本はこれ**。S32 は
+  クラスタ数をリテラル 4 で持つので production の `BaseDockWindowIds` とは結合しておらず 5→4 を守らない＝旧記述「S32 RED」は誤り）。
+  ④ footer に AddModeSeg を戻すと FOOTER-13 RED。⑤ `IsDockKind` を壊すと FloatingWindow PLANE/GROUP RED（**`IsCoreKind` は呼び出し元
+  ゼロの dead helper なので litmus にならない**＝旧記述「IsCoreKind から run_result を外すと RED」は誤り。修正済み）。
 
 ## 再走手順
 
@@ -68,6 +91,7 @@ pwsh scripts/run-live-e2e.ps1 -Method SettingsDialogE2ERunner.Run  # [E2E SETTIN
 pwsh scripts/run-live-e2e.ps1 -Method FooterModeE2ERunner.Run      # [E2E FOOTER MODE PASS] 37/0
 pwsh scripts/run-live-e2e.ps1 -Method ScenarioStartupE2ERunner.Run # [E2E SCENARIO STARTUP PASS] + 16/17
 pwsh scripts/run-live-e2e.ps1 -Method FloatingWindowE2ERunner.Run  # [E2E FLOATING WINDOW PASS]
+pwsh scripts/run-live-e2e.ps1 -Method ChartPlacementJourneyE2ERunner.Run # CP-S4-01 base=4（review 2026-06-25 で startup 退役を追補）
 ```
 （この dev 機は pwsh 不在＝PowerShell 5.1 で `& .\scripts\run-live-e2e.ps1 -Method <X>` 直叩き。確認は Bash `grep -a`。）
 

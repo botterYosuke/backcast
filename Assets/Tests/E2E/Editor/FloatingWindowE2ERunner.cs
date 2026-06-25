@@ -37,8 +37,8 @@
 //      true + BringToFront)                                                                       [WINDOW-08]
 //  10. #99 magnet snap pure arithmetic (flush/edge-align, x/y independent, threshold guards)       [SNAP-01]
 //  11. #99 snap controller wiring (excludes self/hidden, dragged-only, no group propagation)       [SNAP-02]
-//  12. #99 dock catalog kinds (chart multi-instance + 5 base singletons, unknown tolerance)        [DOCK-01]
-//  13. #99 DockDefaultPlacement grid arithmetic (base-5 first-launch placement)                    [DOCK-02]
+//  12. #99 dock catalog kinds (chart multi-instance + 4 base singletons, unknown tolerance)        [DOCK-01]
+//  13. #99 DockDefaultPlacement grid arithmetic (pure ceil(√n) placement, n arbitrary)            [DOCK-02]
 //  14. #101 DockSnapPlacement flush adjacency (right→down→left→up, overflow cascade, size verbatim) [DOCK-03]
 //  15. #101 focus-adjacent dock spawn (spec-fixed count-independent size, focus/nearest target)    [DOCK-04]
 //  16. #103 two depth planes: back DockLayer 1.0× vs front FloatingWindowLayer 1.2× (parallax speed
@@ -46,7 +46,7 @@
 //  17. #103 cross-plane snap BAN (per-controller母集合 — dock never snaps to front; same-plane snap
 //      unchanged; dock focus within plane; DockShape.IsDockKind routing parity)                     [PLANE-02]
 //  18. #103 two-controller persist round-trip (capture UNION → disk → restore routes by kind to the
-//      correct plane/layer, hidden startup preserved, no cross-plane leak, schema-add 0)            [PLANE-03]
+//      correct plane/layer, hidden run_result preserved (ADR-0026: startup retired), leak-free)        [PLANE-03]
 //  19. #103 REAL scene wiring (loads BackcastWorkspace.unity: DockLayer is the backmost Content sibling
 //      of FloatingWindowLayer + _dockLayer/_floatingLayer serialized refs — pins the scene-builder output) [PLANE-01]
 //  20. #104 Slice A: groupId additive schema (Capture/Apply pass-through + on-disk round-trip + back-compat null +
@@ -160,7 +160,7 @@ public static class FloatingWindowE2ERunner
                       "Hide/reveal Show (SetActive + BringToFront) + #99 magnet snap (pure flush/edge-align x-y INDEPENDENT, " +
                       "beyond-threshold->0, threshold<=0 guard) + controller SnapOnRelease (excludes self, ignores hidden, " +
                       "applies via anchoredPosition, dragged-only — no group propagation) + #99 dock catalog kinds (chart " +
-                      "multi-instance + 5 base singletons, accents from PlayerColors, unknown-kind tolerance preserved) + " +
+                      "multi-instance + 4 base singletons, accents from PlayerColors, unknown-kind tolerance preserved) + " +
                       "DockDefaultPlacement (ceil(√n) grid in absolute canvas-logical coords, row-major slot 0=top-left, " +
                       "y up-positive rows, no overlap, n=0 empty) + #101 DockSnapPlacement (flush adjacency right→down→" +
                       "left→up, perpendicular-edge align, strict no-overlap selection, gap=0 flush, size verbatim, " +
@@ -171,7 +171,7 @@ public static class FloatingWindowE2ERunner
                       "composition) + cross-plane snap BAN (per-controller snap母集合 — dock window never snaps to a " +
                       "front window; same-plane snap unchanged; dock focus resolves WITHIN the back plane; " +
                       "DockShape.IsDockKind routing parity) + two-controller persist round-trip (capture UNION → disk → " +
-                      "restore routes by kind to the correct plane/layer, hidden startup preserved, no cross-plane leak, " +
+                      "restore routes by kind to the correct plane/layer, hidden run_result preserved (ADR-0026: startup retired), no cross-plane leak," +
                       "schema-add 0) + #103 REAL scene wiring (authored DockLayer is the backmost Content sibling of " +
                       "FloatingWindowLayer + _dockLayer/_floatingLayer serialized refs point to them — binds depth " +
                       "ordering to the scene-builder output, not the test's setup) + " +
@@ -689,9 +689,9 @@ public static class FloatingWindowE2ERunner
     }
 
     // ---- 12. dock catalog kinds ----
-    // Covers: DOCK-01 — #99 Slice 2 / findings 0075 §2 (chart multi-instance + 5 base singleton kinds
-    // present in Default(), each with a distinct accent and a usable spec; unknown-kind tolerance
-    // unchanged so a forward-evolved doc still survives).
+    // Covers: DOCK-01 — #99 Slice 2 / findings 0075 §2 (chart multi-instance + 4 base singleton kinds
+    // present in Default() after ADR-0026 retired KIND_STARTUP, each with a distinct accent and a usable
+    // spec; unknown-kind tolerance unchanged so a forward-evolved doc still survives).
     static string Section12_DockCatalogKinds()
     {
         var catalog = FloatingWindowCatalog.Default();
@@ -2009,7 +2009,7 @@ public static class FloatingWindowE2ERunner
 
         // (b) FormGroup mints ONE shared non-null groupId across every member.
         string g = c.FormGroup(ids);
-        if (string.IsNullOrEmpty(g)) return "S32b: FormGroup returned null for 5 live members";
+        if (string.IsNullOrEmpty(g)) return "S32b: FormGroup returned null for 4 live members";
         foreach (var id in ids)
             if (c.GroupIdOf(id) != g)
                 return $"S32b: {id} not in the factory group (got {c.GroupIdOf(id)}, expected {g})";

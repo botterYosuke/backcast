@@ -1,6 +1,6 @@
 # ScenarioStartupE2ERunner — 台本（Surface E2E / 操作網羅台帳）
 
-`ScenarioStartupE2ERunner.cs`（第二波で実装済み・全 11 section AFK GREEN）が自動検証する **Scenario Startup tile サーフェス**（Replay 実行設定
+`ScenarioStartupE2ERunner.cs`（第二波で実装済み・全 14 section AFK GREEN＝#128/ADR-0026 で S13=SCENARIO-16/S14=SCENARIO-17 追加）が自動検証する **Scenario Startup tile サーフェス**（Replay 実行設定
 パネル）の台本。実装者は `.cs` と本 `.md` をセットで読む。これは調査メモではなく、**この サーフェスでユーザーが
 できる行動すべての網羅台帳と、E2E の観測点・合格条件を定義する正本**。Action ID 採番・カバー状態の語彙・セクション
 構成・責務境界の共通規約は [E2E-CONVENTIONS.md](./E2E-CONVENTIONS.md)（命名・配置の上位規約は
@@ -14,7 +14,7 @@
 
 ## 対象サーフェス
 
-Hakoniwa `PanelKind::Startup` タイル（slot 0・TTWR `populate_startup_tile` parity）。uGUI ビュー `ScenarioStartupTile`
+**Settings ダイアログの Scenario セクションが宿す `ScenarioStartupTile`**（#128/ADR-0026 で移設。旧: dock `KIND_STARTUP` window／さらに旧: Hakoniwa `PanelKind::Startup` タイル slot 0・TTWR `populate_startup_tile` parity）。uGUI ビュー `ScenarioStartupTile`
 ＋頭脳 `ScenarioStartupController`（input-agnostic な PLAIN C#）。#76 S6b-β-clean U5 でタイルは **scenario 編集専用**に
 なり、Run ボタン＋run-readiness は Strategy Editor タイトルバーへ移動済み（タイルは scenario フィールドと per-field
 エラーラベルだけを持つ）。4 フィールド = Start / End / Granularity / Initial cash（CONTEXT「run 期間 vs lookback」）。

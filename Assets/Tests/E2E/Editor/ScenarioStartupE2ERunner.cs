@@ -38,6 +38,9 @@ public static class ScenarioStartupE2ERunner
     public static void Run()
     {
         string fail = null;
+        // SCENARIO-16/17 verdicts, captured independently so each emits its own per-Action-ID rollup tag
+        // (not a shared pair gated on the whole suite). "not-run" = an earlier exception preempted them.
+        string s16 = "not-run", s17 = "not-run";
         try
         {
             if (Directory.Exists(TempDir)) Directory.Delete(TempDir, true);
@@ -54,21 +57,29 @@ public static class ScenarioStartupE2ERunner
                 ?? Section9_IndividualWritersAreMutateExistingOnly()
                 ?? Section10_InlineReaderMatchesGolden()
                 ?? Section11_FileNewClearsInMemory()
-                ?? Section12_StartupTileHasNoRunButton()
-                ?? Section13_DockClusterIsFour()
-                ?? Section14_ForwardCompatSkipsStartup();
+                ?? Section12_StartupTileHasNoRunButton();
+
+            // Section13/14 are independent pure checks (reflection over BaseDockWindowIds / catalog lookup),
+            // so run them unconditionally for accurate per-section verdicts even if an earlier section failed.
+            s16 = Section13_DockClusterIsFour();
+            s17 = Section14_ForwardCompatSkipsStartup();
+            fail = fail ?? s16 ?? s17;
         }
         catch (Exception e)
         {
             fail = "exception: " + e;
         }
 
+        // Per-Action-ID verdicts for SCENARIO-16/17 — emitted on their OWN result, independent of the suite
+        // (M3 fix 2026-06-25): a failure elsewhere no longer hides these tags, and a 16/17 failure no longer
+        // collapses into the shared FAIL only. "not-run" (earlier exception preempted them) emits no tag.
+        if (s16 != "not-run") Debug.Log(s16 == null ? "[E2E SCENARIO-16 PASS]" : "[E2E SCENARIO-16 FAIL] " + s16);
+        if (s17 != "not-run") Debug.Log(s17 == null ? "[E2E SCENARIO-17 PASS]" : "[E2E SCENARIO-17 FAIL] " + s17);
+
         if (fail == null)
         {
             Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear + " +
                       "dock 5→4 (SCENARIO-16) + forward-compat startup skip (SCENARIO-17) verified");
-            Debug.Log("[E2E SCENARIO-16 PASS]");   // dock cluster reduced 5→4 (ADR-0026)
-            Debug.Log("[E2E SCENARIO-17 PASS]");   // saved "startup" window skipped on restore (forward-compat)
             EditorApplication.Exit(0);
         }
         else

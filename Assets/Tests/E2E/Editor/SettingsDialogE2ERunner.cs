@@ -86,6 +86,11 @@ public static class SettingsDialogE2ERunner
         c.Open();
         if (c.OnEscape(true, false) != SettingsEscDecision.DeferToDrag) return "open+drag ESC not DeferToDrag";
         if (!c.IsOpen) return "ESC during drag CLOSED an open Settings (must defer)";
+        // PRIORITY: drag-revert OUTRANKS a blocking modal (findings 0102 D1: drag > secret/save-guard > toggle).
+        // Pins the ordering that drag=true & blocking=true is still DeferToDrag — swapping the OnEscape branch
+        // order would flip this to ConsumedByBlockingModal and otherwise go undetected.
+        if (c.OnEscape(true, true) != SettingsEscDecision.DeferToDrag) return "drag+blocking ESC must rank drag first (DeferToDrag)";
+        if (!c.IsOpen) return "drag+blocking ESC closed Settings (drag-revert must win and defer)";
         return null;
     }
 
@@ -211,7 +216,11 @@ public static class SettingsDialogE2ERunner
             var coord = new LiveLogoutCoordinator();
             var vm = new VenueMenuViewModel(conn, coord);
             var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-            var view = new SettingsVenueSectionView(vm, null, (_, __) => { }, () => { }, () => true, font);
+            // Capture the brain callbacks so (c) below can prove the buttons are actually WIRED, not just gated.
+            string firedVenue = null, firedEnv = "<unset>"; bool disconnectFired = false;
+            var view = new SettingsVenueSectionView(vm, null,
+                (v, e) => { firedVenue = v; firedEnv = e; }, () => { disconnectFired = true; },
+                () => true, font);
             view.Build((RectTransform)go.transform);
 
             var items = (IList)typeof(SettingsVenueSectionView).GetField("_items", BF).GetValue(view);
@@ -224,16 +233,31 @@ public static class SettingsDialogE2ERunner
             // *_ALLOW_PROD env gate (prod grey-out), so we assert "≥1 connect enabled", not "all".
             view.Refresh();
             var btns = ((RectTransform)go.transform).GetComponentsInChildren<Button>(true);
-            Button disconnect = null; int connectEnabled = 0, connectCount = 0;
+            Button disconnect = null, firstConnect = null; int connectEnabled = 0, connectCount = 0;
             foreach (var b in btns)
             {
                 if (b.gameObject.name == "venue:Disconnect") disconnect = b;
-                else if (b.gameObject.name.StartsWith("venue:")) { connectCount++; if (b.interactable) connectEnabled++; }
+                else if (b.gameObject.name.StartsWith("venue:"))
+                {
+                    connectCount++; if (b.interactable) connectEnabled++;
+                    if (firstConnect == null) firstConnect = b;   // reuse this pass for the onClick-wiring check below
+                }
             }
             if (disconnect == null) return "no Disconnect button in the venue section";
             if (connectCount == 0) return "no connect buttons in the venue section (vacuous)";
             if (connectEnabled < 1) return "disconnected: no connect button is enabled (gating wiring broken)";
             if (disconnect.interactable) return "disconnected: Disconnect is enabled (must require IsConnected)";
+
+            // (c) onClick WIRING (not just gating): exercise the actual button → brain callback. The asserts
+            //     above only read interactable; an unwired button (onClick → nothing) would still pass them.
+            //     onClick.Invoke fires the UnityEvent directly regardless of interactable — same technique as
+            //     SETTINGS-05's [x] button. Closes the H1 "wiring not AFK-covered" gap (findings 0102).
+            if (firstConnect == null) return "no connect button to exercise onClick (vacuous)";
+            firstConnect.onClick.Invoke();
+            if (firedVenue == null) return "connect button onClick did not fire _onConnect(venue,env) — wiring broken";
+            if (firedEnv == "<unset>") return "connect onClick fired but env arg not threaded through — wiring broken";
+            disconnect.onClick.Invoke();
+            if (!disconnectFired) return "Disconnect button onClick did not fire _onDisconnect — wiring broken";
 
             // connected → connects disable (CanConnect false). Proves Refresh re-reads the live VM gating.
             conn.ApplyStatePoll(Poll("CONNECTED"));

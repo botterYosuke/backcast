@@ -1297,6 +1297,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveStrategyEditor();
+        DriveRunResult();      // #138 second slice (findings 0110 §7): back-plane mirror — hide run_result in LiveManual
         DriveFooter();
         DriveSettings();   // #125-#128: ESC toggle (guarded) + reflect open state + live-gated section refresh
         DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
@@ -1540,6 +1541,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         else _windows.ShowHidden(_strategyEditorHiddenByMode);
         bool showAdd = !liveManual;
         if (_addCellOverlay != null && _addCellOverlay.activeSelf != showAdd) _addCellOverlay.SetActive(showAdd);
+    }
+
+    // ── #138 second slice (findings 0110 §7): the Run Result tile — hidden ONLY in LiveManual, the
+    // BACK-plane mirror of DriveOrderTicket (order ticket = a FRONT-plane window visible only in LiveManual;
+    // run_result = the back-plane base tile hidden only in LiveManual). run_result is a strategy-run surface:
+    // its content comes from PushLiveTiles (HasLifecycle/HasTelemetry, set only by a registered LiveAuto run)
+    // or PushReplayTiles — neither path exists in LiveManual, so the tile is "(no run)" there and would
+    // otherwise show STALE LiveAuto telemetry (LivePanelViewModel.Apply never resets the flags). Replay
+    // (backtest needs Python) and LiveAuto (the cell drives the strategy) keep it visible. ONLY run_result is
+    // hidden — Orders/Positions/Buying Power/chart stay live in LiveManual via the adapter EC (OrderEvent/
+    // AccountEvent). ABSOLUTE toggle, NOT a remembered-set (the strategy editor uses one because its cell
+    // windows can be hidden for an independent reason — a deleted cell's dormant region_001 shell; run_result
+    // is a NON-closable base-dock SINGLETON with no such independent hide state). Crucially, run_result RIDES
+    // CaptureLayout (the dock plane is captured verbatim; strategy_editor is the only kind excluded — :2553),
+    // so a layout saved while hidden in LiveManual persists visible=false and ApplyGeometry restores it
+    // hidden. Driving the absolute mode state every frame SELF-HEALS that on the next boot (Replay →
+    // SetActive(true)); an in-memory remembered-set would leave it PERMANENTLY hidden (it only records ids it
+    // itself hid, never an already-hidden one). This is exactly why DriveOrderTicket (also captured, also
+    // mode-conditional) drives absolute state. Pure SetActive — geometry/content/persistence/groupId
+    // unchanged. Same poll cycle as DriveOrderTicket (≤1-frame DisplayMode latency, symmetric). One way it
+    // is NOT symmetric with the order ticket: run_result is a base-group member (order ticket is a free
+    // singleton), so a base-group drag while it is hidden leaves it at a stale spot until the next drag —
+    // an accepted cosmetic edge, see findings 0110 §7.3①. ──
+    void DriveRunResult()
+    {
+        var rt = _dockWindows?.RectOf(WINDOW_ID_RUN_RESULT);
+        if (rt == null) return;
+        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
+        bool show = !liveManual;
+        if (rt.gameObject.activeSelf != show) rt.gameObject.SetActive(show);
     }
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and

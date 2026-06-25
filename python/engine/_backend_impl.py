@@ -1007,6 +1007,7 @@ class DataEngineBackend:
             get_run_buffer_base_dir,
             make_run_id,
         )
+        from engine.strategy_runtime.universe_bridge import EngineUniverseBridge
 
         scenario = dict(_json.loads(scenario_json))
         instruments = scenario.get("instruments") or [scenario.get("instrument", "unknown")]
@@ -1057,6 +1058,10 @@ class DataEngineBackend:
             data_root=duckdb_root,
             sink=observer,
             stop_event=self.engine.replay_stop_event,
+            # ADR-0031 S1: bt.universe.* edits route through the engine channels the C# host drains
+            # (write) and pushes the registry mirror back through (read). Same engine the observer
+            # pushes last_portfolio through, so the host sees both on one object.
+            universe_bridge=EngineUniverseBridge(self.engine),
             on_run_begin=on_run_begin,
         )
         return bt, run_buffer, scenario

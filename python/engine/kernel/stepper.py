@@ -193,6 +193,11 @@ class KernelStepper:
         rails: Optional[SafetyRails] = None,
         bar_interval_sec: float = 0.0,
         stop_event=None,
+        data_root=None,
+        start: Optional[str] = None,
+        end: Optional[str] = None,
+        granularity: str = "Daily",
+        bar_loader=None,
     ) -> None:
         if not instrument_ids:
             raise ValueError("instrument_ids must be non-empty")
@@ -202,6 +207,16 @@ class KernelStepper:
             raise ValueError(f"universe must share a single venue, got {sorted(venues)}")
         self._venue = venues.pop()
         self._bars = bars
+        # ADR-0031 S2 (#142): the data source for a mid-stream universe join. `from_scenario`
+        # forwards the scenario's data_root / window / granularity so join_instrument can read a
+        # newly-added instrument's bars from the CURRENT replay time onward and merge them into the
+        # remaining stream. None (golden / pure-unit callers) → membership-only joins (no data).
+        # `bar_loader` is injectable for the gate (default = duckdb load_bars).
+        self._data_root = data_root
+        self._start = start
+        self._end = end
+        self._granularity = granularity
+        self._bar_loader = bar_loader
         self._strategy = strategy
         # When no Strategy drives the run (the bt handle), submits still need a strategy_id
         # for the client_order_id; the host binds it (mirrors cell_api's host-bound id).
@@ -262,6 +277,78 @@ class KernelStepper:
             self._bar_interval_sec = 1.0 / bars_per_second
         else:
             raise ValueError(f"bars_per_second must be positive, got {bars_per_second!r}")
+
+    # -- ADR-0031 S2 (#142): mid-stream universe join / drop ------------------
+
+    def join_instrument(self, instrument_id: str) -> None:
+        """Mid-stream join (ADR-0031 D5): stream ``instrument_id``'s bars from the CURRENT replay
+        time to ``scenario.end`` into the remaining stream. ``bt.universe.add(X)`` calls this on the
+        cell worker thread between bars.
+
+        Added-time-onward (never rewinds, never re-plays history): only bars strictly AFTER the
+        current bar's ts join. Before the first bar (setup-time add) the whole window joins =
+        "added at setup → streams from start". Existing instruments' per-bar order/fill/equity are
+        untouched — only FUTURE bars (index > current) are re-merged in ts order (the closed/open
+        history is immutable). Idempotent if already in the universe. Cross-venue is rejected (the
+        Replay universe shares one venue, mirroring __init__). A missing DuckDB file for X is graceful
+        (membership only — the chart window still shows; ADR-0031 S1)."""
+        if instrument_id in self._instrument_ids:
+            return
+        venue = instrument_id.split(".")[-1]
+        if venue != self._venue:
+            raise ValueError(
+                f"bt.universe.add({instrument_id!r}): cross-venue join not supported in Replay "
+                f"(the universe venue is {self._venue!r})"
+            )
+
+        new_bars: list[Bar] = []
+        if self._data_root is not None:
+            from engine.kernel.duckdb_bars import load_bars as _load_bars
+
+            loader = self._bar_loader or _load_bars
+            try:
+                loaded = loader(
+                    self._data_root,
+                    instrument_id,
+                    start=self._start,
+                    end=self._end,
+                    granularity=self._granularity,
+                )
+            except FileNotFoundError:
+                loaded = []  # no data for X → still a member (window shows), just no bars (S1)
+            cur_ts = self._current_bar.ts_event_ns if self._current_bar is not None else None
+            new_bars = [b for b in loaded if cur_ts is None or b.ts_event_ns > cur_ts]
+
+        self._instrument_ids.append(instrument_id)
+        if new_bars:
+            from engine.kernel.duckdb_bars import merge_bars_by_ts
+
+            head = self._bars[: self._index + 1]
+            tail = self._bars[self._index + 1 :]
+            # merge keeps ts order; at equal ts the existing tail precedes the joined bars (stable).
+            self._bars = head + merge_bars_by_ts([tail, new_bars])
+
+    def drop_instrument(self, instrument_id: str) -> None:
+        """Mid-stream drop (ADR-0031 D6 Replay side): stop supplying ``instrument_id``'s bars from
+        now on (``bt.universe.remove(X)``). Already-streamed history stays; only FUTURE bars
+        (index > current) are removed. No-op if not in the universe.
+
+        Note: removing an instrument the cell still HOLDS leaves the open position marked-to-market at
+        its last streamed close for the rest of the run (``_last_prices[X]`` stops updating once X's
+        future bars are gone). That is the only defined price — no newer data flows — so equity pins X
+        at its last known value; removing the universe membership does not close or liquidate positions."""
+        if instrument_id not in self._instrument_ids:
+            return
+        self._instrument_ids.remove(instrument_id)
+        head = self._bars[: self._index + 1]
+        tail = [b for b in self._bars[self._index + 1 :] if b.instrument_id != instrument_id]
+        self._bars = head + tail
+
+    def clear_instruments(self) -> None:
+        """Empty the universe mid-stream (``bt.universe.clear()``): drop every FUTURE bar so the
+        stream reaches END after the current bar. Already-streamed history stays."""
+        self._instrument_ids = []
+        self._bars = self._bars[: self._index + 1]
 
     # -- primitives -----------------------------------------------------------
 

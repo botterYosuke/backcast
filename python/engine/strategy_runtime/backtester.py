@@ -77,6 +77,94 @@ class ExecutionSeam(Protocol):
     def portfolio_snapshot(self) -> PortfolioSnapshot: ...
 
 
+@runtime_checkable
+class UniverseBridge(Protocol):
+    """The ``bt.universe.*`` ↔ C# ``InstrumentRegistry`` SoT bridge (ADR-0031 D2). ``add`` /
+    ``remove`` / ``clear`` push edit ops the Unity host applies to the registry; ``list`` reads
+    the registry mirror the host pushes back (Python keeps no own SoT). Kept a Protocol so the
+    façade stays decoupled from the engine and marimo-free — production wires
+    ``EngineUniverseBridge`` (engine channels), gates wire an in-memory fake."""
+
+    def add(self, instrument_id: str) -> None: ...
+    def remove(self, instrument_id: str) -> None: ...
+    def clear(self) -> None: ...
+    def list(self) -> list[str]: ...
+
+
+def _normalize_instrument_id(instrument_id: str) -> str:
+    """Validate + normalize a cell-supplied id. A blank/non-str id is a programming error in the
+    strategy cell, surfaced as ``ValueError`` immediately (fail-loud, like ``submit_market``)."""
+    if not isinstance(instrument_id, str):
+        raise ValueError(f"bt.universe id must be a string, got {type(instrument_id).__name__}")
+    iid = instrument_id.strip()
+    if not iid:
+        raise ValueError("bt.universe id must be a non-empty instrument id (e.g. '7203.TSE')")
+    return iid
+
+
+class _UniverseHandle:
+    """``bt.universe`` — the cell-facing dynamic universe editor (ADR-0031 D1).
+
+    A thin façade over a ``UniverseBridge``. ``add`` / ``remove`` / ``clear`` are
+    programmatic-user edits of the C# ``InstrumentRegistry`` SoT (D2); ``list`` reads it back.
+    Fail-closed when no bridge is wired (e.g. the no-scenario placeholder, or a run context that
+    does not expose a registry): every operation raises a ``RuntimeError`` with guidance, the
+    same discipline as ``submit_market`` outside an open bar.
+    """
+
+    def __init__(self, bridge: Optional[UniverseBridge], bar_source: object = None) -> None:
+        self._bridge = bridge
+        # ADR-0031 S2 (#142): the Replay bar source (KernelStepper) exposes join_instrument /
+        # drop_instrument / clear_instruments for mid-stream data join. LiveAuto's LiveCellBackend
+        # has none (data comes from venue subscription — S4/S5), so these are duck-typed: skipped
+        # when absent. None (no-scenario / pure tests) → no data join.
+        self._bar_source = bar_source
+
+    def _require(self) -> UniverseBridge:
+        if self._bridge is None:
+            raise RuntimeError(
+                "bt.universe is unavailable in this run context (no instrument registry bridge "
+                "is wired for this run)"
+            )
+        return self._bridge
+
+    def add(self, instrument_id: str) -> None:
+        """Add one instrument to the universe SoT. The chart window for it spawns via the
+        registry's ``Changed`` cascade (ADR-0031 D2 — no extra wiring); in Replay its bars join the
+        stream from the current replay time (S2); in LiveAuto it is also subscribed (S4)."""
+        iid = _normalize_instrument_id(instrument_id)
+        bridge = self._require()
+        # Mid-stream data join FIRST (validates venue before any membership mutation), then the
+        # registry edit (engine channel → C# SoT / chart window).
+        join = getattr(self._bar_source, "join_instrument", None)
+        if join is not None:
+            join(iid)
+        bridge.add(iid)
+
+    def remove(self, instrument_id: str) -> None:
+        """Remove one instrument from the universe SoT (chart despawns; Replay stops its future
+        bars — S2; LiveAuto unsubscribes — S5)."""
+        iid = _normalize_instrument_id(instrument_id)
+        bridge = self._require()
+        bridge.remove(iid)
+        drop = getattr(self._bar_source, "drop_instrument", None)
+        if drop is not None:
+            drop(iid)
+
+    def clear(self) -> None:
+        """Empty the universe SoT (all chart windows despawn; Replay ends the stream — S2; LiveAuto
+        unsubscribes all — S5)."""
+        bridge = self._require()
+        bridge.clear()
+        clr = getattr(self._bar_source, "clear_instruments", None)
+        if clr is not None:
+            clr()
+
+    def list(self) -> list[str]:
+        """Read back the current universe SoT (the C# registry contents) as a ``list[str]``."""
+        return list(self._require().list())
+
+
 class Backtester:
     """The ``bt`` handle: replay / step / bar / portfolio / submit_market over one stepper.
 
@@ -98,6 +186,7 @@ class Backtester:
         bar_source: BarSource,
         *,
         execution_seam: Optional[ExecutionSeam] = None,
+        universe_bridge: Optional[UniverseBridge] = None,
         on_run_begin: Optional[Callable[[], None]] = None,
     ) -> None:
         # The two façade seams (ADR-0025 D1). In Replay one ``KernelStepper`` is BOTH; in Auto
@@ -105,6 +194,10 @@ class Backtester:
         # ``execution_seam`` defaults to ``bar_source``. The split keeps the seams nameable.
         self._bars = bar_source
         self._exec: ExecutionSeam = bar_source if execution_seam is None else execution_seam
+        # ADR-0031 S1/S2: bt.universe.* dynamic universe editor. None bridge → fail-closed (no
+        # registry bridge wired); production wires EngineUniverseBridge. bar_source is the Replay
+        # KernelStepper (mid-stream join — S2) or the LiveCellBackend (no join — duck-typed away).
+        self.universe = _UniverseHandle(universe_bridge, bar_source)
         # Captured by replay() at stream start (immutable for the run — F6). None → full speed.
         self._bars_per_second: Optional[float] = None
         self._on_run_begin = on_run_begin
@@ -126,6 +219,7 @@ class Backtester:
         sink=None,
         rails: Optional[SafetyRails] = None,
         stop_event=None,
+        universe_bridge: Optional[UniverseBridge] = None,
         on_run_begin: Optional[Callable[[], None]] = None,
     ) -> "Backtester":
         """Production wire: build a stepper from a normalized/validated scenario dict.
@@ -152,8 +246,14 @@ class Backtester:
             sink=sink,
             rails=rails,
             stop_event=stop_event,
+            # ADR-0031 S2 (#142): hand the stepper the data source so bt.universe.add(X) mid-run can
+            # read X's bars from the current replay time to scenario.end and merge them in.
+            data_root=data_root,
+            start=scenario["start"],
+            end=scenario["end"],
+            granularity=scenario["granularity"],
         )
-        return cls(stepper, on_run_begin=on_run_begin)
+        return cls(stepper, universe_bridge=universe_bridge, on_run_begin=on_run_begin)
 
     # -- host lifecycle seams (#95 Phase 4) -----------------------------------
 
@@ -254,6 +354,27 @@ _NO_SCENARIO_GUIDANCE = (
 )
 
 
+class _NoScenarioUniverse:
+    """``bt.universe`` on the no-scenario placeholder (ADR-0031 S1). Every op fails closed with the
+    same recover-by-committing-the-scenario guidance as the rest of ``NoScenarioBacktester``."""
+
+    @staticmethod
+    def _raise(method: str) -> NoReturn:
+        raise RuntimeError(f"bt.universe.{method}(): {_NO_SCENARIO_GUIDANCE}")
+
+    def add(self, instrument_id: str) -> None:
+        self._raise("add")
+
+    def remove(self, instrument_id: str) -> None:
+        self._raise("remove")
+
+    def clear(self) -> None:
+        self._raise("clear")
+
+    def list(self) -> list[str]:
+        self._raise("list")
+
+
 class NoScenarioBacktester:
     """The fail-closed ``bt`` the host injects BEFORE the startup panel commits (#95 Phase 5 Q5).
 
@@ -267,6 +388,11 @@ class NoScenarioBacktester:
     (``bt.step / bt.replay / bt.bar / bt.portfolio / bt.submit_market / bt._close_open_bar``) —
     so a cell written for the real ``bt`` surfaces the guidance INSTEAD of a NameError.
     """
+
+    def __init__(self) -> None:
+        # bt.universe must exist on the placeholder too (a cell written for the real bt may call
+        # bt.universe.add before committing a scenario) — surface the same guidance, not AttributeError.
+        self.universe = _NoScenarioUniverse()
 
     @staticmethod
     def _raise(method: str) -> NoReturn:

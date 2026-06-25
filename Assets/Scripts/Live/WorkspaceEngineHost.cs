@@ -320,6 +320,56 @@ public sealed class WorkspaceEngineHost
         }
     }
 
+    // ===================== ADR-0031 S1 (#141): bt.universe.* registry bridge =====================
+    // MAIN-THREAD only (BackcastWorkspaceRoot.DriveUniverseBridge in Update): main is GIL-free after
+    // BeginAllowThreads, so each call acquires the GIL. DrainUniverseEdits pops the cell's pending
+    // bt.universe.* edit ops as a JSON array ("" / "[]" when none); PushUniverseIds writes the C#
+    // registry's current Ids back into the engine mirror so bt.universe.list() reads the SoT (D2).
+
+    // Drain pending bt.universe.* edits (JSON array of {"op","id"}). Returns "" when the server is
+    // not ready or on a seam error, which UniverseBridge.ParseEdits treats as "no edits".
+    public string DrainUniverseEdits()
+    {
+        if (!Volatile.Read(ref _serverReady)) return "";
+        try
+        {
+            using (Py.GIL())
+            using (PyObject res = _server.InvokeMethod("drain_universe_edits"))
+                return res.As<string>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] drain_universe_edits failed: " + e.Message);
+            return "";
+        }
+    }
+
+    // Push the registry's current Ids (JSON array of str) into the engine mirror for bt.universe.list().
+    // Returns true iff the push actually reached the engine — so the caller clears its dirty flag ONLY on
+    // a confirmed push (a no-op while !_serverReady must NOT latch the edit as pushed, or a seed made
+    // during the not-ready window would be lost forever).
+    public bool PushUniverseIds(string idsJson)
+    {
+        if (!Volatile.Read(ref _serverReady)) return false;
+        try
+        {
+            // Honor the server ack (mirrors CallUnsubscribeMarketData): a rejected push (BAD_JSON)
+            // returns false so the caller keeps its dirty flag set instead of latching the edit as
+            // pushed — the "clear dirty ONLY on a CONFIRMED push" invariant (findings 0113 §Review
+            // F2/F4/F5). Dispose the argument PyString too (no finalizer-thread reclamation).
+            using (Py.GIL())
+            using (var arg = new PyString(idsJson ?? "[]"))
+            using (PyObject res = _server.InvokeMethod("push_universe_ids", arg))
+            using (PyObject ok = res.GetItem("success"))
+                return ok.As<bool>();
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning("[WorkspaceEngineHost] push_universe_ids failed: " + e.Message);
+            return false;
+        }
+    }
+
     // #95 Phase 6 Slice 4 (findings 0075 P6-1): edit-time stale projection through the persistent
     // in-proc session (engine.inproc_server.notebook_restage -> IncrementalNotebookSession). NOTEBOOK-RUN
     // WORKER THREAD ONLY (NotebookRunLane): the IncrementalNotebookSession is thread-guarded to the

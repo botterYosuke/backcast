@@ -84,6 +84,18 @@ class DataEngine:
         # Phase 3: in-proc Rust event sink (set by inproc_python_worker via set_rust_event_sink)
         self._rust_event_sink = None
 
+        # ADR-0031 S1: the bidirectional `bt.universe.*` ↔ C# InstrumentRegistry bridge channels.
+        # Python is a CLIENT, not the SoT (D2): it pushes edit ops and reads back a registry mirror.
+        #   - write channel  (Python→C#): `_universe_edits` accumulates add/remove/clear ops on the
+        #     cell worker thread; the host main thread drains them (`drain_universe_edits`) and
+        #     applies each to the C# `InstrumentRegistry` (Changed → chart spawn/despawn is free).
+        #   - read channel   (C#→Python): the host pushes the registry's current Ids back
+        #     (`push_universe_ids`) whenever it changes; `bt.universe.list()` reads `universe_ids`.
+        # Both are guarded by `_lock` (enqueue runs on the worker thread; drain/push on the host
+        # main thread via the GIL). `universe_ids` starts empty until the host seeds it.
+        self._universe_edits: list[dict] = []
+        self.universe_ids: list[str] = []
+
         # Initialize the first visible state.
         if self._mode == "replay" and self._replay_provider:
             self._prime_provider_locked(self._replay_provider)
@@ -110,6 +122,35 @@ class DataEngine:
     def set_rust_event_sink(self, sink) -> None:
         """Phase 3: register in-proc Rust mpsc sender for live event delivery."""
         self._rust_event_sink = sink
+
+    # -- ADR-0031 S1: bt.universe.* ↔ C# InstrumentRegistry bridge ------------
+
+    def enqueue_universe_edit(self, op: str, instrument_id: str | None = None) -> None:
+        """Append a `bt.universe.*` edit op (``add`` / ``remove`` / ``clear``) for the host to
+        drain and apply to the C# ``InstrumentRegistry`` SoT (ADR-0031 D2 — "programmatic user
+        edit"). Called on the cell worker thread; thread-safe."""
+        with self._lock:
+            self._universe_edits.append({"op": op, "id": instrument_id or ""})
+
+    def drain_universe_edits(self) -> list[dict]:
+        """Pop and return all pending universe edits (host main-thread drain). Thread-safe; the
+        host is the SOLE consumer so a drained op is never lost (it is applied to the registry
+        immediately on the main thread)."""
+        with self._lock:
+            edits = self._universe_edits
+            self._universe_edits = []
+            return edits
+
+    def push_universe_ids(self, ids: list[str]) -> None:
+        """The host pushes the C# registry's current Ids back so ``bt.universe.list()`` reads the
+        SoT (ADR-0031 D2 — Python holds no own SoT). Thread-safe."""
+        with self._lock:
+            self.universe_ids = [str(i) for i in ids]
+
+    def get_universe_ids(self) -> list[str]:
+        """Read the registry mirror the host pushed (``bt.universe.list()`` source). Thread-safe."""
+        with self._lock:
+            return list(self.universe_ids)
 
     @property
     def is_running(self) -> bool:

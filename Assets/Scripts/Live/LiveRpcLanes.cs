@@ -254,6 +254,27 @@ public class LiveRpcLanes
         }
     }
 
+    // ADR-0031 S5 (#145): remove → venue unsubscribe. Blocking (closes the WS / re-registers the
+    // reduced set), so it rides the write lane like subscribe — serial against orders, same _coord
+    // book-keeping. server signature `unsubscribe_market_data(instrument_id)`; the engine drops the
+    // price/depth caches + reducer per-id state (orchestrator D20/A0).
+    public void SubmitUnsubscribeMarketData(string instrumentId,
+                                            Action<OrderRpcResult> onResult)
+        => EnqueueWrite(() => CallUnsubscribeMarketData(instrumentId), onResult);
+
+    OrderRpcResult CallUnsubscribeMarketData(string instrumentId)
+    {
+        using (Py.GIL())
+        using (var pi = new PyString(instrumentId))
+        using (PyObject res = _server.InvokeMethod("unsubscribe_market_data", pi))
+        {
+            var r = new OrderRpcResult { Status = "", OrderId = "" };
+            using (PyObject ok = res.GetItem("success")) r.Success = ok.As<bool>();
+            using (PyObject ec = res.GetItem("error_code")) r.ErrorCode = ec.As<string>() ?? "";
+            return r;
+        }
+    }
+
     OrderRpcResult CallModify(string venue, string orderId, double? newQty, double? newPrice)
     {
         using (Py.GIL())

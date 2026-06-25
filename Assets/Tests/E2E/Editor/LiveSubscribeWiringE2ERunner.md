@@ -37,10 +37,21 @@ seam）・本番呼出元ゼロ（唯一の caller が E2E ランナー自身＝
 | SUBWIRE-06 | 立花 demo で本番トリガ経由の板取得 | `TachibanaLiveE2ERunner` | universe 投入→突入/選択購読で実 demo FD 板 | 実 demo 資格情報・場中が必要 | HITL専用（実 venue・場中） | `TachibanaLiveE2ERunner` |
 | SUBWIRE-07 | kabu demo で本番トリガ経由の板取得 | `KabuLiveE2ERunner` | universe 投入→突入/選択購読で実 demo PUSH 板 | 実 demo（検証 18081）・本体起動が必要 | HITL専用（実 venue・本体） | `KabuLiveE2ERunner` |
 
+> **⚠️ ADR-0031 D6 supersession（#144・findings 0115 §S4）**: 本台帳の「**deliberately no universe-Changed
+> auto-subscribe**（hook を load-bearing に保ち AC#6 delete-to-RED litmus を成立させる）」決定は **ADR-0031 D6 が
+> supersede した**。`InstrumentRegistry.Changed → LiveSubscriptionCoordinator.OnUniverseChanged` 配線が追加され、
+> registry に銘柄が足されたら（UI [+ Add] でも Python `bt.universe.add` でも）Changed 起動で購読する。帰結:
+> SUBWIRE-02/03 の `universe.Add`/`AddFromPicker` は今や Changed 経由でも購読されるため、**下の「LiveSubscribeHook
+> 代入を消す → RED」litmus は [+ Add] 経路には当たらない**（row-select 経路のみ hook に残る）。Changed-driven 購読の
+> 正本ゲートは [UniverseSubscribeE2ERunner](./UniverseSubscribeE2ERunner.md)（UNISUB-01/07）。本 runner 自体は
+> additive・dedup で無害につき GREEN 維持。
+
 ## litmus（delete-the-production-logic）
 
 - `LiveSubscriptionCoordinator.BulkSubscribeUniverse` の本体を消す → **SUBWIRE-01 RED**（突入で誰も購読しない）。
-- `BackcastWorkspaceRoot` の `_sidebarCtrl.LiveSubscribeHook = _subCoord.OnLiveRowSelected` 代入を消す → **SUBWIRE-02/03 RED**。
+- `BackcastWorkspaceRoot` の `_sidebarCtrl.LiveSubscribeHook = _subCoord.OnLiveRowSelected` 代入を消す → **SUBWIRE-02/03**:
+  ADR-0031 D6 以降は Changed-driven 購読が [+ Add] を拾うため hook 削除では RED にならない（row-select 経路のみ依存）。
+  Changed 配線の litmus は UniverseSubscribeE2ERunner UNISUB-07 を参照。
 - `mock_adapter.inject_tick` の subscribe gating を外す → **SUBWIRE-04 RED**（未購読でも板が出て assertion が vacuous 化）。
 
 ## 実行

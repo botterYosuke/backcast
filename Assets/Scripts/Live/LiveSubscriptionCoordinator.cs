@@ -11,15 +11,18 @@
 // Controller.LiveSubscribeHook was the #31 DEFERRED seam, never assigned, and the only caller of the
 // RPC was the E2E runner itself. This coordinator is the production trigger.
 //
-// Two independent, load-bearing triggers (Live mode only; Replay is a no-op — the engine
-// precondition-rejects subscribe there):
+// Three triggers (Live mode only; Replay is a no-op — the engine precondition-rejects subscribe there):
 //   (1) rising edge into a Live mode  → bulk-subscribe the WHOLE universe at entry (LiveManual 突入
 //       / universe 復元-before-entry / AC#1, AC#5). One batch RPC (engine gathers sequentially).
-//   (2) LiveSubscribeHook            → subscribe ONE instrument on row-select OR [+ Add] (AC#2). This
-//       is the per-instrument trigger for ids added after entry; it is NOT made redundant by (1)
-//       because (1) only fires on the entry edge, not on later adds (there is deliberately no
-//       universe-Changed auto-subscribe — that would make this hook redundant and break the AC#6
-//       delete-to-RED litmus).
+//   (2) OnUniverseChanged (ADR-0031 S4/S5, wired to InstrumentRegistry.Changed) → membership change
+//       drives subscription symmetrically: a fresh add (UI [+ Add] OR a strategy cell's bt.universe.add)
+//       → subscribe; a remove/clear → unsubscribe. This SUPERSEDES ADR-0022's "deliberately no
+//       universe-Changed auto-subscribe" stance (which had kept the per-edit hook load-bearing for the
+//       AC#6 litmus).
+//   (3) LiveSubscribeHook            → subscribe ONE instrument on row-select OR [+ Add] (AC#2). Since
+//       D6, the [+ Add] subscribe is REDUNDANT with (2) (deduped, harmless); the hook remains load-
+//       bearing only for row-SELECT (focus on an existing member — not a membership change, so (2)
+//       does not fire).
 //
 // INVARIANT (ADR-0022 D3 — membership 不可侵): this NEVER writes the universe. It only READS
 // InstrumentRegistry.Ids and subscribes. Subscription is subordinate to membership; the system never
@@ -35,6 +38,7 @@ public interface ISubscribeSink
 {
     void Subscribe(string instrumentId);                          // single (row select / one add)
     void SubscribeBatch(IReadOnlyList<string> instrumentIds);     // bulk (entry / restore)
+    void Unsubscribe(string instrumentId);                        // ADR-0031 S5: remove / clear (add↔remove symmetry)
 }
 
 public sealed class LiveSubscriptionCoordinator
@@ -75,6 +79,32 @@ public sealed class LiveSubscriptionCoordinator
         _lastMode = mode;
         if (nowLive && !wasLive) BulkSubscribeUniverse();          // rising edge → bulk subscribe
         else if (!nowLive && wasLive) _subscribed.Clear();         // falling edge → reset dedup
+    }
+
+    // ADR-0031 S4 (#144): membership change → subscription follows. Wired to InstrumentRegistry.Changed
+    // so that WHOEVER adds an instrument — a UI [+ Add] OR a strategy cell's bt.universe.add(X) — gets the
+    // new id subscribed while in a Live mode. This SUPERSEDES ADR-0022's "deliberately no universe-Changed
+    // auto-subscribe": D6 makes the subscribe follow membership symmetrically (add→subscribe; remove→
+    // unsubscribe is S5). In Replay this is a no-op (the engine precondition-rejects subscribe; bt.universe
+    // adds join the replay stream instead — S2). Subscription stays SUBORDINATE to membership (ADR-0022 D3):
+    // this only READS Ids and subscribes; a subscribe failure surfaces a typed error and NEVER touches the
+    // registry. Idempotent via _subscribed (a re-fire / an id already covered by the entry bulk is a no-op),
+    // so the redundant per-edit LiveSubscribeHook ([+ Add]) double-fire is harmless.
+    public void OnUniverseChanged()
+    {
+        if (!IsLive(_lastMode)) return;   // Replay: subscribe is precondition-rejected; data join is S2
+        // ADR-0031 S5 (#145): unsubscribe ids that LEFT the universe (in _subscribed but gone from Ids) —
+        // a remove or clear stops their venue feed (add↔remove symmetry). Drop them from the dedup mirror
+        // so a later re-add re-subscribes. Done BEFORE the subscribe pass so a swap (remove X + add Y in
+        // one edit) both unsubscribes X and subscribes Y.
+        var current = new HashSet<string>(_universe.Ids);
+        List<string> gone = null;
+        foreach (string id in _subscribed)
+            if (!current.Contains(id)) (gone ??= new List<string>()).Add(id);
+        if (gone != null)
+            foreach (string id in gone) { _subscribed.Remove(id); _sink.Unsubscribe(id); }
+        // S4: subscribe only the FRESH ids (in Ids but not yet in _subscribed).
+        BulkSubscribeUniverse();
     }
 
     void BulkSubscribeUniverse()

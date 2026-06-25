@@ -179,8 +179,12 @@ class LiveLoopManager:
         # oracle / #24 golden / pytest の **直接** caller 用に存続する（Rust core も marimo guard も
         # 通らない）。marimo loader も Rust core を一切 import しない（#25 の import-purity 不変条件を保つ）。
         from engine.strategy_runtime.live_cell_runtime import build_live_marimo_loader
+        from engine.strategy_runtime.universe_bridge import EngineUniverseBridge
 
-        _kernel_loader = build_live_marimo_loader()
+        # ADR-0031 S4/S5 (#144/#145): thread the universe bridge into every LiveCellBridge so a
+        # LiveAuto strategy cell's bt.universe.* edits the shared C# InstrumentRegistry (add→subscribe
+        # / remove→unsubscribe via Changed). Same DataEngine the orchestrator drives.
+        _kernel_loader = build_live_marimo_loader(universe_bridge=EngineUniverseBridge(self._engine))
 
         self._run_registry: RunRegistry = RunRegistry()
         self._strategy_registry: StrategyRegistry = StrategyRegistry(loader=_kernel_loader)

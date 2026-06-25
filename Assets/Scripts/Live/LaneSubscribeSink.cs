@@ -37,6 +37,16 @@ public sealed class LaneSubscribeSink : ISubscribeSink
         lanes.SubmitSubscribeMarketDataBatch(instrumentIds, OnResult);
     }
 
+    // ADR-0031 S5 (#145): remove → venue unsubscribe (add↔remove symmetry). Fire-and-forget like
+    // Subscribe; an UNSUBSCRIBE_FAILED is logged but never touches membership (ADR-0022 D3 — the
+    // registry owns membership, not the venue).
+    public void Unsubscribe(string instrumentId)
+    {
+        var lanes = _host != null ? _host.Lanes : null;
+        if (lanes == null) return;
+        lanes.SubmitUnsubscribeMarketData(instrumentId, OnResult);
+    }
+
     static void OnResult(OrderRpcResult r)
     {
         if (!r.Success && !string.IsNullOrEmpty(r.ErrorCode))

@@ -175,11 +175,16 @@ class LiveCellBridge:
         *,
         cell_runner: Callable[[Backtester], None],
         strategy_id: str = "",
+        universe_bridge=None,
     ) -> None:
         self._cell_runner = cell_runner
         self.id = strategy_id  # controller overwrites with nautilus_strategy_id after construction
         self._backend = LiveCellBackend(self)
-        self._bt = Backtester(self._backend)  # bar_source = execution_seam = the live backend
+        # ADR-0031 S4/S5 (#144/#145): wire bt.universe.* so a LiveAuto cell can edit the registry
+        # (add→subscribe / remove→unsubscribe via InstrumentRegistry.Changed). LiveCellBackend has no
+        # mid-stream data join (venue feeds the data — S2 is Replay-only), so bar_source exposes no
+        # join_instrument; the handle duck-types that away. None → fail-closed (pytest / no engine).
+        self._bt = Backtester(self._backend, universe_bridge=universe_bridge)  # bar_source = exec = live backend
 
         # Rendezvous primitives. ``_bar_q`` (thread-safe) carries bars live-loop → worker.
         # ``_completion`` (a loop-bound future) + ``_complete_bar`` carry "bar done + intents"

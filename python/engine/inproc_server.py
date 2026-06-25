@@ -276,6 +276,35 @@ class InprocLiveServer:
             return {"success": True, "error_code": "", "error_message": ""}
         return {"success": False, "error_code": "TEARDOWN_FAILED", "error_message": err or ""}
 
+    # ------------------------------------------------------------------
+    # Universe bridge — ADR-0031 S1 (bt.universe.* ↔ C# InstrumentRegistry)
+    # ------------------------------------------------------------------
+    #
+    # Direct on the DataEngine (like force_stop_replay): the bridge channels live on the engine
+    # the cell's bt edits, and the C# host owns the registry SoT. The host drains pending edits
+    # every frame on its main thread and applies them to InstrumentRegistry; it pushes the
+    # registry's Ids back so bt.universe.list() reads the SoT (Python keeps no own SoT — D2).
+
+    def drain_universe_edits(self) -> str:
+        """Return pending `bt.universe.*` edits as a JSON array of ``{"op","id"}`` and clear them.
+        The host (main thread) applies each to the registry. JSON keeps the PyO3 boundary to a
+        single string (mirrors get_portfolio_json)."""
+        import json
+        return json.dumps(self._engine.drain_universe_edits(), ensure_ascii=False)
+
+    def push_universe_ids(self, ids_json: str) -> dict:
+        """The host pushes the registry's current Ids (JSON array of str) into the engine mirror
+        so ``bt.universe.list()`` reads the SoT (D2)."""
+        import json
+        try:
+            ids = json.loads(ids_json) if ids_json else []
+        except (ValueError, TypeError):
+            return {"success": False, "error_code": "BAD_JSON"}
+        if not isinstance(ids, list):
+            return {"success": False, "error_code": "BAD_JSON"}
+        self._engine.push_universe_ids(ids)  # DataEngine.push_universe_ids coerces each to str
+        return {"success": True, "error_code": ""}
+
     def close(self) -> None:
         """Tear down the underlying live server (loop/runner/account-sync).
 

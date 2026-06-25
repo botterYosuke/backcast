@@ -249,6 +249,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     readonly OnceGate _teardownGate = new OnceGate();
     string _lastPayload;
     bool _errLogged;
+    // ADR-0031 S1 (#141): the registry mirror (bt.universe.list() source) needs re-pushing to the engine.
+    // Set true by InstrumentRegistry.Changed (UI edits AND drained Python edits both fire it) and once at
+    // boot to self-seed; cleared ONLY after a CONFIRMED push (PushUniverseIds returned true). This avoids
+    // rebuilding/serializing the Ids every frame (only when actually dirty) AND fixes the latch where a
+    // push attempted while the server is not yet ready would otherwise mark the seed as done and lose it.
+    bool _universeMirrorDirty = true;
 
     // ── #39: footer mode segment (Replay/Manual/Auto), wired to the host live seam. #76 S6b-β-clean U4:
     // the LiveAuto ▶ start is retired from the footer (Live start re-wiring is a separate epic); the
@@ -471,6 +477,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // InstrumentRegistry.Changed drives spawn/close. Replaces the #60 Hakoniwa chart tile family.
         SyncChartWindowsToUniverse();
         _scenario.Universe.Changed += SyncChartWindowsToUniverse;   // keep chart windows == universe
+        _scenario.Universe.Changed += MarkUniverseMirrorDirty;      // ADR-0031 S1: re-push bt.universe.list() mirror on any edit
         _scenario.Committed += RequestChartPreviewsForAllLiveCharts; // #129 (findings 0104 F1): params-only Commit reseeds preview
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
@@ -714,14 +721,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         // #107 (ADR-0022): the production trigger for live market-data subscription. Two triggers:
         // (1) bulk-subscribe the whole universe on a Live-mode rising edge (LiveManual 突入), fed by
-        // OnModePoll in DriveFooter; (2) the #31 DEFERRED LiveSubscribeHook, fired by the sidebar on a
-        // Live row-select AND [+ Add] (per-instrument). There is deliberately NO universe-Changed
-        // auto-subscribe — that would make the hook redundant and break the AC#6 delete-to-RED litmus.
-        // Reads the SAME _scenario.Universe SoT and NEVER writes it (membership 不可侵 / D3). The egress is
-        // the real LiveRpcLanes write lane via LaneSubscribeSink (host.Lanes resolved lazily — built by
-        // InitializePython, always ready before the first Live edge).
+        // OnModePoll in DriveFooter; (2) the #31 LiveSubscribeHook, fired by the sidebar on a Live
+        // row-select (per-instrument focus); (3) ADR-0031 S4 (#144): universe-Changed → subscribe the
+        // FRESH ids, so a strategy cell's bt.universe.add(X) OR a UI [+ Add] subscribes the new id
+        // (D6 SUPERSEDES ADR-0022's "deliberately no universe-Changed auto-subscribe" — membership
+        // change now drives subscription symmetrically). The hook's [+ Add] subscribe becomes redundant
+        // (deduped) but is kept for the row-select focus path. Reads the SAME _scenario.Universe SoT and
+        // NEVER writes it (membership 不可侵 / D3). Egress is the real LiveRpcLanes write lane via
+        // LaneSubscribeSink (host.Lanes resolved lazily — built by InitializePython, ready before the
+        // first Live edge).
         _subCoord = new LiveSubscriptionCoordinator(new LaneSubscribeSink(_host), _scenario.Universe);
         _sidebarCtrl.LiveSubscribeHook = _subCoord.OnLiveRowSelected;
+        _scenario.Universe.Changed += _subCoord.OnUniverseChanged;   // S4: add→subscribe / S5: remove→unsubscribe
     }
 
     // #104 Slice G (findings 0082 §8): create a per-plane ghost overlay container as a child of the
@@ -1324,6 +1335,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #39/#23: drain live push events into the Panel (footer run lifecycle authority); a NEW
         // SecretRequired opens the secret modal (#23 re-home). Then refresh the live tiles + Order
         // ticket from the Panel, and drive the mode footer.
+        DriveUniverseBridge();  // ADR-0031 S1: drain bt.universe.* edits → registry SoT (chart 反映はタダ); push mirror back
+
         bool newSecret = _host.DrainLiveEvents();
         DriveSecretModal(newSecret);
         RefreshLiveTiles();
@@ -1379,6 +1392,56 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (string.IsNullOrEmpty(iid)) return specTitle;    // malformed id — let the fallback render so we can see it
         string name = _provider.TryGetName(iid, out var n) ? n : null;
         return InstrumentLabel.Compose(iid, name);
+    }
+
+    // ADR-0031 S1 (#141): the bt.universe.* ↔ InstrumentRegistry bridge tick (main thread).
+    //   write: drain the cell's pending bt.universe.* edits and apply them to the registry SoT —
+    //          InstrumentRegistry.Changed fires, so SyncChartWindowsToUniverse spawns/despawns chart
+    //          windows for free (ADR-0031 D2 — chart 反映はタダ); LiveAuto subscribe/unsubscribe also
+    //          rides the same Changed cascade (S4/S5).
+    //   read : push the registry's current Ids back into the engine mirror so bt.universe.list() reads
+    //          the SoT (D2 — Python keeps no own SoT). Coalesced — only when the Ids changed since the
+    //          last push, so UI edits AND Python edits both reach the mirror without per-frame Python
+    //          churn, and the first frame self-seeds the mirror (list() works before any edit).
+    // The host wrappers self-guard on _serverReady (return ""/no-op until the in-proc server is up), so
+    // this is safe to call every frame and in the edit-mode AFK probe (host present but not initialized).
+    void DriveUniverseBridge()
+    {
+        if (_host == null) return;
+
+        // write channel — apply Python-enqueued edits to the registry. Any that change the set fire
+        // InstrumentRegistry.Changed → MarkUniverseMirrorDirty (so the push below picks them up).
+        UniverseBridge.ApplyJson(_host.DrainUniverseEdits(), _scenario.Universe);
+
+        // read channel — re-push the mirror ONLY when the registry changed (dirty), and clear the flag
+        // ONLY on a confirmed push so a not-ready-server no-op doesn't drop the seed.
+        if (_universeMirrorDirty && _host.PushUniverseIds(UniverseIdsToJson(_scenario.Universe.Ids)))
+            _universeMirrorDirty = false;
+    }
+
+    // InstrumentRegistry.Changed handler: any edit (UI or drained Python) means the engine mirror is
+    // stale and bt.universe.list() must be re-seeded on the next DriveUniverseBridge tick.
+    void MarkUniverseMirrorDirty() => _universeMirrorDirty = true;
+
+    // Serialize the registry Ids as a JSON array of strings for push_universe_ids. Ids are canonical
+    // (`<code>.<venue>`), but escape "/\ defensively so a malformed id can never break the JSON.
+    static string UniverseIdsToJson(IReadOnlyList<string> ids)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.Append('[');
+        for (int i = 0; i < ids.Count; i++)
+        {
+            if (i > 0) sb.Append(',');
+            sb.Append('"');
+            foreach (char c in ids[i] ?? "")
+            {
+                if (c == '"' || c == '\\') sb.Append('\\');
+                sb.Append(c);
+            }
+            sb.Append('"');
+        }
+        sb.Append(']');
+        return sb.ToString();
     }
 
     // #41 instruments universe prune: assemble the gate inputs fresh from the current mode + prune
@@ -2382,6 +2445,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         bool pyOk = _coordinator.Save();
         bool layoutOk = TryWriteLayout(_currentLayoutPath);
         if (!pyOk || !layoutOk) { _menuBarView?.ShowMessage("Save failed (see log)."); return; }
+        // ADR-0031 S3 (#143): bt.universe.* edits do NOT persist here. File→Save writes the .py + layout
+        // key only (the historical universe-untouched invariant — JOURNEY-LAYOUT-07). A bt.universe edit
+        // marks the registry dirty (DriveUniverseBridge applies it, never writes a sidecar — D4); it falls
+        // to disk on the EXISTING full-registry Save paths (Run-commit / Save As → Commit →
+        // SetStartupParamsAndInstruments(Universe.Ids)), exactly like a startup-tile text edit. No new
+        // trigger is added here ("独自トリガを引かない"). findings 0113 §S3.
         ReseedFromEditor();
         _menuBarView?.ShowMessage("Saved " + Path.GetFileName(_currentLayoutPath));
     }
@@ -2841,6 +2910,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartWindowsToUniverse;   // #99 chart-window sync unsubscribe (no orphan handler)
+        _scenario.Universe.Changed -= MarkUniverseMirrorDirty;      // ADR-0031 S1 mirror-dirty unsubscribe (no orphan handler)
+        if (_subCoord != null) _scenario.Universe.Changed -= _subCoord.OnUniverseChanged; // ADR-0031 S4 subscribe unsubscribe (no orphan handler)
         _scenario.Committed -= RequestChartPreviewsForAllLiveCharts; // #129 chart preview reseed unsubscribe
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe

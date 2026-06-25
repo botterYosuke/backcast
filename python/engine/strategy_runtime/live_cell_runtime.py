@@ -114,20 +114,27 @@ def _make_cell_runner(app: Any, original_path: Path) -> Callable[[Any], None]:
     return cell_runner
 
 
-def _make_bridge_factory(app: Any, original_path: Path) -> Callable[..., LiveCellBridge]:
+def _make_bridge_factory(app: Any, original_path: Path, universe_bridge: Any = None) -> Callable[..., LiveCellBridge]:
     def bridge_factory(*, instrument_id: str = "", **_params: Any) -> LiveCellBridge:
         # controller.attach calls strategy_cls(instrument_id=..., **params) then sets .id; the cell
         # gets its instruments/params from the cell body + scenario, so extra kwargs are ignored.
-        return LiveCellBridge(cell_runner=_make_cell_runner(app, original_path))
+        # ADR-0031 S4/S5: pass the universe bridge so a LiveAuto cell's bt.universe.* edits the registry.
+        return LiveCellBridge(
+            cell_runner=_make_cell_runner(app, original_path), universe_bridge=universe_bridge
+        )
 
     bridge_factory.__name__ = "LiveCellBridgeFactory"
     return bridge_factory
 
 
-def build_live_marimo_loader() -> Callable[..., tuple]:
+def build_live_marimo_loader(universe_bridge: Any = None) -> Callable[..., tuple]:
     """Return the editor live loader: ``(path, *, original_path=None, base_cls=None) ->
     (app, scenario, bridge_factory)``. Non-marimo (``load_app`` → None) raises
-    ``NOT_A_MARIMO_NOTEBOOK``; broken syntax propagates as ``SyntaxError`` (D4)."""
+    ``NOT_A_MARIMO_NOTEBOOK``; broken syntax propagates as ``SyntaxError`` (D4).
+
+    ``universe_bridge`` (ADR-0031 S4/S5) is threaded into every ``LiveCellBridge`` the factory
+    builds, so a LiveAuto strategy cell's ``bt.universe.*`` edits the shared C# registry (the
+    orchestrator passes ``EngineUniverseBridge(engine)``)."""
 
     def load_live(
         path: "str | Path",
@@ -172,6 +179,6 @@ def build_live_marimo_loader() -> Callable[..., tuple]:
 
         scenario = load_scenario(p)
         anchor = original_path if original_path is not None else p
-        return app, scenario, _make_bridge_factory(app, anchor)
+        return app, scenario, _make_bridge_factory(app, anchor, universe_bridge)
 
     return load_live

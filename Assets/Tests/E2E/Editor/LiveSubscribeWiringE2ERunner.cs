@@ -15,7 +15,11 @@
 //
 // LITMUS (delete-the-production-logic, AC#6):
 //   * delete BulkSubscribeUniverse (rising-edge bulk)        → Section1 RED (entry universe never renders).
-//   * delete the LiveSubscribeHook 代入 in BackcastWorkspaceRoot → Section2 RED (post-entry add never renders).
+//   * delete the LiveSubscribeHook 代入 in BackcastWorkspaceRoot → ⚠️ ADR-0031 D6 (#144) SUPERSEDED this:
+//     Section2's universe.Add / AddFromPicker now ALSO subscribe via InstrumentRegistry.Changed →
+//     OnUniverseChanged, so deleting the hook no longer turns Section2 RED for the [+ Add] path (only the
+//     row-SELECT-of-existing-member path still depends on the hook). The delete-to-RED gate for the new
+//     Changed wiring is UniverseSubscribeE2ERunner UNISUB-07. See LiveSubscribeWiringE2ERunner.md.
 //   * the mock adapter's emit is SUBSCRIBE-GATED, so a NON-subscribed id never renders (Section3 negative
 //     control proves the depth assertion is non-vacuous).
 //
@@ -125,8 +129,8 @@ public static class LiveSubscribeWiringE2ERunner
             // ── Section 2 (AC#2): per-instrument subscribe via LiveSubscribeHook (row-select AND [+ Add]) ──
             // Both ids are added to membership AFTER the bulk edge, so bulk did NOT cover them — only the hook can.
             const string C = "6758.TSE", D = "4063.TSE";
-            universe.Add(C);                                  // membership add (no auto-subscribe — Changed has no handler)
-            sidebar.SelectRow(C, UniverseSourceMode.Live);    // row-select → LiveSubscribeHook → subscribe C
+            universe.Add(C);                                  // ADR-0031 D6: membership add now ALSO subscribes via Changed→OnUniverseChanged
+            sidebar.SelectRow(C, UniverseSourceMode.Live);    // row-select → LiveSubscribeHook → subscribe C (redundant since D6, deduped)
             if (!EmitAndWaitDepth(C, 12000)) return "Section2: row-selected " + C + " board did not render (LiveSubscribeHook not wired?)";
 
             sidebar.AddFromPicker(D, UniverseSourceMode.Live, new StubSp(), s_ts);  // [+ Add] → LiveSubscribeHook → subscribe D

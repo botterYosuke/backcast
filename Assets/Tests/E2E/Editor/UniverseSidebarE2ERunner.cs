@@ -838,20 +838,26 @@ public static class UniverseSidebarE2ERunner
     // RED→GREEN litmus: revert the MapError split (map LiveUniverseUnsupported back to NotConnected) →
     // the Unsupported assert FAILs; the two-code pairing keeps it non-vacuous (a single always-NotConnected
     // or always-Unsupported map fails one leg).
-    // Covers: SIDEBAR-09 (供給ステータス別 placeholder — 接続済み非列挙 venue は未接続と別ラベル)
+    // Covers: SIDEBAR-20 (kabu ログイン済みでも picker が「未接続」と矛盾表示しない — error-code→status map の区別)
     static string Section16_UnsupportedDistinctFromNotConnected()
     {
         // not-logged-in → NotConnected → "Venue not connected" (unchanged, correct).
-        var notConn = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveVenueNotLoggedIn, out _);
+        var notConn = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveVenueNotLoggedIn, out bool notConnTransient);
         if (notConn.Kind != UniverseStatusKind.NotConnected)
             return $"LIVE_VENUE_NOT_LOGGED_IN mapped to {notConn.Kind}, expected NotConnected";
 
         // logged-in-but-unenumerable → Unsupported (NOT NotConnected) → distinct picker message.
-        var unsup = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveUniverseUnsupported, out _);
+        var unsup = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveUniverseUnsupported, out bool unsupTransient);
         if (unsup.Kind == UniverseStatusKind.NotConnected)
             return "LIVE_UNIVERSE_UNSUPPORTED still collapses into NotConnected — the 'Connected: KABU' vs 'Venue not connected' bug is back (findings 0103)";
         if (unsup.Kind != UniverseStatusKind.Unsupported)
             return $"LIVE_UNIVERSE_UNSUPPORTED mapped to {unsup.Kind}, expected Unsupported";
+
+        // Both are TERMINAL (non-transient): the unsupported universe is a stable venue capability, not a
+        // warmup glitch, so the cache must STICK. If Unsupported were transient the picker would re-spawn a
+        // background fetch every ~500ms (TRANSIENT_RETRY_COOLDOWN_MS) while open — churn with no recovery.
+        if (notConnTransient) return "LIVE_VENUE_NOT_LOGGED_IN marked transient (should be terminal/cached)";
+        if (unsupTransient) return "LIVE_UNIVERSE_UNSUPPORTED marked transient — picker would re-fetch every ~500ms";
 
         // and the two genuinely render DIFFERENT placeholder text in the picker.
         string LabelFor(AvailableInstrumentsResult res)

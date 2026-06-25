@@ -2,7 +2,9 @@
 //
 // The picker's candidate-supply seam. Ports the SHAPE of TTWR's UniverseStatus
 // (instrument_picker.rs: ReplayEndUnset / ReplayLoading / ReplayError /
-// LiveVenueNotConnected / LiveLoading / LiveError / Ready{ids} / empty) so the picker UI can
+// LiveVenueNotConnected / LiveLoading / LiveError / Ready{ids} / empty) — plus backcast's
+// `Unsupported` (logged-in venue with no instrument master, kabu MVP) which TTWR lacks; it
+// distinguishes that case from NotConnected/not-logged-in (findings 0103) so the picker UI can
 // render every placeholder NOW (ADR-0005 surface parity). The SEMANTICS (when each status is
 // returned from a REAL source — DuckDB listed_info for Replay, venue fetch_instruments for
 // Live) are a SEPARATE issue; #31 ships a mock that returns Ready/Empty, and the probe

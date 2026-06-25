@@ -15,11 +15,15 @@ Root cause (two halves):
     ``Unsupported`` status with the message "Venue has no instrument list" (findings 0103).
 
 delete-the-production-logic litmus:
-  - flip kabu's ``enumerates_instruments`` to True → the UNSUPPORTED test fails (it would fall through
-    to the store/fetch path instead of the typed short-circuit).
-  - drop the ``is_logged_in()`` guard in ``_list_instruments_live`` → the not-logged-in test fails
-    (it would no longer return LIVE_VENUE_NOT_LOGGED_IN). The two assertions together prove the codes
-    are genuinely distinct (non-vacuous).
+  - flip the REAL ``KabuStationAdapter.enumerates_instruments`` to True → ``test_kabu_adapter_declares_
+    no_instrument_enumeration`` fails (the root-cause fact is gone).
+  - delete the ``enumerates_instruments`` short-circuit in ``_list_instruments_live`` → the logged-in
+    kabu test falls through to the fetch path → "fetch_instruments failed: ..." ≠ LIVE_UNIVERSE_UNSUPPORTED → fails.
+  - the login guard ``if runner is None or not runner.is_logged_in()`` has BOTH halves pinned: the
+    ``runner is None`` half by ``test_no_session_returns_not_logged_in`` and the
+    ``not runner.is_logged_in()`` half by ``test_logged_out_runner_returns_not_logged_in`` — dropping
+    either disjunct flips one test RED. The UNSUPPORTED-vs-NOT_LOGGED_IN pairing proves the codes are
+    genuinely distinct (non-vacuous).
 """
 from __future__ import annotations
 
@@ -42,11 +46,12 @@ class _FakeAdapter:
 
 
 class _FakeRunner:
-    def __init__(self, adapter: _FakeAdapter):
+    def __init__(self, adapter: _FakeAdapter, logged_in: bool = True):
         self._adapter = adapter
+        self._logged_in = logged_in
 
     def is_logged_in(self) -> bool:
-        return True
+        return self._logged_in
 
     @property
     def adapter(self) -> _FakeAdapter:
@@ -100,6 +105,18 @@ def test_no_session_returns_not_logged_in():
     """The genuinely-disconnected case stays distinct: no live session → LIVE_VENUE_NOT_LOGGED_IN.
     Pairing this with the test above proves the two states are NOT collapsed (non-vacuous)."""
     res = _backend_with_session(None).list_instruments("live", "")
+    assert res.success is False
+    assert res.error_message == "LIVE_VENUE_NOT_LOGGED_IN"
+
+
+def test_logged_out_runner_returns_not_logged_in():
+    """The OTHER half of the login guard: a session whose runner reports is_logged_in()==False (e.g.
+    venue dropped the session) → LIVE_VENUE_NOT_LOGGED_IN, never reaching the enumerates_instruments
+    check. Pairs with test_no_session (which covers the `runner is None` disjunct) so BOTH halves of
+    `if runner is None or not runner.is_logged_in()` are pinned — dropping either fails one test."""
+    adapter = _FakeAdapter("KABU", enumerates=False)
+    session = _FakeSession(_FakeRunner(adapter, logged_in=False))
+    res = _backend_with_session(session).list_instruments("live", "")
     assert res.success is False
     assert res.error_message == "LIVE_VENUE_NOT_LOGGED_IN"
 

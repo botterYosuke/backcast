@@ -333,7 +333,7 @@ infinite canvas の Content 上で、**独立した floating window**（`chart` 
 ~~ADR-0019 の中間定義「core 含み group は Hakoniwa group として全体 translate 禁止 / 内部 swap・core は detach 不可」~~——ADR-0024 で「全 group 同一挙動・cursor 位置で動的 mode 判定」へ再反転（owner の "puzzle game プルン" 体感要件）。
 ~~ADR-0024 の「cursor 位置で per-frame 3 mode 判定・detach は距離 256px トリガ」~~——ADR-0029 で「**gesture-channel で gesture 開始時に mode 固定**・距離トリガ撤廃・detach はドロップ先の結果」へ反転（owner「すぐ detach する／島の遠距離移動不可／内外で化けて分かりにくい」）。
 _Avoid_: 「Hakoniwa = 固有の GameObject/bounded box」と捉えること（クラスタの概念ラベル・実体は floating window 群）／
-**global** タイリング強制・resize 連動を持ち込むこと（free-placement・**例外は swap 時の島内局所 reflow のみ**＝[[ADR-0029]] D6）／drag mode を cursor 位置の per-frame 判定で持つこと（ADR-0029 で **gesture-channel 固定**へ・距離トリガは退役）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）／「結合なし・各 window 独立」を不変条件と扱うこと（ADR-0019 で反転＝group 関係を `groupId` で持つ・ADR-0024 でも維持）／startup / run_result を core として特別扱いすること（ADR-0024 で Hakoniwa special 廃止＝全 window 同等）
+**global** タイリング強制を持ち込むこと（free-placement・**島内局所 reflow の例外は 2 つだけ**＝swap 時＝[[ADR-0029]] D6、および **resize 時の島内 flush 追従押し出し**＝[[ADR-0030]]・どちらも island scope 厳守で global 化しない）／drag mode を cursor 位置の per-frame 判定で持つこと（ADR-0029 で **gesture-channel 固定**へ・距離トリガは退役）／chart を「Hakoniwa tile」と呼ぶこと（**chart は floating window**＝旧 Avoid 反転・ADR-0017）／「結合なし・各 window 独立」を不変条件と扱うこと（ADR-0019 で反転＝group 関係を `groupId` で持つ・ADR-0024 でも維持）／startup / run_result を core として特別扱いすること（ADR-0024 で Hakoniwa special 廃止＝全 window 同等）
 
 **window group / groupId** ※2026-06-21 新設・2026-06-22 drag mode 更新・**2026-06-25 gesture-channel 化**・方針 [[ADR-0019]]＋[[ADR-0024]]＋**[[ADR-0029]]**（findings 0082／0088／**0106**）:
 floating window の **永続的な集合関係**。`FloatingWindowLayout.groupId: string?`（nullable・GUID `grp_<hex32>`）に保存され、同一 `groupId` を共有する **visible/live 集合が 2 個以上** のとき "group"（≒ "island"）とみなす（singleton は group 不成立）。group の attach は **flush 隣接判定**（`|dragged.edge - other.opposite_edge| ≤ 1px` ∧ 直交軸 overlap > 0）が release commit 後にトリガ＝ADR-0024 では **release-position rule**（cursor が別 island と overlap なら最寄り flush へ snap → merge）＋ **in-drag 磁石吸着**（[[R_SNAP]] = 96px で flush 位置へ実描画 snap）が attach 経路。drag 中の挙動は **[[gesture channel]] で gesture 開始時に固定**（[[ADR-0029]]・~~ADR-0024 の cursor 位置 per-frame 3 mode 判定を supersede~~・drag 中は化けない）: **①島移動**（plain title-bar drag）= island 全体を実描画で平行移動・**距離無制限**・magnetic snap・別島に flush で release すれば merge・swap も detach も起こさない／**②単窓ピックアップ**（[[eject つまみ]] or Alt+drag）= 島から 1 枚抜き出して運び**ドロップ先で決定**: 兄弟 rect 上 → **swap**（[[swap drop target]]・サイズ維持＋島内局所 reflow）／別島に flush → **merge**（singleton 経由）／空き地 → **detach**（A.groupId=null・残 <2 で連鎖 dissolve）。merge 衝突は **size 最大 > 辞書順最小 > 新規 GUID**（ADR-0024 simplify＝ADR-0019 D5 の Hakoniwa-priority 退役）。detach commit で dragged の `groupId=null`、残 visible/live が 1 なら連鎖 dissolve（残 1 も null）。**hide は groupId 温存**（Replay/Live mode 切替で復活）、**close（universe sync 削除等）は連鎖 dissolve**、**spawn は groupId=null**（attach はユーザ drag-release だけ）。**cross-plane group は禁止**（ADR-0018 plane 分離と整合）＝restore 時に多数派 plane 残し・同数なら dock plane 優先で分割。group 関係は座標から再導出せず `groupId` が唯一の真実源。**ESC キャンセル**: drag 中 ESC で実描画 / ghost を rest へ spring 200ms で revert（state は不変）。
@@ -382,6 +382,14 @@ _Avoid_: つまみを隠して Alt のみにすること（発見性が落ちる
 **island-scoped reflow** ※2026-06-25 新設・方針 **[[ADR-0029]]**（findings 0106 §4）:
 **swap した瞬間だけ**走る局所自動調整。A/B が**サイズ維持で位置（anchor）交換**した後、はみ出し/隙間を解消する向きに**同じ island の隣窓だけ**を best-effort で magnetic flush re-snap（`ぷるん` spring）。**scope は island に厳密限定**（他 island・他 plane に波及しない）＝ADR-0017 free-placement の唯一の明示 carve-out。perfect tiling は非保証で残隙間は許容（owner Q4=空けたまま・Q5=サイズ違いを許容して自動調整）。
 _Avoid_: reflow を island の外へ波及させること（global no-reflow 違反）／単窓を抜いた跡の穴を reflow で詰めること（Q4＝空けたまま・swap 時のみ）／perfect tiling を強制すること（best-effort・隙間許容）
+
+**resize つまみ** ※2026-06-25 新設・方針 **[[ADR-0030]]**（findings 0112）:
+各 floating window の root 右下角に常時表示する**リサイズ起動アフォーダンス**（"◢" チップ・raycast target・独自 IDragHandler）。「ここを掴めばサイズを変えられる」を可視化。[[eject つまみ]]（drag handler 無しで title input へ bubble）と違い**独自 IDragHandler を持つので [[gesture channel]] の `ResolveChannel` に入らない**（ADR-0029 の 2 チャンネル不変条件を壊さない別系統）。左上 pivot 固定で右下へ伸縮・全 window 一律（per-spec フラグなし）。
+_Avoid_: つまみを drag channel の第 3 モードとして `ResolveChannel` に相乗りさせること（別系統が ADR-0029 不変条件を保つ要）／title-bar drag と混同すること
+
+**island-scoped resize push** ※2026-06-25 新設・方針 **[[ADR-0030]]**（findings 0112）:
+[[resize つまみ]] でリサイズした瞬間に走る島内押し出し。リサイズ窓の**動く辺（右/下）に flush している同じ island のメンバー**が辺に張り付いたまま追従平行移動（**対称**＝広げる→押し出し/縮める→引き戻し・島内**連鎖**・x/y 独立・メンバーは移動のみで size 保持）。**scope は island に厳密限定**（他 island・他 plane・非グループ隣接は不動）。[[island-scoped reflow]]（swap 時・best-effort magnetic flush・隙間許容）とは**別物**＝こちらは動いた辺への**強制 flush 追従**（常にタイル維持）。
+_Avoid_: push を island の外へ波及させること（global no-reflow 違反）／swap の `ReflowIslandAfterSwap`（best-effort）を resize に流用すること（別アルゴリズム）／メンバーを resize すること（移動のみ・size 保持）
 パネルは独立 floating window（canvas 論理座標の position+size）になり、slot 順序の正本・swap・`ceil(√n)` 派生 rect は廃止。
 くっつきは磁石スナップ。以下は履歴:
 **tile** = Hakoniwa の 1 区画（安定 `id` で同定）。**slot** = tile が占める grid スロット番号（row-major・
@@ -424,7 +432,7 @@ window をクリック/drag したとき最前面へ（TTWR `WindowManager.max_z
 title bar drag で position を移動（screen delta / zoom → canvas 論理 delta・group 所属時は一体移動 or swap）。**[[drag ghost]]** = drag 中の post-release 状態半透明プレビュー。実装は #15＋#99＋#103＋#104（ADR-0019）。
 _Avoid_: ~~chart を floating window と呼ぶこと~~（ADR-0017 で反転＝**chart は floating window**）／~~磁石スナップに group 一体移動・detach 状態を持ち込むこと~~（ADR-0019 で反転＝group 関係を `groupId` で持つ）／zOrder を `slot` に相乗りさせること（別 field）／
 floating window rect を panel の 0..1 正規化 `LayoutRect` で持つこと（floating は canvas 論理座標の position+size）／
-resize/常時最前面 pin を #15 の汎用 window system に含めること（前者は将来 slice・後者は実 editor content 由来の例外）／元箱庭 6 種を `FloatingWindowLayer` に置くこと（ADR-0018 で `DockLayer` 行き）／cross-plane group を許可すること（ADR-0019 で禁止＝restore 時に分割）
+~~resize を #15 の汎用 window system に含めること（将来 slice）~~（[[ADR-0030]] で将来 slice を起こした＝右下つまみリサイズ・島内 flush 追従押し出し・全 window 対象）／常時最前面 pin を #15 の汎用 window system に含めること（実 editor content 由来の例外）／元箱庭 6 種を `FloatingWindowLayer` に置くこと（ADR-0018 で `DockLayer` 行き）／cross-plane group を許可すること（ADR-0019 で禁止＝restore 時に分割）
 
 **chrome z-order 前面順序（画面固定 chrome のレイヤリング契約）**:
 [[infinite canvas]] の外に置く画面固定 chrome（menu bar / その dropdown / sidebar / footer / secret modal）の

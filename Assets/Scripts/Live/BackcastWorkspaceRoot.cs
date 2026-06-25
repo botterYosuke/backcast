@@ -1774,12 +1774,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         var kb = UnityEngine.InputSystem.Keyboard.current;
         if (kb != null && kb.escapeKey.wasPressedThisFrame)
         {
-            // ESC guard inputs queried fresh: any window drag in flight (front OR back plane) keeps the
-            // drag-revert owner (ADR-0024 §8); secret(1000)/save-guard open consume ESC so Settings can't
-            // open behind them. IsDragging stays true across an ESC-cancel until mouse-up, so this never
-            // races the title-input's own ESC handler regardless of Update ordering.
-            bool dragging = (_windows != null && _windows.IsDragging)
-                         || (_dockWindows != null && _dockWindows.IsDragging);
+            // ESC guard inputs queried fresh: any window drag OR resize in flight (front OR back plane) keeps
+            // the geometry-revert owner (ADR-0024 §8 drag / ADR-0030 §6 resize); secret(1000)/save-guard open
+            // consume ESC so Settings can't open behind them. IsDragging / IsResizing stay true across an
+            // ESC-cancel until mouse-up (CancelDrag/CancelResize don't null the session), so this never races
+            // the title-input's / resize-grip's own ESC handler regardless of Update ordering.
+            bool dragging = (_windows?.IsGestureActive ?? false) || (_dockWindows?.IsGestureActive ?? false);
             bool blocking = (_host != null && _host.Modal != null && _host.Modal.IsOpen)
                          || (_saveGuardController != null && _saveGuardController.IsOpen)
                          || (_menuBarView != null && _menuBarView.IsMenuOpen);   // open menu dropdown consumes ESC too

@@ -97,8 +97,10 @@ public class FloatingWindowHitlHarness : MonoBehaviour
         BuildHud(canvasGo.transform);
 
         Debug.Log("[FLOATING WINDOW HITL] ready: drag a TITLE BAR to move; press/drag a title to raise " +
-                  "(front); × hides a window; drag the background/body to pan, wheel to zoom (windows follow, " +
-                  "HUD is screen-fixed). Save/Load round-trips rect + z-order + visibility.");
+                  "(front); drag the bottom-right \"◢\" GRIP to RESIZE (left-top fixed, right-bottom grow; #139 / " +
+                  "ADR-0030 — same-island flush neighbours follow; ESC reverts); × hides a window; drag the " +
+                  "background/body to pan, wheel to zoom (windows follow, HUD is screen-fixed). Save/Load " +
+                  "round-trips rect + size + z-order + visibility.");
     }
 
     void Update()

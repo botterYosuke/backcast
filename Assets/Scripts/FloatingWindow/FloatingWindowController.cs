@@ -75,6 +75,21 @@ public class FloatingWindowController
     // drop outcomes.
     public enum ReleaseResult { IslandMoved, Swapped, Merged, Detached }
 
+    // ADR-0030 §3/§6 / findings 0112: the per-RESIZE snapshot — the grip's OWN session, captured at
+    // BeginResize and INDEPENDENT of the title-bar DragSession (the grip is NOT a title-bar drag and never
+    // enters ResolveChannel, so ADR-0029's gesture-channel invariant is untouched). Holds the resized
+    // window's rest rect + every island member's rest rect, so each ResizeApply re-derives the new geometry
+    // ABSOLUTELY from rest (a transient frame can't corrupt it) and CancelResize reverts by writing the rest
+    // rects straight back. `canceled` short-circuits the release commit (ESC already reverted).
+    class ResizeSession
+    {
+        public string resizedId;
+        public Vector2 grabStart;                                            // logical anchor at grab (delta source)
+        public List<string> islandIds;                                       // includes resizedId
+        public Dictionary<string, FloatingWindowMath.DockRect> restRects;    // per island member (rest); [resizedId] = the resized's rest rect
+        public bool canceled;
+    }
+
     static readonly Vector2 CENTER = new Vector2(0.5f, 0.5f);
     static readonly Vector2 TOP_LEFT = new Vector2(0f, 1f);
 
@@ -112,6 +127,12 @@ public class FloatingWindowController
     // ReleaseDrag / CancelDrag.
     DragSession _drag;
 
+    // ADR-0030 §6 / findings 0112: the live RESIZE snapshot (null between resizes). Owned by BeginResize /
+    // ResizeApply / ReleaseResize / CancelResize. Separate from _drag — a resize and a title-drag are
+    // mutually exclusive in practice (one pointer), but the controller keeps them in independent fields so
+    // the grip system never touches the gesture-channel drag machinery (ADR-0030 §3).
+    ResizeSession _resize;
+
     // ADR-0024 §3 / findings 0088 §3: the injected spring side-effect ("プルン" rect interpolation). The
     // controller ALWAYS writes the authoritative final geometry directly (so the AFK gate sees the
     // settled rect without a driver); this optional hook lets the production RectSpringDriver animate the
@@ -146,6 +167,19 @@ public class FloatingWindowController
     // IsDragging==true regardless of MonoBehaviour Update ordering, letting the Settings ESC guard defer
     // to the drag-revert (ADR-0024 §8) instead of toggling Settings.
     public bool IsDragging => _drag != null;
+
+    // ADR-0030 §3 / findings 0112: true between BeginResize and the release ReleaseResize (INCLUDING the
+    // post-ESC window — CancelResize sets canceled but does NOT null _resize; only ReleaseResize does).
+    // INDEPENDENT of IsDragging — the grip's resize session and the title-bar drag session never coexist
+    // on the same gesture, and a resize never flips IsDragging (ADR-0029 channel invariant untouched).
+    public bool IsResizing => _resize != null;
+
+    // #139 (ADR-0030 §3 review / simplify): "is ANY geometry gesture (drag OR resize) live on this controller?"
+    // — the single predicate the Settings ESC guard consults, so the call site no longer hand-ORs the gesture
+    // taxonomy (a future gesture kind extends THIS accessor, not every consumer). IsDragging / IsResizing stay
+    // public for callers that must distinguish the two (the AFK gate asserts them separately); this only
+    // aggregates the read — it does not couple the sessions (ADR-0030 §3 separation is a field/input concern).
+    public bool IsGestureActive => _drag != null || _resize != null;
     public RectTransform RectOf(string id) => _windows.TryGetValue(id, out var e) ? e.rt : null;
 
     // #138 (findings 0110): mode-conditional visibility for a whole window KIND — used by the root's
@@ -867,6 +901,119 @@ public class FloatingWindowController
             FireSpring(e.rt, from);
         }
     }
+
+    // ============================ ADR-0030 — window resize (grip) ============================
+    // The bottom-right grip's resize session. SEPARATE from the title-bar DragSession (ADR-0030 §3): the
+    // grip has its OWN raycast target + IDragHandler (FloatingWindowResizeGrip) and drives THIS session
+    // directly — it never enters ResolveChannel, so the ADR-0029 gesture-channel invariant is untouched.
+    // The math (FloatingWindowMath.ResizeIslandPush) is the AFK-authoritative push-out; this is the thin
+    // RectTransform boundary that snapshots rest, clamps to spec.minSize, and writes the live geometry.
+
+    // ADR-0030 §1/§6 / findings 0112: open a resize session — RAISE + record focus (grip grab == a
+    // title-bar press, ADR-0030 §6 最前面化), then snapshot the resized window's rest rect AND every island
+    // member's rest rect (same ResolveIslandIds the drag uses — visible/live members sharing a non-null
+    // groupId when ≥2, else just {resized}). `grabStart` is the logical anchor the grip drag measures its
+    // delta from (only the delta matters). Idempotent — re-opening for the same id re-snapshots from rest.
+    public void BeginResize(string id, Vector2 grabStart)
+    {
+        _resize = null;
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var resized) || resized.rt == null) return;
+        NoteUserFocus(id);   // ADR-0030 §6: grip grab raises (SetAsLastSibling) + records the focus target
+
+        var islandIds = ResolveIslandIds(resized);
+        // Settle any in-flight commit/ESC spring on the island members first, so the rest snapshot reads a
+        // settled pose and no dying tween fights this resize's per-frame writes (BeginDrag does the same).
+        if (_springStop != null)
+            foreach (var mid in islandIds)
+                if (_windows.TryGetValue(mid, out var se) && se.rt != null) _springStop(se.rt);
+
+        var session = new ResizeSession
+        {
+            resizedId = id,
+            grabStart = grabStart,
+            islandIds = islandIds,
+            restRects = new Dictionary<string, FloatingWindowMath.DockRect>(islandIds.Count),
+        };
+        foreach (var mid in islandIds)
+        {
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            session.restRects[mid] = new FloatingWindowMath.DockRect(e.rt.anchoredPosition, e.rt.sizeDelta);
+        }
+        _resize = session;
+    }
+
+    // ADR-0030 §1/§4/§6 / findings 0112: per-frame resize apply. The new size is derived ABSOLUTELY from the
+    // rest size + the grip's logical delta (cursor - grabStart): the grip lives at the BOTTOM-RIGHT, so
+    // dragging it RIGHT grows width (+Δx) and dragging it DOWN grows height (-Δy, y up-positive). The desired
+    // size is CLAMPED to spec.minSize (NO max — infinite canvas, ADR-0030 §6); then ResizeIslandPush computes
+    // the resized window's new size (TOP-LEFT fixed) + the flush-following members' translations (symmetric,
+    // chained, island-scoped), and the controller writes them all. Discrete real-render, NO mid-resize spring
+    // (a per-frame tween would fight the absolute writes — mirror RenderTranslate). Self-heals via
+    // EnsureResizeSession. Returns the clamped size actually applied to the resized window.
+    public Vector2 ResizeApply(string id, Vector2 grabStart, Vector2 cursor)
+    {
+        if (string.IsNullOrEmpty(id) || !_windows.TryGetValue(id, out var resized) || resized.rt == null)
+            return Vector2.zero;
+        EnsureResizeSession(id, grabStart);
+        // ADR-0030 §6: after ESC the session is canceled — ignore further resize frames until release.
+        if (_resize != null && _resize.canceled) return resized.rt.sizeDelta;
+
+        Vector2 delta = cursor - _resize.grabStart;
+        Vector2 restSize = _resize.restRects.TryGetValue(id, out var rr) ? rr.size : resized.rt.sizeDelta;
+        Vector2 desired = new Vector2(restSize.x + delta.x, restSize.y - delta.y);
+        Vector2 clamped = _catalog.TryGet(resized.kind, out FloatingWindowSpec spec)
+            ? ClampSize(spec, desired.x, desired.y) : desired;
+
+        // Pure island push-out from the captured REST island (absolute every frame, so no drift). Scope is
+        // STRICTLY the captured island (ADR-0030 §5 — other islands / planes are not in restRects).
+        var layout = FloatingWindowMath.ResizeIslandPush(id, _resize.restRects, clamped, DEFAULT_FLUSH_EPS);
+        foreach (var mid in _resize.islandIds)
+        {
+            if (!layout.TryGetValue(mid, out var to)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            e.rt.anchoredPosition = to.topLeft;
+            e.rt.sizeDelta = to.size;
+        }
+        return clamped;
+    }
+
+    // ADR-0030 §6 / findings 0112: commit the resize. The absolute model means the last ResizeApply already
+    // wrote the authoritative geometry (the live render IS the committed state), so the release just closes
+    // the session. After an ESC cancel the geometry was already reverted to rest and nothing commits. Persist
+    // is the caller's existing Capture (schema-add 0 — ADR-0030 §6). No-op for a mismatched/absent session
+    // (a stray release for a different id must not tear down the active resize).
+    public void ReleaseResize(string id)
+    {
+        if (_resize != null && _resize.resizedId != id) return;
+        EndResize();
+    }
+
+    // ADR-0030 §6 / findings 0112: ESC during a resize — actively revert the resized window's SIZE and every
+    // pushed member's POSITION to the rest snapshot (spring the revert), and mark the session canceled so the
+    // following release commits nothing. Mirrors CancelDrag (state was never touched during the resize, so
+    // there is nothing to roll back beyond geometry). No-op when no resize is active or the id mismatches.
+    public void CancelResize(string id)
+    {
+        if (_resize == null || _resize.resizedId != id) return;
+        foreach (var mid in _resize.islandIds)
+        {
+            if (!_resize.restRects.TryGetValue(mid, out var rest)) continue;
+            if (!_windows.TryGetValue(mid, out var e) || e.rt == null) continue;
+            var from = new FloatingWindowMath.DockRect(e.rt.anchoredPosition, e.rt.sizeDelta);
+            e.rt.anchoredPosition = rest.topLeft;
+            e.rt.sizeDelta = rest.size;
+            FireSpring(e.rt, from);
+        }
+        _resize.canceled = true;
+    }
+
+    void EnsureResizeSession(string id, Vector2 grabStart)
+    {
+        if (_resize == null || _resize.resizedId != id) BeginResize(id, grabStart);
+    }
+
+    void EndResize() => _resize = null;
+    // ========================== end ADR-0030 — window resize (grip) ==========================
 
     // Move a window by a CANVAS-LOGICAL delta (the input boundary already divided the viewport
     // delta by zoom). y is up-positive, matching anchoredPosition. No-op for an unknown id.

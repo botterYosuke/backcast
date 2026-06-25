@@ -5,8 +5,8 @@
 // wiring is NOT thrown away). It does ONLY translation of input → controller: it never resizes the window
 // itself, it asks the controller's resize session (BeginResize / ResizeApply / ReleaseResize / CancelResize).
 //
-// SEPARATE SYSTEM (ADR-0030 §3): UNLIKE the eject handle (no drag handler — its press BUBBLES to the title
-// bar so ResolveChannel can read it), this grip IS its OWN drag handler, so its drag is SWALLOWED here and
+// SEPARATE SYSTEM (ADR-0030 §3): UNLIKE a plain title-bar drag (read by FloatingWindowTitleInput and
+// classified by ResolveChannel), this grip IS its OWN drag handler, so its drag is SWALLOWED here and
 // routed straight to the resize session. It NEVER enters ResolveChannel — the ADR-0029 gesture-channel
 // invariant is untouched, and IsDragging stays false during a resize (only IsResizing flips).
 //

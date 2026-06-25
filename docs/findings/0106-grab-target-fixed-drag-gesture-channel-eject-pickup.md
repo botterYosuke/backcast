@@ -1,5 +1,7 @@
 # findings 0106 — 掴む対象でモード固定するドラッグ（gesture-channel・距離トリガ撤廃・eject/Alt 単窓ピックアップ・swap 島内局所 reflow）
 
+> ⚠️ **一部 superseded（2026-06-25・[[ADR-0032]] / findings 0113）**: 本 findings の **eject つまみ "⤴" 起動経路**（§0-Q2・§1 の `EJECT_HANDLE` 分岐・§3 起動経路・§14 の `FloatingWindowEjectHandle.Attach`・S41/S24 の eject 行）は **ADR-0032 で廃止**され、単窓ピックアップの起動は `Alt`+drag 単独になった。それ以外（2 チャンネル固定・距離撤廃・ドロップ結果・swap reflow・island move・merge・spring・ESC）は**全て有効**。詳細は findings 0113。
+
 方針: **[[ADR-0029]]**。本 findings はその下位設計の木を固定する。
 grill: `grill-with-docs`（2026-06-25・owner HITL Q1–Q5）。supersede: findings 0088 §1（cursor 位置 3 mode 判定 `ResolveDragMode`）／§4 の swap 4 値交換と detach 距離経路／§11 の `D_DETACH_PX` 定数／§13 の DRAG-* のうち cursor 判定・距離 detach・swap exact を assert する section。維持: 0088 §2（磁石吸着 R_SNAP）／§3（spring）／§5（merge cascade）／§6（ESC）／§12（cross-plane）／§9（factory grouping）。
 

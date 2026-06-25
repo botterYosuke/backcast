@@ -498,7 +498,7 @@ public class FloatingWindowController
         => BeginDrag(id, dragStart, FloatingWindowMath.DragChannel.IslandMove);
 
     // ADR-0029 §1 / findings 0106 §1: open a drag session on a fixed gesture channel. The title input
-    // resolves the channel ONCE at OnBeginDrag (eject handle / Alt → SingleWindowPickup, else IslandMove)
+    // resolves the channel ONCE at OnBeginDrag (Alt → SingleWindowPickup, else IslandMove; ADR-0032)
     // and the channel is INVARIANT for the rest of the drag. A singleton's SingleWindowPickup folds onto
     // IslandMove semantics for the carry render (it is already independent) but still classifies the drop.
     public void BeginDrag(string id, Vector2 dragStart, FloatingWindowMath.DragChannel channel)
@@ -667,7 +667,7 @@ public class FloatingWindowController
     //   IslandMove (plain title-bar drag) → CommitTranslate: the whole island shifts by the cursor offset;
     //              on flush/overlap with another island it merges (owner Q3). It NEVER detaches — membership
     //              only shrinks via the pickup channel (root of owner unhappiness 1). Returns IslandMoved.
-    //   SingleWindowPickup (eject handle / Alt) → CommitPickup: the drop POSITION decides Swap (size-preserving
+    //   SingleWindowPickup (Alt+drag; ADR-0032) → CommitPickup: the drop POSITION decides Swap (size-preserving
     //              anchor swap + island reflow) / MergeToIsland (join a flushed other island) / Detach (empty
     //              space → groupId=null, remnant dissolves). Returns Swapped / Merged / Detached.
     //

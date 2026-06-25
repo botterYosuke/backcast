@@ -37,15 +37,16 @@ public static class FloatingWindowMath
 {
     // ADR-0029 §1 / findings 0106 §1: the TWO drag GESTURE CHANNELS, fixed at OnBeginDrag and NEVER
     // re-evaluated per frame (ADR-0024's cursor-position 3-mode `ResolveDragMode` + the `D_DETACH_PX`
-    // distance trigger are SUPERSEDED — owner unhappiness 1/2). The channel is decided from WHAT was
-    // grabbed (the eject handle / Alt) — not from cursor distance — so a drag can never morph mid-gesture.
+    // distance trigger are SUPERSEDED — owner unhappiness 1/2). The channel is decided from HOW the drag
+    // started (Alt held or not) — not from cursor distance — so a drag can never morph mid-gesture.
     //
     //   IslandMove        — a plain title-bar drag. The WHOLE island translates as a unit at UNLIMITED
     //                       distance (no detach, ever — membership only shrinks via SingleWindowPickup).
     //                       Releasing flush against another island merges (owner Q3). A singleton is a
     //                       1-member island.
-    //   SingleWindowPickup— the eject handle or Alt+drag. ONE window is lifted out of the island and
-    //                       carried; the DROP POSITION decides the outcome (ResolveDropOutcome).
+    //   SingleWindowPickup— Alt+drag (ADR-0032 retired the "⤴" eject handle; Alt is the sole trigger). ONE
+    //                       window is lifted out of the island and carried; the DROP POSITION decides the
+    //                       outcome (ResolveDropOutcome).
     public enum DragChannel
     {
         IslandMove,
@@ -134,12 +135,12 @@ public static class FloatingWindowMath
         return best;
     }
 
-    // ADR-0029 §3 / findings 0106 §1: the gesture-channel discriminator — the ONLY input-derived choice,
-    // read ONCE at OnBeginDrag and frozen for the whole drag. The eject handle (visible affordance) or a
-    // held Alt selects SingleWindowPickup; a plain title-bar grab selects IslandMove. Pure truth table so
-    // the AFK gate pins both engage paths without an EventSystem / a real Keyboard device.
-    public static DragChannel ResolveChannel(bool hitEjectHandle, bool altHeld)
-        => (hitEjectHandle || altHeld) ? DragChannel.SingleWindowPickup : DragChannel.IslandMove;
+    // ADR-0029 §3 / ADR-0032 / findings 0113 §1: the gesture-channel discriminator — the ONLY input-derived
+    // choice, read ONCE at OnBeginDrag and frozen for the whole drag. A held Alt selects SingleWindowPickup;
+    // a plain title-bar grab selects IslandMove. ADR-0032 retired the "⤴" eject handle, so Alt is now the
+    // sole engage path. Pure truth table so the AFK gate pins it without an EventSystem / a real Keyboard.
+    public static DragChannel ResolveChannel(bool altHeld)
+        => altHeld ? DragChannel.SingleWindowPickup : DragChannel.IslandMove;
 
     // ADR-0029 §4 / findings 0106 §3: the SingleWindowPickup drop classifier — evaluated ONCE at release
     // from the drop POSITION (NOT distance — the distance trigger is retired). `islandMembers` = the

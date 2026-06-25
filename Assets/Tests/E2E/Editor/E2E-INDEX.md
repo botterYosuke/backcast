@@ -27,7 +27,7 @@
 | [FooterModeE2ERunner](./FooterModeE2ERunner.md) ✅ | `FOOTER-01..13` | 13 | 11 | 0 | 0 | 1 | 1 |
 | ~~HakoniwaE2ERunner~~ **RETIRED #99 / ADR-0017** | — | — | — | — | — | — | — |
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
-| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05,PLANE-01..04,GROUP-01,02,04,11,DRAG-01..20` | 48 | 43 | 0 | 0 | 5 | 0 |
+| [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05,PLANE-01..04,GROUP-01,02,04,11,DRAG-01..20` | 48 | 42 | 0 | 0 | 5 | 1 |
 | [FloatingWindowResizeE2ERunner](./FloatingWindowResizeE2ERunner.md) ✅ | `RESIZE-01..13` | 13 | 12 | 0 | 0 | 1 | 0 |
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..55` | 55 | 52 | 0 | 0 | 2 | 1 |
 | [StrategyEditorZoomCrispnessE2ERunner](./StrategyEditorZoomCrispnessE2ERunner.md) ✅ | `ZOOM-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |

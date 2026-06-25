@@ -1,14 +1,14 @@
 // FloatingWindowResizeHandle.cs — issue #139 / ADR-0030 §1/§6 / findings 0112
 //
 // The shared builder for the window root's always-visible "◢" RESIZE GRIP — the VISIBLE affordance that
-// drives the bottom-right resize gesture. Mirrors FloatingWindowEjectHandle.Attach (the eject "⤴" chip):
-// ONE find-or-create builder so EVERY floating window (editor / order / dock / HITL) grows an identical
-// grip, and the AFK gate drives Attach directly on a bare window root to pin the structural contract
-// (named, raycast target, OWN drag handler, last sibling, bottom-right) without play mode.
+// drives the bottom-right resize gesture. ONE find-or-create builder so EVERY floating window (editor /
+// order / dock / HITL) grows an identical grip, and the AFK gate drives Attach directly on a bare window
+// root to pin the structural contract (named, raycast target, OWN drag handler, last sibling, bottom-right)
+// without play mode.
 //
-// WHY A SEPARATE SYSTEM (ADR-0030 §3): the grip is NOT a title-bar drag, so — UNLIKE the eject handle,
-// which deliberately has NO drag handler and BUBBLES to the title bar's FloatingWindowTitleInput — the
-// grip carries its OWN IDragHandler (FloatingWindowResizeGrip). Its press/drag is SWALLOWED by the grip
+// WHY A SEPARATE SYSTEM (ADR-0030 §3): the grip is NOT a title-bar drag, so — UNLIKE a plain title-bar
+// drag input (which is read by FloatingWindowTitleInput and classified by ResolveChannel) — the grip
+// carries its OWN IDragHandler (FloatingWindowResizeGrip). Its press/drag is SWALLOWED by the grip
 // and routed to the controller's resize session, so it NEVER enters ResolveChannel and the ADR-0029
 // gesture-channel invariant is untouched. The chip is the LAST sibling (drawn on top, wins the raycast)
 // and a raycast target, so the small bottom-right region reliably engages resize while the body/title and
@@ -49,7 +49,7 @@ public static class FloatingWindowResizeHandle
         rt.sizeDelta = new Vector2(Size, Size);
 
         var img = go.GetComponent<Image>();
-        img.color = new Color(1f, 1f, 1f, 0.16f);   // faint chip behind the glyph (eject-handle parity)
+        img.color = new Color(1f, 1f, 1f, 0.16f);   // faint chip behind the glyph
         img.raycastTarget = true;                    // THE grip raycast target — its press drives the resize session
 
         var glyphGo = new GameObject("ResizeGlyph", typeof(RectTransform), typeof(Text));

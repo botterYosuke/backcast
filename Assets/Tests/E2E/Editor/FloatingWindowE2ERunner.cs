@@ -71,7 +71,7 @@
 //  38. ADR-0029 §8: ESC cancel (live render reverts to rest, state untouched, MouseUp commits nothing)      [DRAG-09]
 //  39. ADR-0029 §3: spring fire-point wiring (pickup swap / pickup detach commit + ESC fire the animator)   [DRAG-10]
 //  40. ADR-0024 §8/ADR-0029: chart:<id> drags like any window (flush-attach island, island-move, pickup-detach) [DRAG-13]
-//  41. ADR-0029 §3: eject handle affordance (always-visible "⤴", 2nd raycast target, no drag handler)       [DRAG-17]
+//  (41. RETIRED — ADR-0032 removed the "⤴" eject handle; SingleWindowPickup engages via Alt+drag only. [DRAG-17])
 
 using System;
 using System.Collections.Generic;
@@ -135,7 +135,7 @@ public static class FloatingWindowE2ERunner
                 ?? Section38_EscCancel(spawned)
                 ?? Section39_SpringFireWiring(spawned)
                 ?? Section40_ChartEquivalence(spawned)
-                ?? Section41_EjectHandleAffordance(spawned)
+                // Section41 (eject handle affordance) RETIRED — ADR-0032 removed the "⤴" handle (Alt+drag only).
                 ?? Section19_SceneWiringBackPlane();   // LAST: loads the real scene (root-free sections run first)
         }
         catch (Exception e)
@@ -182,7 +182,7 @@ public static class FloatingWindowE2ERunner
                       "overlap=0 no / eps=1px) + ADR-0024 merge cascade (size max > StringCompareOrdinal min > " +
                       "new GUID — Hakoniwa-priority RETIRED) + flush-attach release commit (controller wiring) + " +
                       "SpawnDockedToFocus groupId=null invariant + ADR-0029 gesture channels: ResolveChannel " +
-                      "(eject/Alt ⇒ SingleWindowPickup / plain ⇒ IslandMove) + ResolveDropOutcome (cursor over " +
+                      "(Alt ⇒ SingleWindowPickup / plain ⇒ IslandMove; eject handle RETIRED ADR-0032) + ResolveDropOutcome (cursor over " +
                       "sibling ⇒ Swap DISTANCE-INDEPENDENT / picked rect flush to another island ⇒ MergeToIsland / " +
                       "empty ⇒ Detach) + IslandMove real-render UNLIMITED distance (256px+ NO detach — distance " +
                       "trigger RETIRED) vs SingleWindowPickup carry (picked only, siblings frozen), channel FIXED at " +
@@ -206,8 +206,7 @@ public static class FloatingWindowE2ERunner
                       "attach retained + ESC cancel (live render reverts to rest, state untouched, MouseUp commits " +
                       "nothing, both channels) + spring fire-points (pickup swap / pickup detach commit + ESC fire " +
                       "the injected animator) + chart:<id> drags like any window (flush-attach island, island-move, " +
-                      "pickup-detach) + eject handle affordance (always-visible \"⤴\", 2nd raycast target, no drag " +
-                      "handler, glyph non-blocking, last sibling) " +
+                      "pickup-detach) " +
                       "(Unity-owned versioned schema, additive capability surface, ADR-0003 capability parity, " +
                       "under Unity Mono) " +
                       "[WINDOW-01..10,SNAP-01,02,DOCK-01,02,03,04,PLANE-01,02,03,GROUP-01,02,04,11,DRAG-01..19]");
@@ -1469,23 +1468,21 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 24. ADR-0029 §3/§4: ResolveChannel + ResolveDropOutcome pure (gesture channel + drop classifier) ----
-    // Covers: DRAG-01..04, DRAG-15, DRAG-17 (ADR-0029: gesture-channel discriminator (ResolveChannel = the
-    //         channel-lock + eject/Alt engage) + SingleWindowPickup DROP classifier (ResolveDropOutcome), both
-    //         PURE). ResolveChannel: eject/Alt ⇒ SingleWindowPickup, plain ⇒ IslandMove. ResolveDropOutcome:
+    // ---- 24. ADR-0029 §3/§4 / ADR-0032: ResolveChannel + ResolveDropOutcome pure (gesture channel + drop classifier) ----
+    // Covers: DRAG-01..04, DRAG-15 (ADR-0029/0032: gesture-channel discriminator (ResolveChannel = the
+    //         channel-lock + Alt engage) + SingleWindowPickup DROP classifier (ResolveDropOutcome), both
+    //         PURE). ResolveChannel: Alt ⇒ SingleWindowPickup, plain ⇒ IslandMove (ADR-0032 retired the eject
+    //         handle, so Alt is the sole engage path). ResolveDropOutcome:
     //         cursor over a sibling ⇒ Swap (DISTANCE-INDEPENDENT — the D_DETACH distance trigger is RETIRED) /
     //         picked rect magnet-flush to another island ⇒ MergeToIsland / else ⇒ Detach.
     static string Section24_ChannelAndDropOutcomePure()
     {
         // ---- ResolveChannel truth table (the ONLY input-derived choice, read once at OnBeginDrag) ----
-        if (FloatingWindowMath.ResolveChannel(false, false) != FloatingWindowMath.DragChannel.IslandMove)
+        // ADR-0032: Alt is the sole engage path (eject handle removed). Plain grab → IslandMove; Alt → pickup.
+        if (FloatingWindowMath.ResolveChannel(false) != FloatingWindowMath.DragChannel.IslandMove)
             return "S24: plain grab ≠ IslandMove";
-        if (FloatingWindowMath.ResolveChannel(true, false) != FloatingWindowMath.DragChannel.SingleWindowPickup)
-            return "S24: eject handle ≠ SingleWindowPickup";
-        if (FloatingWindowMath.ResolveChannel(false, true) != FloatingWindowMath.DragChannel.SingleWindowPickup)
+        if (FloatingWindowMath.ResolveChannel(true) != FloatingWindowMath.DragChannel.SingleWindowPickup)
             return "S24: Alt ≠ SingleWindowPickup";
-        if (FloatingWindowMath.ResolveChannel(true, true) != FloatingWindowMath.DragChannel.SingleWindowPickup)
-            return "S24: eject+Alt ≠ SingleWindowPickup";
 
         // island: A (picked) at (0,0,280,180); sibling B at (300,0,280,180) → B rect = x[300,580], y[-180,0].
         var members = new List<FloatingWindowMath.GroupMember>
@@ -1583,7 +1580,7 @@ public static class FloatingWindowE2ERunner
         if (!Approx2(c.RectOf("B").anchoredPosition, b0 + new Vector2(400f, 0f))) return "S25b: sibling did NOT follow at 400px — island move must stay whole-island unlimited";
         if (c.GroupIdOf("A") != G || c.GroupIdOf("B") != G) return "S25b: groupId mutated during unlimited island move";
 
-        // (c) SingleWindowPickup carry: eject/Alt grab ⇒ ONLY the picked window real-renders at offset; the
+        // (c) SingleWindowPickup carry: Alt grab ⇒ ONLY the picked window real-renders at offset; the
         //     sibling stays frozen at rest. Even at 400px the channel stays SingleWindowPickup (no morph).
         //     First revert the live render from (a)/(b) (no commit happened) so the rest snapshot is a0/b0.
         c.CancelDrag("A");
@@ -1749,7 +1746,7 @@ public static class FloatingWindowE2ERunner
         if (!Approx2(c.RectOf("startup").anchoredPosition, s0 + new Vector2(400f, 0f))) return "S27a: core dragged did not move";
         if (!Approx2(c.RectOf("run_result").anchoredPosition, r0 + new Vector2(400f, 0f))) return "S27a: core sibling did not move (whole-island unlimited)";
 
-        // (b) PICKUP-DETACH a CORE member (was core-LOCKED): eject/Alt-grab startup, drop on empty space ⇒
+        // (b) PICKUP-DETACH a CORE member (was core-LOCKED): Alt-grab startup, drop on empty space ⇒
         //     Detached (groupId=null, remnant dissolves). Cores are no longer detach-immune. Revert (a)'s
         //     uncommitted live render first so the rest snapshot is the original layout.
         c.CancelDrag("startup");
@@ -2589,57 +2586,10 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 41. ADR-0029 §3: eject handle affordance (always-visible "⤴", 2nd raycast target, no drag handler) ----
-    // Covers: DRAG-17 (the SingleWindowPickup gesture has a VISIBLE always-on affordance — the eject handle —
-    //         on every title bar; it is a 2nd raycast target with NO drag handler so its press bubbles to
-    //         FloatingWindowTitleInput while pointerPressRaycast still names it; glyph never blocks).
-    //         The engage-paths truth table (eject/Alt ⇒ pickup) is pinned in S24 (ResolveChannel).
-    static string Section41_EjectHandleAffordance(List<GameObject> spawned)
-    {
-        // Build a bare title bar (the production builder is ThemeService-free, so AFK drives it directly).
-        var barGo = new GameObject("TitleBar", typeof(RectTransform)); spawned.Add(barGo);
-        var bar = (RectTransform)barGo.transform;
-        var handle = FloatingWindowEjectHandle.Attach(bar, null);
-        if (handle == null) return "S41: Attach returned null";
-        spawned.Add(handle);
-
-        // (a) always visible: a child of the title bar named EjectHandle, active.
-        if (handle.transform.parent != bar.transform) return "S41a: eject handle is not a child of the title bar";
-        if (handle.name != FloatingWindowEjectHandle.NodeName) return $"S41a: handle name {handle.name} != {FloatingWindowEjectHandle.NodeName}";
-        if (!handle.activeSelf) return "S41a: eject handle is not active (must be always visible)";
-
-        // (b) THE 2nd raycast target: the handle has a raycast-target Image (so its press is hit-tested).
-        var img = handle.GetComponent<UnityEngine.UI.Image>();
-        if (img == null) return "S41b: eject handle has no Image";
-        if (!img.raycastTarget) return "S41b: eject handle Image is not a raycast target (its press can't engage pickup)";
-
-        // (c) NO drag handler on the handle ⇒ a press/drag BUBBLES to the title bar's FloatingWindowTitleInput
-        //     (the channel discriminator reads pointerPressRaycast). A drag handler here would swallow the drag.
-        if (handle.GetComponent(typeof(UnityEngine.EventSystems.IDragHandler)) != null)
-            return "S41c: eject handle has its own drag handler — the pickup drag would not bubble to the title input";
-        if (handle.GetComponent<FloatingWindowTitleInput>() != null)
-            return "S41c: eject handle carries a FloatingWindowTitleInput (must not)";
-
-        // (d) drawn ON TOP (last sibling) so its press wins the raycast over the title text.
-        if (handle.transform.GetSiblingIndex() != bar.transform.childCount - 1)
-            return "S41d: eject handle is not the last sibling (press would not win the raycast)";
-
-        // (e) the "⤴" glyph child exists and does NOT block raycasts (the chip Image is the single target).
-        var glyph = handle.transform.Find("EjectGlyph");
-        if (glyph == null) return "S41e: eject glyph child missing";
-        var glyphText = glyph.GetComponent<UnityEngine.UI.Text>();
-        if (glyphText == null) return "S41e: eject glyph has no Text";
-        if (glyphText.text != FloatingWindowEjectHandle.Glyph) return $"S41e: glyph text {glyphText.text} != {FloatingWindowEjectHandle.Glyph}";
-        if (glyphText.raycastTarget) return "S41e: glyph Text blocks raycasts (only the chip Image should be the target)";
-
-        // (f) ResolveChannel reachability: the input layer's discriminator maps an eject-handle press to
-        //     SingleWindowPickup and a plain grab to IslandMove (full truth table in S24).
-        if (FloatingWindowMath.ResolveChannel(true, false) != FloatingWindowMath.DragChannel.SingleWindowPickup)
-            return "S41f: eject press does not engage SingleWindowPickup";
-        if (FloatingWindowMath.ResolveChannel(false, false) != FloatingWindowMath.DragChannel.IslandMove)
-            return "S41f: plain grab does not stay IslandMove";
-        return null;
-    }
+    // ---- 41. RETIRED (ADR-0032 / findings 0113) — the "⤴" eject handle was removed; SingleWindowPickup
+    //         engages via Alt+drag only. The ResolveChannel truth table (Alt ⇒ pickup / plain ⇒ IslandMove)
+    //         is pinned in S24; the input-layer Alt poll → BeginDrag(channel) glue is owner playmode HITL
+    //         (findings 0113 §AFK — a real Keyboard device cannot be driven in batchmode). ----
 
     static string Section19_SceneWiringBackPlane()
     {

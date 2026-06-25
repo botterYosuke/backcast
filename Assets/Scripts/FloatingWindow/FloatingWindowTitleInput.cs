@@ -30,11 +30,6 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     InfiniteCanvasController _canvas;   // live zoom source (render-free controller stays clean)
     RectTransform _viewport;            // screen -> viewport-local conversion space (CanvasScaler-safe)
     string _windowId;
-    // ADR-0029 §3 / findings 0106 §1: the title bar's eject handle (the "⤴" affordance, a 2nd raycast
-    // target with NO drag handler so its press/drag bubbles here). When the press landed on it, the drag
-    // is a SingleWindowPickup; otherwise a plain title-bar grab is an IslandMove. Null on a bare title bar
-    // (no handle wired) → every drag is IslandMove unless Alt is held.
-    GameObject _ejectHandle;
 
     // #104 (ADR-0019 / findings 0082 §6): the canvas-LOGICAL drag-start anchor and running cursor.
     // restAtDragStart is the dragged top-left at OnBeginDrag; cursor is restAtDragStart plus the
@@ -61,11 +56,10 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     }
 
     // #139 / ADR-0030 §1/§2 / findings 0112: every window grows the always-visible "◢" RESIZE GRIP here,
-    // uniformly (dock / editor / order / HITL), with no per-factory wiring — the same "attach via the title
-    // input" discipline the eject handle uses (Awake). The grip targets the window ROOT (this title bar's
-    // parent), which — unlike the eject handle (attached to the title bar SELF in Awake) — is not available
-    // at Awake time (the title bar is parented AFTER `new GameObject`), so the grip attaches from Initialize,
-    // where the hierarchy is wired and the controller/canvas/viewport/id deps the grip needs are in hand.
+    // uniformly (dock / editor / order / HITL), with no per-factory wiring. The grip targets the window ROOT
+    // (this title bar's parent), which is not available at Awake time (the title bar is parented AFTER
+    // `new GameObject`), so the grip attaches from Initialize, where the hierarchy is wired and the
+    // controller/canvas/viewport/id deps the grip needs are in hand.
     // Idempotent find-or-create (FloatingWindowResizeHandle.Attach), so a re-Initialize is a no-op.
     void AttachResizeGrip()
     {
@@ -74,16 +68,6 @@ public class FloatingWindowTitleInput : MonoBehaviour,
         var gripGo = FloatingWindowResizeHandle.Attach(root, null);
         var grip = gripGo != null ? gripGo.GetComponent<FloatingWindowResizeGrip>() : null;
         grip?.Initialize(_windows, _canvas, _viewport, _windowId);
-    }
-
-    // ADR-0029 §3 / findings 0106 §1: every title bar grows the always-visible "⤴" eject handle here, ONCE,
-    // so the SingleWindowPickup affordance appears uniformly on dock / editor / order / HITL windows with no
-    // per-factory wiring. The handle is a 2nd raycast target with NO drag handler, so its press/drag bubbles
-    // to this component while pointerPressRaycast still names it (the channel discriminator in OnBeginDrag).
-    void Awake()
-    {
-        if (_ejectHandle == null)
-            _ejectHandle = FloatingWindowEjectHandle.Attach((RectTransform)transform, null);
     }
 
     // Press on the title bar -> raise (click-to-front, title-bar only) AND record USER focus (#101 /
@@ -96,11 +80,11 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     }
 
     // Begin-drag also raises+focuses (a drag is a press too), then OnDrag moves. Raising here keeps the
-    // window on top while it is being dragged even if OnPointerDown was missed. ADR-0029 §1/§3: the gesture
-    // CHANNEL is fixed HERE, once — a press on the eject handle (pointerPressRaycast) OR a held Alt makes it
-    // a SingleWindowPickup; otherwise a plain title-bar grab is an IslandMove. The channel never changes
-    // mid-drag (the distance metric is retired). Snapshot the dragged's logical rest position for the
-    // absolute per-frame re-render.
+    // window on top while it is being dragged even if OnPointerDown was missed. ADR-0029 §1 / ADR-0032: the
+    // gesture CHANNEL is fixed HERE, once — a held Alt makes it a SingleWindowPickup; otherwise a plain
+    // title-bar grab is an IslandMove (ADR-0032 retired the "⤴" eject-handle engage path; Alt+drag is the
+    // sole pickup trigger). The channel never changes mid-drag (the distance metric is retired). Snapshot
+    // the dragged's logical rest position for the absolute per-frame re-render.
     public void OnBeginDrag(PointerEventData eventData)
     {
         _windows?.NoteUserFocus(_windowId);
@@ -113,10 +97,9 @@ public class FloatingWindowTitleInput : MonoBehaviour,
         _escCanceled = false;
         _dragging = true;
 
-        bool hitEject = _ejectHandle != null && eventData.pointerPressRaycast.gameObject == _ejectHandle;
         var kb = Keyboard.current;
         bool altHeld = kb != null && (kb.leftAltKey.isPressed || kb.rightAltKey.isPressed);
-        var channel = FloatingWindowMath.ResolveChannel(hitEject, altHeld);
+        var channel = FloatingWindowMath.ResolveChannel(altHeld);
         // ADR-0029 §1: open the controller's drag session on the fixed channel — snapshot the island + rest
         // rects so the render is absolute from rest and ESC can revert.
         _windows?.BeginDrag(_windowId, _restAtDragStart, channel);

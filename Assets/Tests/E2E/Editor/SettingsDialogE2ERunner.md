@@ -34,6 +34,7 @@ Help→Settings で開く screen-fixed モーダル（`SettingsModalOverlay` chr
 | SETTINGS-10 | 「実行 / 外観」タブを切替える（#137 S2） | `SettingsModalOverlay.SelectTab` / `tab_run`・`tab_appearance` | 既定=実行 active・Venue/Mode/Scenario/Data は実行 group・Appearance は外観 group の子・タブクリックで group の activeSelf とタブ色(`tab_active/inactive_background`)が入替わる | overlay を built し SelectTab/タブ onClick で activeSelf・section parent・タブ色を assert | 自動(E2E済) | `SettingsDialogE2ERunner`(S10) |
 | SETTINGS-11 | 各節がカード面でグループ化（#137 S3） | `SettingsModalOverlay.MakeCard` | panel 面=`panel_background`・各 `card:*` 面=`elevated_surface_background`（panel より一段上げ）・ヘッダ=`text_muted` | overlay を built し panel/5 カードの role 解決と card≠panel を assert | 自動(E2E済) | `SettingsDialogE2ERunner`(S11) |
 | SETTINGS-12 | 実 OS でモーダルを目視操作（実 EventSystem raycast・実ピクセル・secret over settings の実描画・Dark/Light 美観） | findings 0102 D3 / 0107 | backdrop が下層クリックを食う・secret が Settings の前面に実描画・送信後 Settings 残存・カード/枠線/プレースホルダが Dark/Light 双方で可読 | — | HITL専用（実 GPU/EventSystem・実 venue secret・実ピクセル美観） | — |
+| SETTINGS-13 | テーマ切替時の Settings 内ライブ再描画（#137 review fixes・findings 0107 追補） | `BackcastWorkspaceRoot.ApplyViewportTheme` / `SettingsModalOverlay.ApplyTheme` / `SettingsVenueSectionView.ApplyTheme` / `SettingsModeSegmentView.Refresh` | Dark↔Light 切替で Settings モーダル開放中の全要素（close ボタン・Venue 行ボタン/ラベル・Mode セグメントラベル）が `panel_background/text/border/elevated_surface_background/text_muted` の現在テーマへ即時 repaint される | overlay を built しテーマ切替後に `_closeBtnImg.color`/`_closeBtnText.color`/Venue `_items[].image.color`/Mode label `text` role 解決値が新パレットと一致するかを反射 assert | 自動(E2E済) | `SettingsDialogE2ERunner`(S13) |
 
 > Venue 接続の **実 RPC（login/logout）/ LIVE_VENUE 絞り込み**は `VenueMenuViewModel` が brain で、（ADR-0027: prod 解禁の env ゲートは廃止）
 > `VenueMenuM3Probe`（MENU-11/14/19）が正本。本台本は「Settings の venue 表面が同じ VM を gating 込みで宿す」までを観測する。
@@ -44,7 +45,7 @@ Help→Settings で開く screen-fixed モーダル（`SettingsModalOverlay` chr
 - いずれかが落ちたら `[E2E SETTINGS DIALOG FAIL] <id: msg>` で `EditorApplication.Exit(1)`。`error CS` 0 件。
 - delete-the-production-logic litmus（findings 0102/0107）: `SETTINGS_SORT`≥1000 で S06 RED / `OnEscape` の guard 順を崩すと S02/03 RED /
   `SettingsVenueSectionView.Refresh` の gating を消すと S08 RED / `MakeField` の Outline 枠線やプレースホルダを消す・インライン色に
-  すると S09 RED / `SelectTab` を no-op にすると S10 RED / カードをインライン色にする・カード面を消すと S11 RED。
+  すると S09 RED / `SelectTab` を no-op にすると S10 RED / カードをインライン色にする・カード面を消すと S11 RED。 / `ApplyViewportTheme` から `_settingsVenueView?.ApplyTheme()` / `_settingsModeView?.Refresh()` 呼出を消す・あるいは `SettingsModalOverlay.MakeButton` が Image/Text の参照を保持しないと S13 RED。
 
 ## カバー状態の語彙
 

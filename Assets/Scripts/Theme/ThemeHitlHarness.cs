@@ -28,6 +28,7 @@ public class ThemeHitlHarness : MonoBehaviour
     ScenarioStartupTile _tile;
     PythonSyntaxMeshEffect _syntax;
     ChartView _chartView;   // #53: the REAL production candlestick part (was a fake swatch pre-#53)
+    Image _scenarioPanelImg;   // #137 review HIGH 2: scenario column panel face (was unpainted Unity-white)
     readonly Dictionary<string, Graphic> _samples = new Dictionary<string, Graphic>();
     bool _alt; // false = dark, true = NonDefault
 
@@ -92,6 +93,7 @@ public class ThemeHitlHarness : MonoBehaviour
 
         // -- scenario panel (left column) — covers panel_background / element_background / text / error --
         var panel = Panel(parent, "panel", new Vector2(0f, 0f), new Vector2(0.34f, 1f));
+        _scenarioPanelImg = panel.GetComponent<Image>();   // #137 review HIGH 2: retain for ApplyTheme repaint
         _tile = new ScenarioStartupTile(new ScenarioStartupController(), _font);
         _tile.Build(panel);
 
@@ -171,6 +173,9 @@ public class ThemeHitlHarness : MonoBehaviour
         Set("accents_bg", t.colors.surface_background);
         Set("accent_editor", t.players.Get(0));
         Set("accent_order", t.players.Get(2));
+        // #137 review HIGH 2: paint the scenario column face from panel_background (was Unity default white
+        // because Panel() never tints its Image — the tile only paints its own children, not the host face).
+        if (_scenarioPanelImg != null) _scenarioPanelImg.color = t.colors.panel_background;
         _tile?.ApplyTheme();
         _syntax?.ApplyTheme();
     }

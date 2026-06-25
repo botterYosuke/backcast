@@ -14,9 +14,11 @@
 //   * S3 — each section sits in a themed CARD面 (elevated_surface_background, raised from the panel face);
 //     headers are muted/uppercase (text_muted).
 //   * D5 — all chrome colors resolve through ThemeService roles (NO inline color constants — findings 0020),
-//     and ApplyTheme repaints them on a LIVE Dark/Light switch (the switch lives in THIS modal's Appearance
-//     tab, so the chrome must re-theme in place). The only theme-independent fill is the modal SCRIM (a dim
-//     veil is focus chrome, not a surface).
+//     and ApplyTheme repaints the chrome (panel + cards + headers + title + tabs + close button) on a LIVE
+//     Dark/Light switch (the switch lives in THIS modal's Appearance tab, so the chrome must re-theme in
+//     place). Venue/Mode section views own their own rebake (see SettingsVenueSectionView.ApplyTheme /
+//     SettingsModeSegmentView.Refresh) and are invoked from BackcastWorkspaceRoot.ApplyViewportTheme.
+//     The only theme-independent fill is the modal SCRIM (a dim veil is focus chrome, not a surface).
 //
 // Z-ORDER (ADR-0026 §28 / findings 0102 D2): SETTINGS_SORT sits BELOW the secret/save-guard overlays
 // (sortingOrder 1000) and ABOVE the menu bar (MenuBarView.MENU_SORT 600).
@@ -58,6 +60,8 @@ public sealed class SettingsModalOverlay : MonoBehaviour
     readonly List<Image> _cardImgs = new List<Image>();
     readonly List<Text> _headerTexts = new List<Text>();
     Text _titleText;
+    Image _closeBtnImg;
+    Text _closeBtnText;
 
     // Section content containers (host builds the reused section views into these).
     public RectTransform VenueSection { get; private set; }
@@ -102,8 +106,10 @@ public sealed class SettingsModalOverlay : MonoBehaviour
         _titleText = MakeLabel(_panel, Margin, 10f, 360f, TitleH, "<b>Settings</b>", ThemeService.Current.colors.text);
         _titleText.supportRichText = true;
 
-        // [x] close button (top-right) — name "btn_x" is pinned by SETTINGS-05/07.
-        MakeButton(_panel, PanelWidth - 36f, 10f, 26f, 26f, "x", () => CloseClicked?.Invoke());
+        // [x] close button (top-right) — name "btn_x" is pinned by SETTINGS-05/07. Retain the Image/Text
+        // so ApplyTheme() repaints them on a LIVE Dark/Light switch (else the baked colors persist).
+        MakeButton(_panel, PanelWidth - 36f, 10f, 26f, 26f, "x", () => CloseClicked?.Invoke(),
+                   out _closeBtnImg, out _closeBtnText);
 
         // tab bar (S2): two tabs under the title.
         float tabY = TitleH + 12f;
@@ -160,6 +166,8 @@ public sealed class SettingsModalOverlay : MonoBehaviour
         foreach (var img in _cardImgs) if (img != null) img.color = c.elevated_surface_background;
         foreach (var t in _headerTexts) if (t != null) t.color = c.text_muted;
         if (_titleText != null) _titleText.color = c.text;
+        if (_closeBtnImg != null) _closeBtnImg.color = c.element_background;
+        if (_closeBtnText != null) _closeBtnText.color = c.text;
         PaintTabs();
     }
 
@@ -264,22 +272,24 @@ public sealed class SettingsModalOverlay : MonoBehaviour
         return go.GetComponent<Button>();
     }
 
-    void MakeButton(RectTransform parent, float x, float yTop, float w, float h, string text, Action onClick)
+    void MakeButton(RectTransform parent, float x, float yTop, float w, float h, string text, Action onClick,
+                    out Image faceImg, out Text label)
     {
         var go = new GameObject("btn_" + text, typeof(RectTransform), typeof(Image), typeof(Button));
         var rt = (RectTransform)go.transform;
         rt.SetParent(parent, false);
         rt.anchorMin = new Vector2(0f, 1f); rt.anchorMax = new Vector2(0f, 1f); rt.pivot = new Vector2(0f, 1f);
         rt.anchoredPosition = new Vector2(x, -yTop); rt.sizeDelta = new Vector2(w, h);
-        go.GetComponent<Image>().color = ThemeService.Current.colors.element_background;
+        faceImg = go.GetComponent<Image>();
+        faceImg.color = ThemeService.Current.colors.element_background;
         go.GetComponent<Button>().onClick.AddListener(() => onClick());
 
         var labelGo = new GameObject("Text", typeof(RectTransform), typeof(Text));
         var lrt = (RectTransform)labelGo.transform;
         lrt.SetParent(rt, false);
         lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
-        var lt = labelGo.GetComponent<Text>();
-        lt.font = _font; lt.fontSize = 13; lt.color = ThemeService.Current.colors.text;
-        lt.alignment = TextAnchor.MiddleCenter; lt.text = text; lt.raycastTarget = false;
+        label = labelGo.GetComponent<Text>();
+        label.font = _font; label.fontSize = 13; label.color = ThemeService.Current.colors.text;
+        label.alignment = TextAnchor.MiddleCenter; label.text = text; label.raycastTarget = false;
     }
 }

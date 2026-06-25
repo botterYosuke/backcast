@@ -11,6 +11,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 _PYTHON_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _PYTHON_ROOT)
 
@@ -72,23 +74,34 @@ def test_jquants_duckdb_root_absolute_kept(monkeypatch) -> None:
     assert paths.jquants_duckdb_root() == Path(configured)
 
 
-def test_jquants_duckdb_root_lazy_reread_after_runtime_update(monkeypatch) -> None:
+@pytest.mark.scenario("DUCKROOT-04")
+def test_jquants_duckdb_root_lazy_reread_after_runtime_update(monkeypatch, tmp_path) -> None:
     """#137 S4 (findings 0107 D4): a RUNTIME os.environ update takes effect on the NEXT call — no restart.
 
     This is the engine-boundary contract the Settings「Data」injection relies on: the Unity host writes
     os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] when the field commits, and the next Replay's
     jquants_duckdb_root() must read the new value (it lazy-reads os.environ.get every call, never caches).
+
+    Uses tmp_path-derived OS-absolute paths (not POSIX literals) so the assertion holds on Windows too —
+    `Path("/first/root").is_absolute()` is False on Windows (drive-relative), which would trip
+    resolve_repo_relative and yield `C:\\first\\root`. See test_jquants_duckdb_root_absolute_kept for
+    the same per-machine `.env` contract (absolute = `Path.is_absolute()`, OS-appropriate).
     """
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    assert first.is_absolute() and second.is_absolute()        # guard against a future tmp_path change
+
     monkeypatch.setattr(os, "environ", {})
     assert paths.jquants_duckdb_root() is None                 # unset → no override
 
-    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = "/first/root"  # simulate the host's first injection
-    assert paths.jquants_duckdb_root() == Path("/first/root")
+    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = str(first)    # simulate the host's first injection
+    assert paths.jquants_duckdb_root() == first
 
-    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = "/second/root"  # the owner edits the field again
-    assert paths.jquants_duckdb_root() == Path("/second/root")  # next call reflects it (no restart — D4)
+    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = str(second)   # the owner edits the field again
+    assert paths.jquants_duckdb_root() == second               # next call reflects it (no restart — D4)
 
 
+@pytest.mark.scenario("DUCKROOT-04")
 def test_jquants_listed_info_path_resolves_under_injected_root(monkeypatch, tmp_path) -> None:
     """#137 S4: jquants_listed_info_path() resolves `<root>/listed_info.duckdb` from os.environ when present.
 

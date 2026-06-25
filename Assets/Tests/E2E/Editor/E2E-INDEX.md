@@ -17,6 +17,8 @@
 > #137（ADR-0026・findings 0107）: Settings 刷新——**SettingsDialog** に SETTINGS-09（入力欄判別）・SETTINGS-10（2タブ切替）・
 > SETTINGS-11（カード面/role 解決）追加、旧 HITL 行を SETTINGS-12 へ採番替え。**DuckDbRootSettingsE2ERunner** 新設
 > （DUCKROOT-01..05＝DuckDB root の store/validation/browse/os.environ 注入。`.env` から Settings「Data」節へ移設）。
+>
+> #137 review fixes（findings 0107 追補）: **SettingsDialog** に SETTINGS-13（テーマ切替時の Settings 内ライブ再描画＝close ボタン/Venue 行/Mode セグメントの ApplyTheme 配線）追加。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -29,7 +31,7 @@
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..55` | 55 | 52 | 0 | 0 | 2 | 1 |
 | [StrategyEditorZoomCrispnessE2ERunner](./StrategyEditorZoomCrispnessE2ERunner.md) ✅ | `ZOOM-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..17` | 17 | 15 | 0 | 0 | 2 | 0 |
-| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..12` | 12 | 11 | 0 | 0 | 1 | 0 |
+| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..13` | 13 | 12 | 0 | 0 | 1 | 0 |
 | [DuckDbRootSettingsE2ERunner](./DuckDbRootSettingsE2ERunner.md) ✅ | `DUCKROOT-01..05` | 5 | 4 | 0 | 0 | 1 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |

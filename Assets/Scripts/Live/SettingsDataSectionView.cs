@@ -98,10 +98,31 @@ public sealed class SettingsDataSectionView
 
     // Persist to the store, inject into os.environ (host), and refresh the red error. The single write
     // path for both onEndEdit and browse so the store/os.environ/UI never diverge.
+    //
+    // #137 review HIGH 3: validator-first — invalid path は os.environ に注入しない
+    // （旧順序 = Save→Inject→RefreshError では bogus 値が .env baseline を遮蔽し
+    // 次の Replay が ADR-0006 hard-error した）。Store には常に Save するので、
+    // ユーザーが入力した invalid 値は UI に残り赤エラーで誘導される。
+    //
+    // #137 review round 3 (HIGH): invalid commit は env を **明示的に baseline 復帰** させる
+    // （`_onCommit?.Invoke("")` → Injector が IsNullOrWhiteSpace で baseline を復元、findings 0107 D3 と同型）。
+    // 旧経路（valid → invalid の順）では invalid 時に Inject を skip するだけだったため env が前回 valid 値の
+    // ままで UI/Store/env が 3-way 乖離していた。空文字注入で env を baseline に戻し、UI（bogus が残る）/
+    // Store（bogus が persist）/ env（baseline）の 3-way 整合：UI が真実(=bogus 入力中)、env は安全側(=baseline、
+    // 次 Replay が ADR-0006 で正しく hard error or .env 値で実行)、Store は次回起動時に boot Inject が validator-
+    // first で同じ baseline 復帰を再現する。
     void Commit(string root)
     {
-        JquantsDuckdbRootStore.Save(root);
-        _onCommit?.Invoke(root);
+        // #137 review round 3 (MED): whitespace-only 入力を空文字に正規化。Store/Validator/Injector はすべて
+        // IsNullOrWhiteSpace を「unset」扱いするが、UI の field.text は "   " のまま残るため、再オープン時に
+        // Load()="" で field が空表示になり owner が「入力が消えた」と感じる UX 不整合があった。Commit 時に
+        // 空文字に潰すことで field/store/env/再オープン UI が同一の "no override" 状態で一貫する（findings 0107
+        // D3「empty = no override」契約の UI への波及）。
+        string normalized = string.IsNullOrWhiteSpace(root) ? "" : root;
+        if (_field != null && normalized != root) _field.SetTextWithoutNotify(normalized);
+        JquantsDuckdbRootStore.Save(normalized);
+        string err = JquantsDuckdbRootValidator.Validate(normalized);
+        _onCommit?.Invoke(string.IsNullOrEmpty(err) ? normalized : "");
         RefreshError();
     }
 

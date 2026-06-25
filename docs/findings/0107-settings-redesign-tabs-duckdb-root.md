@@ -175,3 +175,22 @@ high-effort code-review が 4 correctness/regression ＋ 1 Medium cleanup を検
 
 再走: `[E2E SETTINGS-01..11 PASS]` / `[E2E DUCKROOT-01..04 PASS]`（exit 139=shutdown segfault・タグが正本）/
 `[E2E SCENARIO STARTUP PASS]` / `[THEME PASS]` / compile `error CS` 0 件。Low cleanup（`Anchor`/`Stretch`/button 二重）は据え置き。
+
+### review fixes (HIGH/MEDIUM round 2)
+
+- HIGH 1: ApplyViewportTheme が Venue/Mode/[x] を rebake していなかった漏れを修正（_settingsVenueView.ApplyTheme / _settingsModeView.Refresh / SettingsModalOverlay の [x] retained graphic 追加）
+- HIGH 2: ThemeHitlHarness scenario panel の Image が paint されず Unity デフォルト白で表示されていた回帰を修正（panel_background role で paint）
+- HIGH 8: SettingsModalOverlay.cs の ApplyTheme doc-comment を実装 (close button + section views 経由) と整合
+- MED 5: SETTINGS-13 AFK probe 追加 — Dark→Light の live re-theme で chrome 全 role が rebase されることを assert（HIGH 1+2 の RED litmus）
+- HIGH 3: SettingsDataSectionView.Commit を validator-first 順に変更（Save → Validate → valid なら onCommit → RefreshError）。invalid path が os.environ に注入され .env baseline を遮蔽していた D3 違反を修正
+- HIGH 4: JquantsDuckdbRootInjector / Store / Validator の string.IsNullOrEmpty を IsNullOrWhiteSpace に変更（空白 1 文字以上が「設定済み」扱いされ Python 側で REPO_ROOT/" " を生成していた bug を修正）
+- MED 6: python/tests/test_paths_dotenv.py に @pytest.mark.scenario("DUCKROOT-04") を付与（CLAUDE.md Gap 3 / Action-ID rollup 規約）
+- DUCKROOT-04 lazy-reread test を OS-portable に修正（POSIX 絶対パスリテラル `/first/root` は Windows で `Path.is_absolute()=False` のため `resolve_repo_relative` で repo 配下に解決される。`tmp_path` 由来の OS-appropriate 絶対パスに置換。実装側は不変 — `.env` 契約の絶対判定は `Path.is_absolute()` で正しい）
+- MED 7: Win32FileDialog.BrowseFolder で `folder` / `result` の IShellItem が AddRef'd 戻り値だが finally で release されていなかった漏れを修正（LIFO で result → folder → dialog を release）
+
+### review fixes (HIGH/MEDIUM round 3)
+
+- HIGH 9 (cross-session re-inject): BackcastWorkspaceRoot 起動時 Inject に validator-first を追加。前回 session で persist された invalid root が boot で env に再注入され Replay を ADR-0006 hard error させていた問題を修正。invalid は empty 文字列で Inject = .env baseline 復帰（Commit 経路の HIGH 3 fix と対称）。
+- HIGH 10 (same-session stale env): Commit で invalid 値を受けたとき `_onCommit?.Invoke("")` で env を baseline へ明示 revert。旧経路（valid → invalid の順）は Inject skip で env が前回 valid 値のまま残り UI/Store/env が 3-way 乖離していた。
+- MED 8 (SETTINGS-13 Manual/Auto 未 assert): modeVm.ApplyPoll で VenueLive=true を seed し、Manual/Auto seg が active になった状態で 3 seg すべて rebake assert。vacuity guard を `modeChecked < 3` に強化。HIGH 1 RED litmus が Replay 1 個でしか効いていなかった漏れを修正。
+- MED 9 (whitespace UX 乖離): Commit で whitespace-only を空文字に正規化し field/store/env/再オープン UI を同一の "no override" 状態に揃える（findings 0107 D3 の UI 波及）。

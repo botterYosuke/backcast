@@ -290,9 +290,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // BEFORE the first Replay, so an init-time run doesn't fall back to the `.env` value. No-op when the
             // field is unset (engine keeps the `.env` setdefault — D3). Its OWN try/catch: a bad persisted root
             // must NOT tear down a successfully-initialized interpreter / drop Python ownership for the session.
+            //
+            // #137 review round 3 (HIGH): validator-first at boot — invalid な persisted root（前回 session で
+            // 入力した bogus が PlayerPrefs に残っている）は inject しない（empty 文字列を渡して .env baseline へ
+            // 復帰させる）。Commit 経路の HIGH 3 fix と対称：runtime も boot も「invalid → .env baseline」で
+            // 一貫し、bogus 値が ADR-0006 hard error を session 跨ぎで誘発しない。UI には bogus が残るので
+            // Settings を開いた owner は赤エラーで誘導される（findings 0107 D-E）。
             if (_isOwner)
             {
-                try { JquantsDuckdbRootInjector.Inject(JquantsDuckdbRootStore.Load()); }
+                try
+                {
+                    string persisted = JquantsDuckdbRootStore.Load();
+                    string err = JquantsDuckdbRootValidator.Validate(persisted);
+                    JquantsDuckdbRootInjector.Inject(string.IsNullOrEmpty(err) ? persisted : "");
+                }
                 catch (Exception e) { Debug.LogError("[BackcastWorkspaceRoot] DuckDB root injection failed: " + e); }
             }
         }
@@ -732,6 +743,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _settingsOverlay?.ApplyTheme();
         _tile?.ApplyTheme();
         _settingsDataView?.ApplyTheme();
+        // #137 review HIGH 1 (findings 0107 追補): the Venue/Mode section views own their own rebake — neither
+        // self-subscribes to ThemeService.Changed, so call them here alongside the overlay chrome so the whole
+        // Settings surface re-themes in place on a LIVE Dark/Light switch (else venue buttons + mode labels
+        // keep their build-time baked colors until the modal is reopened).
+        _settingsVenueView?.ApplyTheme();
+        _settingsModeView?.Refresh();
         // keep the Settings Appearance segment highlight in sync when the theme changes from elsewhere.
         _settingsAppearanceView?.Refresh();
     }

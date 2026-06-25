@@ -19,7 +19,7 @@ public static class JquantsDuckdbRootValidator
     // that contains listed_info.duckdb, else a human message for the red per-field error label.
     public static string Validate(string root)
     {
-        if (string.IsNullOrEmpty(root)) return null;                 // unset → no override, not an error
+        if (string.IsNullOrWhiteSpace(root)) return null;            // unset/whitespace → no override, not an error
         if (!Directory.Exists(root)) return "folder not found: " + root;
         string listed = Path.Combine(root, ListedInfoFile);
         if (!File.Exists(listed)) return "missing " + ListedInfoFile + " in this folder";

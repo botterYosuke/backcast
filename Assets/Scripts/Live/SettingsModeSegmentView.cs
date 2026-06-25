@@ -89,7 +89,12 @@ public sealed class SettingsModeSegmentView
                 col.a = locked ? DISABLED_ALPHA : ENABLED_ALPHA;
                 img.color = col;
             }
-            if (label != null) { var lc = label.color; lc.a = locked ? DISABLED_ALPHA : ENABLED_ALPHA; label.color = lc; }
+            if (label != null) {
+                // #137 review HIGH 1: rebake the label RGB from the current theme's `text` role on every
+                // Refresh — the baked color persists otherwise (a LIVE Dark→Light flip would keep dark text).
+                var baseCol = c.text;
+                label.color = new Color(baseCol.r, baseCol.g, baseCol.b, locked ? DISABLED_ALPHA : ENABLED_ALPHA);
+            }
             if (btn != null) btn.interactable = !locked;
         }
     }

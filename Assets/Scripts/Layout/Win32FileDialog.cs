@@ -47,6 +47,8 @@ public sealed class Win32FileDialog : IFileDialog
         if (!IsWindows) { Debug.LogWarning("[FILEDIALOG] native folder picker is Windows-only -> cancelled."); return null; }
 
         IFileOpenDialog dialog = null;
+        IShellItem folder = null;
+        IShellItem result = null;
         try
         {
             dialog = (IFileOpenDialog)new FileOpenDialogRCW();
@@ -56,7 +58,6 @@ public sealed class Win32FileDialog : IFileDialog
             if (!string.IsNullOrEmpty(title)) dialog.SetTitle(title);
             if (!string.IsNullOrEmpty(initialDir))
             {
-                IShellItem folder;
                 if (SHCreateItemFromParsingName(initialDir, IntPtr.Zero, typeof(IShellItem).GUID, out folder) == 0 && folder != null)
                     dialog.SetFolder(folder);
             }
@@ -64,14 +65,21 @@ public sealed class Win32FileDialog : IFileDialog
             int hr = dialog.Show(GetActiveWindow());
             if (hr != 0) return null;   // HRESULT != S_OK → cancel (ERROR_CANCELLED) or error → treat as cancel
 
-            IShellItem result;
             dialog.GetResult(out result);
             string path;
             result.GetDisplayName(SIGDN_FILESYSPATH, out path);
             return string.IsNullOrEmpty(path) ? null : path;
         }
         catch (Exception e) { Debug.LogWarning("[FILEDIALOG] folder picker failed -> cancelled: " + e.Message); return null; }
-        finally { if (dialog != null) Marshal.ReleaseComObject(dialog); }
+        finally
+        {
+            // Release IShellItem RCWs before the dialog (LIFO ownership) — the dialog
+            // doesn't own them; SHCreateItemFromParsingName / GetResult return AddRef'd refs
+            // that we own. GetDisplayName's out string is a managed System.String (not an RCW).
+            if (result != null) Marshal.ReleaseComObject(result);
+            if (folder != null) Marshal.ReleaseComObject(folder);
+            if (dialog != null) Marshal.ReleaseComObject(dialog);
+        }
     }
 
     static bool IsWindows =>

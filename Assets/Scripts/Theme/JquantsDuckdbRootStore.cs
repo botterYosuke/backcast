@@ -23,7 +23,7 @@ public static class JquantsDuckdbRootStore
     // engine/paths.py falls back to the `.env` setdefault — D3 precedence: ctor > os.environ(UI/.env)).
     public static void Save(string root)
     {
-        if (string.IsNullOrEmpty(root)) PlayerPrefs.DeleteKey(Key);
+        if (string.IsNullOrWhiteSpace(root)) PlayerPrefs.DeleteKey(Key);
         else PlayerPrefs.SetString(Key, root);
         PlayerPrefs.Save();
     }

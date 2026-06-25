@@ -41,13 +41,15 @@ public static class SettingsDialogE2ERunner
         Section("SETTINGS-09", Section09_InputFieldDistinction);
         Section("SETTINGS-10", Section10_TwoTabSwitch);
         Section("SETTINGS-11", Section11_CardSurfacesAndRoles);
+        Section("SETTINGS-13", Section13_LiveReThemeWhileOpen);
 
         if (_fail.Count == 0)
             Debug.Log("[E2E SETTINGS DIALOG PASS] modal shell open/close (SETTINGS-01) / ESC guard: " +
                       "drag-revert (SETTINGS-02), secret+save-guard consume (SETTINGS-03), toggle (SETTINGS-04) / " +
                       "[x]+SetVisible (SETTINGS-05) / z-order menu<settings<secret (SETTINGS-06) / chrome+sections " +
                       "(SETTINGS-07) / venue section + menu Venue retired (SETTINGS-08) / input-field border+placeholder+" +
-                      "muted label (SETTINGS-09) / 2-tab 実行↔外観 switch (SETTINGS-10) / card面+role解決 (SETTINGS-11) " +
+                      "muted label (SETTINGS-09) / 2-tab 実行↔外観 switch (SETTINGS-10) / card面+role解決 (SETTINGS-11) / " +
+                      "LIVE Dark↔Light re-theme while open: close btn + venue + mode (SETTINGS-13) " +
                       "— ADR-0026, findings 0102/0107");
         else
             Debug.LogError("[E2E SETTINGS DIALOG FAIL]\n  - " + string.Join("\n  - ", _fail));
@@ -455,6 +457,120 @@ public static class SettingsDialogE2ERunner
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // SETTINGS-13 (#137 review HIGH 1+2 / findings 0107 追補): the Settings chrome must re-theme in place on
+    // a LIVE Dark↔Light switch — close button face/label, Venue row buttons (face + label), and the Mode
+    // segment labels are all baked at build time and won't self-update; BackcastWorkspaceRoot.ApplyViewportTheme
+    // is responsible for calling SettingsModalOverlay.ApplyTheme + SettingsVenueSectionView.ApplyTheme +
+    // SettingsModeSegmentView.Refresh so they rebake. RED litmus: remove the venue/mode calls from
+    // ApplyViewportTheme — or revert MakeButton so [x] Image/Text are not retained — and the rebased role
+    // values won't match the new palette here.
+    static string Section13_LiveReThemeWhileOpen()
+    {
+        // baseline: ensure Dark before build so the bake corresponds to a known palette.
+        ThemeService.SetTheme(Theme.Dark());
+        var go = new GameObject("settings_retheme_e2e");
+        try
+        {
+            var overlay = go.AddComponent<SettingsModalOverlay>();
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            overlay.Build(font);
+
+            // build the venue + mode section views into the overlay's containers (same wiring as the host).
+            var conn = new VenueConnectionViewModel();
+            var coord = new LiveLogoutCoordinator();
+            var venueVm = new VenueMenuViewModel(conn, coord);
+            var venueView = new SettingsVenueSectionView(venueVm, null, (v, e) => { }, () => { }, () => true, font);
+            venueView.Build(overlay.VenueSection);
+
+            var modeVm = new FooterModeViewModel();
+            // #137 review round 3 (MED): seed VenueLive=true so Manual/Auto segments are visible — without this
+            // ShowManualAutoSegments=false (default) → Manual/Auto seg は SetActive(false) → assert ループの
+            // `if (!seg.gameObject.activeSelf) continue` で skip → modeChecked=1 (Replay のみ) で vacuity guard
+            // を擦り抜け、Manual/Auto label rebake 回帰を検出できない（HIGH 1 RED litmus が Replay 1 個でしか
+            // 効いていなかった）。venue_state=CONNECTED の poll を seed して 3 seg すべて assert する。
+            modeVm.ApplyPoll("{\"execution_mode\":\"Replay\",\"venue_state\":\"CONNECTED\"}");
+            var modeView = new SettingsModeSegmentView(modeVm, _ => { }, font);
+            modeView.Build(overlay.ModeSection);
+
+            // capture Dark roles for the comparison after the flip.
+            var dark = Theme.Dark().colors;
+            var light = Theme.Light().colors;
+
+            // flip to Light and replay the host's ApplyViewportTheme contract (the exact order matters: the
+            // chrome rebakes, then the section views rebake from the same role table — production parity).
+            ThemeService.SetTheme(Theme.Light());
+            overlay.ApplyTheme();
+            venueView.ApplyTheme();
+            modeView.Refresh();
+
+            // [x] close button face + label (HIGH 1 — was previously baked once and never repainted).
+            Button xBtn = null;
+            foreach (var b in go.GetComponentsInChildren<Button>(true))
+                if (b.gameObject.name == "btn_x") { xBtn = b; break; }
+            if (xBtn == null) return "[x] close button missing";
+            var xImg = xBtn.GetComponent<Image>();
+            if (xImg == null || !SameColor(xImg.color, light.element_background))
+                return "[x] face did not rebase to Light element_background on LIVE switch (HIGH 1 RED)";
+            var xLbl = xBtn.GetComponentInChildren<Text>(true);
+            if (xLbl == null || !SameColor(xLbl.color, light.text))
+                return "[x] label did not rebase to Light text on LIVE switch (HIGH 1 RED)";
+
+            // venue rows: face + label rebake (HIGH 1 — sections didn't have an ApplyTheme before).
+            int venueChecked = 0;
+            foreach (var b in overlay.VenueSection.GetComponentsInChildren<Button>(true))
+            {
+                if (!b.gameObject.name.StartsWith("venue:")) continue;
+                var face = b.GetComponent<Image>();
+                if (face == null || !SameColor(face.color, light.element_background))
+                    return "venue row '" + b.gameObject.name + "' face did not rebase to Light element_background (HIGH 1 RED)";
+                var lbl = b.GetComponentInChildren<Text>(true);
+                if (lbl == null || !SameColor(lbl.color, light.text))
+                    return "venue row '" + b.gameObject.name + "' label did not rebase to Light text (HIGH 1 RED)";
+                venueChecked++;
+            }
+            if (venueChecked == 0) return "no venue rows to verify rebake (vacuous)";
+
+            // mode segment labels: Refresh must rebake the label RGB from the current theme's `text` role,
+            // not just adjust alpha (HIGH 1 — old Refresh kept the baked dark text on a Light flip).
+            int modeChecked = 0;
+            foreach (var seg in overlay.ModeSection.GetComponentsInChildren<Button>(true))
+            {
+                if (!seg.gameObject.name.StartsWith("seg:")) continue;
+                if (!seg.gameObject.activeSelf) continue;
+                var lbl = seg.GetComponentInChildren<Text>(true);
+                if (lbl == null) continue;
+                // alpha is locked-state dependent; only compare RGB (the role-rebake contract).
+                var got = lbl.color; var want = light.text;
+                if (Mathf.Abs(got.r - want.r) > 0.003f || Mathf.Abs(got.g - want.g) > 0.003f || Mathf.Abs(got.b - want.b) > 0.003f)
+                    return "mode segment '" + seg.gameObject.name + "' label RGB did not rebase to Light text (HIGH 1 RED)";
+                modeChecked++;
+            }
+            // #137 review round 3 (MED): VenueLive=true seed で 3 seg (Replay/Manual/Auto) すべて active になる
+            // はず — 3 未満なら Manual/Auto seg が rebake 対象から漏れている（HIGH 1 の RED litmus が部分的に
+            // しか効いていなかった旧状態への退行）。
+            if (modeChecked < 3) return "expected 3 active mode segments (Replay/Manual/Auto with VenueLive=true), saw " + modeChecked;
+
+            // non-vacuity: the Light/Dark palettes must actually differ on the roles we asserted, otherwise
+            // the rebake would trivially pass even with the production calls removed.
+            if (SameColor(dark.element_background, light.element_background) && SameColor(dark.text, light.text))
+                return "Dark/Light palettes identical on element_background+text (test would be vacuous)";
+
+            // also sanity-check the panel/card chrome rebased (covers SettingsModalOverlay.ApplyTheme too).
+            var panel = FindByName(go, "SettingsPanel");
+            var panelImg = panel != null ? panel.GetComponent<Image>() : null;
+            if (panelImg == null || !SameColor(panelImg.color, light.panel_background))
+                return "panel face did not rebase to Light panel_background";
+
+            return null;
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(go);
+            // restore Dark so downstream sections (and other runners) start from the canonical baseline.
+            ThemeService.SetTheme(Theme.Dark());
+        }
     }
 
     static bool IsDescendant(Transform child, Transform ancestor)

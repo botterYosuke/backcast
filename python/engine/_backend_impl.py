@@ -1300,6 +1300,20 @@ class DataEngineBackend:
         # the UI treats the live universe as unsupported (current_universe()=None).
         adapter = runner.adapter
         if not getattr(adapter, "enumerates_instruments", True):
+            # Issue #46: kabu picker browses listed_info (TSE-only — kabu's _parse_instrument_id
+            # accepts .TSE only); other non-enumerating venues stay UNSUPPORTED. See CONTEXT.md
+            # "picker browse universe" and docs/findings/0105 §B1/A3 for rationale, error
+            # narrowing, and Replay impact. enumerates_instruments stays False (#253 anti-prune).
+            if (runner.venue_id or "").upper() == "KABU":
+                snapshot, error = self._read_local_snapshot(
+                    "", "list_instruments(live→kabu listed_info fallback)"
+                )
+                if error is not None:
+                    # A3: narrow raw exception text → typed code (full exc already logged).
+                    return InstrumentListResult(
+                        success=False, error_message="LOCAL_UNIVERSE_UNAVAILABLE"
+                    )
+                return self._snapshot_to_list_result(snapshot)
             return InstrumentListResult(
                 success=False,
                 error_message="LIVE_UNIVERSE_UNSUPPORTED",
@@ -1427,8 +1441,32 @@ class DataEngineBackend:
             )
             if error is not None:
                 return InstrumentListResult(success=False, error_message=error)
+        return self._snapshot_to_list_result(snapshot)
+
+    def _snapshot_to_list_result(self, snapshot):
+        """Listed-info snapshot → picker InstrumentListResult (shared by Replay + kabu Live).
+
+        Empty `codes` is treated as a config error (LOCAL_UNIVERSE_UNAVAILABLE) rather than
+        Ready-with-zero-ids: a mounted-but-empty DuckDB is owner-actionable (re-run ingest),
+        and silently returning success=True would render as the generic "No instruments"
+        placeholder — indistinguishable from a venue that truly has no universe. names parallel
+        codes and fall back to the id when the listed_info row had a NULL CompanyName, so the
+        picker always has a non-empty display label.
+        """
+        if not snapshot.codes:
+            return InstrumentListResult(
+                success=False, error_message="LOCAL_UNIVERSE_UNAVAILABLE"
+            )
         ids = [f"{code}.TSE" for code in snapshot.codes]
-        instruments = [InstrumentInfo(id=i, name=i, market="TSE") for i in ids]
+        names = list(snapshot.names) if snapshot.names else []
+        instruments = [
+            InstrumentInfo(
+                id=ids[i],
+                name=(names[i] if i < len(names) and names[i] else ids[i]),
+                market="TSE",
+            )
+            for i in range(len(ids))
+        ]
         return InstrumentListResult(
             success=True,
             instrument_ids=ids,

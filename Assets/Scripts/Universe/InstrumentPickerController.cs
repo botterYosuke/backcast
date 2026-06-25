@@ -23,14 +23,22 @@ using System.Linq;
 public struct PickerRow
 {
     public bool IsPlaceholder;
-    public string Label;        // display text (id for a real row, message for a placeholder)
+    public string Label;        // display text (id [+ optional name] for a real row, message for a placeholder)
     public string Id;           // null for a placeholder
     public bool AlreadyAdded;   // real row already present in the universe
 
     public static PickerRow Placeholder(string label) =>
         new PickerRow { IsPlaceholder = true, Label = label, Id = null, AlreadyAdded = false };
-    public static PickerRow Candidate(string id, bool alreadyAdded) =>
-        new PickerRow { IsPlaceholder = false, Label = id, Id = id, AlreadyAdded = alreadyAdded };
+    // Issue #46 / review finding A5: an optional human-readable name is appended to the label
+    // ("<id> <name>") so the picker shows '7203.TSE トヨタ自動車' instead of '7203.TSE' alone.
+    // When name is null/empty/equal-to-id the label collapses back to just the id (the
+    // listed_info CompanyName fallback in `_snapshot_to_list_result` already substitutes the
+    // id, so we de-dup here to avoid '7203.TSE 7203.TSE' rows).
+    public static PickerRow Candidate(string id, string name, bool alreadyAdded)
+    {
+        string label = (!string.IsNullOrEmpty(name) && name != id) ? id + " " + name : id;
+        return new PickerRow { IsPlaceholder = false, Label = label, Id = id, AlreadyAdded = alreadyAdded };
+    }
 }
 
 public sealed class InstrumentPickerController
@@ -112,15 +120,39 @@ public sealed class InstrumentPickerController
         // Ready: distinguish empty-universe (0 ids) from query-excluded-all (TTWR comment:
         // mixing them yields a wrong "No matches" when nothing was searched).
         IReadOnlyList<string> ids = result.Ids ?? Array.Empty<string>();
+        IReadOnlyList<string> names = result.Names ?? Array.Empty<string>();
         if (ids.Count == 0) return One(EmptyMessage(mode));
 
+        // Filter by id OR name (review finding A5): kabu users from kabuStation expect to
+        // search by company name (e.g. 'トヨタ'), not just the 4-digit ticker. We keep both
+        // the id and name handy for the row build below so the matched indices don't need a
+        // re-lookup. Names is parallel to ids and may be shorter / individually empty (legacy
+        // schemas, NULL CompanyName); fall back to id-only matching for those entries.
         string q = Query ?? "";
-        List<string> filtered = ids
-            .Where(id => q.Length == 0 || id.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
-            .ToList();
-        filtered.Sort(StringComparer.Ordinal);
+        int n = ids.Count;
+        var matchedIds = new List<string>(n);
+        var matchedNames = new List<string>(n);
+        for (int i = 0; i < n; i++)
+        {
+            string id = ids[i];
+            string name = i < names.Count ? (names[i] ?? "") : "";
+            bool match = q.Length == 0
+                || id.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                || (name.Length > 0 && name.IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0);
+            if (!match) continue;
+            matchedIds.Add(id);
+            matchedNames.Add(name);
+        }
 
-        if (filtered.Count == 0) return One("No matches");
+        if (matchedIds.Count == 0) return One("No matches");
+
+        // Sort matched rows by id (ordinal) — pair (id,name) so the name follows its id after
+        // the sort. Indices into matchedIds/matchedNames are interchangeable up to this point;
+        // we materialize a single permutation array to avoid two parallel sorts going out of
+        // sync.
+        var order = new int[matchedIds.Count];
+        for (int i = 0; i < order.Length; i++) order[i] = i;
+        Array.Sort(order, (a, b) => string.CompareOrdinal(matchedIds[a], matchedIds[b]));
 
         // Hoist the already-added lookup OUT of the per-candidate loop. registry.Ids allocates a fresh
         // ReadOnlyCollection wrapper on every get AND .Contains is an O(curated) linear scan — over the
@@ -128,12 +160,14 @@ public sealed class InstrumentPickerController
         // keystroke. A HashSet built once makes the per-candidate check O(1). (case-insensitive substring
         // is OrdinalIgnoreCase IndexOf — no per-id ToLowerInvariant() allocation over the full universe.)
         var owned = registry != null ? new HashSet<string>(registry.Ids) : null;
-        var rows = new List<PickerRow>(filtered.Count);
-        for (int i = 0; i < filtered.Count; i++)
+        var rows = new List<PickerRow>(order.Length);
+        for (int i = 0; i < order.Length; i++)
         {
-            string id = filtered[i];
+            int idx = order[i];
+            string id = matchedIds[idx];
+            string name = matchedNames[idx];
             bool already = owned != null && owned.Contains(id);
-            rows.Add(PickerRow.Candidate(id, already));
+            rows.Add(PickerRow.Candidate(id, name, already));
         }
         return rows;
     }

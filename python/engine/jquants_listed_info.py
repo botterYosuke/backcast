@@ -28,10 +28,16 @@ class ListedSymbolsSnapshot(NamedTuple):
     Empty `as_of_date` is the typed "no snapshot exists at-or-before end_date" signal — callers
     that need to distinguish "DB has snapshot with 0 listings" from "no snapshot at this date"
     look at `as_of_date` rather than `len(codes)`.
+
+    `names` is parallel to `codes` (issue #46 — kabu Live picker UX): the listed_info
+    `CompanyName` column. An individual entry may be the empty string when the source row had
+    a NULL CompanyName; downstream callers fall back to the id for display so the picker
+    always has a label.
     """
 
     codes: list[str]
     as_of_date: str
+    names: list[str]
 
 
 def _validate_iso_date(end_date: str) -> None:
@@ -80,7 +86,7 @@ def read_listed_snapshot(end_date: str | None) -> ListedSymbolsSnapshot | None:
         rows = con.execute(
             f"""
             WITH bound AS ({cte})
-            SELECT (SELECT as_of FROM bound) AS as_of, li.Code
+            SELECT (SELECT as_of FROM bound) AS as_of, li.Code, li.CompanyName
             FROM listed_info li
             WHERE li.Date = (SELECT as_of FROM bound)
             ORDER BY li.Code
@@ -92,7 +98,8 @@ def read_listed_snapshot(end_date: str | None) -> ListedSymbolsSnapshot | None:
 
     if not rows:
         # `(SELECT as_of FROM bound)` returned NULL → no snapshot at-or-before `end_date`.
-        return ListedSymbolsSnapshot(codes=[], as_of_date="")
+        return ListedSymbolsSnapshot(codes=[], as_of_date="", names=[])
     as_of = rows[0][0]
     codes = [str(r[1]) for r in rows]
-    return ListedSymbolsSnapshot(codes=codes, as_of_date=str(as_of))
+    names = [str(r[2]) if r[2] is not None else "" for r in rows]
+    return ListedSymbolsSnapshot(codes=codes, as_of_date=str(as_of), names=names)

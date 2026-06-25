@@ -356,12 +356,18 @@ public sealed class WorkspaceEngineHost
         public bool Success;
         public string ErrorCode;
         public string[] InstrumentIds;
+        // Issue #46 / review finding A5: parallel to InstrumentIds. Carries the human-readable
+        // name (listed_info CompanyName for kabu/TSE, the venue's instrument name otherwise) so
+        // the picker can filter on either id or name. May contain "" for individual rows where
+        // the source did not provide a name (e.g. NULL CompanyName); the picker falls back to
+        // the id for display in that case.
+        public string[] InstrumentNames;
     }
 
     public InstrumentListResult InvokeListInstruments(string source, string endDate)
     {
         if (!Volatile.Read(ref _serverReady))
-            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.ServerNotReady, InstrumentIds = Array.Empty<string>() };
+            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.ServerNotReady, InstrumentIds = Array.Empty<string>(), InstrumentNames = Array.Empty<string>() };
         try
         {
             // Slice review F5: every PyString lives in a `using` so the picker hot path doesn't
@@ -376,27 +382,43 @@ public sealed class WorkspaceEngineHost
                 using (PyObject s = res["success"]) success = s.As<bool>();
                 string errorCode = "";
                 using (PyObject ec = res["error_code"]) errorCode = ec.As<string>() ?? "";
-                var ids = new List<string>();
-                using (PyObject idsObj = res["instrument_ids"])
+                // Single walk over result.instruments[*]; id + name come from the same Python
+                // InstrumentInfo row so the two parallel arrays stay index-aligned by construction
+                // (the pre-rewrite double-loop + while-pad defended against skew that can't happen
+                // when both fields are sourced from the same row). result["instrument_ids"] is
+                // equivalent — _snapshot_to_list_result builds it from the same instruments list
+                // — so we don't need to walk both.
+                List<string> ids;
+                List<string> names;
+                using (PyObject instObj = res["instruments"])
                 {
-                    // pythonnet's PyObject isn't C#-foreach-iterable here, so walk the Python list by
-                    // index (same .Length()+indexer idiom as ExecutorOrphanAbsenceAssert.cs:44).
-                    long count = idsObj.Length();
-                    for (int i = 0; i < count; i++)
-                        using (PyObject item = idsObj[i]) ids.Add(item.As<string>());
+                    long n = instObj.Length();
+                    ids = new List<string>((int)n);
+                    names = new List<string>((int)n);
+                    for (int i = 0; i < n; i++)
+                    {
+                        using (PyObject row = instObj[i])
+                        using (PyObject idObj = row["id"])
+                        using (PyObject nameObj = row["name"])
+                        {
+                            ids.Add(idObj.As<string>() ?? "");
+                            names.Add(nameObj.As<string>() ?? "");
+                        }
+                    }
                 }
                 return new InstrumentListResult
                 {
                     Success = success,
                     ErrorCode = errorCode,
                     InstrumentIds = ids.ToArray(),
+                    InstrumentNames = names.ToArray(),
                 };
             }
         }
         catch (Exception e)
         {
             Debug.LogWarning("[WorkspaceEngineHost] list_instruments failed: " + e.Message);
-            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.RpcError, InstrumentIds = Array.Empty<string>() };
+            return new InstrumentListResult { Success = false, ErrorCode = BackendErrorCodes.RpcError, InstrumentIds = Array.Empty<string>(), InstrumentNames = Array.Empty<string>() };
         }
     }
 

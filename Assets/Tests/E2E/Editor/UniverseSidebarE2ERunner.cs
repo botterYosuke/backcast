@@ -86,7 +86,8 @@ public static class UniverseSidebarE2ERunner
                 ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves()
                 ?? Section14_FullUniverseNoCapVirtualizedRender()
                 ?? Section15_PickerListFillsToFooter()
-                ?? Section16_UnsupportedDistinctFromNotConnected();
+                ?? Section16_UnsupportedDistinctFromNotConnected()
+                ?? Section17_KabuLiveBrowseFromListedInfo();
         }
         catch (Exception e)
         {
@@ -95,7 +96,7 @@ public static class UniverseSidebarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized + list-fills-to-footer + unsupported-distinct-from-notconnected verified");
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized + list-fills-to-footer + unsupported-distinct-from-notconnected + kabu-live-browse-from-listed-info + name-search verified");
             EditorApplication.Exit(0);
         }
         else
@@ -110,6 +111,19 @@ public static class UniverseSidebarE2ERunner
         reg = new InstrumentRegistry();
         sel = new SelectedSymbol();
         return new UniverseSidebarController(reg, sel, new UniverseWriteback(), provider);
+    }
+
+    // Live-mode picker placeholder for a given supply result — used by Section16 / Section17 to
+    // gate the RENDERED label text the user sees (the result struct's Message field is null for
+    // sentinel statuses, so a raw Message check would be vacuous — review finding A1). Routes
+    // through BuildList via TogglePicker+PickerList so the assertion gates the user-visible path.
+    static string LabelFor(AvailableInstrumentsResult res)
+    {
+        var prov = new StubProvider { Next = res };
+        var c = NewController(out _, out _, prov);
+        c.TogglePicker(UniverseSourceMode.Live, null);
+        var rows = c.PickerList(UniverseSourceMode.Live);
+        return rows.Count == 1 && rows[0].IsPlaceholder ? rows[0].Label : "<not-a-single-placeholder>";
     }
 
     // ---- 1. picker open / lock guard / force-close ----
@@ -853,21 +867,16 @@ public static class UniverseSidebarE2ERunner
         if (unsup.Kind != UniverseStatusKind.Unsupported)
             return $"LIVE_UNIVERSE_UNSUPPORTED mapped to {unsup.Kind}, expected Unsupported";
 
-        // Both are TERMINAL (non-transient): the unsupported universe is a stable venue capability, not a
-        // warmup glitch, so the cache must STICK. If Unsupported were transient the picker would re-spawn a
-        // background fetch every ~500ms (TRANSIENT_RETRY_COOLDOWN_MS) while open — churn with no recovery.
-        if (notConnTransient) return "LIVE_VENUE_NOT_LOGGED_IN marked transient (should be terminal/cached)";
-        if (unsupTransient) return "LIVE_UNIVERSE_UNSUPPORTED marked transient — picker would re-fetch every ~500ms";
+        // Cache lifetimes (review finding C1): NotConnected is TRANSIENT — a user who opens [+ Add]
+        // before kabu login must self-heal on the next poll after login (issue #46's user-visible AC
+        // would silently fail otherwise: the engine fallback never runs because the stale terminal
+        // NotConnected cache short-circuits the next Query). Unsupported stays TERMINAL — the adapter's
+        // enumeration capability does not change mid-session, so cache churn would buy no recovery.
+        if (!notConnTransient) return "LIVE_VENUE_NOT_LOGGED_IN marked terminal — picker would stay 'Venue not connected' after login (review finding C1)";
+        if (unsupTransient) return "LIVE_UNIVERSE_UNSUPPORTED marked transient — picker would re-fetch every ~500ms with no recovery possible (venue capability is stable)";
 
-        // and the two genuinely render DIFFERENT placeholder text in the picker.
-        string LabelFor(AvailableInstrumentsResult res)
-        {
-            var prov = new StubProvider { Next = res };
-            var c = NewController(out _, out _, prov);
-            c.TogglePicker(UniverseSourceMode.Live, null);
-            var rows = c.PickerList(UniverseSourceMode.Live);
-            return rows.Count == 1 && rows[0].IsPlaceholder ? rows[0].Label : "<not-a-single-placeholder>";
-        }
+        // and the two genuinely render DIFFERENT placeholder text in the picker (class-level
+        // LabelFor — also used by Section17 — gates the rendered text the user sees).
         string notConnLabel = LabelFor(AvailableInstrumentsResult.NotConnected);
         string unsupLabel = LabelFor(AvailableInstrumentsResult.Unsupported);
         if (notConnLabel != "Venue not connected")
@@ -876,6 +885,170 @@ public static class UniverseSidebarE2ERunner
             return $"Unsupported label '{unsupLabel}' != 'Venue has no instrument list'";
         if (notConnLabel == unsupLabel)
             return "Unsupported and NotConnected render the SAME label (still indistinguishable)";
+        return null;
+    }
+
+    // ---- 17. ISSUE #46 (2026-06-25 / docs/findings/0105): kabu Live picker browses the
+    // listed_info universe. Section16 fixed the contradiction (logged-in kabu no longer mislabels
+    // as "Venue not connected"), but logged-in kabu still rendered ZERO candidates — the user
+    // can't actually pick instruments to subscribe. The engine fallback now serves
+    // listed_info.duckdb when kabu (the only non-enumerating venue currently) is logged in,
+    // emitting ``<code>.TSE`` ids that kabu's _parse_instrument_id consumes id-conversion-free.
+    //
+    // What the C# side must guarantee for issue #46 + the high-effort code review:
+    //   (a) the LOCAL_UNIVERSE_UNAVAILABLE code (listed_info not mounted) maps to a DISTINCT
+    //       picker placeholder — NOT the Unsupported label ("Venue has no instrument list"),
+    //       NOT the NotConnected label ("Venue not connected"). Route through the picker's real
+    //       BuildList path (NOT just the result struct) so the assertion gates the user-visible
+    //       text, not a dead field. TRANSIENT (review finding A6) so a user who mounts the DB
+    //       mid-session self-heals on the next ~500ms cooldown.
+    //   (b) a Ready supply in LIVE mode (the engine's fallback emits this) actually renders
+    //       candidate rows in the picker — same path Replay already uses, but exercised through
+    //       the Live mode flow because issue #253's `enumerates_instruments=False` keeps Live
+    //       picker rendering separate from the legacy store-served path.
+    //   (c) names plumb through (review finding A5): a Ready supply that carries CompanyName
+    //       (parallel to ids) renders rows whose label includes the name, AND the picker filter
+    //       matches a name substring (a kabu user types 'トヨタ' and finds 7203.TSE). Without
+    //       this kabu users from kabuStation lose name-search and have to memorise tickers.
+    //
+    // RED→GREEN litmus: change MapError(LocalUniverseUnavailable) → Unsupported → (a) FAILs.
+    //   Mark NotConnected terminal again → Section16's transient assertion FAILs (review C1).
+    //   Drop the Names field from AvailableInstrumentsResult.Ready → (c) name-search FAILs.
+    //   Remove the kabu fallback from `_list_instruments_live` (revert issue #46) → the user's
+    //   Ready ids dry up at the engine; nothing the C# runner alone can detect, so the pytest
+    //   gate (test_logged_in_kabu_with_listed_info_returns_ready) owns that half end-to-end.
+    // Covers: SIDEBAR-21 (kabu Live が listed_info から候補を browse — engine fallback の C# 受け口)
+    static string Section17_KabuLiveBrowseFromListedInfo()
+    {
+        // (a) LOCAL_UNIVERSE_UNAVAILABLE is a DISTINCT mapping — not UNSUPPORTED, not NotConnected.
+        // We assert the RENDERED PICKER PLACEHOLDER (route through BuildList) not the result
+        // struct's Message field: the C# code's Unsupported sentinel has a null Message, so a
+        // raw `result.Message == "Venue has no instrument list"` check would be vacuous (always
+        // false regardless of the bug — review finding A1). LabelFor mirrors Section16's pattern
+        // and is the gate the user actually sees.
+        var localUnavail = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LocalUniverseUnavailable, out bool localUnavailTransient);
+        if (localUnavail.Kind == UniverseStatusKind.Unsupported)
+            return "LOCAL_UNIVERSE_UNAVAILABLE collapsed into Unsupported — config error mislabeled as venue limitation (issue #46)";
+        if (localUnavail.Kind == UniverseStatusKind.NotConnected)
+            return "LOCAL_UNIVERSE_UNAVAILABLE collapsed into NotConnected — config error mislabeled as login failure";
+        if (localUnavail.Kind != UniverseStatusKind.Error)
+            return $"LOCAL_UNIVERSE_UNAVAILABLE mapped to {localUnavail.Kind}, expected Error";
+        // TRANSIENT (review finding A6): owner who mounts the DuckDB after launch must self-heal
+        // on the next picker poll (the open-picker auto-refresh in Section13) without an app
+        // restart. Terminal caching here would lock the user into "Local instrument catalog not
+        // configured" forever even after they fix the config.
+        if (!localUnavailTransient)
+            return "LOCAL_UNIVERSE_UNAVAILABLE marked terminal — owner who mounts the DuckDB mid-session can't recover without app restart (review finding A6)";
+        // Friendlier message (review finding G2): pre-#46 this only fired in owner-only Replay
+        // and a long env-var name was acceptable; #46 makes it user-visible for kabu Live, so
+        // the env-var detail belongs in logs, not the picker.
+        if (localUnavail.Message != null && (localUnavail.Message.Contains("BACKCAST_") || localUnavail.Message.Contains(".duckdb")))
+            return $"LOCAL_UNIVERSE_UNAVAILABLE message '{localUnavail.Message}' leaks an env-var name / internal file path to end-users (review finding G2)";
+
+        // Route through the picker's BuildList (class-level LabelFor) to confirm the RENDERED
+        // PLACEHOLDER TEXT (what the user sees) is distinct from the Unsupported label. This is
+        // the real gate; the Kind-only checks above are necessary but not sufficient.
+        string unavailLabel = LabelFor(localUnavail);
+        string unsupLabel = LabelFor(AvailableInstrumentsResult.Unsupported);
+        string notConnLabel = LabelFor(AvailableInstrumentsResult.NotConnected);
+        if (unavailLabel == unsupLabel)
+            return $"LOCAL_UNIVERSE_UNAVAILABLE picker label '{unavailLabel}' == UNSUPPORTED label — config-vs-capability indistinguishable in the UI";
+        if (unavailLabel == notConnLabel)
+            return $"LOCAL_UNIVERSE_UNAVAILABLE picker label '{unavailLabel}' == NotConnected label — config error mislabeled as login failure in the UI";
+
+        // (b) Live + Ready supply renders candidate rows in the picker (the engine's listed_info
+        // fallback emits Ready ids; this gates that the C# picker actually paints them in Live
+        // mode, not just Replay).
+        var provider = new StubProvider {
+            Next = AvailableInstrumentsResult.Ready(new[] { "7203.TSE", "9984.TSE", "1301.TSE" }),
+        };
+        var ctrl = NewController(out _, out _, provider);
+        ctrl.TogglePicker(UniverseSourceMode.Live, null);  // Live: no end snapshot
+        var rows = ctrl.PickerList(UniverseSourceMode.Live);
+        if (rows.Any(x => x.IsPlaceholder))
+            return "Live Ready supply produced a placeholder (listed_info-fallback ids not rendered as rows)";
+        if (rows.Count != 3)
+            return $"Live Ready rendered {rows.Count} rows, expected 3 (engine ids dropped on the C# side?)";
+        // ordinal sort: 1301, 7203, 9984 — same contract as Replay (Section3), so the user sees
+        // a stable order across modes.
+        if (rows[0].Id != "1301.TSE" || rows[1].Id != "7203.TSE" || rows[2].Id != "9984.TSE")
+            return "Live picker rows not sorted ordinal (kabu user would see a non-deterministic order)";
+
+        // (c) name search (review finding A5): listed_info CompanyName plumbed through →
+        // picker rows carry "<id> <name>" labels AND the search query matches against name as
+        // well as id. A kabu user from kabuStation types 'トヨタ' and finds 7203.TSE — the
+        // pre-#46 picker was id-only so name search returned 0 matches even though the row
+        // existed in the universe.
+        var namedProvider = new StubProvider {
+            Next = AvailableInstrumentsResult.Ready(
+                new[] { "7203.TSE", "9984.TSE", "1301.TSE" },
+                new[] { "トヨタ自動車", "ソフトバンクグループ", "極洋" }),
+        };
+        var namedCtrl = NewController(out _, out _, namedProvider);
+        namedCtrl.TogglePicker(UniverseSourceMode.Live, null);
+
+        // (c.1) row labels include the name (and de-dup against id when they would collide).
+        var namedRows = namedCtrl.PickerList(UniverseSourceMode.Live);
+        if (namedRows.Count != 3) return $"named Ready rendered {namedRows.Count} rows, expected 3";
+        var toyotaRow = namedRows.FirstOrDefault(r => r.Id == "7203.TSE");
+        if (toyotaRow.Id == null) return "7203.TSE row missing from named picker rows";
+        if (!toyotaRow.Label.Contains("トヨタ自動車"))
+            return $"7203.TSE row label '{toyotaRow.Label}' missing CompanyName 'トヨタ自動車' (review finding A5)";
+        if (!toyotaRow.Label.Contains("7203.TSE"))
+            return $"7203.TSE row label '{toyotaRow.Label}' dropped the id (user can't see ticker for confirmation)";
+
+        // (c.2) filter matches a name substring — the kabu user's primary search idiom.
+        namedCtrl.Picker.SetQuery("トヨタ");
+        var nameHits = namedCtrl.PickerList(UniverseSourceMode.Live);
+        if (nameHits.Count != 1 || nameHits[0].Id != "7203.TSE")
+            return $"name-search 'トヨタ' returned {nameHits.Count} rows (expected 1×7203.TSE) — picker filter doesn't match against name (review finding A5)";
+
+        // (c.3) a fragment not present in ANY row name (e.g. ASCII fragment when names are カナ)
+        // collapses to the "No matches" placeholder — proves the filter is not silently matching
+        // every row when names are empty/short. Internal-comment (lines below) explains the
+        // distinct "absent fragment" semantic this case actually exercises.
+        namedCtrl.Picker.SetQuery("softbank");
+        var asciiHits = namedCtrl.PickerList(UniverseSourceMode.Live);
+        // No row's name contains "softbank" (we used カナ above); confirm graceful 'No matches'
+        // when the query targets a name only present in another script — the FILTER path is
+        // exercised by (c.2) above. This guards against an accidental "match every row when
+        // names list is empty/short" regression.
+        if (asciiHits.Count != 1 || !asciiHits[0].IsPlaceholder || asciiHits[0].Label != "No matches")
+            return "name-search for an absent fragment did not collapse to 'No matches' placeholder";
+
+        // (c.4) clearing the query restores all 3 rows (the filter is query-gated, not sticky).
+        namedCtrl.Picker.SetQuery("");
+        var allBack = namedCtrl.PickerList(UniverseSourceMode.Live);
+        if (allBack.Count != 3) return $"after clearing query, expected 3 rows, got {allBack.Count}";
+
+        // (d) Live + a single TSE id is renderable end-to-end at the view layer (the actual uGUI
+        // _pickerListContent paints the row, with the row label kabu users click to add).
+        var go = new GameObject("universe_sidebar_kabu_live_browse_e2e", typeof(RectTransform), typeof(UniverseSidebarView));
+        var vreg = new InstrumentRegistry();
+        var vprovider = new StubProvider {
+            Next = AvailableInstrumentsResult.Ready(new[] { "7203.TSE" }, new[] { "トヨタ自動車" }),
+        };
+        var vctrl = new UniverseSidebarController(vreg, new SelectedSymbol(), new UniverseWriteback(), vprovider);
+        var view = go.GetComponent<UniverseSidebarView>();
+        var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        try
+        {
+            view.Bind(vctrl, new StubStrategyProvider { Path = null }, font);
+            view.SetContext(UniverseSourceMode.Live, null);  // Live mode, no end (matches kabu live)
+            var addBtn = AddButton(view);
+            var pickerContent = PickerListContent(view);
+            if (addBtn == null || pickerContent == null) return "view: _addBtn/_pickerListContent not reflectable";
+
+            if (HasCandRow(pickerContent, "7203.TSE")) return "view: candidate row rendered before picker opened";
+            addBtn.onClick.Invoke();
+            if (!HasCandRow(pickerContent, "7203.TSE"))
+                return "view: kabu Live picker did not paint the listed_info-fallback candidate row";
+            // The view paints "+ <Label>" where Label now carries the name (PickerRow.Candidate
+            // composes "<id> <name>" when a name is provided), so the user sees the company name.
+            if (!PickerHasText(pickerContent, "トヨタ自動車"))
+                return "view: kabu Live picker row label did not include the CompanyName (review finding A5)";
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
         return null;
     }
 }

@@ -13,7 +13,9 @@
 // SUCCESS-ONLY: transient statuses (SERVER_NOT_READY while the host warms up, LIVE_UNIVERSE_PENDING
 // while the instruments scheduler refreshes) DO NOT get written to the cache, so the next tick
 // re-fires the fetch and the picker self-heals once the warmup completes. Only Ready / Empty and
-// terminal Errors (LOCAL_UNIVERSE_UNAVAILABLE / LIVE_VENUE_NOT_LOGGED_IN / etc.) stick.
+// terminal Errors stick. Post-C1/A6: LIVE_VENUE_NOT_LOGGED_IN and LOCAL_UNIVERSE_UNAVAILABLE are
+// TRANSIENT (so login mid-session / DuckDB mid-session-mount self-heal); the canonical terminal
+// example is LIVE_UNIVERSE_UNSUPPORTED (adapter capability is session-stable).
 //
 // SINGLE-FLIGHT. Per-key (`_inFlightKey`), not global (Slice review F3): a Query for a NEW key
 // arriving while the previous fetch is still running fires its own fetch immediately, so rapid
@@ -99,7 +101,7 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
             {
                 result = rpc.InstrumentIds.Length == 0
                     ? AvailableInstrumentsResult.Empty
-                    : AvailableInstrumentsResult.Ready(rpc.InstrumentIds);
+                    : AvailableInstrumentsResult.Ready(rpc.InstrumentIds, rpc.InstrumentNames);
                 isTransient = false;
             }
             else
@@ -158,17 +160,30 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
                 isTransient = true;
                 return AvailableInstrumentsResult.Error(errorCode);
             case BackendErrorCodes.LiveVenueNotLoggedIn:
-                isTransient = false;
+                // Review finding C1: TRANSIENT, not terminal. A user who opens [+ Add] before
+                // logging in must not be locked into "Venue not connected" for the rest of the
+                // session — once they log in via Settings, the next picker open (or the open-
+                // picker auto-refresh poll in UniverseSidebarView.Update) re-fetches after the
+                // ~500ms transient cooldown and the kabu listed_info fallback (issue #46)
+                // surfaces real candidates. Terminal caching here was the latent companion bug
+                // that defeated #46's user-visible AC.
+                isTransient = true;
                 return AvailableInstrumentsResult.NotConnected;
             case BackendErrorCodes.LiveUniverseUnsupported:
                 // The venue IS logged in but cannot enumerate instruments (kabu MVP). Do NOT
                 // collapse into NotConnected — that produced the "Connected: KABU" badge vs.
-                // "Venue not connected" sidebar contradiction (findings 0103).
+                // "Venue not connected" sidebar contradiction (findings 0103). Stays TERMINAL
+                // (the adapter's enumeration capability does not change mid-session, unlike a
+                // login state, so cache churn would buy no recovery).
                 isTransient = false;
                 return AvailableInstrumentsResult.Unsupported;
             case BackendErrorCodes.LocalUniverseUnavailable:
-                isTransient = false;
-                return AvailableInstrumentsResult.Error("BACKCAST_JQUANTS_DUCKDB_ROOT / listed_info.duckdb not configured");
+                // Review finding A6: TRANSIENT. The owner may mount the DuckDB after launch
+                // (env var set, listed_info.duckdb dropped in) — the next picker open after
+                // the cooldown should self-heal without an app restart. Friendlier message
+                // (review finding G2): the env-var name belongs in logs, not the picker.
+                isTransient = true;
+                return AvailableInstrumentsResult.Error("Local instrument catalog not configured");
             default:
                 isTransient = false;
                 return AvailableInstrumentsResult.Error(string.IsNullOrEmpty(errorCode) ? "unknown error" : errorCode);

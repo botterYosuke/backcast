@@ -196,3 +196,30 @@ def test_picker_supply_rejects_malformed_end_date(listed_db):
     res = _backend().list_instruments("local", "31-12-2024")
     assert res.success is False
     assert "ISO date" in res.error_message
+
+def test_replay_local_supply_empty_snapshot_returns_local_universe_unavailable(monkeypatch):
+    """Review follow-up (docs/findings/0105 §B1 Replay-side note): `_snapshot_to_list_result`'s
+    empty-codes guard is shared with the kabu Live picker, so it ALSO promotes Replay's old
+    `success=True / instrument_ids=[]` (rendered as the generic "No instruments for this date"
+    placeholder) to LOCAL_UNIVERSE_UNAVAILABLE when listed_info is mounted but ingest is empty.
+    This is the intended behavior — a mounted-but-empty DuckDB is owner-actionable (re-run the
+    J-Quants ingest), and Replay's point-in-time empty (end_date before every snapshot) is
+    rescued upstream by the latest-fallback path (findings 0084), so reaching the helper with
+    `snapshot.codes==[]` really means "no rows in the DB", not "no rows for this date".
+
+    Drives via monkeypatch (no DuckDB rebuild needed): the inner reader returns an empty snapshot
+    so the RPC reaches `_snapshot_to_list_result` with `codes=[]` and surfaces the typed config
+    error instead of a Ready-with-zero-ids.
+    """
+    import engine._backend_impl as impl
+    from engine.jquants_listed_info import ListedSymbolsSnapshot
+    monkeypatch.setattr(
+        impl,
+        "read_listed_snapshot",
+        lambda end_date: ListedSymbolsSnapshot(codes=[], as_of_date="", names=[]),
+    )
+    res = _backend().list_instruments("local", "")
+    assert res.success is False
+    assert res.error_message == "LOCAL_UNIVERSE_UNAVAILABLE"
+    assert res.instrument_ids == []
+

@@ -42,11 +42,20 @@ public enum UniverseStatusKind
 public struct AvailableInstrumentsResult
 {
     public UniverseStatusKind Kind;
-    public IReadOnlyList<string> Ids;  // valid (possibly empty) when Kind == Ready
-    public string Message;             // valid when Kind == Error
+    public IReadOnlyList<string> Ids;    // valid (possibly empty) when Kind == Ready
+    // Issue #46 / review finding A5: human-readable names (e.g. listed_info CompanyName for
+    // kabu/TSE) parallel to Ids — picker filter matches id OR name so users can search by
+    // company name (トヨタ) instead of memorising 4-digit codes. May be null/short/empty per
+    // entry; picker callers fall back to the id for display when an entry is missing.
+    public IReadOnlyList<string> Names;
+    public string Message;               // valid when Kind == Error
 
-    public static AvailableInstrumentsResult Ready(IReadOnlyList<string> ids) =>
-        new AvailableInstrumentsResult { Kind = UniverseStatusKind.Ready, Ids = ids ?? Array.Empty<string>() };
+    public static AvailableInstrumentsResult Ready(IReadOnlyList<string> ids, IReadOnlyList<string> names = null) =>
+        new AvailableInstrumentsResult {
+            Kind = UniverseStatusKind.Ready,
+            Ids = ids ?? Array.Empty<string>(),
+            Names = names ?? Array.Empty<string>(),
+        };
     public static readonly AvailableInstrumentsResult Empty =
         new AvailableInstrumentsResult { Kind = UniverseStatusKind.Empty, Ids = Array.Empty<string>() };
     public static readonly AvailableInstrumentsResult Loading =

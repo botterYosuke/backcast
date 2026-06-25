@@ -54,7 +54,9 @@ public static class ScenarioStartupE2ERunner
                 ?? Section9_IndividualWritersAreMutateExistingOnly()
                 ?? Section10_InlineReaderMatchesGolden()
                 ?? Section11_FileNewClearsInMemory()
-                ?? Section12_StartupTileHasNoRunButton();
+                ?? Section12_StartupTileHasNoRunButton()
+                ?? Section13_DockClusterIsFour()
+                ?? Section14_ForwardCompatSkipsStartup();
         }
         catch (Exception e)
         {
@@ -63,7 +65,10 @@ public static class ScenarioStartupE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear verified");
+            Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear + " +
+                      "dock 5→4 (SCENARIO-16) + forward-compat startup skip (SCENARIO-17) verified");
+            Debug.Log("[E2E SCENARIO-16 PASS]");   // dock cluster reduced 5→4 (ADR-0026)
+            Debug.Log("[E2E SCENARIO-17 PASS]");   // saved "startup" window skipped on restore (forward-compat)
             EditorApplication.Exit(0);
         }
         else
@@ -673,5 +678,40 @@ public static class ScenarioStartupE2ERunner
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // ---- 13. dock cluster reduced 5→4 (startup retired to the Settings modal) ----
+    // Covers: SCENARIO-16 (#126 / ADR-0026): BackcastWorkspaceRoot.BaseDockWindowIds has 4 ids and no
+    // "startup". This is the single source SpawnBaseDockWindows + FormFactoryBaseGroup both read, so a
+    // 4-length array IS the 5→4 reduction. RED litmus: re-add WINDOW_ID_STARTUP to the array → 5 → RED.
+    static string Section13_DockClusterIsFour()
+    {
+        var f = typeof(BackcastWorkspaceRoot).GetField("BaseDockWindowIds",
+            BindingFlags.NonPublic | BindingFlags.Static);
+        if (f == null) return "S13: BaseDockWindowIds field not found (renamed?)";
+        var ids = (string[])f.GetValue(null);
+        if (ids == null) return "S13: BaseDockWindowIds is null";
+        if (ids.Length != 4) return $"S13: base dock has {ids.Length} windows, expected 4 (startup retired by ADR-0026)";
+        var set = new System.Collections.Generic.HashSet<string>(ids);
+        if (set.Contains("startup")) return "S13: base dock still contains 'startup'";
+        if (!set.Contains("buying_power") || !set.Contains("orders") || !set.Contains("positions") || !set.Contains("run_result"))
+            return "S13: base dock missing one of buying_power/orders/positions/run_result (non-vacuity)";
+        return null;
+    }
+
+    // ---- 14. forward-compat: a pre-ADR-0026 saved "startup" window is skipped on restore ----
+    // Covers: SCENARIO-17 (#126 / ADR-0026): the catalog no longer resolves "startup", so RestoreLayout's
+    // Spawn returns null and the loop continues (the entry is kept in the doc — the generic
+    // forward-evolution path proven by FloatingWindowE2ERunner). Litmus: re-add the startup spec to
+    // FloatingWindowCatalog.Default() → TryGet true → a stale "startup" would re-spawn → this RED.
+    static string Section14_ForwardCompatSkipsStartup()
+    {
+        var catalog = FloatingWindowCatalog.Default();
+        if (catalog.TryGet("startup", out _))
+            return "S14: catalog still resolves 'startup' — a saved layout would re-spawn the retired window (must skip)";
+        // non-vacuity: a SURVIVING dock kind still resolves (so the negative isn't an empty-catalog artifact).
+        if (!catalog.TryGet(FloatingWindowCatalog.KIND_RUN_RESULT, out _))
+            return "S14: catalog missing run_result (vacuous negative — catalog appears empty)";
+        return null;
     }
 }

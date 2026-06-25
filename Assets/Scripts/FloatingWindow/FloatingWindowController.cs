@@ -130,6 +130,13 @@ public class FloatingWindowController
 
     public int Count => _windows.Count;
     public bool Has(string id) => id != null && _windows.ContainsKey(id);
+
+    // #125 (ADR-0026 §25): true while a title-bar drag gesture is live (between BeginDrag and the
+    // mouse-up ReleaseDrag), INCLUDING the post-ESC-cancel window (CancelDrag sets _drag.canceled but
+    // does NOT null _drag — only the mouse-up ReleaseDrag does). So an ESC pressed mid-drag always reads
+    // IsDragging==true regardless of MonoBehaviour Update ordering, letting the Settings ESC guard defer
+    // to the drag-revert (ADR-0024 §8) instead of toggling Settings.
+    public bool IsDragging => _drag != null;
     public RectTransform RectOf(string id) => _windows.TryGetValue(id, out var e) ? e.rt : null;
 
     // #104 (ADR-0019 / findings 0082 §8): bind a ghost overlay to this controller. Production root

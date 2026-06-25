@@ -33,7 +33,9 @@ public class FloatingWindowCatalog
     public const string KIND_ORDERS = "orders";
     public const string KIND_POSITIONS = "positions";
     public const string KIND_RUN_RESULT = "run_result";
-    public const string KIND_STARTUP = "startup";
+    // KIND_STARTUP ("startup") RETIRED — ADR-0026: Scenario Startup moved to the Settings modal's
+    // Scenario section; the dock no longer hosts a startup window. A pre-ADR-0026 saved layout that
+    // names "startup" is forward-compat: TryGet("startup")=false → spawn skipped, layout entry kept.
 
     readonly Dictionary<string, FloatingWindowSpec> _specs;
 
@@ -98,10 +100,8 @@ public class FloatingWindowCatalog
                 KIND_RUN_RESULT, "Run Result",
                 defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
                 accent: players.Get(6), closeable: false),
-            new FloatingWindowSpec(
-                KIND_STARTUP, "Scenario Startup",
-                defaultSize: new Vector2(380f, 260f), minSize: new Vector2(280f, 200f),
-                accent: players.Get(7), closeable: false),
+            // KIND_STARTUP spec RETIRED — ADR-0026 (Scenario Startup → Settings modal). Dropping it from
+            // Default() is what makes a saved "startup" window skip on restore (catalog TryGet=false).
         });
     }
 }

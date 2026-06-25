@@ -49,8 +49,9 @@ public static class FooterModeE2ERunner
         "{\"LiveStrategyEvent\":{\"run_id\":\"" + runId + "\",\"strategy_id\":\"s1\",\"status\":\""
         + status + "\",\"ts_ms\":0}}";
 
-    // Reflect a WorkspaceFooterView's private _modeSegs (List<(Button btn, Text label, string mode)>):
-    // ValueTuple fields Item1/Item3 are public, so default GetField flags find them.
+    // Reflect a SettingsModeSegmentView's private _modeSegs (List<(Button btn, Text label, string mode)>):
+    // ValueTuple fields Item1/Item3 are public, so default GetField flags find them. (#127/ADR-0026:
+    // the segments moved from the footer to the Settings Mode section; same tuple shape.)
     static Button SegButton(System.Collections.IList segs, string mode)
     {
         foreach (var item in segs)
@@ -129,72 +130,64 @@ public static class FooterModeE2ERunner
         Check(ig.Kind == FooterModeRequestKind.Ignore && !mi.Locked,
             "same mode reselect (Replay→Replay) → Ignore (no RPC, no lock)");
 
-        // ============ WorkspaceFooterView reflects VM state (Covers: FOOTER-06, FOOTER-07 view side) ============
-        // The VM-side ShowManualAutoSegments is asserted above; here we pin that the real VIEW
+        // ============ SettingsModeSegmentView reflects VM state (Covers: FOOTER-06, FOOTER-07 view side) ============
+        // #127 (ADR-0026): the mode segments moved from the footer to the Settings modal's Mode section.
+        // The VM-side ShowManualAutoSegments is asserted above; here we pin that the real Settings VIEW
         // SetActive(false)s Manual/Auto when venue is down (FOOTER-07) and interactable=!locked on every
-        // visible segment when a Live switch locks (FOOTER-06). Headless: build the view under a bare
-        // RectTransform and reflect _modeSegs (no GPU — we read activeSelf/interactable, not pixels).
+        // visible segment when a Live switch locks (FOOTER-06). Headless: build under a bare RectTransform
+        // and reflect _modeSegs (no GPU — we read activeSelf/interactable, not pixels).
+        var sgo = new GameObject("settings_mode_view_e2e", typeof(RectTransform));
         var fgo = new GameObject("footer_view_e2e", typeof(RectTransform));
         try
         {
-            var bar = (RectTransform)fgo.transform;
             var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
             var fvm = new FooterModeViewModel();
-            var view = new WorkspaceFooterView(fvm, null, null, font);
-            view.Build(bar);
+            var modeView = new SettingsModeSegmentView(fvm, null, font);
+            modeView.Build((RectTransform)sgo.transform);
 
-            var segs = (System.Collections.IList)typeof(WorkspaceFooterView)
-                .GetField("_modeSegs", BF).GetValue(view);
+            var segs = (System.Collections.IList)typeof(SettingsModeSegmentView)
+                .GetField("_modeSegs", BF).GetValue(modeView);
 
             // presence guard: all 3 mode segments exist (SetActive(false) keeps the GameObject in the list,
             // so this is true even when Manual/Auto are hidden). Without it the negative checks below
-            // (!SegActive / !SegInteractable) would false-green on a removed/renamed segment — SegButton
-            // returns null → SegActive/SegInteractable return false → the "hidden/disabled" assert passes vacuously.
+            // (!SegActive / !SegInteractable) would false-green on a removed/renamed segment.
             Check(SegButton(segs, FooterModeViewModel.Replay) != null
                 && SegButton(segs, FooterModeViewModel.LiveManual) != null
                 && SegButton(segs, FooterModeViewModel.LiveAuto) != null,
-                "view: all 3 mode segments present (guards the negative checks below from false-green)");
+                "view: all 3 mode segments present in Settings (guards the negative checks below from false-green)");
 
             // venue down (poll-less default VM): Replay active, Manual/Auto SetActive(false).
             Check(SegActive(segs, FooterModeViewModel.Replay), "view: Replay segment active when venue down");
             Check(!SegActive(segs, FooterModeViewModel.LiveManual) && !SegActive(segs, FooterModeViewModel.LiveAuto),
-                "FOOTER-07 view: Manual/Auto SetActive(false) when venue down");
+                "FOOTER-07 view: Manual/Auto SetActive(false) when venue down (Settings Mode section)");
 
             // venue live → Manual/Auto shown.
             fvm.ApplyPoll(Poll("Replay", "CONNECTED"));
-            view.Refresh();
+            modeView.Refresh();
             Check(SegActive(segs, FooterModeViewModel.LiveManual) && SegActive(segs, FooterModeViewModel.LiveAuto),
-                "FOOTER-07 view: Manual/Auto shown when venue live");
+                "FOOTER-07 view: Manual/Auto shown when venue live (Settings Mode section)");
 
             // a locked Live switch disables every visible segment (2nd click can't race the engine answer).
             fvm.RequestMode("LiveManual", false);
             Check(fvm.Locked, "FOOTER-06 precondition: Live request locked the VM");
-            view.Refresh();
+            modeView.Refresh();
             Check(!SegInteractable(segs, FooterModeViewModel.Replay),
-                "FOOTER-06 view: visible segment interactable=false while locked");
+                "FOOTER-06 view: visible segment interactable=false while locked (Settings Mode section)");
 
-            // ============ U4 cutover negative invariant — RE-HOMED from the retired RunButtonE2ERunner
-            // SectionC (#95 Phase 6 Slice 9; findings 0075 §3c). The footer AFTER the transport→reactive
-            // cutover (#76 S6b-β-clean / Phase 6 global ▶ Run sunset) keeps the mode segments but has NO
-            // replay-transport controls (▶/⏸ play-pause, ⏭ step, ⏹ stop, the 1/2/5/10/50x speed buttons).
-            // NON-VACUITY: pin all 3 mode segment GameObjects exist FIRST (a renamed/removed footer would
-            // false-green the absence check). WorkspaceFooterView.MakeButton names every button "btn:"+label,
-            // so a re-added transport control surfaces as btn:▶ etc. under the built footer `bar`.
-            // RED litmus: add a MakeButton(bar,"▶",…) to WorkspaceFooterView.Build → btn:▶ appears → RED.
-            // (Covers: FOOTER-13 — re-homed U4) ============
-            var footerBtnNames = new HashSet<string>();
-            foreach (var b in bar.GetComponentsInChildren<Button>(true)) footerBtnNames.Add(b.gameObject.name);
-            Check(footerBtnNames.Contains("btn:Replay")
-                && footerBtnNames.Contains("btn:Manual")
-                && footerBtnNames.Contains("btn:Auto"),
-                "U4: footer has the 3 mode segments (non-vacuity guard for the transport-absence check)");
-            string retiredTransport = null;
-            foreach (var t in new[] { "btn:▶", "btn:⏸", "btn:⏭", "btn:⏹", "btn:1x", "btn:2x", "btn:5x", "btn:10x", "btn:50x" })
-                if (footerBtnNames.Contains(t)) { retiredTransport = t; break; }
-            Check(retiredTransport == null,
-                "FOOTER-13 (re-homed U4): footer has NO retired replay-transport button (found: " + (retiredTransport ?? "none") + ")");
+            // ============ FOOTER-13 (ADR-0026 re-home of U4): the footer is mode-STATUS-ONLY now. After
+            // #127 it has NO mode segment buttons (moved to Settings) AND still no replay-transport controls
+            // (retired by #76). So the built footer has ZERO Buttons — only the status Text.
+            // NON-VACUITY: the Settings mode view above proves the segments DID move (not merely vanished).
+            // RED litmus: re-add AddModeSeg(...) to WorkspaceFooterView.Build → a Button reappears → RED. ============
+            var footerVm = new FooterModeViewModel();
+            footerVm.ApplyPoll(Poll("Replay", "CONNECTED"));   // venue live: segments (if still here) would be visible
+            var footer = new WorkspaceFooterView(footerVm, null, font);
+            footer.Build((RectTransform)fgo.transform);
+            var footerBtns = ((RectTransform)fgo.transform).GetComponentsInChildren<Button>(true);
+            Check(footerBtns.Length == 0,
+                "FOOTER-13 (ADR-0026): footer is status-only — NO buttons (mode segments → Settings; transport long retired). Found " + footerBtns.Length);
         }
-        finally { UnityEngine.Object.DestroyImmediate(fgo); }
+        finally { UnityEngine.Object.DestroyImmediate(sgo); UnityEngine.Object.DestroyImmediate(fgo); }
 
         // ============ SUPPORTING PIN — LiveAutoTransportViewModel ▶ context (Live 運転コントロール surface;
         // NOT a FOOTER Action row — preserved so the regression net doesn't drop; migrates to that surface's

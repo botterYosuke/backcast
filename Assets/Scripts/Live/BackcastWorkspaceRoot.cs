@@ -47,20 +47,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
 
-    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids — the 5 former
-    // Hakoniwa base tiles, now independent floating windows that snap on release. `startup` is
-    // shown in Replay and hidden in Live (visibility toggle, NEVER destroyed — findings §3).
+    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids. ADR-0026 retired the
+    // `startup` base window (Scenario Startup → Settings modal), so the base dock is now 4 windows.
     // Singletons (one window each); ids = the catalog kind verbatim (no instance suffix).
-    const string WINDOW_ID_STARTUP = "startup";
     const string WINDOW_ID_BUYING_POWER = "buying_power";
     const string WINDOW_ID_ORDERS = "orders";
     const string WINDOW_ID_POSITIONS = "positions";
     const string WINDOW_ID_RUN_RESULT = "run_result";
 
     // #105: the base dock cluster's id list — the single source for BOTH the first-launch spawn
-    // (SpawnBaseDockWindows) and the factory grouping (FormFactoryBaseGroup). Order = findings 0075 §4.
+    // (SpawnBaseDockWindows) and the factory grouping (FormFactoryBaseGroup). #126 (ADR-0026): startup
+    // removed → 4 base windows. run_result is the group's promoting core (DockShape.IsCoreKind).
     static readonly string[] BaseDockWindowIds = {
-        WINDOW_ID_STARTUP, WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS,
+        WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS,
         WINDOW_ID_POSITIONS, WINDOW_ID_RUN_RESULT,
     };
 
@@ -191,6 +190,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // LivePanelTileView wiring as the 3 #23 tiles.
     LivePanelTileView _ordersView, _positionsView, _runResultView, _buyingPowerView;
     OrderTicketView _orderTicket;
+    // #125-#128 (ADR-0026): the Settings modal — screen-fixed集約口 for Venue / Mode / Scenario. The
+    // controller owns open/close + ESC-guard; the overlay is the chrome; the three section views reuse
+    // the unchanged brains (VenueMenuViewModel / FooterModeViewModel / ScenarioStartupController).
+    SettingsModalController _settings;
+    SettingsModalOverlay _settingsOverlay;
+    SettingsModeSegmentView _settingsModeView;     // #127: mode segments, re-homed from the footer
+    SettingsVenueSectionView _settingsVenueView;   // #128: venue connect/disconnect, re-homed from the menu
+    bool _settingsOpenPrev;
     SecretModalOverlay _secretOverlay;
     bool _secretModalOpenPrev;
     // #34 (findings 0101): 注文訂正 modal。頭脳は plain C# の controller（検証ロジック・Python 非依存）、
@@ -565,7 +572,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _footerSelected,
             () => new List<string>(_scenario.Universe.Ids),          // scenario run universe
             () => !string.IsNullOrEmpty(_host.Conn.VenueId) ? _host.Conn.VenueId : _venue);
-        _footer = new WorkspaceFooterView(_footerMode, _footerAuto, OnFooterMode, _font);
+        // #127 (ADR-0026): the footer is mode-STATUS-only now; the mode segments moved to Settings (the
+        // OnFooterMode switch path is reused by SettingsModeSegmentView, wired below).
+        _footer = new WorkspaceFooterView(_footerMode, _footerAuto, _font);
         _footer.Build(_footerContainer);
 
         // menu bar (V-host): File = Layout; the Venue submenu reuses the host's durable Conn/Coord so a
@@ -578,12 +587,38 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             isReplayRunning: () => _host.IsRunning);
         if (_menuBarView != null)
             _menuBarView.Bind(_menuBar, OnFileNew, OnFileOpen, OnFileSave, OnFileSaveAs,
-                OnVenueConnect, OnVenueDisconnect,
-                () => _host.ServerReady && !_host.TeardownComplete,   // connect-ready gate
+                OpenSettings,                                         // #125: Help→Settings opens the集約 modal
                 () => _footerMode.DisplayMode,                        // bar mode badge
                 DocumentBadgeText,                                    // #95 P6 S6 (#90): document-identity badge
-                ResolveExplicitLiveVenue(),                           // ADR-0021: pinned LIVE_VENUE (null=show all)
                 _font);                                               // uGUI font (#77)
+
+        // #125-#128 (ADR-0026): the Settings modal集約口. Screen-fixed chrome (own canvas, SETTINGS_SORT
+        // below secret/save-guard, above the menu). The three sections rebuild the VIEW against the SAME
+        // unchanged brains — engine paths are untouched:
+        //   Scenario → ScenarioStartupTile on _scenario (the SAME universe SoT the sidebar/picker edit)
+        //   Mode     → SettingsModeSegmentView on _footerMode (OnFooterMode switch path reused verbatim)
+        //   Venue    → SettingsVenueSectionView on _venueMenu (OnVenueConnect/Disconnect reused verbatim)
+        _settings = new SettingsModalController();
+        var settingsGo = new GameObject("SettingsModalOverlay");
+        settingsGo.transform.SetParent(transform, false);
+        _settingsOverlay = settingsGo.AddComponent<SettingsModalOverlay>();
+        _settingsOverlay.Build(_font);
+        _settingsOverlay.CloseClicked += CloseSettings;
+
+        // Scenario section: the unchanged tile + controller (SoT shared with sidebar/picker; #126).
+        if (_tile == null) _tile = new ScenarioStartupTile(_scenario, _font);
+        _tile.Build(_settingsOverlay.ScenarioSection);
+        _tile.SyncFieldsFromController();
+
+        // Mode section: same FooterModeViewModel + OnFooterMode path as the retired footer segments (#127).
+        _settingsModeView = new SettingsModeSegmentView(_footerMode, OnFooterMode, _font);
+        _settingsModeView.Build(_settingsOverlay.ModeSection);
+
+        // Venue section: same VenueMenuViewModel + login/logout as the retired menu dropdown (#128).
+        _settingsVenueView = new SettingsVenueSectionView(
+            _venueMenu, ResolveExplicitLiveVenue(), OnVenueConnect, OnVenueDisconnect,
+            () => _host.ServerReady && !_host.TeardownComplete, _font);
+        _settingsVenueView.Build(_settingsOverlay.VenueSection);
 
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
@@ -701,11 +736,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return root;
     }
 
-    // The BACK-plane (_dockWindows) factory: the 6 #99 dock kinds (ADR-0017 / findings 0075 §7) —
-    // chart / startup / buying_power / orders / positions / run_result. Frame chrome comes from
-    // DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView for chart,
-    // ScenarioStartupTile for startup, LivePanelTileView for the 4 base panels) is injected here so
-    // the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
+    // The BACK-plane (_dockWindows) factory: the dock kinds (ADR-0017 / findings 0075 §7) —
+    // chart / buying_power / orders / positions / run_result (startup retired by ADR-0026). Frame chrome
+    // comes from DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView for chart,
+    // LivePanelTileView for the 4 base panels) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
     // snap/focus stays WITHIN the back plane (a dock window never snaps to the front-plane editor).
     RectTransform BuildDockWindowFrame(FloatingWindowSpec spec, string id)
     {
@@ -732,13 +766,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (body == null) return;
 
-        if (kind == FloatingWindowCatalog.KIND_STARTUP)
-        {
-            if (_tile == null) _tile = new ScenarioStartupTile(_scenario, _font);
-            _tile.Build(body);
-            _tile.SyncFieldsFromController();
-            return;
-        }
+        // #126 (ADR-0026): KIND_STARTUP is no longer a dock kind — the scenario tile is built into the
+        // Settings modal's Scenario section (BuildWorkspace), not a dock window body.
 
         if (kind == FloatingWindowCatalog.KIND_BUYING_POWER)
         { _buyingPowerView = new LivePanelTileView(FormatBuyingPower); _buyingPowerView.Build(body, _font); return; }
@@ -793,8 +822,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll
     }
 
-    // Spawn the 5 base dock windows (singletons) at the DockDefaultPlacement positions. Order
-    // matches findings 0075 §4: startup / buying_power / orders / positions / run_result.
+    // Spawn the 4 base dock windows (singletons) at the DockDefaultPlacement positions. Order
+    // (findings 0075 §4 minus the ADR-0026-retired startup): buying_power / orders / positions / run_result.
     // First-launch positions can be overridden by a saved layout via RestoreFloating's
     // ApplyGeometry on the matching id (the window is already registered by the time the
     // restore runs, so it gets repositioned in place — never destroyed+respawned).
@@ -813,9 +842,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083 / ADR-0020): factory-default
-    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 5 base
+    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 4 base
     // dock windows into ONE island (a plain group — ADR-0024 §1 retires the "Hakoniwa group" special
-    // case, so startup / run_result drag exactly like the others). This is the ONLY first-launch grouping
+    // case, so run_result drags exactly like the others). This is the ONLY first-launch grouping
     // path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the doc's persisted
     // groupId instead (工場出荷値のみ＝owner decision). The base windows are already spawned ungrouped
     // (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
@@ -1098,15 +1127,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _depthRendered.Remove(instrumentId);
     }
 
-    // #99 (ADR-0017 / findings 0075 §3): the only mode-conditional dock surface left is the
-    // `startup` window — shown in Replay, hidden in Live (NEVER destroyed, visibility toggle —
-    // dormant temp via _windows.Hide(id) / Show(id), so a Replay→Live→Replay round-trip keeps the
-    // user's startup position). Replaces the #61 SyncBaseTilesToMode (which retiled the whole base
-    // set on every flip); under the dock model nothing else is mode-conditional.
-    void SyncStartupVisibilityToMode(bool live)
+    // #126 (ADR-0026): the `startup` window's show/hide-on-mode toggle is RETIRED (Scenario Startup
+    // moved to the Settings modal — always available, not mode-gated). NO dock surface is mode-conditional
+    // now; this hook only tracks the Replay/Live shape (_lastLiveShape) and force-repaints the base
+    // panels on a flip (Live figures ⇄ Replay figures — #65 / #23 wiring).
+    void SyncLiveShape(bool live)
     {
-        if (live) _dockWindows.Hide(WINDOW_ID_STARTUP);   // #103: startup lives on the back plane
-        else _dockWindows.Show(WINDOW_ID_STARTUP);
         _lastLiveShape = live;
         ForceRefreshLiveTiles();   // shape flip: repaint the base panels now (#23 wiring)
     }
@@ -1167,6 +1193,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveFooter();
+        DriveSettings();   // #125-#128: ESC toggle (guarded) + reflect open state + live-gated section refresh
         DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
         DrivePrune();          // #41: after DriveFooter (fresh DisplayMode); before depth so a pruned chart tile propagates first
         DriveDepthLadders();   // #57: after DriveFooter so _footerMode.DisplayMode is the fresh mode
@@ -1604,6 +1631,44 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
     }
 
+    // #125-#128 (ADR-0026): the Settings modal driver. ESC toggle with the guard order from
+    // SettingsModalController (drag-revert > secret/save-guard > toggle), then reflect the open state
+    // into the overlay and keep the live-gated section widgets (venue interactable / mode lock-dim)
+    // fresh while open. The [x] button + Help→Settings call Open/Close directly.
+    void OpenSettings() => _settings?.Open();
+    void CloseSettings() => _settings?.Close();
+
+    void DriveSettings()
+    {
+        if (_settings == null || _settingsOverlay == null) return;
+
+        var kb = UnityEngine.InputSystem.Keyboard.current;
+        if (kb != null && kb.escapeKey.wasPressedThisFrame)
+        {
+            // ESC guard inputs queried fresh: any window drag in flight (front OR back plane) keeps the
+            // drag-revert owner (ADR-0024 §8); secret(1000)/save-guard open consume ESC so Settings can't
+            // open behind them. IsDragging stays true across an ESC-cancel until mouse-up, so this never
+            // races the title-input's own ESC handler regardless of Update ordering.
+            bool dragging = (_windows != null && _windows.IsDragging)
+                         || (_dockWindows != null && _dockWindows.IsDragging);
+            bool blocking = (_host != null && _host.Modal != null && _host.Modal.IsOpen)
+                         || (_saveGuardController != null && _saveGuardController.IsOpen)
+                         || (_menuBarView != null && _menuBarView.IsMenuOpen);   // open menu dropdown consumes ESC too
+            _settings.OnEscape(dragging, blocking);
+        }
+
+        if (_settings.IsOpen != _settingsOpenPrev)
+        {
+            _settingsOverlay.SetVisible(_settings.IsOpen);
+            _settingsOpenPrev = _settings.IsOpen;
+        }
+        if (_settings.IsOpen)
+        {
+            _settingsVenueView?.Refresh();
+            _settingsModeView?.Refresh();
+        }
+    }
+
     void OnSecretChar(char c) => _host.Modal.AppendChar(c);
     void OnSecretBackspace() => _host.Modal.Backspace();
 
@@ -1869,14 +1934,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _subCoord?.OnModePoll(_footerMode.DisplayMode);
 
         // #99 dock shape flip: the poll is the mode SoT (DisplayMode). LiveManual⇄LiveAuto share one
-        // Live shape (no-op); a Replay⇄Live transition flips the `startup` window visibility (Replay
-        // shows it, Live hides it — findings 0075 §3, ADR-0017 §4) and force-repaints the base panels.
+        // Live shape (no-op); a Replay⇄Live transition force-repaints the base panels (#126: the startup
+        // window's old visibility toggle is retired — Scenario Startup now lives in the Settings modal).
         bool live = DockShape.IsLiveShape(_footerMode.DisplayMode);
-        if (live != _lastLiveShape) SyncStartupVisibilityToMode(live);
+        if (live != _lastLiveShape) SyncLiveShape(live);
 
         // base panel content is refreshed by RefreshLiveTiles (Update, before DriveFooter) — gated on the
         // VM AppliedCount so idle frames cost one long compare. A shape flip force-repaints inside
-        // SyncStartupVisibilityToMode (above).
+        // SyncLiveShape (above).
 
         // #112 ADR-0025 D3: apply a per-cell-RUN live launch result (marshalled from the RPC worker)
         // BEFORE ObserveLifecycle/SyncLiveRunButton so the in-flight guard releases correctly. On

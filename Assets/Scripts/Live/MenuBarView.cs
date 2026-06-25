@@ -15,10 +15,10 @@
 // Canvas (1000) stays above the menu, so it remains topmost (findings 0045).
 //
 //   * File = Layout (New / Open / Save) — forwards to the workspace root's layout I/O.
-//   * Venue = the reused VenueMenuViewModel (vm.Venue): 4 TTWR connect variants (prod grey-out) +
-//     Disconnect. MOCK is NOT a parity variant — it surfaces only as a dev-only connect in the editor
-//     (findings 0027 D2), used to reach the LiveAuto-on-mainline HITL.
-//   * Edit / Help — present for structure parity; bodies deferred to #16 / the settings slice (stub).
+//   * Venue dropdown RETIRED (#128 / ADR-0026): venue 接続/切断 moved to the Settings modal's Venue
+//     section. The venue badge (vm.Venue.BadgeText) still shows connection state on the bar.
+//   * Help → Settings opens the集約 modal (Venue / Mode / Scenario — #125 / ADR-0026; was a stub).
+//   * Edit — present for structure parity; bodies deferred to #16 (stub).
 
 using System;
 using System.Collections.Generic;
@@ -28,7 +28,7 @@ using UnityEngine.UI;
 [RequireComponent(typeof(RectTransform))]
 public sealed class MenuBarView : MonoBehaviour
 {
-    enum OpenMenu { None, File, Edit, Venue, Help }
+    enum OpenMenu { None, File, Edit, Help }
 
     // chrome z-order contract (findings 0045): field/windows(0) < sidebar < BACKDROP < menu+dropdown
     // < secret modal(1000). Only the RELATIONS matter; these values just realise them.
@@ -37,12 +37,9 @@ public sealed class MenuBarView : MonoBehaviour
 
     RectTransform _container;
     MenuBarViewModel _vm;
-    Action _onNew, _onOpen, _onSave, _onSaveAs, _onDisconnect;
-    Action<string, string> _onConnect;     // (venue, env)
-    Func<bool> _connectReady;              // server ready && !teardown
+    Action _onNew, _onOpen, _onSave, _onSaveAs, _onSettings;
     Func<string> _modeText;                // current execution-mode display for the bar badge
     Func<string> _documentBadgeText;       // #95 P6 S6 (#90): notebook document-identity string (Untitled/basename/* dirty)
-    string _filterVenue;                   // ADR-0021: explicit LIVE_VENUE or null = show all venues (VisibleConnectItems normalizes)
     OpenMenu _open;
     string _message;
     Font _font;
@@ -51,7 +48,7 @@ public sealed class MenuBarView : MonoBehaviour
     string _lastDocBadge;                             // #95 P6 S6: document-badge cache (set Text.text only on change)
 
     // top-level button widths (fixed so the submenu drop x-offsets line up under each button).
-    const float W_FILE = 56f, W_EDIT = 44f, W_VENUE = 52f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
+    const float W_FILE = 56f, W_EDIT = 44f, W_HELP = 44f, ITEM_H = 22f, V_MARGIN = 4f;
 
     // retained uGUI graphics reflected by Refresh (no per-frame rebuild of the static tree).
     Canvas _canvas;
@@ -59,32 +56,22 @@ public sealed class MenuBarView : MonoBehaviour
     Text _docBadge;            // #95 P6 S6 (#90): document-identity badge (left lane; separate from the venue/mode/message badge)
     GameObject _backdrop;
     readonly Dictionary<OpenMenu, GameObject> _dropdowns = new Dictionary<OpenMenu, GameObject>();
-    // venue items whose interactable state depends on live connection — refreshed each frame.
-    readonly List<(Button btn, Func<bool> enabled)> _venueItems = new List<(Button, Func<bool>)>();
-
-    // Root wires the existing brain + the layout I/O and venue callbacks. The VM owns the File→New
-    // refuse-when-running gate and the venue logic (vm.Venue); the root performs the real clear/save/
-    // restore and the venue login/logout RPCs (findings 0027 D3/D5).
+    // Root wires the existing brain + the layout I/O and Settings open. The VM owns the File→New
+    // refuse-when-running gate and the venue logic (vm.Venue, now surfaced in the Settings modal); the
+    // root performs the real clear/save/restore (findings 0027 D3/D5). #128: venue connect/disconnect
+    // callbacks moved to SettingsVenueSectionView — the bar only opens Settings now (#125).
     public void Bind(MenuBarViewModel vm,
-                     Action onNew, Action onOpen, Action onSave, Action onSaveAs,
-                     Action<string, string> onConnect, Action onDisconnect,
-                     Func<bool> connectReady, Func<string> modeText, Func<string> documentBadgeText,
-                     string filterVenue, Font font)
+                     Action onNew, Action onOpen, Action onSave, Action onSaveAs, Action onSettings,
+                     Func<string> modeText, Func<string> documentBadgeText, Font font)
     {
         _vm = vm;
         _onNew = onNew;
         _onOpen = onOpen;
         _onSave = onSave;
         _onSaveAs = onSaveAs;
-        _onConnect = onConnect;
-        _onDisconnect = onDisconnect;
-        _connectReady = connectReady;
+        _onSettings = onSettings;
         _modeText = modeText;
         _documentBadgeText = documentBadgeText;
-        // ADR-0021: LIVE_VENUE no longer LOCKS the server's venue — it filters the menu. null (unset)
-        // surfaces all connect variants (the menu drives the runtime venue rebind); an explicit venue
-        // surfaces ONLY that venue's variants. Stored verbatim — VisibleConnectItems normalizes.
-        _filterVenue = filterVenue;
         _container = GetComponent<RectTransform>();
         _font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         Build();
@@ -92,6 +79,10 @@ public sealed class MenuBarView : MonoBehaviour
     }
 
     public void ShowMessage(string msg) { _message = msg; if (_built) Refresh(); }
+
+    // #125 (ADR-0026): true while a File/Edit/Help dropdown is open. The Settings ESC guard treats an
+    // open menu like a transient blocking overlay — ESC must not toggle Settings open behind it.
+    public bool IsMenuOpen => _open != OpenMenu.None;
 
     void Build()
     {
@@ -116,7 +107,7 @@ public sealed class MenuBarView : MonoBehaviour
         float x = 0f;
         MakeBarButton("File", W_FILE, x, () => Toggle(OpenMenu.File)); x += W_FILE;
         MakeBarButton("Edit", W_EDIT, x, () => Toggle(OpenMenu.Edit)); x += W_EDIT;
-        MakeBarButton("Venue", W_VENUE, x, () => Toggle(OpenMenu.Venue)); x += W_VENUE;
+        // #128: the top-level Venue button + dropdown are retired (venue → Settings modal).
         MakeBarButton("Help", W_HELP, x, () => Toggle(OpenMenu.Help)); x += W_HELP;
 
         _badge = MakeBadge(x + 8f, TextAnchor.MiddleRight);
@@ -129,7 +120,6 @@ public sealed class MenuBarView : MonoBehaviour
         // button's x. Built once; shown/hidden by Refresh from _open.
         BuildFileMenu();
         BuildEditMenu();
-        BuildVenueMenu();
         BuildHelpMenu();
     }
 
@@ -181,9 +171,6 @@ public sealed class MenuBarView : MonoBehaviour
         foreach (var kv in _dropdowns)
             if (kv.Value != null) kv.Value.SetActive(_open == kv.Key);
         if (_backdrop != null) _backdrop.SetActive(_open != OpenMenu.None);
-
-        foreach (var (btn, enabled) in _venueItems)
-            if (btn != null) btn.interactable = enabled();
     }
 
     void Update() { if (_built) Refresh(); }
@@ -194,7 +181,6 @@ public sealed class MenuBarView : MonoBehaviour
         Refresh();
     }
     string ModeText() => _modeText != null ? _modeText() : "-";
-    bool Ready() => _connectReady == null || _connectReady();
 
     void BuildFileMenu()
     {
@@ -215,34 +201,12 @@ public sealed class MenuBarView : MonoBehaviour
         MakeDisabledItem(dd, "Redo  (no active editor)", 1);
     }
 
-    void BuildVenueMenu()
-    {
-        var venue = _vm.Venue;
-        // ADR-0021: the venue list is computed by the pure VenueMenuViewModel.VisibleConnectItems so the
-        // AFK gate drives the filter without building uGUI. LIVE_VENUE unset → all variants (+ editor
-        // MOCK dev); pinned → only that venue's variants (the menu then rebinds the server on login).
-        var items = VenueMenuViewModel.VisibleConnectItems(_filterVenue, Application.isEditor);
-
-        var dd = NewDropdown(OpenMenu.Venue, W_FILE + W_EDIT, 260f, items.Count + 1);
-        int row = 0;
-        foreach (var (label, v, env) in items)
-        {
-            string venueId = v, envId = env;
-            var btn = MakeItem(dd, label, () => { _open = OpenMenu.None; _onConnect?.Invoke(venueId, envId); Refresh(); }, row++);
-            // MOCK is a plain dev connect (CanConnect); prod variants grey out unless *_ALLOW_PROD is set
-            // (mirrors the login dialog; Python is the safety authority). all disabled while connected/mid-auth.
-            if (venueId == "MOCK") _venueItems.Add((btn, () => Ready() && venue.CanConnect));
-            else _venueItems.Add((btn, () => Ready() && venue.CanConnectEnv(venueId, envId)));
-        }
-        var dis = MakeItem(dd, "Disconnect", () => { _open = OpenMenu.None; _onDisconnect?.Invoke(); Refresh(); }, row);
-        _venueItems.Add((dis, () => Ready() && venue.CanDisconnect));
-    }
-
     void BuildHelpMenu()
     {
-        // ADR-0005 lists Settings as its own surface — item present, body deferred to that slice.
-        var dd = NewDropdown(OpenMenu.Help, W_FILE + W_EDIT + W_VENUE, 220f, 1);
-        MakeDisabledItem(dd, "Settings  (deferred slice)", 0);
+        // #125 (ADR-0026): Settings opens the集約 modal (Venue / Mode / Scenario). Was a disabled stub;
+        // the Help dropdown now drops under File+Edit (the Venue top-level button is retired, #128).
+        var dd = NewDropdown(OpenMenu.Help, W_FILE + W_EDIT, 220f, 1);
+        MakeItem(dd, "Settings", () => { _open = OpenMenu.None; _onSettings?.Invoke(); Refresh(); }, 0);
     }
 
     // ── uGUI builders ──

@@ -38,20 +38,21 @@ public static class DockShape
     // predicate that routes a kind to its depth plane: BackcastWorkspaceRoot uses it on layout
     // restore, and the AFK gate uses it to prove the round-trip plane routing — so the two cannot
     // drift. Pure (the catalog consts are compile-time strings) so probes drive it headlessly.
+    // ADR-0026: startup is no longer a dock kind (moved to the Settings modal). The dock plane is now
+    // chart + the 4 base singletons (buying_power / orders / positions / run_result).
     public static bool IsDockKind(string kind) =>
         kind == FloatingWindowCatalog.KIND_CHART ||
-        kind == FloatingWindowCatalog.KIND_STARTUP ||
         kind == FloatingWindowCatalog.KIND_BUYING_POWER ||
         kind == FloatingWindowCatalog.KIND_ORDERS ||
         kind == FloatingWindowCatalog.KIND_POSITIONS ||
         kind == FloatingWindowCatalog.KIND_RUN_RESULT;
 
-    // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kinds. A group containing AT LEAST
-    // ONE visible/live core (startup OR run_result) is promoted to a Hakoniwa group — translate-banned,
-    // swap-only, core members are detach-immune. Hidden cores do not count (visible/live集合 only;
-    // mode-switch hide can demote a Hakoniwa group to a plain group and Replay-restore re-promotes it).
-    // The 2 kinds are FIXED (ADR-0019 §2 / Avoid in CONTEXT.md "core member"): no config / no extension.
+    // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kind(s). A group containing AT LEAST
+    // ONE visible/live core is promoted to a Hakoniwa group — translate-banned, swap-only, core members
+    // are detach-immune (NOTE: ADR-0024 §1 since RETIRED the Hakoniwa special, so IsCoreKind now only
+    // feeds legacy/diagnostic paths). ADR-0026 retires the `startup` dock window, so the core set
+    // reduces to {run_result} (a consequence of the placement supersession — ADR-0019 itself stays
+    // immutable; recorded in findings 0102). run_result remains the factory group's promoting core.
     public static bool IsCoreKind(string kind) =>
-        kind == FloatingWindowCatalog.KIND_STARTUP ||
         kind == FloatingWindowCatalog.KIND_RUN_RESULT;
 }

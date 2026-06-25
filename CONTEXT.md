@@ -465,7 +465,9 @@ marimo **3D モード**移植（#81・ADR-0013・findings 0050）。**1 セル =
 `load_app`）が担う——C# は空間 UI（窓・位置・矢印）だけを持ち def/ref 解析を再実装しない（[[ttwr-parity-first]]）。
 依存の **reactive 解決は marimo 側で閉じている**ので、窓間の依存矢印は refs/defs の**可視化**にすぎず実行には効かない。
 セルの追加 [+]・削除・drag/z-order・位置永続化を持つ（**notebook は常に ≥1 セル**＝最後の 1 個は削除不可・marimo parity）。
+**mode-conditional 可視性（findings 0110）**: この authoring 表面（全 `strategy_editor` cell 窓＋[+] Add Cell ボタン）は **`LiveManual` のとき非表示**（人間が order ticket で発注するモードで Python authoring 不要）。`Replay`（backtest に Python 要）／`LiveAuto`（cell が戦略を自動駆動）では表示維持。実装は **純可視性トグル**（`SetActive`・geometry/content/永続化は不変・run は止めない）で、order ticket（`LiveManual` のときだけ表示）の **完全な鏡像**＝front-plane は LiveManual で order ticket だけ・Replay/LiveAuto で strategy_editor だけ。
 _Avoid_: 窓ごとに別 `.py` ファイルを持つと解釈すること（ノート = 1 `.py`・[[strategy file provider（供給 seam）]] 参照）／
+mode 非表示を window close や永続化スキーマ変更と解釈すること（可視性のみ＝SetActive）／LiveAuto も隠すこと（cell が戦略を駆動するので Python 表面が要る・findings 0110 Q1）／
 `def _(refs)` / `return defs` を画面に出すこと（本体のみ）／合成/分解を C# に再実装すること（marimo 純正に委譲）／
 セル identity を窓 GameObject に 1:1 固定すること（物理窓 region_001 は never-Destroy・論理セルは hide-not-destroy で
 dormant 化・ADR-0013）／依存矢印を実行に必要と見なすこと（純粋可視化・Slice 2）

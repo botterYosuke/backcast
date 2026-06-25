@@ -31,6 +31,7 @@ using System.IO;
 using System.Reflection;
 using TMPro;
 using UnityEditor;
+using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -70,7 +71,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section21_ConsoleAndDynamicLayout(spawned)
                 ?? Section22_ConsoleAuditGaps(spawned)
                 ?? Section23_ModeAwareLiveLaunch(spawned)
-                ?? Section24_LiveLifecycleEdges(spawned);
+                ?? Section24_LiveLifecycleEdges(spawned)
+                ?? Section25_ModeConditionalVisibility(spawned);
         }
         catch (Exception e)
         {
@@ -139,6 +141,12 @@ public static class StrategyEditorNotebookE2ERunner
                       "deleting the launching cell OR File→New (region reuse) drops the ▶/■ tracking without " +
                       "stopping the venue run, a new launch stays blocked by the still-active run, and a deferred " +
                       "stop pending at reconcile time is honored not dropped) " +
+                      "+ #138 mode-conditional visibility (STRATEGY-53/54/55 / findings 0110: the strategy_editor " +
+                      "authoring surface — ALL cell windows (region_001 + region_002) + the [+] Add Cell button — is " +
+                      "hidden in LiveManual and visible in Replay/LiveAuto, the inverse of the order ticket (front-plane " +
+                      "exclusivity); hiding is pure visibility — same window instances + geometry preserved across a " +
+                      "Replay→LiveManual→Replay round-trip and Save-while-hidden keeps positions (AC5); the toggle " +
+                      "re-shows only what it hid, so a dormant region_001 shell is never resurrected) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -2559,6 +2567,145 @@ public static class StrategyEditorNotebookE2ERunner
             return "S22/STRATEGY-46: stale stdout 'stale-from-A' leaked into cellC's view";
 
         lane.Dispose();
+        return null;
+    }
+
+    // ── Section 25: #138 (findings 0110) — the Strategy Editor authoring surface is HIDDEN in LiveManual.
+    //    The mirror of the order ticket (visible ONLY in LiveManual): in Replay (backtest needs Python)
+    //    and LiveAuto (the cell drives the strategy) the strategy_editor cell windows + the [+] Add Cell button
+    //    stay visible; in LiveManual (the human trades via the order ticket — no Python authoring) they are
+    //    hidden, and the order ticket is the inverse (front-plane exclusivity). Hiding is PURE VISIBILITY
+    //    (SetActive): the windows are NOT destroyed and their geometry is preserved across the round-trip,
+    //    and a Save (CapturePositions) taken while hidden still records the live positions (AC5).
+    //    A SECOND cell window (region_002) is spawned so the multi-window "ALL windows" contract (AC1) and
+    //    the HideKind/ShowHidden loop are exercised — a single-window-only regression would NOT pass.
+    //    Real BackcastWorkspaceRoot composed from the authored scene (Python-FREE via FakeMarimoSynthesizer);
+    //    the REAL DriveStrategyEditor / DriveOrderTicket / FooterModeViewModel.ApplyPoll / coordinator are
+    //    driven (the SAME seam OrderTicketE2ERunner SectionC uses for ORDER-14). Vacuity guard: every
+    //    seam/widget is asserted to EXIST first, so a rename FAILS (not vacuously passes).
+    //    RUNS LAST: OpenScene(Single) fake-nulls earlier synthetic GameObjects (Run's finally guards != null).
+    //    Covers: STRATEGY-53 (mode→visibility for ALL windows + exclusivity), STRATEGY-54 (non-destructive:
+    //    same instance + geometry + Save-while-hidden / AC5), STRATEGY-55 (a dormant region_001 shell is NOT
+    //    resurrected by the toggle — the remembered-set re-shows only what it hid).
+    static string Section25_ModeConditionalVisibility(List<GameObject> spawned)
+    {
+        const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
+        EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
+        var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (root == null) return "S25: BackcastWorkspaceRoot missing in scene";
+        var ty = typeof(BackcastWorkspaceRoot);
+        ty.GetField("_font", BF).SetValue(root, Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+        root.SetSynthesizer(new FakeMarimoSynthesizer());   // #81: Python-free cell synthesis
+        ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
+        ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
+
+        Func<RectTransform> editorWin = () => ty.GetField("_strategyEditorWindow", BF)?.GetValue(root) as RectTransform;
+        var addCellOverlay = ty.GetField("_addCellOverlay", BF)?.GetValue(root) as GameObject;
+        var orderWindow = ty.GetField("_orderWindow", BF)?.GetValue(root) as RectTransform;
+        var footerMode = ty.GetField("_footerMode", BF)?.GetValue(root);
+        var windows = ty.GetField("_windows", BF)?.GetValue(root) as FloatingWindowController;
+        var coord = ty.GetField("_coordinator", BF)?.GetValue(root) as NotebookCellCoordinator;
+        if (editorWin() == null) return "S25: _strategyEditorWindow missing in scene";
+        if (addCellOverlay == null) return "S25: _addCellOverlay not built ([+] Add Cell toggle target missing — renamed?)";
+        if (orderWindow == null) return "S25: _orderWindow not built (front-plane exclusivity mirror target renamed?)";
+        if (footerMode == null) return "S25: _footerMode not built";
+        if (windows == null) return "S25: _windows controller not built";
+        if (coord == null) return "S25: _coordinator not built";
+
+        var applyPoll = footerMode.GetType().GetMethod("ApplyPoll");
+        if (applyPoll == null) return "S25: FooterModeViewModel.ApplyPoll not found (renamed?)";
+        var driveEditor = ty.GetMethod("DriveStrategyEditor", BF);
+        if (driveEditor == null) return "S25: DriveStrategyEditor not found (renamed?)";
+        var driveOrder = ty.GetMethod("DriveOrderTicket", BF);
+        if (driveOrder == null) return "S25: DriveOrderTicket not found (renamed?)";
+
+        // Deterministic 2-cell notebook so "ALL windows" (AC1) and the multi-window loop are REAL (not
+        // vacuously single-window): the authored scene boots with region_001 dormant, so New() first binds
+        // cell0 into region_001 (un-dormant), then AddCell spawns a DISTINCT region_002 window.
+        coord.New();
+        var cell2 = coord.AddCell();
+        string r2 = coord.RegionOf(cell2);
+        Func<RectTransform> win2 = () => windows.RectOf(r2);
+        if (r2 == NotebookCellCoordinator.AdoptedRegionId || win2() == null)
+            return "S25: AddCell did not spawn a DISTINCT second strategy_editor window (region_002), got " + r2;
+
+        void Poll(string mode, string venueState)
+            => applyPoll.Invoke(footerMode, new object[] { "{\"execution_mode\":\"" + mode + "\",\"venue_state\":\"" + venueState + "\"}" });
+        void Drive() { driveEditor.Invoke(root, null); driveOrder.Invoke(root, null); }
+
+        // STRATEGY-53: the WHOLE surface (ALL strategy_editor windows + [+] Add Cell) toggles with mode —
+        //   visible in Replay/LiveAuto, hidden in LiveManual — and the order ticket is the inverse.
+        Poll("Replay", "");
+        Drive();
+        if (!editorWin().gameObject.activeSelf) return "STRATEGY-53: region_001 hidden under Replay (must be visible)";
+        if (!win2().gameObject.activeSelf) return "STRATEGY-53: region_002 hidden under Replay (ALL cell windows must be visible)";
+        if (!addCellOverlay.activeSelf) return "STRATEGY-53: [+] Add Cell hidden under Replay (must be visible)";
+        if (orderWindow.gameObject.activeSelf) return "STRATEGY-53: order ticket visible under Replay (front-plane exclusivity)";
+
+        Poll("LiveAuto", "CONNECTED");
+        Drive();
+        if (!editorWin().gameObject.activeSelf) return "STRATEGY-53: region_001 hidden under LiveAuto (cell drives the strategy — must stay visible)";
+        if (!win2().gameObject.activeSelf) return "STRATEGY-53: region_002 hidden under LiveAuto (must stay visible)";
+        if (!addCellOverlay.activeSelf) return "STRATEGY-53: [+] Add Cell hidden under LiveAuto (must be visible)";
+
+        Poll("LiveManual", "CONNECTED");
+        Drive();
+        if (editorWin().gameObject.activeSelf) return "STRATEGY-53: region_001 VISIBLE under LiveManual (must be hidden)";
+        if (win2().gameObject.activeSelf) return "STRATEGY-53: region_002 VISIBLE under LiveManual (ALL cell windows must be hidden)";
+        if (addCellOverlay.activeSelf) return "STRATEGY-53: [+] Add Cell VISIBLE under LiveManual (must be hidden)";
+        if (!orderWindow.gameObject.activeSelf) return "STRATEGY-53: order ticket NOT visible under LiveManual (front-plane exclusivity)";
+        Debug.Log("[E2E STRATEGY-53 PASS] the whole strategy editor surface (ALL cell windows + [+] Add Cell) toggles with mode — visible in Replay/LiveAuto, hidden in LiveManual; order ticket is the inverse");
+
+        // STRATEGY-54: hiding is PURE VISIBILITY — same window instances + geometry preserved across the
+        //   Replay → LiveManual → Replay round-trip, AND a Save (CapturePositions) taken WHILE hidden in
+        //   LiveManual still records the live positions (AC5). A "close+respawn"/"reset geometry"/"capture
+        //   skips inactive windows" impl would fail.
+        Poll("Replay", "");
+        Drive();
+        var w1 = editorWin(); var w2 = win2();
+        int id1 = w1.GetInstanceID(), id2 = w2.GetInstanceID();
+        Vector2 p1 = w1.anchoredPosition, s1 = w1.sizeDelta, p2 = w2.anchoredPosition, s2 = w2.sizeDelta;
+        var posReplay = coord.CapturePositions();
+        Poll("LiveManual", "CONNECTED");
+        Drive();
+        if (editorWin() == null || win2() == null) return "STRATEGY-54: a strategy editor window was destroyed on entering LiveManual (must be hide-not-destroy)";
+        var posHidden = coord.CapturePositions();   // AC5: Save while the surface is hidden
+        if (posHidden.Count != posReplay.Count) return "STRATEGY-54: CapturePositions count changed when Saved during LiveManual (AC5)";
+        for (int i = 0; i < posHidden.Count; i++)
+            if ((posHidden[i] - posReplay[i]).sqrMagnitude > EPS) return "STRATEGY-54: a strategy editor position was dropped/changed when Saved during LiveManual (AC5)";
+        Poll("Replay", "");
+        Drive();
+        var b1 = editorWin(); var b2 = win2();
+        if (b1 == null || b1.GetInstanceID() != id1 || b2 == null || b2.GetInstanceID() != id2)
+            return "STRATEGY-54: a strategy editor window is a new instance after a LiveManual round-trip (must be hide-not-destroy)";
+        if ((b1.anchoredPosition - p1).sqrMagnitude > EPS || (b1.sizeDelta - s1).sqrMagnitude > EPS
+            || (b2.anchoredPosition - p2).sqrMagnitude > EPS || (b2.sizeDelta - s2).sqrMagnitude > EPS)
+            return "STRATEGY-54: strategy editor geometry changed across the hide/show (pos/size not preserved)";
+        if (!b1.gameObject.activeSelf || !b2.gameObject.activeSelf) return "STRATEGY-54: strategy editor not restored to visible after leaving LiveManual";
+        Debug.Log("[E2E STRATEGY-54 PASS] LiveManual hide is pure visibility — same window instances + geometry preserved across the round-trip, and Save-while-hidden keeps positions (AC5)");
+
+        // STRATEGY-55 (#138 regression guard): the mode toggle must re-show ONLY the windows IT hid — never a
+        //   window hidden for an INDEPENDENT reason. Delete region_001's cell → it goes dormant (hidden,
+        //   ADR-0013 D4) while region_002 stays. DriveStrategyEditor in Replay (show side), and a LiveManual
+        //   round-trip, must both leave the dormant shell hidden. A blanket "SetActive(true) on every
+        //   strategy_editor window" would resurrect the empty dormant shell — that is the RED this pins.
+        string r1 = NotebookCellCoordinator.AdoptedRegionId;
+        Poll("Replay", "");
+        Drive();
+        if (windows.RectOf(r1) == null || !windows.RectOf(r1).gameObject.activeSelf) return "STRATEGY-55: precondition — region_001 not visible before delete";
+        if (!coord.DeleteCell(r1)) return "STRATEGY-55: precondition — DeleteCell(region_001) failed";
+        if (windows.RectOf(r1).gameObject.activeSelf) return "STRATEGY-55: precondition — DeleteCell did not hide region_001 (dormant shell)";
+        Drive();   // Replay show-side: must NOT resurrect the dormant shell
+        if (windows.RectOf(r1).gameObject.activeSelf) return "STRATEGY-55: dormant region_001 shell resurrected by the mode toggle in Replay (must stay hidden)";
+        if (!win2().gameObject.activeSelf) return "STRATEGY-55: region_002 wrongly hidden (only the dormant shell must stay hidden)";
+        Poll("LiveManual", "CONNECTED");
+        Drive();
+        Poll("Replay", "");
+        Drive();
+        if (windows.RectOf(r1).gameObject.activeSelf) return "STRATEGY-55: dormant region_001 shell resurrected after a LiveManual round-trip (must stay hidden)";
+        if (!win2().gameObject.activeSelf) return "STRATEGY-55: region_002 not restored after the LiveManual round-trip";
+        Debug.Log("[E2E STRATEGY-55 PASS] the LiveManual visibility toggle re-shows only the windows it hid — a dormant region_001 shell is never resurrected");
+
         return null;
     }
 }

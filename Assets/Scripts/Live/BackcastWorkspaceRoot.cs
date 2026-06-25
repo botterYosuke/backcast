@@ -1039,9 +1039,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // divergence from TTWR/marimo parity at the owner's request. Its own ScreenSpaceOverlay canvas keeps
     // it screen-fixed (it does NOT pan with the canvas) and above Content but below the secret modal
     // (z帯, findings 0050).
+    // #138 (findings 0110): the [+] Add Cell overlay GameObject, kept so DriveStrategyEditor can hide the
+    // whole authoring affordance in LiveManual (mirror of the order ticket's mode-conditional visibility).
+    GameObject _addCellOverlay;
+
     void BuildAddCellButton()
     {
         var overlayGo = new GameObject("AddCellOverlay", typeof(RectTransform), typeof(Canvas), typeof(GraphicRaycaster));
+        _addCellOverlay = overlayGo;
         overlayGo.transform.SetParent(transform, false);
         var canvas = overlayGo.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
@@ -1254,6 +1259,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         DriveSecretModal(newSecret);
         RefreshLiveTiles();
         DriveOrderTicket();
+        DriveStrategyEditor();
         DriveFooter();
         DriveSettings();   // #125-#128: ESC toggle (guarded) + reflect open state + live-gated section refresh
         DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
@@ -1474,6 +1480,30 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     static long Mix(long h, long v) => (h ^ v) * 1099511628211L;   // FNV-1a prime
+
+    // ids of the strategy_editor windows THIS toggle hid on entering LiveManual, so leaving LiveManual
+    // re-shows exactly those — and never a window hidden for an independent reason (dormant region_001).
+    readonly HashSet<string> _strategyEditorHiddenByMode = new HashSet<string>();
+
+    // ── #138 (findings 0110): Strategy Editor authoring surface — the MIRROR of DriveOrderTicket.
+    // The order ticket is visible ONLY in LiveManual; the Strategy Editor (all strategy_editor cell windows
+    // + the [+] Add Cell button) is hidden ONLY in LiveManual. Rationale: LiveManual = the human trades via
+    // the order ticket, so the Python authoring surface is not needed; Replay (backtest needs Python) and
+    // LiveAuto (the cell drives the strategy) keep it visible. Pure visibility toggle (SetActive only):
+    // geometry/content/persistence are unchanged and an in-flight run is NOT stopped (LiveManual has no live
+    // run path; teardown on mode-leave is findings 0026). NOT a blanket re-activate on leave: we re-show only
+    // the windows we ourselves hid (HideKind/ShowHidden remembered-set), so a dormant region_001 shell
+    // (cell deleted, ADR-0013 D4) is not resurrected. Runs in the same poll cycle as DriveOrderTicket,
+    // so it carries the identical ≤1-frame DisplayMode latency (symmetric). ──
+    void DriveStrategyEditor()
+    {
+        if (_windows == null) return;
+        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
+        if (liveManual) _windows.HideKind(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, _strategyEditorHiddenByMode);
+        else _windows.ShowHidden(_strategyEditorHiddenByMode);
+        bool showAdd = !liveManual;
+        if (_addCellOverlay != null && _addCellOverlay.activeSelf != showAdd) _addCellOverlay.SetActive(showAdd);
+    }
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
     // gate the buttons on a live session; apply any worker-thread place/cancel status to the (main) view. ──

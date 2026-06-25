@@ -148,6 +148,32 @@ public class FloatingWindowController
     public bool IsDragging => _drag != null;
     public RectTransform RectOf(string id) => _windows.TryGetValue(id, out var e) ? e.rt : null;
 
+    // #138 (findings 0110): mode-conditional visibility for a whole window KIND — used by the root's
+    // DriveStrategyEditor (the strategy_editor surface is hidden in LiveManual, the mirror of the order
+    // ticket). Allocation-free (struct dictionary enumerator), so it is safe to call every poll frame
+    // unlike a List-returning enumerator. The hide/show pair is asymmetric ON PURPOSE: HideKind records
+    // the ids it actually hid into `recordHidden`, and ShowHidden re-shows ONLY those — so a window hidden
+    // for an INDEPENDENT reason (a dormant region_001 shell after DeleteCell, ADR-0013 D4) is never
+    // resurrected by the mode toggle. SetActive only (no BringToFront): geometry and z are preserved.
+    public void HideKind(string kind, HashSet<string> recordHidden)
+    {
+        if (string.IsNullOrEmpty(kind) || recordHidden == null) return;
+        foreach (var kv in _windows)
+            if (kv.Value.kind == kind && kv.Value.rt != null && kv.Value.rt.gameObject.activeSelf)
+            {
+                kv.Value.rt.gameObject.SetActive(false);
+                recordHidden.Add(kv.Key);
+            }
+    }
+
+    public void ShowHidden(HashSet<string> hidden)
+    {
+        if (hidden == null || hidden.Count == 0) return;
+        foreach (var id in hidden)
+            if (_windows.TryGetValue(id, out var e) && e.rt != null) e.rt.gameObject.SetActive(true);
+        hidden.Clear();
+    }
+
     // #104 (ADR-0019 / findings 0082 §8): bind a ghost overlay to this controller. Production root
     // mints one per plane (the back DockLayer plane has its own ghost layer; the front
     // FloatingWindowLayer plane has its own — neither leaks). The controller calls Render() during

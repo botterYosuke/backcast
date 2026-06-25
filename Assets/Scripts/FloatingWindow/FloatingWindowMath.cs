@@ -35,49 +35,58 @@ using UnityEngine;
 
 public static class FloatingWindowMath
 {
-    // ADR-0024 §2 / findings 0088 §1: the THREE drag modes the title-input boundary picks each frame
-    // PURELY from cursor position (ADR-0019's 7-mode group/Hakoniwa/core machine is SUPERSEDED — there
-    // is no Hakoniwa special case any more; startup / run_result drag exactly like every other window).
+    // ADR-0029 §1 / findings 0106 §1: the TWO drag GESTURE CHANNELS, fixed at OnBeginDrag and NEVER
+    // re-evaluated per frame (ADR-0024's cursor-position 3-mode `ResolveDragMode` + the `D_DETACH_PX`
+    // distance trigger are SUPERSEDED — owner unhappiness 1/2). The channel is decided from WHAT was
+    // grabbed (the eject handle / Alt) — not from cursor distance — so a drag can never morph mid-gesture.
     //
-    //   Swap     — the cursor sits inside ANOTHER member of the dragged's island (same groupId,
-    //              visible/live ≥ 2). Live geometry frozen; release exchanges (x,y,w,h) with the target
-    //              (ghost-2 preview). Distance-independent: swap WINS over translate/detach whenever the
-    //              cursor is over a sibling rect.
-    //   Translate— the cursor is OUTSIDE the island ∧ |cursor - dragStart| < D_DETACH_PX. Live geometry:
-    //              the WHOLE island real-renders shifted by the cursor offset (+ magnetic snap). A
-    //              singleton (island = {A}) also translates — it is just a 1-member island.
-    //   Detach   — the cursor is OUTSIDE the island ∧ |cursor - dragStart| ≥ D_DETACH_PX. Live geometry:
-    //              ONLY the dragged real-renders following the cursor (+ magnetic snap); the rest of the
-    //              island stays at rest. Release commits the detach (groupId=null) or, on overlap, a
-    //              singleton-merge into the overlapped island.
-    public enum DragMode
+    //   IslandMove        — a plain title-bar drag. The WHOLE island translates as a unit at UNLIMITED
+    //                       distance (no detach, ever — membership only shrinks via SingleWindowPickup).
+    //                       Releasing flush against another island merges (owner Q3). A singleton is a
+    //                       1-member island.
+    //   SingleWindowPickup— the eject handle or Alt+drag. ONE window is lifted out of the island and
+    //                       carried; the DROP POSITION decides the outcome (ResolveDropOutcome).
+    public enum DragChannel
+    {
+        IslandMove,
+        SingleWindowPickup,
+    }
+
+    // ADR-0029 §4 / findings 0106 §3: the outcome of a SingleWindowPickup release, decided PURELY by the
+    // release position (owner Q1 — one gesture, drop-decided):
+    //   Swap         — the cursor sits over a sibling member of the picked window's island. The two
+    //                  exchange position (anchor only — size preserved) + island-scoped reflow (D6/Q5).
+    //   MergeToIsland— the picked window lands flush (magnet engaged) against ANOTHER island. It joins
+    //                  that island (singleton → merge cascade).
+    //   Detach       — neither sibling nor flush (empty space). The window leaves its island
+    //                  (groupId=null; the remnant chain-dissolves below 2).
+    public enum DropOutcome
     {
         Swap,
-        Translate,
+        MergeToIsland,
         Detach,
     }
 
-    // ADR-0024 §2 / findings 0088 §1: the result of ResolveDragMode — the mode plus, for Swap, the id of
-    // the island member the cursor sits over. swapTargetId is null/empty for Translate / Detach. Pure
-    // POCO so the AFK gate drives the dispatcher headlessly.
-    public struct DragResolution
+    // ADR-0029 §4 / findings 0106 §3: the result of ResolveDropOutcome — the outcome plus, for Swap, the
+    // sibling id under the cursor; for MergeToIsland, the id of a flushed member of the other island.
+    // Pure POCO so the AFK gate drives the drop classifier headlessly.
+    public struct DropResolution
     {
-        public DragMode mode;
-        public string swapTargetId;   // non-null/non-empty only when mode == Swap
+        public DropOutcome outcome;
+        public string swapTargetId;     // non-empty only when outcome == Swap
+        public string mergeTargetId;    // non-empty only when outcome == MergeToIsland (a member of the other island)
     }
-
-    // ADR-0024 §6 / findings 0088 §11: the detach distance threshold in canvas-LOGICAL px. Re-calibrated
-    // 64f → 256f so the 3-tier ladder (R_SNAP_PX=96 attract < D_DETACH_PX=256 translate-cap < detach)
-    // lines up: a short outward drag translates the island, a deliberate "tear-off" past one tile-width
-    // detaches it. Distance one — no velocity, no modifier keys (rejected in favour of an AFK-checkable
-    // scalar). Zoom-independent (canvas-logical).
-    public const float D_DETACH_PX = 256f;
 
     // ADR-0024 §3 / findings 0088 §11: the in-drag magnetic-attraction radius in canvas-LOGICAL px.
     // While translating / detaching, an outer edge within R_SNAP_PX of another window's opposite edge
     // (with orthogonal overlap) snaps flush ("プルン"). ~250/2.6 of a tile — strong enough for the
     // owner's "もっと強く" ask without surprise-snapping a brisk drag. Zoom-independent.
     public const float R_SNAP_PX = 96f;
+
+    // ADR-0029 §6 / findings 0106 §4: the island-scoped reflow re-snap pass count. Best-effort (not a
+    // convergence guarantee) — 2 passes settle the common 2-3 window swap chains; longer chains may leave a
+    // residual gap, accepted as free-placement (owner Q4). See ReflowIslandAfterSwap.
+    public const int REFLOW_PASSES = 2;
 
     // ADR-0024 §3 / findings 0088 §3, §11: the spring rect-interpolation animation. 200ms duration,
     // single overshoot of 8% (ease-out-back), settling to the target. SPRING_BACK_S is the ease-out-back
@@ -107,8 +116,9 @@ public static class FloatingWindowMath
     //
     // Containment uses top-left pivot, y-up-positive geometry (DockRect.Top / Bottom / Left / Right
     // already use those conventions). A cursor exactly on an edge counts as inside (`<=` / `>=`) — the
-    // caller's drag-mode logic already evaluates "near vs far" via D_DETACH, so edge equality at the
-    // resolver is harmless (the swap still produces a defined (x,y,w,h) commit).
+    // caller's drop classifier (ADR-0029 ResolveDropOutcome) decides swap purely from this containment,
+    // so edge equality at the resolver is harmless (swap commits a defined SIZE-PRESERVING anchor swap +
+    // island reflow — the ADR-0024 (x,y,w,h) 4-value exchange and the D_DETACH distance trigger are RETIRED).
     public static string ResolveDropTarget(Vector2 cursor, IList<GroupMember> groupMembers, string draggedId)
     {
         if (groupMembers == null || groupMembers.Count == 0) return null;
@@ -124,26 +134,101 @@ public static class FloatingWindowMath
         return best;
     }
 
-    // ADR-0024 §2 / findings 0088 §1: the pure 3-mode dispatcher, evaluated EVERY frame from cursor
-    // position alone. `islandMembers` = the dragged's island (same groupId, visible/live ≥ 2) projected
-    // to GroupMember rects; a singleton drag passes an empty/self-only list. `draggedId` is excluded from
-    // the swap scan. Branch order (Swap first, distance-independent) is the spec's: a cursor over a
-    // sibling rect swaps regardless of how far it has travelled.
+    // ADR-0029 §3 / findings 0106 §1: the gesture-channel discriminator — the ONLY input-derived choice,
+    // read ONCE at OnBeginDrag and frozen for the whole drag. The eject handle (visible affordance) or a
+    // held Alt selects SingleWindowPickup; a plain title-bar grab selects IslandMove. Pure truth table so
+    // the AFK gate pins both engage paths without an EventSystem / a real Keyboard device.
+    public static DragChannel ResolveChannel(bool hitEjectHandle, bool altHeld)
+        => (hitEjectHandle || altHeld) ? DragChannel.SingleWindowPickup : DragChannel.IslandMove;
+
+    // ADR-0029 §4 / findings 0106 §3: the SingleWindowPickup drop classifier — evaluated ONCE at release
+    // from the drop POSITION (NOT distance — the distance trigger is retired). `islandMembers` = the
+    // picked window's island (it includes `pickedId`, excluded from the swap scan); `pickedRect` is the
+    // picked window's rect at the release position; `otherWindows` = every visible/live window NOT in the
+    // island (the merge candidates). Branch order is the spec's (owner Q1):
     //
-    //   1. Swap     — cursor inside another island member's rect (ResolveDropTarget: top-sibling wins,
-    //                 hidden / self excluded). Distance is NOT consulted.
-    //   2. Detach   — |cursor - dragStart| ≥ D_DETACH_PX (inclusive — the threshold-INCLUSIVE feel of
-    //                 SnapOffset; the design's "強く引き剥がす" engages exactly at the radius).
-    //   3. Translate— everything else (cursor outside island ∧ within D_DETACH_PX, incl. singleton).
-    public static DragResolution ResolveDragMode(
-        Vector2 cursor, Vector2 dragStart, IList<GroupMember> islandMembers, string draggedId, float dDetach)
+    //   1. Swap         — the cursor sits over a sibling member rect (ResolveDropTarget: top sibling wins,
+    //                     self/hidden excluded). Distance is NOT consulted.
+    //   2. MergeToIsland— else, the picked rect at release is magnet-flush (within rSnap, ComputeMagneticSnap
+    //                     engages) against a non-island window → join that window's island.
+    //   3. Detach       — neither (empty space).
+    public static DropResolution ResolveDropOutcome(
+        Vector2 cursor, DockRect pickedRect, IList<GroupMember> islandMembers, string pickedId,
+        IList<GroupMember> otherWindows, float rSnap)
     {
-        string swapTarget = ResolveDropTarget(cursor, islandMembers, draggedId);
+        string swapTarget = ResolveDropTarget(cursor, islandMembers, pickedId);
         if (!string.IsNullOrEmpty(swapTarget))
-            return new DragResolution { mode = DragMode.Swap, swapTargetId = swapTarget };
-        if ((cursor - dragStart).magnitude >= dDetach)
-            return new DragResolution { mode = DragMode.Detach, swapTargetId = null };
-        return new DragResolution { mode = DragMode.Translate, swapTargetId = null };
+            return new DropResolution { outcome = DropOutcome.Swap, swapTargetId = swapTarget };
+
+        // Flush-to-another-island: the picked rect at its release position is magnet-engaged against a
+        // non-island window — EITHER within rSnap (ComputeMagneticSnap would still pull it) OR ALREADY flush
+        // (the in-drag magnet snapped it to a 0-gap kiss, where ComputeMagneticSnap returns zero). Both count
+        // as "landed flush on another island". The top-sibling among candidates wins (mirrors the swap scan).
+        if (otherWindows != null)
+        {
+            string best = null; int bestSibling = int.MinValue;
+            for (int i = 0; i < otherWindows.Count; i++)
+            {
+                var o = otherWindows[i];
+                if (o.id == pickedId) continue;
+                bool engaged = ComputeMagneticSnap(pickedRect, new[] { o.rect }, rSnap) != Vector2.zero
+                               || IsFlushAdjacent(pickedRect, o.rect, 1f);
+                if (engaged && o.siblingIndex > bestSibling)
+                { best = o.id; bestSibling = o.siblingIndex; }
+            }
+            if (!string.IsNullOrEmpty(best))
+                return new DropResolution { outcome = DropOutcome.MergeToIsland, mergeTargetId = best };
+        }
+
+        return new DropResolution { outcome = DropOutcome.Detach };
+    }
+
+    // ADR-0029 §6 / findings 0106 §4: swap = SIZE-PRESERVING anchor exchange + island-scoped best-effort
+    // magnetic flush re-snap (owner Q5). A and B keep their own (w,h); only their top-left ANCHORS swap.
+    // Then every island member is re-snapped against its island siblings (flush magnet, R_SNAP) so the
+    // neighbours "ぷるん" close gaps / overlaps opened by the size mismatch. Returns the post-swap+reflow
+    // rect for every island member (id → DockRect) — the SAME pure result the ghost preview and the
+    // controller commit both consume, so the AFK gate pins the layout headlessly.
+    //
+    // Scope is STRICTLY the passed `islandMembers` (findings 0106 §4 / ADR-0029 §7 — no global reflow; other
+    // islands / other planes never appear here and so are never moved). Perfect tiling is NOT guaranteed —
+    // residual gaps are accepted as free-placement (owner Q4). A stable deterministic scan order (by id
+    // ordinal) makes the result reproducible; two convergence passes settle the common chains.
+    public static Dictionary<string, DockRect> ReflowIslandAfterSwap(
+        IList<GroupMember> islandMembers, string aId, string bId, float rSnap)
+    {
+        var rects = new Dictionary<string, DockRect>();
+        if (islandMembers == null) return rects;
+        foreach (var m in islandMembers)
+            if (!string.IsNullOrEmpty(m.id)) rects[m.id] = m.rect;
+
+        // 1. Size-preserving anchor swap (4-value exchange is RETIRED — (w,h) stay put).
+        if (!string.IsNullOrEmpty(aId) && !string.IsNullOrEmpty(bId)
+            && rects.TryGetValue(aId, out var ra) && rects.TryGetValue(bId, out var rb))
+        {
+            rects[aId] = new DockRect(rb.topLeft, ra.size);   // A keeps its size, takes B's anchor
+            rects[bId] = new DockRect(ra.topLeft, rb.size);   // B keeps its size, takes A's anchor
+        }
+
+        // 2. Island-scoped best-effort magnetic flush re-snap. Deterministic id-ordinal scan, REFLOW_PASSES
+        //    passes so a window that moves can pull a downstream neighbour flush in the next pass. Each window
+        //    snaps against the CURRENT rects of its island siblings only (scope strictly the island). This is
+        //    best-effort, NOT a convergence guarantee — longer gap chains may leave a residual gap, which is
+        //    accepted as free-placement (owner Q4 / ADR-0029 §7); 2 passes settle the common 2-3 window cases.
+        var order = new List<string>(rects.Keys);
+        order.Sort(StringComparer.Ordinal);
+        for (int pass = 0; pass < REFLOW_PASSES; pass++)
+        {
+            foreach (var id in order)
+            {
+                var moving = rects[id];
+                var others = new List<DockRect>(rects.Count - 1);
+                foreach (var kv in rects) if (kv.Key != id) others.Add(kv.Value);
+                Vector2 d = ComputeMagneticSnap(moving, others, rSnap);
+                if (d != Vector2.zero) rects[id] = new DockRect(moving.topLeft + d, moving.size);
+            }
+        }
+        return rects;
     }
 
     // ADR-0024 §3 / findings 0088 §2: in-drag magnetic snap. Returns the canvas-logical Δ to add to

@@ -1,8 +1,10 @@
-// DragGhostLayer.cs — issue #104 Slice G / ADR-0024 §7 (puzzle-feel drag)
+// DragGhostLayer.cs — issue #104 Slice G / ADR-0024 §7, updated by #136 / ADR-0029 §5 (gesture-channel drag)
 //
-// The drag-time PREVIEW overlay. Under ADR-0024 it is used by the SWAP mode ONLY: 2 ghosts (the dragged
-// at the target's slot + the target at the dragged's slot) show the would-be (x,y,w,h) exchange. Translate
-// and Detach REAL-RENDER the live island / dragged window (no ghost — the live geometry IS the preview).
+// The drag-time PREVIEW overlay. Under ADR-0029 it is used by the SingleWindowPickup swap candidate ONLY:
+// the controller's ComposeReflowGhosts paints the WHOLE post-swap + island-scoped reflow layout — the picked
+// window SOLID at its swapped anchor (size preserved) + every reflow-moved neighbour DASHED — so the user
+// previews where the picked window lands AND how the island "ぷるん" closes the gaps. IslandMove and the
+// merge/detach pickup outcomes REAL-RENDER the live window(s) (no ghost — the live geometry IS the preview).
 // Commit-on-release discipline: the ghost is a PREVIEW only; groupId is untouched until release.
 //
 // LAYER MODEL: the ghost container is a child RectTransform on the same plane as the windows it
@@ -13,8 +15,10 @@
 // real window beneath it.
 //
 // POOLING: ghost GameObjects are re-used across frames (pool grows monotonically). Inactive ghosts
-// stay deactivated; ActiveCount is the live ghost prefix. The pool is small in practice — at most
-// 2 ghosts per drag (Swap), 0 for Translate / Detach (real-render, no ghost).
+// stay deactivated; ActiveCount is the live ghost prefix. Under ADR-0029 a Swap preview paints the
+// whole post-swap+reflow island — 1 SOLID picked ghost + N DASHED reflow-moved neighbours (N = however
+// many island members the reflow displaces), so the pool is island-sized, not fixed at 2. IslandMove
+// and the merge / detach pickup outcomes real-render (0 ghosts).
 //
 // VISUAL CONTRACT (findings 0082 §8): alpha = 0.45, kind accent border. Dragged ghost = SOLID border
 // (1 px); target ghost = DASHED border (1 px). The dashed/solid distinction is part of the spec —
@@ -22,7 +26,7 @@
 // drop target (dashed = "the other"). uGUI has no native dashed renderer; the production visual is
 // a future refinement (HITL covers the look). For the AFK gate the structural distinction is
 // encoded on the ghost's GameObject name (`GhostWindow_Solid` / `GhostWindow_Dashed`) AND in the
-// per-spec `style` field, so a probe can pin "2 ghosts, one solid one dashed" without rendering.
+// per-spec `style` field, so a probe can pin "1 solid picked + N dashed reflow-moved" without rendering.
 
 using System;
 using System.Collections.Generic;
@@ -42,7 +46,8 @@ public class DragGhostLayer
 
     // A single ghost rendering: a window-sized phantom at a canvas-logical top-left position with the
     // catalog accent for `kind` and the style flag. Pure POCO — assembled by the controller's
-    // ComposeSwapGhosts and handed to Render(). Swap paints 2 ghosts per frame.
+    // ComposeReflowGhosts (ADR-0029) and handed to Render(): the picked window SOLID + every reflow-moved
+    // island neighbour DASHED.
     public struct GhostSpec
     {
         public string kind;          // accent color source (FloatingWindowCatalog.TryGet)

@@ -3,7 +3,7 @@
 方針: **[[ADR-0029]]**。本 findings はその下位設計の木を固定する。
 grill: `grill-with-docs`（2026-06-25・owner HITL Q1–Q5）。supersede: findings 0088 §1（cursor 位置 3 mode 判定 `ResolveDragMode`）／§4 の swap 4 値交換と detach 距離経路／§11 の `D_DETACH_PX` 定数／§13 の DRAG-* のうち cursor 判定・距離 detach・swap exact を assert する section。維持: 0088 §2（磁石吸着 R_SNAP）／§3（spring）／§5（merge cascade）／§6（ESC）／§12（cross-plane）／§9（factory grouping）。
 
-実装着地（§14）は未記入（実装後に追記）。AFK 正本再構成（§AFK）は実装着手前に `behavior-to-e2e` を formal invoke して固定する。
+実装着地は §14 に記録（#136 S1–S5・2026-06-25・AFK 緑）。AFK 正本再構成（§AFK）は `behavior-to-e2e`（#136 S1・formal invoke）で固定済み＝S24–S41。S6 owner playmode HITL のみ残。
 
 ## §0 owner が選んだ 5 の分岐（HITL・2026-06-25）
 
@@ -145,6 +145,41 @@ function ReflowIslandAfterSwap(I₁, A, B):
 - 島の遠距離移動が引っかからずできること（不満 1 の解消確認）。
 - ドラッグ中に mode が化けないこと（不満 2 の解消確認）。
 
-## §14 実装着地
+## §14 実装着地（#136 S1–S5・2026-06-25）
 
-（実装後に追記）
+実装は Unity C# 単言語。AFK 緑（`FloatingWindowE2ERunner.Run` → `[E2E FLOATING WINDOW PASS]`・`error CS` 0・S1–S41 全 GREEN）。S6 owner playmode HITL（§HITL）のみ残。
+
+### pure 算術（`FloatingWindowMath`）
+- `enum DragChannel { IslandMove, SingleWindowPickup }` 新設。`enum DropOutcome { Swap, MergeToIsland, Detach }` ＋ `struct DropResolution { outcome, swapTargetId, mergeTargetId }` 新設。
+- `ResolveDragMode`（cursor 3 mode）・`D_DETACH_PX`・`enum DragMode`・`struct DragResolution` を**削除**（全ファイルで参照 0 を確認）。
+- `ResolveChannel(bool hitEjectHandle, bool altHeld)` ＝ `(eject||alt) ? Pickup : IslandMove`（input 由来の唯一の選択・真理値表 S24/S41）。
+- `ResolveDropOutcome(cursor, pickedRect, islandMembers, pickedId, otherWindows, rSnap)`: ① sibling 上（`ResolveDropTarget` 流用）→ Swap、② picked rect が非 island 窓に磁石 engaged **または既に flush**（`ComputeMagneticSnap!=0 || IsFlushAdjacent(…,1f)`）→ MergeToIsland（最前面 sibling）、③ それ以外 → Detach。**罠**: in-drag 磁石で既に gap=0 まで寄った rect は `ComputeMagneticSnap` が 0 を返すので、`IsFlushAdjacent` 併用が必須（S37b で発覚）。
+- `ReflowIslandAfterSwap(islandMembers, aId, bId, rSnap) -> Dictionary<string,DockRect>`: ① size 維持で A/B の anchor だけ交換（4 値交換しない）、② id 序数で安定走査・2 pass で島内メンバーを `ComputeMagneticSnap` で flush re-snap、③ 残隙間は許容。scope は渡された島メンバーに厳密限定（他 island/plane は引数に現れず動かない）。`StringComparer.Ordinal` で決定論。
+- 維持: `ResolveDropTarget`/`ComputeMagneticSnap`/`ResolveNearestFlush`/`IsFlushAdjacent`/`SpringEase`/`ResolveMergeWinner`/`R_SNAP_PX=96`/`SPRING_*`。
+
+### controller（`FloatingWindowController`）
+- `DragSession.channel` 追加（BeginDrag で確定・drag 中不変）。`enum ReleaseResult { IslandMoved, Swapped, Merged, Detached }` 新設（`ReleaseDrag` の戻り値）。
+- `BeginDrag(id, start)` は `IslandMove` 既定の overload・`BeginDrag(id, start, channel)` が本体。
+- `DragApplyDelta` をチャンネル分岐: IslandMove=`RenderTranslate`（島全員・無制限・magnet・ghost clear）／Pickup=`FreezeIslandToRest`+`RenderDetach`（picked のみ）+ sibling 上なら `ComposeReflowGhosts` を ghost。戻り値 `DragChannel`。
+- `ReleaseDrag` をチャンネル分岐: IslandMove=`CommitTranslate`（既存・overlap/flush merge・**detach しない**）→ IslandMoved／Pickup=`CommitPickup`。
+- `CommitPickup`: pickedRect=rest+offset+magnet を作り `ResolveDropOutcome` で分岐 — Swap→`CommitSwapReflow`／Merge→`groupId=null` 先行→A を flush 位置へ→`CommitMergeWithTarget`（A 単独だけ Y へ・cascade）→ oldGroup dissolve／Detach→`groupId=null`→ oldGroup dissolve。`CaptureNonIslandMembers` を merge 候補に。
+- `CommitSwap`（4 値交換）→ `CommitSwapReflow`（`ReflowIslandAfterSwap` 駆動・各メンバーを spring）に置換。`CommitDetach` は `CommitPickup` に吸収（削除）。
+- `ComposeSwapGhosts`（2 枚）→ `ComposeReflowGhosts`（post-swap+reflow で動くメンバーだけ・picked Solid/隣窓 Dashed・size 維持）に置換。
+
+### input（`FloatingWindowTitleInput`）＋ eject つまみ
+- `OnBeginDrag` で `channel = ResolveChannel(pointerPressRaycast.gameObject==_ejectHandle, Keyboard.current.leftAltKey.isPressed)` を計算し `BeginDrag(id, rest, channel)`。
+- **eject つまみ**は `FloatingWindowEjectHandle.Attach(titleBar, font)`（新規・ThemeService 非依存）が build。`FloatingWindowTitleInput.Awake()` が自分の title-bar に 1 度 attach＝dock/editor/order/HITL の全 title-bar に factory 改変ゼロで均一に出る。つまみ＝chip Image（raycast target）＋ glyph Text（非 raycast）・**drag handler 無し**（press は title input へ bubble・`pointerPressRaycast` で識別）・最後 sibling・**left inset 4px**（当初 right inset 30px だったが close ✕/run ▶ の raycast cluster に埋もれる regression を review が検出し LEFT へ統一＝後述 §code-review 着地）。最終 icon/配置は owner HITL で調整（ADR-0029 §自己保護）。
+
+### AFK 正本（`FloatingWindowE2ERunner`）
+S24–S41 を ADR-0029 へ書換/新設（§AFK 対応表どおり）。**RED→GREEN litmus**: 実装中に S25c が実 RED（pickup carry の rest snapshot が前 sub-test の live render で displaced）→ sub-test 間に `CancelDrag` で rest 復帰して GREEN＝ゲートが非空虚であることを実証。delete-the-production-logic litmus（設計上）: `DragApplyDelta` を常時 IslandMove にすると S25c/S29d/S31a が RED、`ReflowIslandAfterSwap` を 4 値交換に戻すと S29a/d・S31a が RED、`ResolveChannel` の真理値表を壊すと S24/S41f が RED。
+
+> ⚠️ **AFK カバレッジの正直な限界（#136 レビュー 2026-06-25 で是正）**: pickup section（S25c/S26a/S29d/S31a/S37g/S40d…）は `c.BeginDrag(id, start, DragChannel.SingleWindowPickup)` で**チャンネルを直接注入**しており、`ResolveChannel` を壊しても RED に**ならない**（RED になるのは pure 真理値表を叩く S24/S41f の 2 本のみ）。**入力層の glue**（`OnBeginDrag` で `eventData.pointerPressRaycast.gameObject == _ejectHandle` を読む eject ヒット判定 ＋ `Keyboard.current` の Alt poll ＋ `BeginDrag(channel)` への受け渡し＝`FloatingWindowTitleInput.cs:98-104`）は EventSystem raycast と実 Keyboard デバイスを要するため batchmode AFK では駆動できず、**どの section もここを通らない**。したがって「eject つまみ/Alt で pickup に入る」起動そのものが実機で死んでも全 AFK が緑のまま——この単一統合点の検証は **owner playmode HITL（§HITL・DRAG-20-HITL）専任**。pure `ResolveChannel` は AFK が、glue は HITL が守る二層であることを明記する（litmus を実態より広く書かない＝#125 の偽 litmus 教訓の継承）。
+
+### code-review(simplify high) 着地（#136・Medium 全消し）
+- **pickup merge は island 外 bbox へ flush**（findings 0106 §3 `ResolveNearestFlush(A.rect, Y.bbox)` 準拠）: 当初 in-drag 個別窓 magnet で位置決めしていたが、多メンバー島の**内部 seam に flush して隣窓に重なる**バグ（IslandMove 側 S37f が守っていたのと同型）＋ 位置 target と group target の不一致を review が検出。`CommitPickup` の merge 分岐を `ResolveTargetIslandBbox`+`ResolveNearestFlush`（CommitTranslate overlap 分岐と同じ helper）へ修正＝位置と group を `res.mergeTargetId` に単一化。S37g（縦 2 窓島の内部 seam ではなく外 bbox へ flush）で pin。
+- **eject つまみは title-bar の LEFT** へ移動: 当初 right-inset 30px だったが editor/order 窓の右側は close ✕(-3)・cell run ▶(~-28) の **raycast Button cluster**で、後付け sibling に埋もれて press が IslandMove に化ける regression を review が検出。left 端（title Text は非 raycast＝衝突なし）へ統一。最終 icon/配置は owner HITL（DRAG-20-HITL）。
+- `FloatingWindowEjectHandle.Attach` は **find-or-create**（NodeName 重複防止）。`ComposeReflowGhosts` は swap target 変化時のみ再計算（per-frame GC 回避）＝この memoize で `_lastSwapTargetId` を BeginDrag で reset する必要が露見し修正（S31f）。Alt は left/right 両対応。`REFLOW_PASSES` 定数化。S25e（singleton-in-name 退役カバレッジ復活）。
+
+### 走査順・残隙間の確定（ADR-0029 §自己保護で findings に記録する下位事実）
+- reflow 走査順 = **id 序数昇順・2 pass**（決定論・1 pass では下流隣窓を引き切れないケースを 2 pass が拾う）。収束保証はせず 2 pass 固定（実用上の島サイズで十分・perfect tiling 非保証は owner Q4 どおり）。
+- 残隙間/微小重なりは許容（free-placement）。owner HITL（§HITL・DRAG-20-HITL）で体感の許容範囲を確認。

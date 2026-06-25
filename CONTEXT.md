@@ -74,6 +74,17 @@ end-to-end に塞がる）。記録: findings 0011・#25/#23。
 _Avoid_: 取消受付（`PENDING_CANCEL`）/ 訂正受付（`PENDING_UPDATE`）を終端・成立扱いすること（受付であって確定ではない）／
 mock の即 `CANCELED` を全 venue の cancel 契約と一般化すること／受付時点で `new_qty` を注文数量へ確定反映すること
 
+**訂正の atomicity（`modify_is_cancel_replace`）**:
+venue が訂正を atomic に行えるか否かの安定した contract fact。**tachibana** は atomic（`CLMKabuCorrectOrder`・
+mock も atomic）＝`False`。**kabu** は訂正 API が無く「取消 → 新規発注」変換で実現する非 atomic＝`True`で、取消成功＋
+新規失敗で**原注文だけ消えて代替注文が無い**実害がありうる（adapter は `CANCELED`＋`reject_reason="MODIFY_NEW_FAILED:…"`
+で返す）。manual 経路では訂正は**同期確定**（adapter は受付ではなく確定 status を返す）＝cancel と違い `PENDING_UPDATE` は
+返らない。capability は **Python（active adapter）が宣言**し poll snapshot（`get_state_json`）で Unity へ運ぶ（frontend は
+`venue=="kabu"` 分岐を持たない・ADR-0001）。UI は `True` のとき訂正 modal に警告＋「理解した上で訂正」ack を Confirm の前提に
+する。記録: findings 0101・#34。
+_Avoid_: frontend に venue 名分岐を置くこと（capability は Python 宣言を読む）／非 atomic venue で事前警告 ack 無しに訂正を
+出せること
+
 **確定バー / partial バー（`KlineUpdate.is_closed`）**:
 `LiveRunner` は bucket-rollover で生成した**確定バー**（`is_closed=True`）と、UI 用に 1 秒間隔で publish する
 進行中の**partial バー**（`is_closed=False`）を同じ `KlineUpdate` 型で bus に流す。kernel live driver は

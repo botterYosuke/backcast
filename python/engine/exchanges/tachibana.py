@@ -117,6 +117,9 @@ _MASTER_READ_TIMEOUT = 600.0
 class TachibanaAdapter:
     venue_id: str = "TACHIBANA"
     enumerates_instruments: bool = True
+    # #34 D5 (findings 0101): 立花は CLMKabuCorrectOrder で atomic に訂正できる＝
+    # cancel+replace ではないので UI 警告不要。
+    modify_is_cancel_replace: bool = False
 
     def __init__(self, environment: Literal["demo", "prod"] = "demo"):
         if environment not in ("demo", "prod"):

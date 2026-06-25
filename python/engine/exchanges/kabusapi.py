@@ -67,6 +67,11 @@ class KabuStationAdapter:
     # returns []). Declaring this False keeps a persisted store snapshot from being
     # served as the authoritative live universe (issue #253).
     enumerates_instruments: bool = False
+    # #34 D5 (findings 0101): kabu には訂正 API が無く modify_order は「取消 → 新規発注」
+    # 変換で実現する（非 atomic・kabusapi_execution.modify_order）。取消成功＋新規失敗で
+    # 原注文だけ消える実害がありうるので UI に警告＋ack を出す（venue 名分岐ではなく
+    # この宣言を poll snapshot 経由で Unity が読む）。
+    modify_is_cancel_replace: bool = True
 
     def __init__(
         self,

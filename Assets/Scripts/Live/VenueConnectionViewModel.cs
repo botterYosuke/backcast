@@ -47,6 +47,11 @@ public class VenueConnectionViewModel
     /// staleness 比較 (cancel race re-check 等) で magic-number を散らさないための糖衣。
     public bool HasEventWsRecvTs => LastEventWsRecvTsMs > 0;
 
+    // #34 D5 (findings 0101): 接続中 venue の訂正が cancel+replace (非 atomic・kabu) か。
+    // Python (active adapter → get_state_json) が宣言する単一 capability を poll で受ける。
+    // 訂正 modal がこれを読んで警告+ack gate を出す (C# は venue 名分岐しない)。未接続=false。
+    public bool ModifyIsCancelReplace { get; private set; }
+
     public long PollCount { get; private set; }
 
     // login ACK observability (immediate result; superseded by the next poll).
@@ -66,6 +71,8 @@ public class VenueConnectionViewModel
         // (false / 0). 0 sentinel for last_event_ws_recv_ts_ms means "not yet received".
         public bool ec_ws_subscribed;
         public long last_event_ws_recv_ts_ms;
+        // #34 D5: 接続中のみ true になり得る (engine が connected gate 下で emit)。
+        public bool modify_is_cancel_replace;
     }
 
     string _lastStateJson;
@@ -90,6 +97,8 @@ public class VenueConnectionViewModel
         // #85 Q1 (A'): EC WS signal — adapter property の None ⇒ JSON null ⇒ 0/false。
         EcWsSubscribed = d.ec_ws_subscribed;
         LastEventWsRecvTsMs = d.last_event_ws_recv_ts_ms;
+        // #34 D5: 訂正 atomicity capability (接続中のみ true・未接続/旧 payload は false)。
+        ModifyIsCancelReplace = d.modify_is_cancel_replace;
     }
 
     /// venue_login RPC ACK — the immediate login result. The badge still defers to

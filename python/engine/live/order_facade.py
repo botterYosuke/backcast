@@ -389,9 +389,18 @@ class ManualOrderFacade:
             avg_price=res.avg_price if res.avg_price is not None else prior_state.avg_price,
             ts_ms=_now_ms(),
         )
-        # #236: qty/price はインテントに属するため、変更があれば _intents も更新する。
+        # #34 D4 (findings 0101): new_qty/new_price を _intents に反映するのは訂正が
+        # **実際に効いた**ときだけ。kabu は訂正を「取消 → 新規発注」変換で実現し、取消成功＋
+        # 新規失敗のとき `CANCELED`（reject_reason="MODIFY_NEW_FAILED:…"）を返す＝元注文は
+        # 取消済みで代替注文が無いので、ここで new_qty を書くと **終端注文に幻の新数量** が
+        # 載る（list_orders は終端を除くが get_status/監査で誤る）。broker の modify_took_effect
+        # と同型で、終端取消・拒否・受付（manual 経路では発生しないが防御）を除外する。
+        modify_took_effect = res.status not in (
+            "REJECTED", "DENIED", "CANCELED", "EXPIRED", "PENDING_UPDATE", "PENDING_CANCEL"
+        )
+        # #236: qty/price はインテントに属するため、効いた変更だけ _intents も更新する。
         # symbol/side は訂正不変。prior_intent が None（EC-stream 由来）の場合は更新しない。
-        if prior_intent is not None:
+        if prior_intent is not None and modify_took_effect:
             new_intent = OrderIntent(
                 symbol=prior_intent.symbol,
                 side=prior_intent.side,

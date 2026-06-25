@@ -193,6 +193,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     OrderTicketView _orderTicket;
     SecretModalOverlay _secretOverlay;
     bool _secretModalOpenPrev;
+    // #34 (findings 0101): 注文訂正 modal。頭脳は plain C# の controller（検証ロジック・Python 非依存）、
+    // 入力面は uGUI overlay。resting 一覧は get_orders を write lane で読み、worker→main は volatile stash。
+    ModifyModalOverlay _modifyOverlay;
+    readonly ModifyModalController _modifyModal = new ModifyModalController();
+    volatile System.Collections.Generic.List<RestingOrderRpcRow> _restingRowsLatest;   // 最新 get_orders 行（ref 代入は atomic）
+    volatile bool _restingDirty;                  // DriveOrderTicket が main で SetRestingOrders する合図
+    volatile string _modifyStatusLine = "";       // 訂正結果（worker で整形・modal に main で反映）
+    volatile bool _modifyStatusDirty;
+    bool _restingRefreshedForLiveManual;          // LiveManual 突入時に 1 度だけ初回 refresh するラッチ
     // #89: quit-confirm (findings 0068). The pure controller decides; this root wires the real
     // Save/SaveAs/Quit + a _quitConfirmed latch so the 2nd wantsToQuit (fired by our own Quit() after
     // a confirmed save/discard) is allowed through.
@@ -502,6 +511,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _orderTicket.Build(_orderWindowBody, _font);
             _orderTicket.PlaceRequested += OnManualPlace;
             _orderTicket.CancelRequested += OnManualCancel;
+            // #34 (findings 0101 D1): resting 行の [訂正]/[取消] と一覧 [更新]。
+            _orderTicket.ModifyRowRequested += OnRowModify;
+            _orderTicket.CancelRowRequested += OnRowCancel;
+            _orderTicket.RefreshRequested += RefreshRestingOrders;
             HudFrameChrome.Decorate(_orderWindow);   // cyan HUD chrome on the adopted order ticket
             _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
         }
@@ -517,6 +530,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _secretOverlay.BackspacePressed += OnSecretBackspace;
         _secretOverlay.SubmitClicked += SubmitSecret;
         _secretOverlay.CancelClicked += CancelSecret;
+
+        // #34 (findings 0101): 訂正 modal overlay（secret と同じ ScreenSpaceOverlay chrome）。入力は
+        // controller に main で同期し（DriveModifyModal）、Confirm/Cancel で submit/close する。
+        var modifyGo = new GameObject("ModifyModalOverlay");
+        modifyGo.transform.SetParent(transform, false);
+        _modifyOverlay = modifyGo.AddComponent<ModifyModalOverlay>();
+        _modifyOverlay.Build(_font);
+        _modifyOverlay.ConfirmClicked += OnModifyConfirm;
+        _modifyOverlay.CancelClicked += OnModifyCancel;
 
         // #89: quit-confirm overlay + pure controller (findings 0068). On OS close with a dirty
         // document, wantsToQuit blocks and this modal asks Save / Don't Save / Cancel. NOT wired in
@@ -1378,7 +1400,124 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _manualStatusDirty = false;
             _orderTicket.SetStatus(_manualStatusLine);
         }
+        // #34 (findings 0101 D1): LiveManual 突入時に resting 一覧を 1 度 refresh（接続済みのとき）。
+        // mode を抜けたらラッチを戻し、次回突入で再 refresh する。
+        if (liveManual && _host.ServerReady && _host.Conn.IsConnected && _host.Lanes != null)
+        {
+            if (!_restingRefreshedForLiveManual) { _restingRefreshedForLiveManual = true; RefreshRestingOrders(); }
+        }
+        else { _restingRefreshedForLiveManual = false; }
+        // get_orders 結果（lane スレッドで stash）を main で view に反映する。
+        if (_restingDirty)
+        {
+            _restingDirty = false;
+            _orderTicket.SetRestingOrders(BuildRestingRowVMs(_restingRowsLatest));
+        }
+        DriveModifyModal();
     }
+
+    // get_orders 行 → view-model（ラベル化）。MARKET は "成行"、それ以外は "@price"。約定済みは併記。
+    System.Collections.Generic.List<OrderTicketView.RestingRowVM> BuildRestingRowVMs(
+        System.Collections.Generic.List<RestingOrderRpcRow> rows)
+    {
+        var vms = new System.Collections.Generic.List<OrderTicketView.RestingRowVM>();
+        if (rows == null) return vms;
+        foreach (var r in rows)
+        {
+            string price = r.HasPrice ? ("@" + r.Price) : "成行";
+            string filled = r.FilledQty > 0 ? (" (約定" + r.FilledQty + ")") : "";
+            vms.Add(new OrderTicketView.RestingRowVM
+            {
+                OrderId = r.OrderId,
+                Label = r.Symbol + " " + r.Side + " " + r.Qty + " " + price + filled,
+            });
+        }
+        return vms;
+    }
+
+    void RefreshRestingOrders()
+    {
+        if (_host.Lanes == null || !_host.Conn.IsConnected) return;
+        _host.Lanes.SubmitGetOrders(ManualVenue(), res =>
+        {
+            // lane スレッド: list を stash し dirty を立てるだけ（uGUI は main の Drive で触る）。
+            // res.Orders は失敗時も空 list で初期化済み（never null・SubmitGetOrders 契約）。
+            _restingRowsLatest = res.Orders;
+            _restingDirty = true;
+        });
+    }
+
+    // resting 行 [訂正]: 選択行の原数量/原価格/約定済みで modal を開く（cancel+replace venue は警告 ack 付き）。
+    void OnRowModify(string orderId)
+    {
+        if (string.IsNullOrEmpty(orderId)) return;
+        var rows = _restingRowsLatest;
+        if (rows == null) return;
+        foreach (var r in rows)
+        {
+            if (r.OrderId != orderId) continue;
+            double? price = r.HasPrice ? r.Price : (double?)null;
+            bool cancelReplace = _host.Conn.ModifyIsCancelReplace;
+            _modifyModal.OpenFor(orderId, r.Qty, price, r.FilledQty, cancelReplace);
+            string sym = (r.Symbol + " " + r.Side).Trim();
+            _modifyOverlay.Configure(orderId, sym, r.Qty, price, r.FilledQty, cancelReplace);
+            _modifyOverlay.SetVisible(true);
+            return;
+        }
+    }
+
+    // resting 行 [取消]: その行を直接取消（Cancel last と同じ lane・findings 0014 受付/確定）。
+    void OnRowCancel(string orderId)
+    {
+        if (string.IsNullOrEmpty(orderId) || _host.Lanes == null) return;
+        _host.Lanes.SubmitCancelOrder(ManualVenue(), orderId, res =>
+        {
+            _manualStatusLine = (res.Success ? res.Status : ("ERR " + res.ErrorCode)) + " (" + orderId + ")";
+            _manualStatusDirty = true;
+            _restingDirty = true;   // 一覧を再取得して取消反映（受付/確定）
+            if (res.Success) RefreshRestingOrders();
+        });
+    }
+
+    // 訂正 modal の入力を controller に main で同期し、CanConfirm を Confirm に反映。可視性も controller 起点。
+    void DriveModifyModal()
+    {
+        if (_modifyOverlay == null) return;
+        if (_modifyModal.Open)
+        {
+            _modifyModal.NewQtyBuf = _modifyOverlay.NewQtyText;
+            _modifyModal.NewPriceBuf = _modifyOverlay.NewPriceText;
+            _modifyModal.AckCancelReplace = _modifyOverlay.AckChecked;
+            _modifyOverlay.SetConfirmInteractable(_modifyModal.CanConfirm());
+        }
+        if (_modifyOverlay.IsVisible != _modifyModal.Open) _modifyOverlay.SetVisible(_modifyModal.Open);
+        if (_modifyStatusDirty) { _modifyStatusDirty = false; _modifyOverlay.SetStatus(_modifyStatusLine); }
+    }
+
+    void OnModifyConfirm()
+    {
+        // controller が最新入力で検証済み（DriveModifyModal が同期）。二重チェックして submit。
+        string err = _modifyModal.ValidationError();
+        if (err != null) { _modifyStatusLine = err; _modifyStatusDirty = true; return; }
+        if (_host.Lanes == null) { _modifyStatusLine = "not connected"; _modifyStatusDirty = true; return; }
+        var (q, p) = _modifyModal.Parsed();
+        string oid = _modifyModal.OrderId;
+        _modifyStatusLine = "訂正発行中…"; _modifyStatusDirty = true;
+        _host.Lanes.SubmitModifyOrder(ManualVenue(), oid, q, p, res =>
+        {
+            // status 返し分け（findings 0101 D3）。ACCEPTED=訂正確定 / CANCELED=取消成立・要再発注。
+            string line;
+            if (!res.Success) line = "訂正拒否 ERR " + res.ErrorCode;
+            else if (res.Status == "CANCELED" || res.Status == "EXPIRED") line = "取消成立・要再発注 (" + oid + ")";
+            else line = "訂正確定 " + res.Status + " (" + oid + ")";
+            _manualStatusLine = line; _manualStatusDirty = true;
+            _restingDirty = true;
+            if (res.Success) RefreshRestingOrders();
+        });
+        _modifyModal.Close();
+    }
+
+    void OnModifyCancel() => _modifyModal.Close();
 
     void OnManualPlace()
     {

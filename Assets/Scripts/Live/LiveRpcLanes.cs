@@ -35,6 +35,26 @@ public struct OrderRpcResult
     public string OrderId;
 }
 
+// #34 (findings 0101 D1): get_orders の 1 行（resting 注文一覧）。symbol/side/qty/price は
+// #29 Slice3a の静的属性、filled_qty は約定済み（訂正の減数下限）。price は MARKET で HasPrice=false。
+public struct RestingOrderRpcRow
+{
+    public string OrderId;
+    public string Symbol;
+    public string Side;
+    public double Qty;
+    public double FilledQty;
+    public bool HasPrice;
+    public double Price;
+}
+
+public struct OrdersRpcResult
+{
+    public bool Success;
+    public string ErrorCode;
+    public System.Collections.Generic.List<RestingOrderRpcRow> Orders;
+}
+
 public class LiveRpcLanes
 {
     readonly PyObject _server;
@@ -82,18 +102,27 @@ public class LiveRpcLanes
                                  Action<OrderRpcResult> onResult)
         => EnqueueWrite(() => CallPlace(venue, iid, side, qty, price, orderType, tif), onResult);
 
-    // Shared write-lane scaffold: enqueue (or Stopped() after teardown), coord book-keeping,
-    // exception → LANE_EXC, deliver. `call` does its OWN Py.GIL() marshaling — never hoist
-    // PyObject construction out here (the pre-GIL hoist was the cancel-lane segfault).
+    // OrderRpcResult-typed shim over the generic scaffold (below). Stopped() と LANE_EXC は
+    // どちらも {Success=false, ErrorCode=<code>} なので uniform fail() で両方を厳密に再現する。
     void EnqueueWrite(Func<OrderRpcResult> call, Action<OrderRpcResult> onResult)
+        => EnqueueWrite<OrderRpcResult>(call,
+            code => new OrderRpcResult { Success = false, ErrorCode = code },
+            onResult);
+
+    // Base write-lane scaffold for all order/read RPCs (#34 get_orders et al.): enqueue (or
+    // fail("LANES_STOPPED") after teardown), coord book-keeping, exception → fail("LANE_EXC:"+msg),
+    // deliver. Typed via `fail(code)`; the non-generic EnqueueWrite(OrderRpcResult) shim above
+    // delegates here. `call` does its OWN Py.GIL() marshaling — never hoist PyObject construction
+    // out here (the pre-GIL hoist was the cancel-lane segfault).
+    void EnqueueWrite<T>(Func<T> call, Func<string, T> fail, Action<T> onResult)
     {
-        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(Stopped()); return; }
+        if (_writeQueue.IsAddingCompleted) { onResult?.Invoke(fail("LANES_STOPPED")); return; }
         _writeQueue.Add(() =>
         {
             _coord.BeginWrite();
-            OrderRpcResult r;
+            T r;
             try { r = call(); }
-            catch (Exception e) { r = new OrderRpcResult { Success = false, ErrorCode = "LANE_EXC:" + e.Message }; }
+            catch (Exception e) { r = fail("LANE_EXC:" + e.Message); }
             finally { _coord.EndWrite(); }
             onResult?.Invoke(r);
         });
@@ -246,12 +275,59 @@ public class LiveRpcLanes
         }
     }
 
+    // #34 (findings 0101 D1): resting 注文一覧 read (get_orders)。orchestrator.get_orders は
+    // facade.list_orders ＋ adapter.fetch_working_orders をマージするので blocking ＝ write lane に
+    // 載せて order 操作と直列化する（subscribe_market_data と同じ理由）。OrderEvent ではなく list を
+    // 返すので専用 result 型 + dispatch helper を持つ。callback は write lane スレッドで走るので、
+    // 受け手（root）は volatile に stash し main スレッドの Drive で uGUI に反映する（place/cancel と同型）。
+    public void SubmitGetOrders(string venue, Action<OrdersRpcResult> onResult)
+        => EnqueueWrite(
+            () => CallGetOrders(venue),
+            code => new OrdersRpcResult { Success = false, ErrorCode = code, Orders = new List<RestingOrderRpcRow>() },
+            onResult);
+
+    OrdersRpcResult CallGetOrders(string venue)
+    {
+        using (Py.GIL())
+        using (var pv = new PyString(venue))
+        using (PyObject res = _server.InvokeMethod("get_orders", pv))
+        {
+            var r = new OrdersRpcResult { Orders = new List<RestingOrderRpcRow>() };
+            using (PyObject ok = res.GetItem("success")) r.Success = ok.As<bool>();
+            using (PyObject ec = res.GetItem("error_code")) r.ErrorCode = ec.As<string>() ?? "";
+            using (PyObject orders = res.GetItem("orders"))
+            {
+                int n = (int)orders.Length();
+                for (int i = 0; i < n; i++)
+                    using (PyObject o = orders.GetItem(i))
+                        r.Orders.Add(ParseOrderRow(o));
+            }
+            return r;
+        }
+    }
+
+    static RestingOrderRpcRow ParseOrderRow(PyObject o)
+    {
+        var row = new RestingOrderRpcRow { OrderId = "", Symbol = "", Side = "" };
+        using (PyObject v = o.GetItem("order_id")) row.OrderId = v.As<string>() ?? "";
+        using (PyObject v = o.GetItem("symbol")) row.Symbol = v.As<string>() ?? "";
+        using (PyObject v = o.GetItem("side")) row.Side = v.As<string>() ?? "";
+        using (PyObject v = o.GetItem("qty")) row.Qty = v.As<double>();
+        using (PyObject v = o.GetItem("filled_qty")) row.FilledQty = v.As<double>();
+        using (PyObject v = o.GetItem("price"))
+        {
+            // price は MARKET 注文等で None。None なら HasPrice=false。
+            row.HasPrice = !v.IsNone();
+            row.Price = row.HasPrice ? v.As<double>() : 0.0;
+        }
+        return row;
+    }
+
     // ---- Urgent-secret lane (separate thread) --------------------------------------
     // payload is owned by the caller (SecretModalController.Submit()); we zeroize it the
     // moment the RPC returns. The transient string is the irreducible pythonnet boundary.
     // Late call after teardown: the queue is CompleteAdding()'d. Don't throw — report a
     // graceful stop so a UI racing disconnect surfaces it instead of crashing.
-    static OrderRpcResult Stopped() => new OrderRpcResult { Success = false, ErrorCode = "LANES_STOPPED" };
 
     public void SubmitSecret(string requestId, char[] payload, Action<bool> onAck)
     {

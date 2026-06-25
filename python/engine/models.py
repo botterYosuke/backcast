@@ -91,6 +91,10 @@ class TradingState(_BoundaryModel):
     # 0 = まだ受信していない (UTC 0 = 1970-01-01 は立花が送り得る ts と衝突しない sentinel)。
     ec_ws_subscribed: bool = Field(False, description="EC WS で 1 フレーム以上受信した (SSL ハンドシェイク成立) か。False のうちは発注 gate を通さない。")
     last_event_ws_recv_ts_ms: int = Field(0, description="EC WS 直近受信時刻 (UTC ms)。0 = まだ受信していない (sentinel)。staleness 検出 / verdict diagnostic 用。")
+    # #34 D5 (findings 0101): 接続中 venue の訂正が非 atomic (取消+新規変換) かを active
+    # adapter が宣言する単一 capability。Unity の訂正 modal が True のとき警告+ack gate を出す
+    # (C# は venue 名分岐しない)。未接続/未宣言は False。
+    modify_is_cancel_replace: bool = Field(False, description="接続中 venue の訂正が cancel+replace (非 atomic) か。True なら UI が訂正前に警告+ack を要求する。")
     # §9.14 ADR: live_last_error は必ず TradingState の最後の field に置く
     # (UI / Rust 側 deserializer が末尾追加を許容する optional field として扱うため)。
     live_last_error: Optional[str] = Field(None, description="Live runner/bridge の最終エラー (type名: message)")

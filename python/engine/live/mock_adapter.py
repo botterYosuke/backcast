@@ -39,6 +39,9 @@ class MockVenueAdapter:
 
     venue_id: str = "MOCK"
     enumerates_instruments: bool = True
+    # #34 D5 (findings 0101): mock の訂正は atomic（set_next_modify_outcome の status を
+    # そのまま返す）＝cancel+replace ではないので UI 警告不要。
+    modify_is_cancel_replace: bool = False
 
     def __init__(self) -> None:
         self.is_logged_in: bool = False

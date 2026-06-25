@@ -613,6 +613,12 @@ class DataEngineBackend:
                 "per_instrument": merged_pi,
                 "ec_ws_subscribed": first_recv_ts is not None,
                 "last_event_ws_recv_ts_ms": last_recv_ts if last_recv_ts is not None else 0,
+                # #34 D5 (findings 0101): active adapter が宣言する訂正 atomicity capability。
+                # 接続中のみ意味を持つ。Unity の訂正 modal がこれを読んで警告+ack gate を出す。
+                "modify_is_cancel_replace": (
+                    bool(getattr(adapter, "modify_is_cancel_replace", False))
+                    if connected else False
+                ),
             }
         )
         return state.model_dump_json()

@@ -11,6 +11,7 @@
 // stay logic-free and the root owns the host seam.
 
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -18,13 +19,26 @@ public sealed class OrderTicketView
 {
     public event Action PlaceRequested;
     public event Action CancelRequested;
+    // #34 (findings 0101 D1): resting 行の [訂正]/[取消] と一覧 [更新]。root が SubmitModifyOrder/
+    // SubmitCancelOrder/SubmitGetOrders へ marshal する（view は RPC も検証も持たない・既存分業）。
+    public event Action<string> ModifyRowRequested;
+    public event Action<string> CancelRowRequested;
+    public event Action RefreshRequested;
+
+    // resting 一覧の 1 行 view-model（root が get_orders 由来の行をラベル化して渡す）。
+    public struct RestingRowVM
+    {
+        public string OrderId;
+        public string Label;   // 例 "7203 BUY 100 @2500"
+    }
 
     Button _sideBtn, _typeBtn, _placeBtn, _cancelBtn;
     InputField _qty, _price;
-    RectTransform _priceRow;
-    Text _status, _instrument;
+    RectTransform _priceRow, _restingContainer;
+    Text _status, _instrument, _restingHeader;
     bool _sideBuy = true;
     bool _limit;
+    readonly List<GameObject> _restingRowGos = new List<GameObject>();
 
     public bool SideBuy => _sideBuy;
     public bool Limit => _limit;
@@ -65,9 +79,39 @@ public sealed class OrderTicketView
         _placeBtn = MakeButton(body, font, 8f, 118f, 96f, 28f, "Place", () => PlaceRequested?.Invoke());
         _cancelBtn = MakeButton(body, font, 110f, 118f, 110f, 28f, "Cancel last", () => CancelRequested?.Invoke());
 
-        _status = MakeLabel(body, font, 8f, 152f, 330f, 80f, "last order: -");
+        _status = MakeLabel(body, font, 8f, 152f, 330f, 48f, "last order: -");
         _status.horizontalOverflow = HorizontalWrapMode.Wrap;
         _status.verticalOverflow = VerticalWrapMode.Truncate;
+
+        // #34 (findings 0101 D1): resting 注文一覧（form 下・LiveManual のみ）。get_orders を読み、
+        // 各行に [訂正]/[取消]、見出しに [更新]。行は SetRestingOrders で動的に再構築する。
+        _restingHeader = MakeLabel(body, font, 8f, 204f, 240f, 20f, "resting: —");
+        MakeButton(body, font, 252f, 202f, 86f, 22f, "更新", () => RefreshRequested?.Invoke());
+        _restingContainer = MakeRow(body, 8f, 228f, 330f, 200f);
+        _font = font;
+    }
+
+    Font _font;
+
+    // resting 一覧の再構築（root が get_orders 由来の行を渡す）。既存行を破棄して作り直す。
+    public void SetRestingOrders(IReadOnlyList<RestingRowVM> rows)
+    {
+        foreach (var go in _restingRowGos) if (go != null) UnityEngine.Object.Destroy(go);
+        _restingRowGos.Clear();
+        int count = rows != null ? rows.Count : 0;
+        if (_restingHeader != null) _restingHeader.text = "resting: " + count;
+        if (_restingContainer == null || rows == null) return;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            var row = rows[i];
+            float y = i * 26f;
+            var rowGo = MakeRow(_restingContainer, 0f, y, 330f, 24f);
+            _restingRowGos.Add(rowGo.gameObject);
+            MakeLabel(rowGo, _font, 0f, 0f, 188f, 24f, row.Label);
+            string oid = row.OrderId;   // capture per-row id for the closures
+            MakeButton(rowGo, _font, 190f, 0f, 64f, 22f, "訂正", () => ModifyRowRequested?.Invoke(oid));
+            MakeButton(rowGo, _font, 258f, 0f, 64f, 22f, "取消", () => CancelRowRequested?.Invoke(oid));
+        }
     }
 
     string _iidShown = "\0";

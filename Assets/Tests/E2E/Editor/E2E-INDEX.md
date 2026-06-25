@@ -7,7 +7,7 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（14 本・224 行）
+## Surface E2E（15 本・239 行）
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -22,6 +22,7 @@
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..15` | 15 | 13 | 0 | 0 | 2 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
+| [ModifyOrderE2ERunner](./ModifyOrderE2ERunner.md) ✅ | `MODIFY-01..11,20,21` | 15 | 13 | 0 | 1 | 1 | 0 |
 | [DepthLadderE2ERunner](./DepthLadderE2ERunner.md) ✅ | `DEPTH-01..11` | 11 | 9 | 1 | 0 | 1 | 0 |
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
 | [ReplayRunResultTileE2ERunner](./ReplayRunResultTileE2ERunner.md) ✅ | `RRT-01..05` | 5 | 5 | 0 | 0 | 0 | 0 |

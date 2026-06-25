@@ -1,19 +1,20 @@
-"""ADR-0027 — prod 解禁の env ゲート廃止 + DEV_* prefill 廃止の回帰ゲート (#130 / #131)。
+"""ADR-0027 — prod 解禁の env ゲート廃止の回帰ゲート (#130 / #131)。
 
 固定する不変条件（delete-the-production-logic litmus で RED→GREEN が立つ）:
 
 - PRODGATE-02: kabusapi_url.base_url("prod") は env フラグ無しでも raise せず prod URL を返す。
 - PRODGATE-03: kabu の build_form_init("prod") は env フラグ無しで本体ポート 18080 を返し、
-  FormInit に allow_prod / dev_* / is_debug_build フィールドを持たない。
+  廃止された解禁フラグ系フィールド (allow_prod / dev_* / is_debug_build) を持たない。
 - PRODGATE-04: tachibana の build_form_init("prod") は env フラグ無しで初期モード "prod" を返し、
-  FormInit に allow_prod / dev_* / is_debug_build フィールドを持たない。
-- PRODGATE-05: kabu login form-state は DEV_KABU_API_PASSWORD を env に置いても surface しない
-  (ダイアログは空欄で開く / #131)。
-- PRODGATE-06: tachibana login form-state は DEV_TACHIBANA_* を env に置いても surface しない
-  (ダイアログは空欄で開く / #131)。
+  廃止された解禁フラグ系フィールド (allow_prod / dev_* / is_debug_build) を持たない。
+- PRODGATE-08: login ダイアログ flow (run_dialog) は process env を一切読まない。
 - ゲート撤去後も未知 env は INVALID_ENV のまま弾く (environment_hint の _ENV_PER_VENUE 検証は残る)。
 
 PRODGATE-01 (dispatcher の prod front-stop 撤去) は test_inproc_prompt_login.py が持つ。
+
+注: 旧 PRODGATE-05/06 (「DEV_* prefill 廃止」=ダイアログは空欄で開く) は **ADR-0033 が D3 を
+supersede** したため撤去。demo/verify の prefill 復活を assert する新ゲート PREFILL-01..05 が
+test_login_prefill.py にある。PRODGATE-08 は ADR-0033 でも維持される (env 読みは presenter に閉じる)。
 """
 from __future__ import annotations
 
@@ -22,8 +23,6 @@ import pytest
 from engine.exchanges import kabusapi_url
 from engine.exchanges import kabusapi_login_form_state as kabu_form
 from engine.exchanges import tachibana_login_form_state as tachi_form
-
-_DEV_SENTINEL = "DEV_CREDENTIAL_DO_NOT_PREFILL_9001"
 
 
 # --- PRODGATE-02: kabu URL builder は prod を env フラグ無しで通す -----------------
@@ -74,32 +73,13 @@ def test_tachibana_form_init_prod_mode_without_allow_flag(monkeypatch):
     assert not any(f.startswith("dev_") for f in fields)
 
 
-# --- PRODGATE-05/06: DEV_* を env に置いても form-state は prefill しない (#131) ------
-
-
-@pytest.mark.scenario("PRODGATE-05")
-def test_kabu_form_init_does_not_prefill_dev_password(monkeypatch):
-    monkeypatch.setenv("DEV_KABU_API_PASSWORD", _DEV_SENTINEL)
-    init = kabu_form.build_form_init("verify")
-    # ダイアログは空欄で開く: FormInit は API パスワードを一切載せない。
-    assert _DEV_SENTINEL not in repr(init)
-
-
-@pytest.mark.scenario("PRODGATE-06")
-def test_tachibana_form_init_does_not_prefill_dev_credentials(monkeypatch):
-    monkeypatch.setenv("DEV_TACHIBANA_AUTH_ID_DEMO", _DEV_SENTINEL)
-    monkeypatch.setenv("DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO", _DEV_SENTINEL)
-    init = tachi_form.build_form_init("demo")
-    assert _DEV_SENTINEL not in repr(init)
-
-
-# --- PRODGATE-08: login ダイアログ widget も process-env を読まない (#131 真の面) -----
-# PRODGATE-05/06 は build_form_init (presenter) の repr を見る。だが prefill が歴史的に
-# 実在したのは run_dialog の credential StringVar/Entry 側で、そこに
+# --- PRODGATE-08: login ダイアログ widget は process-env を読まない -------------------
+# ADR-0033 でも維持: prefill は復活したが env 読みは presenter (build_form_init) に閉じ、
+# run_dialog (tkinter widget) は os.environ を直接読まない。歴史的に prefill が実在したのは
+# run_dialog の credential StringVar 側で、そこに
 #   pw_var = tk.StringVar(value=os.environ.get("DEV_KABU_API_PASSWORD", ""))
-# を戻しても presenter テストは GREEN のまま素通りしてしまう。ダイアログ flow モジュールが
-# process env を一切読まないことを source-scan で固定する（ADR-0027 D3: 手動起動では資格情報は
-# 常にユーザー入力。env 由来の prefill を戻すと environ/getenv が現れ RED になる）。
+# を書くと presenter テストを素通りしてしまう。flow モジュールが environ/getenv を持たないことを
+# source-scan で固定する（ADR-0033 D4: env 読みは presenter に閉じる。run_dialog に戻すと RED）。
 
 
 @pytest.mark.scenario("PRODGATE-08")

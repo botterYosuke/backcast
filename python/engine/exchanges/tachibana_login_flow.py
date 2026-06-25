@@ -8,8 +8,9 @@ Tachibana path uses session_cache on disk, not an in-memory token).
 
 v4r9 公開鍵認証: パスワード欄は廃止。利用者は **認証ID** と **秘密鍵 PEM ファイル** を
 指定する（ファイル選択ダイアログ付き）。本人性は「秘密鍵で復号できること」で証明する。
-ADR-0027: prod 解禁の env ゲート (TACHIBANA_ALLOW_PROD) と DEV_* prefill は廃止。
-ダイアログは認証ID・秘密鍵欄が空欄で開き、Prod ラジオは常時選択可能。
+ADR-0027: prod 解禁の env ゲート (TACHIBANA_ALLOW_PROD) は廃止。Prod ラジオは常時選択可能。
+ADR-0033: demo モードは debug ビルドで .env から認証ID・秘密鍵パスを prefill する
+（prod は空欄＝手入力・Prod 切替で欄をクリア）。env 読みは presenter に閉じる。
 """
 from __future__ import annotations
 
@@ -90,7 +91,8 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
     from tkinter import filedialog
 
     # ADR-0027: prod 解禁 env ゲートは廃止。env_hint で初期モードを決め、Prod ラジオは
-    # 常時選択可能。認証ID・秘密鍵パスは prefill せず常にユーザーが入力する (空欄で開く)。
+    # 常時選択可能。ADR-0033: demo モードは debug ビルドで認証ID・秘密鍵パスを .env から
+    # prefill する (prod は空欄＝手入力)。env 読みは presenter (build_form_init) に閉じる。
     init = build_form_init(env_hint=env_hint)
 
     from engine.exchanges.tachibana_auth import PNoCounter
@@ -102,8 +104,8 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
     root.title("Tachibana ログイン (公開鍵認証)")
     root.resizable(False, False)
 
-    auth_id_var = tk.StringVar(value="")
-    key_path_var = tk.StringVar(value="")
+    auth_id_var = tk.StringVar(value=init.auth_id_prefill)
+    key_path_var = tk.StringVar(value=init.key_path_prefill)
     mode_var = tk.StringVar(value=init.initial_mode)
     status_var = tk.StringVar(value="")
 
@@ -243,14 +245,24 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
 
         threading.Thread(target=_run_auth, daemon=True).start()
 
+    def _on_mode_change(*_args: Any) -> None:
+        # ADR-0033 D2: モード切替で prefill を再導出 (demo→.env 値 / prod→空欄)。
+        # env 読みは presenter (build_form_init) に閉じる (PRODGATE-08)。Radiobutton の
+        # command= で配線する (StringVar.trace_add は #133 の gc teardown を生き残る参照を作る)。
+        refreshed = build_form_init(env_hint=mode_var.get())
+        auth_id_var.set(refreshed.auth_id_prefill)
+        key_path_var.set(refreshed.key_path_prefill)
+
     ok_btn.config(command=_on_ok)
     cancel_btn.config(command=_on_cancel)
     browse_btn.config(command=_on_browse)
+    demo_radio.config(command=_on_mode_change)
+    prod_radio.config(command=_on_mode_change)
     root.protocol("WM_DELETE_WINDOW", _on_cancel)
     root.bind("<Return>", _on_ok)
     root.bind("<Escape>", _on_cancel)
 
-    # ADR-0027: 認証ID は prefill しない (常に空欄) ので認証 ID 欄へフォーカス。
+    # ADR-0033: prefill があれば認証 ID 欄は埋まっているが、フォーカスは認証 ID 欄に置く。
     auth_id_entry.focus_set()
 
     def _poll_cancel() -> None:

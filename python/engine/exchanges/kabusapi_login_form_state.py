@@ -1,5 +1,6 @@
 """kabuStation login form state — pure presenter logic, no tkinter dependency."""
 from __future__ import annotations
+import os
 import socket
 from dataclasses import dataclass
 from typing import Optional
@@ -9,6 +10,7 @@ from typing import Optional
 class FormInit:
     env_hint: str
     station_port: int
+    api_password_prefill: str  # ADR-0033: verify only, debug build only; else ""
 
 
 KABU_STATION_NOT_RUNNING = "KABU_STATION_NOT_RUNNING"
@@ -26,15 +28,41 @@ USER_CANCELLED = "USER_CANCELLED"
 EMPTY_FIELDS = "EMPTY_FIELDS"
 
 
+def _verify_prefill() -> str:
+    """Resolve the verify API password for prefill (ADR-0033 D1/D3/D4).
+
+    Returns ``DEV_KABU_API_PASSWORD`` in debug builds, else ``""`` (release build
+    or key absent). Never reads the prod key ``PROD_KABU_API_PASSWORD`` (D2). The
+    env read lives here in the pure presenter so ``run_dialog`` stays env-free
+    (PRODGATE-08).
+    """
+    from engine.live._build_mode import IS_DEBUG_BUILD
+
+    if not IS_DEBUG_BUILD:
+        return ""
+    # engine.paths autoloads .env into os.environ on import (setdefault).
+    import engine.paths  # noqa: F401
+
+    return (os.environ.get("DEV_KABU_API_PASSWORD") or "").strip()
+
+
 def build_form_init(env_hint: str) -> FormInit:
     """Presenter state for the kabu login dialog.
 
-    ADR-0027: prod 解禁の env ゲート (KABU_ALLOW_PROD) と debug ビルドの DEV_*
-    prefill は廃止。ポートは env_hint だけで決め (prod=18080 / verify=18081)、
-    API パスワードは常にユーザーが入力する (空欄で開く / D2・D3)。
+    ADR-0027: prod 解禁の env ゲート (KABU_ALLOW_PROD) は廃止。ポートは env_hint
+    だけで決める (prod=18080 / verify=18081)。
+
+    ADR-0033: verify モードの API パスワードは debug ビルドのとき .env から prefill
+    する (D1)。prod モードは prefill せず常にユーザー入力 (D2)。run_dialog はラジオ
+    切替のたびに build_form_init(mode) を呼び直して prefill を再導出する。
     """
     station_port = 18080 if env_hint == "prod" else 18081
-    return FormInit(env_hint=env_hint, station_port=station_port)
+    api_password_prefill = "" if env_hint == "prod" else _verify_prefill()
+    return FormInit(
+        env_hint=env_hint,
+        station_port=station_port,
+        api_password_prefill=api_password_prefill,
+    )
 
 
 def probe_station(host: str = "127.0.0.1", port: int = 18081) -> bool:

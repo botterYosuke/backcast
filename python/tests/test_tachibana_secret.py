@@ -27,10 +27,12 @@ SENTINEL = "SECOND_PW_DO_NOT_LEAK_4242"
 
 
 def test_login_form_ignores_second_password_env(monkeypatch) -> None:
-    """第二暗証番号 env / DEV_* 資格情報を env に置いても FormInit はそれを surface しない。
+    """第二暗証番号 env を env に置いても FormInit はそれを一切 surface しない。
 
-    ADR-0027 D3: ログインダイアログは DEV_* を prefill しない (空欄で開く)。よって
-    build_form_init は env を一切読まず、FormInit に資格情報フィールドを持たない。
+    第二暗証番号 (F-H5) はログイン時に収集せず、発注時に GUI modal でのみ取得する。
+    ADR-0033 で demo の認証ID・秘密鍵パスは prefill するようになったが、第二暗証番号
+    (DEV_TACHIBANA_SECOND / SECOND_PASSWORD) は prefill 対象に含めない——build_form_init は
+    それらを一切読まず、FormInit のどのフィールドにも漏らさない。
     """
     monkeypatch.setenv("DEV_TACHIBANA_AUTH_ID_DEMO", "authid1")
     monkeypatch.setenv("DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO", "/tmp/key.pem")
@@ -38,12 +40,10 @@ def test_login_form_ignores_second_password_env(monkeypatch) -> None:
     monkeypatch.setenv("DEV_TACHIBANA_SECRET", SENTINEL)
     init = build_form_init("demo")
     assert isinstance(init, FormInit)
-    # FormInit に資格情報フィールドは存在せず、どの値にも漏れていない。
+    # 第二暗証番号はどのフィールドにも漏れていない (auth_id/key_path の prefill は ADR-0033 で許容)。
     assert SENTINEL not in repr(init)
-    assert "authid1" not in repr(init)  # ADR-0027 D3: prefill しない
     field_names = {f.lower() for f in vars(init)}
     assert not any("second" in n or "secret" in n for n in field_names)
-    assert not any("dev_" in n or "auth_id" in n or "private_key" in n for n in field_names)
 
 
 def test_no_second_password_env_constant_in_tachibana_sources() -> None:

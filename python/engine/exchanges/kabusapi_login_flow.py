@@ -89,7 +89,8 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
     import tkinter as tk
 
     # ADR-0027: prod 解禁 env ゲートは廃止。env_hint をそのまま初期モードにし、Prod ラジオは
-    # 常時選択可能。API パスワードは prefill せず常にユーザーが入力する (空欄で開く)。
+    # 常時選択可能。ADR-0033: verify モードは debug ビルドで API パスワードを .env から prefill
+    # する (prod は空欄＝手入力)。env 読みは presenter (build_form_init) に閉じる。
     init = build_form_init(env_hint=env_hint)
 
     result: dict[str, Any] = {"success": False, "error_code": USER_CANCELLED, "token": None}
@@ -98,7 +99,7 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
     root.title("kabuStation ログイン")
     root.resizable(False, False)
 
-    pw_var = tk.StringVar(value="")
+    pw_var = tk.StringVar(value=init.api_password_prefill)
     mode_var = tk.StringVar(value="prod" if env_hint == "prod" else "verify")
     status_var = tk.StringVar(value="")
     port_var = tk.StringVar(value=str(init.station_port))
@@ -225,6 +226,17 @@ def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None)
             root.destroy()
             return
         root.after(200, _poll_cancel)
+
+    def _on_mode_change(*_args: Any) -> None:
+        # ADR-0033 D2: モード切替で prefill を再導出 (verify→.env 値 / prod→空欄)。
+        # 併せて本体ポート/接続状態も切替先に合わせて更新する。Radiobutton の command= で
+        # 配線する (StringVar.trace_add は #133 の gc teardown を生き残る参照を作る)。
+        refreshed = build_form_init(env_hint=mode_var.get())
+        pw_var.set(refreshed.api_password_prefill)
+        _refresh_station_status()
+
+    verify_radio.config(command=_on_mode_change)
+    prod_radio.config(command=_on_mode_change)
 
     _refresh_station_status()
     pw_entry.focus_set()

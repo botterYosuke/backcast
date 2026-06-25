@@ -40,6 +40,9 @@ public static class UniverseSidebarE2ERunner
     {
         public AvailableInstrumentsResult Next = AvailableInstrumentsResult.Empty;
         public AvailableInstrumentsResult Query(UniverseSourceMode mode, string replayEndDate) => Next;
+        // #140 / findings 0112: stub TryGetName for the interface — these tests don't drive chart
+        // titles, but the production interface requires the cache-only id→name seam.
+        public bool TryGetName(string instrumentId, out string name) { name = null; return false; }
     }
 
     // Records the (mode, endDate) the picker queried with, so Section11 can prove the view honors the
@@ -55,6 +58,7 @@ public static class UniverseSidebarE2ERunner
             Queried = true; LastMode = mode; LastEnd = replayEndDate;
             return AvailableInstrumentsResult.Ready(new[] { "7203.TSE" });
         }
+        public bool TryGetName(string instrumentId, out string name) { name = null; return false; }
     }
 
     sealed class StubStrategyProvider : IStrategyFileProvider

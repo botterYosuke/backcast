@@ -48,6 +48,16 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
     string _transientKey;                   // last key that returned a transient status
     long _transientAtMs;                    // _clock.ElapsedMilliseconds of last transient result
 
+    // #140 / findings 0112: id→name index built from EVERY Ready snapshot ever cached, so the
+    // chart-window title resolver gets O(1) lookup AND survives a (mode, end) flip (the picker's
+    // single _cachedKey moves on a mode/scenario.end change, but instrument NAMES don't —
+    // _nameByIid accumulates so a Replay snapshot's names are still available after the user
+    // flips to Live before the next picker open). Cleared on no path: if listed_info renames an
+    // instrument between snapshots the latest cached Ready overwrites the entry; if the snapshot
+    // drops an iid it stays in the index (a stale-name hazard the chart title accepts — picker
+    // and prune are the live sources of truth for whether iid is still in the universe).
+    readonly Dictionary<string, string> _nameByIid = new Dictionary<string, string>();
+
     // Monotonic ms source for the transient-retry cooldown. Was Environment.TickCount64, which the
     // Unity .NET profile doesn't expose; Stopwatch.ElapsedMilliseconds is the same monotonic-long-ms
     // contract (only the delta between two reads is used, so a shared static clock is fine).
@@ -139,8 +149,41 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
             {
                 _cachedKey = key;
                 _cachedResult = result;
+                MergeNameIndex(result);
             }
             if (_inFlightKey == key) _inFlightKey = null;
+        }
+    }
+
+    // #140 / findings 0112: merge this Ready snapshot's id→name pairs into the mode-agnostic
+    // name index so the chart-title resolver can compose `<id> <name>` without keying on (mode,
+    // end). Skipped on Empty / Error (those carry no names). The assignment is intentionally
+    // `=` (not TryAdd) — listed_info renames between snapshots overwrite the prior cached name
+    // (the latest Ready wins), pinned by AFK CHART-TITLE-10 so a TryAdd regression turns RED.
+    // Caller holds `_lock`; this helper assumes that contract (no internal locking).
+    void MergeNameIndex(AvailableInstrumentsResult result)
+    {
+        if (result.Kind != UniverseStatusKind.Ready || result.Ids == null || result.Names == null) return;
+        int n = Math.Min(result.Ids.Count, result.Names.Count);
+        for (int i = 0; i < n; i++)
+        {
+            string nm = result.Names[i];
+            if (!string.IsNullOrEmpty(nm)) _nameByIid[result.Ids[i]] = nm;
+        }
+    }
+
+    // #140 / findings 0112: cache-only id→name lookup. NEVER kicks a fetch (the picker's Query is
+    // the sole fetch trigger so layout-restore of N saved charts doesn't race N background threads
+    // through the host's GIL during SERVER_NOT_READY warmup). NEVER keys on (mode, end) — the name
+    // is a per-instrument property; the index accumulates across every Ready snapshot the picker
+    // has cached so a Replay→Live mode flip doesn't blank chart titles when their iid's name is
+    // sitting in the other cache slot.
+    public bool TryGetName(string instrumentId, out string name)
+    {
+        if (string.IsNullOrEmpty(instrumentId)) { name = null; return false; }
+        lock (_lock)
+        {
+            return _nameByIid.TryGetValue(instrumentId, out name);
         }
     }
 

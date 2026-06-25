@@ -72,7 +72,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section22_ConsoleAuditGaps(spawned)
                 ?? Section23_ModeAwareLiveLaunch(spawned)
                 ?? Section24_LiveLifecycleEdges(spawned)
-                ?? Section25_ModeConditionalVisibility(spawned);
+                ?? Section25_ModeConditionalVisibility(spawned)
+                ?? Section26_ZeroCellsFloor(spawned);
         }
         catch (Exception e)
         {
@@ -99,10 +100,10 @@ public static class StrategyEditorNotebookE2ERunner
                       "textInfo.meshInfo[].colors32 by full-source index, Default unchanged, no tag injection) + registry run-wiring (#78 RegistryStrategyFileProvider: unregistered/unbound/dirty/" +
                       "torn-down -> false -> Run blocked; saved editor .py flows through, re-resolved live each call) " +
                       "+ #81 notebook aggregate (fresh=1 empty cell, AddCell dirties, body-edit dirties, SaveAs/Save->Open " +
-                      "round-trip preserves body+name+config, >=1 delete guard, non-marimo/broken Open REJECTED (marimo-or-error, #113), supplyable " +
+                      "round-trip preserves body+name+config, #146 last-cell delete reaches 0 cells + X1 persistence floor=1 (empty Save->Open returns 1 empty cell), non-marimo/broken Open REJECTED (marimo-or-error, #113), supplyable " +
                       "5-condition, ResetUnboundEmpty) + SpawnPlacement (anchor-start, diagonal cascade, overlap-allowed, " +
                       "<10 threshold, full-chain clear) + NotebookCellCoordinator (cell0->region_001, AddCell->region_002 spawn, " +
-                      "DeleteCell despawn region_002 / hide-dormant region_001, >=1 guard, dormant reuse, CapturePositions cell-order) " +
+                      "DeleteCell despawn region_002 / hide-dormant region_001, #146 last-cell delete -> 0 cells (region_001 dormant shell), dormant reuse, CapturePositions cell-order) " +
                       "+ #95 Phase 2 土台 per-cell RUN (adopted+spawned both carry a ▶ RUN button via EnsureRunButton find-or-create, " +
                       "idempotent; press routes the run output to ITS window by cell index; pressing one window does not overwrite another; " +
                       "downstream cell output routes to the downstream window) " +
@@ -147,6 +148,10 @@ public static class StrategyEditorNotebookE2ERunner
                       "exclusivity); hiding is pure visibility — same window instances + geometry preserved across a " +
                       "Replay→LiveManual→Replay round-trip and Save-while-hidden keeps positions (AC5); the toggle " +
                       "re-shows only what it hid, so a dormant region_001 shell is never resurrected) " +
+                      "+ #146 zero-cells floor (STRATEGY-56 full delete -> 0 cells / 0 cell windows with region_001 left a dormant " +
+                      "never-Destroy shell; STRATEGY-57 0->1 AddCell reuses the dormant region_001 = File->New と同一動線; " +
+                      "STRATEGY-58 X1 a 0-cell notebook saved as a header-only .py reopens as exactly ONE empty cell — marimo's " +
+                      "load_app floor, mirrored by the fake) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -713,8 +718,8 @@ public static class StrategyEditorNotebookE2ERunner
     // ======================================================================
     // 10. #81 MarimoNotebookDocument aggregate (ADR-0013 / findings 0050) — driven by the
     //     Covers: STRATEGY-01, STRATEGY-10, STRATEGY-12, STRATEGY-15, STRATEGY-16, STRATEGY-17
-    //     (notebook 集約: add/edit dirty・≥1 guard・supplyable・ResetUnboundEmpty(File→New aggregate 側,
-    //      MenuBar MENU-02 が正本)・Open 分解・Save 合成 round-trip)
+    //     (notebook 集約: add/edit dirty・#146 last-cell delete -> 0 cells + X1 floor=1・supplyable・
+    //      ResetUnboundEmpty(File→New aggregate 側, MenuBar MENU-02 が正本)・Open 分解・Save 合成 round-trip)
     //     Python-FREE FakeMarimoSynthesizer (the SAME round-trip contract the layer-2 pythonnet +
     //     layer-3 marimo golden assert, so a drifting fake is caught mechanically).
     // ======================================================================
@@ -724,7 +729,7 @@ public static class StrategyEditorNotebookE2ERunner
         var synth = new FakeMarimoSynthesizer();
         var nb = new MarimoNotebookDocument(synth);
 
-        // fresh notebook: one empty cell, unbound, not dirty, not supplyable (>=1 invariant).
+        // fresh notebook: one empty cell (File→New floor=1), unbound, not dirty, not supplyable (unbound).
         if (nb.CellCount != 1) return "S10: fresh notebook not 1 cell";
         if (nb.IsBound || nb.IsDirty) return "S10: fresh notebook bound/dirty";
         if (nb.TryGetStrategyFile(out _)) return "S10: unbound notebook supplyable";
@@ -770,12 +775,31 @@ public static class StrategyEditorNotebookE2ERunner
         if (nb4.CellCount != 2 || nb4.Cells[0].Name != "_config" || nb4.Cells[1].Name != "_strat")
             return "S10: cell names not carried through Open (seam dropped name+config)";
 
-        // >=1 delete guard: the last cell cannot be removed.
+        // #146 (ADR-0033 supersedes ADR-0013 D5): the 0-cell floor is LIFTED — the last cell CAN now
+        // be removed, reaching 0 cells (the empty-canvas state). delete-the-production-logic litmus:
+        // re-add `if (_cells.Count <= 1) return false;` to MarimoNotebookDocument.RemoveCell and THIS
+        // goes RED (RemoveCell returns false at 1 cell).
         var single = new MarimoNotebookDocument(synth);
-        if (single.RemoveCell(single.Cells[0])) return "S10: removed the last cell (>=1 guard breached)";
-        if (single.CellCount != 1) return "S10: last-cell removal mutated count";
+        if (!single.RemoveCell(single.Cells[0])) return "S10/#146: the last cell must now be removable (0-cell floor lifted)";
+        if (single.CellCount != 0) return "S10/#146: removing the last cell did not reach 0 cells";
+        if (single.RemoveCell(null)) return "S10/#146: RemoveCell(null) must still be false (genuine anomaly)";
         if (!nb2.RemoveCell(nb2.Cells[0])) return "S10: RemoveCell on a 2-cell notebook failed";
         if (nb2.CellCount != 1) return "S10: RemoveCell did not shrink";
+        if (!nb2.RemoveCell(nb2.Cells[0])) return "S10/#146: RemoveCell down to 0 must succeed";
+        if (nb2.CellCount != 0) return "S10/#146: notebook did not reach 0 cells";
+
+        // X1 persistence floor = 1 (marimo-derived, ADR-0033 D2): a 0-cell notebook saves to a
+        // header-only `.py`, but marimo's load_app inflates an empty valid-marimo file back to ONE
+        // empty cell, so Save→Open round-trips 0 → 1 (NOT 0). The fake mirrors this marimo floor.
+        // delete-the-production-logic litmus: drop the empty→1 inflation in FakeMarimoSynthesizer.Decompose
+        // and THIS goes RED (the round-trip comes back 0, or the Open 0-cell guard rejects it).
+        string emptyPy = Path.Combine(TempDir, "nb_empty.py");
+        if (!single.SaveAs(emptyPy)) return "S10/#146 X1: SaveAs of a 0-cell notebook failed (synth must accept [])";
+        if (single.CellCount != 0) return "S10/#146 X1: SaveAs mutated the live 0-cell count";
+        var reopened = new MarimoNotebookDocument(synth);
+        if (!reopened.Open(emptyPy)) return "S10/#146 X1: Open of a saved empty notebook failed (LastError=" + (reopened.LastError ?? "<null>") + ")";
+        if (reopened.CellCount != 1) return "S10/#146 X1: empty notebook did not reopen as exactly 1 cell (marimo floor=1)";
+        if (reopened.Cells[0].Body != "") return "S10/#146 X1: the reopened floor cell must be empty";
 
         // #113 (reverses findings 0054 §D1): the editor is "marimo or error" at Open time. Open of a
         // NON-MARIMO `.py` (Decompose -> null, "not a marimo notebook") is NO LONGER wrapped into a
@@ -868,10 +892,10 @@ public static class StrategyEditorNotebookE2ERunner
     // ======================================================================
     // 12. #81 NotebookCellCoordinator — region_id<->Cell binding + window lifecycle on REAL
     //     Covers: STRATEGY-06, STRATEGY-07, STRATEGY-08, STRATEGY-09, STRATEGY-10, STRATEGY-13, STRATEGY-16
-    //     (add region_002 / dormant reuse / delete despawn・hide-dormant / ≥1 guard /
+    //     (add region_002 / dormant reuse / delete despawn・hide-dormant / #146 last-cell -> 0 cells + 0→1 reuse /
     //      CapturePositions cell-order / Open orphan 一掃)
     //     (bare-RT) windows: cell0->region_001, AddCell->region_002 spawn, delete routing
-    //     (despawn region_002 / hide-dormant region_001), >=1 guard, dormant reuse, positions.
+    //     (despawn region_002 / hide-dormant region_001), #146 last-cell delete -> 0 cells, dormant reuse, positions.
     // ======================================================================
     static string Section12_Coordinator(List<GameObject> spawned)
     {
@@ -909,9 +933,20 @@ public static class StrategyEditorNotebookE2ERunner
         if (controller.Has(R2)) return "S12: region_002 not despawned on delete";
         if (nb.CellCount != 1) return "S12: notebook not 1 cell after delete";
 
-        // >=1 guard: deleting the last cell (region_001) is refused, shell preserved.
-        if (coord.DeleteCell(R1)) return "S12: deleted the last cell (>=1 guard breached)";
-        if (!controller.Has(R1)) return "S12: region_001 destroyed by a refused delete";
+        // #146 (ADR-0033): deleting the LAST cell now SUCCEEDS → 0 cells / 0 windows. region_001 is the
+        // never-Destroy shell (ADR-0013 D4), so the last delete HIDES it (dormant), never destroys it —
+        // the only authoring affordance left is the screen-fixed, root-owned [+] Add Cell button.
+        // delete-the-production-logic litmus: re-add the `_cells.Count<=1` floor and THIS goes RED.
+        if (!coord.DeleteCell(R1)) return "S12/#146: deleting the last cell must now succeed (0-cell floor lifted)";
+        if (nb.CellCount != 0) return "S12/#146: notebook not 0 cells after deleting the last cell";
+        if (!controller.Has(R1)) return "S12/#146: region_001 shell destroyed by the last delete (must hide, dormant)";
+        if (controller.RectOf(R1).gameObject.activeSelf) return "S12/#146: region_001 not dormant (still active) at 0 cells";
+
+        // 0 → 1: AddCell from an empty canvas reuses the DORMANT region_001 (File→New と同一動線, ADR-0013 D4).
+        var reborn = coord.AddCell();
+        if (coord.RegionOf(reborn) != R1) return "S12/#146: AddCell from 0 cells did not reuse the dormant region_001";
+        if (!controller.RectOf(R1).gameObject.activeSelf) return "S12/#146: reused region_001 not re-activated from 0 cells";
+        if (nb.CellCount != 1) return "S12/#146: notebook not 1 cell after re-add from 0";
 
         // with 2 cells, delete the region_001 cell -> region_001 HIDDEN (dormant), NOT destroyed.
         coord.AddCell();   // region_002 again
@@ -926,6 +961,96 @@ public static class StrategyEditorNotebookE2ERunner
 
         // CapturePositions is cell-order parallel (regenerated from live).
         if (coord.CapturePositions().Count != nb.CellCount) return "S12: CapturePositions count != cell count";
+        return null;
+    }
+
+    // ======================================================================
+    // 26. #146 zero-cells floor (ADR-0033 / findings 0114) — the FULL-delete → 0-window journey on
+    //     REAL (bare-RT) windows, the 0→1 re-spawn (File→New と同一動線), and the X1 persistence floor.
+    //     Covers: STRATEGY-56 (全 cell 削除 → 0 cell / 0 窓・region_001 dormant・shell 保全),
+    //             STRATEGY-57 (0 → 1: AddCell が dormant region_001 を再利用),
+    //             STRATEGY-58 (空ノート Save → Open は marimo 床=1 で空セル 1 枚に戻る・X1)
+    //     Emits a per-Action-ID single-token PASS tag at each milestone so run-all-tests' rollup
+    //     (`scripts/E2ERollup.ps1`, single-token `[A-Z0-9-]+`) records STRATEGY-56/57/58 — the surface
+    //     summary tag `[E2E STRATEGY NOTEBOOK PASS]` has spaces and is NOT picked up by the rollup.
+    // ======================================================================
+    static string Section26_ZeroCellsFloor(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+        const string R2 = "strategy_editor:region_002";
+
+        var layerGo = new GameObject("FWLayer26", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) => { var go = new GameObject("W_" + id, typeof(RectTransform)); spawned.Add(go); return go.GetComponent<RectTransform>(); },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        // adopt the scene-authored region_001 shell (never-Destroy).
+        var adoptGo = new GameObject("region001_26", typeof(RectTransform));
+        spawned.Add(adoptGo);
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptGo.GetComponent<RectTransform>());
+
+        Directory.CreateDirectory(TempDir);
+        var synth = new FakeMarimoSynthesizer();
+        var nb = new MarimoNotebookDocument(synth);
+        var coord = new NotebookCellCoordinator(nb, controller, _ => null, () => Vector2.zero, new Vector2(520f, 380f));
+
+        // 2 windows: cell0 -> region_001, cell1 -> region_002 (the確定生成 of two cells).
+        coord.SyncWindowsToNotebook(null);
+        coord.AddCell();
+        if (nb.CellCount != 2 || !controller.Has(R1) || !controller.Has(R2))
+            return "S26: precondition — expected region_001 + region_002 (2 windows)";
+
+        // ── STRATEGY-56: delete BOTH cells → 0 cells / 0 cell windows. region_002 despawns; region_001
+        // (never-Destroy shell) goes dormant (hidden but alive). The [+] Add Cell button is root-owned
+        // and screen-fixed (not a cell window), so it is structurally untouched by cell deletion.
+        if (!coord.DeleteCell(R2)) return "S26/STRATEGY-56: DeleteCell(region_002) failed";
+        if (controller.Has(R2)) return "S26/STRATEGY-56: region_002 not despawned";
+        if (!coord.DeleteCell(R1)) return "S26/STRATEGY-56: deleting the LAST cell (region_001) must now succeed";
+        if (nb.CellCount != 0) return "S26/STRATEGY-56: notebook did not reach 0 cells";
+        if (coord.CellOf(R1) != null || coord.CellOf(R2) != null) return "S26/STRATEGY-56: a region still bound to a cell at 0 cells";
+        if (!controller.Has(R1)) return "S26/STRATEGY-56: region_001 shell destroyed (must stay as a dormant shell)";
+        if (controller.RectOf(R1).gameObject.activeSelf) return "S26/STRATEGY-56: region_001 not dormant (still active) at 0 cells";
+        Debug.Log("[E2E STRATEGY-56 PASS] full delete reaches 0 cells / 0 cell windows; region_001 dormant (shell preserved)");
+
+        // ── STRATEGY-57: 0 → 1. AddCell from the empty canvas reuses the dormant region_001 (the SAME
+        // host + path as File→New, ADR-0013 D4), re-activated, exactly one window.
+        var reborn = coord.AddCell();
+        if (nb.CellCount != 1) return "S26/STRATEGY-57: notebook not 1 cell after re-add from 0";
+        if (coord.RegionOf(reborn) != R1) return "S26/STRATEGY-57: 0→1 AddCell did not reuse the dormant region_001 (got " + coord.RegionOf(reborn) + ")";
+        if (!controller.RectOf(R1).gameObject.activeSelf) return "S26/STRATEGY-57: reused region_001 not re-activated";
+        if (controller.Has(R2)) return "S26/STRATEGY-57: a stray region_002 window exists after a single re-add";
+        Debug.Log("[E2E STRATEGY-57 PASS] 0->1 AddCell reuses dormant region_001 (File->New と同一動線)");
+
+        // ── STRATEGY-58 (X1): a 0-cell notebook saves as a header-only `.py`, but marimo's load_app
+        // inflates an empty valid-marimo file back to ONE empty cell, so Save→Open round-trips 0 → 1
+        // (NOT 0). Drive it through the coordinator's own Open path (SyncWindowsToNotebook) so the
+        // window rebuild also lands the floor cell on region_001.
+        var zero = new MarimoNotebookDocument(synth);
+        if (zero.RemoveCell(zero.Cells[0]) == false || zero.CellCount != 0)
+            return "S26/STRATEGY-58: could not bring a fresh notebook to 0 cells";
+        string emptyPy = Path.Combine(TempDir, "nb_zero_floor.py");
+        if (!zero.SaveAs(emptyPy)) return "S26/STRATEGY-58: SaveAs of a 0-cell notebook failed";
+
+        var layerGo2 = new GameObject("FWLayer26b", typeof(RectTransform));
+        spawned.Add(layerGo2);
+        var controller2 = new FloatingWindowController(
+            layerGo2.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) => { var go = new GameObject("W2_" + id, typeof(RectTransform)); spawned.Add(go); return go.GetComponent<RectTransform>(); },
+            go => UnityEngine.Object.DestroyImmediate(go));
+        var adoptGo2 = new GameObject("region001_26b", typeof(RectTransform));
+        spawned.Add(adoptGo2);
+        controller2.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptGo2.GetComponent<RectTransform>());
+        var nb2 = new MarimoNotebookDocument(synth);
+        var coord2 = new NotebookCellCoordinator(nb2, controller2, _ => null, () => Vector2.zero, new Vector2(520f, 380f));
+
+        if (!coord2.Open(emptyPy, null)) return "S26/STRATEGY-58: reopening the saved empty notebook failed (LastError=" + (nb2.LastError ?? "<null>") + ")";
+        if (nb2.CellCount != 1) return "S26/STRATEGY-58: empty notebook did not reopen as exactly 1 cell (marimo floor=1)";
+        if (nb2.Cells[0].Body != "") return "S26/STRATEGY-58: the reopened floor cell must be empty";
+        if (!controller2.Has(R1) || !controller2.RectOf(R1).gameObject.activeSelf)
+            return "S26/STRATEGY-58: the floor cell did not land on an active region_001 window";
+        Debug.Log("[E2E STRATEGY-58 PASS] empty notebook Save->Open returns 1 empty cell (X1 marimo floor=1)");
         return null;
     }
 
@@ -1281,7 +1406,7 @@ public static class StrategyEditorNotebookE2ERunner
         // RED litmus: revert Invalidate to a bare `_generation++` (no live-lane reconcile) → _liveRunRegion
         // dangles onto the deleted cell → IsLiveRunLaunched stays true → the "dangled after delete" assert
         // goes RED.
-        var f2 = BuildLiveEdgeFixture(spawned, 2);   // 2 cells so the >=1 delete guard allows deleting cell 0
+        var f2 = BuildLiveEdgeFixture(spawned, 2);   // 2 cells so a surviving cell remains after deleting cell 0
         string r2 = f2.Region(1);                     // the surviving cell's region (captured BEFORE delete)
         f2.Run.RunCell(R1);                           // launch from cell 0 (R1)
         f2.StartInFlight = false; f2.HasActiveRun = true;   // run confirmed active

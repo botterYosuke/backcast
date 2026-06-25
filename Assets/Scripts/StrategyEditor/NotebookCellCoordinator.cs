@@ -11,7 +11,9 @@
 // PHYSICAL WINDOW != LOGICAL CELL (ADR-0013 Decision 4): region_001 is a never-Destroy adopted shell.
 // Deleting its cell HIDES it (dormant); deleting a region_002+ cell DESPAWNS it. A new cell reuses a
 // dormant region_001 first (shell only — new cascade position, NOT the old hidden coords, findings
-// 0050 trap 2), else spawns region_002+. The notebook is ALWAYS >=1 cell (the aggregate's >=1 guard).
+// 0050 trap 2), else spawns region_002+. #146 (ADR-0033 supersedes ADR-0013 D5): the notebook MAY reach
+// 0 cells in a session — deleting the last cell leaves region_001 a dormant shell + the [+] Add Cell
+// button only; the next AddCell reuses that dormant region_001 (the same 0→1 path as File→New).
 //
 // TWO SERIALISATION PATHS, NEVER RECOMBINED: cell content+order -> `.py` (the aggregate, via the
 // synthesizer); spatial position -> the layout sidecar as a cell-order-parallel list (CapturePositions),
@@ -96,13 +98,14 @@ public sealed class NotebookCellCoordinator
     }
 
     // ---- title-bar X : delete the cell in `regionId` ----
-    // >=1 guard (the aggregate refuses the last cell). region_001 -> hide (dormant); region_002+ ->
-    // despawn. Positions are regenerated from live on the next Save, so nothing to splice here.
+    // #146 (ADR-0033): the last cell CAN be deleted (0-cell floor lifted). region_001 -> hide (dormant);
+    // region_002+ -> despawn. Deleting the last cell empties the canvas (region_001 dormant + [+] only).
+    // Positions are regenerated from live on the next Save, so nothing to splice here.
     public bool DeleteCell(string regionId)
     {
         if (string.IsNullOrEmpty(regionId)) return false;
         if (!_cellByRegion.TryGetValue(regionId, out var cell)) return false;
-        if (!_notebook.RemoveCell(cell)) return false;   // last-cell guard
+        if (!_notebook.RemoveCell(cell)) return false;   // #146: false only on a null/unknown cell (no last-cell floor)
 
         Untrack(regionId, cell);
         if (regionId == AdoptedRegionId)

@@ -27,7 +27,7 @@ binding）、boundary `StrategyEditorView`（InputField↔Cell.Body の同期・
 
 セル本体のコード編集（Cell.SetBody → notebook dirty → EditHistory 記録）、Undo/Redo（Cmd/Ctrl+Z 系・per-cell history）、
 構文ハイライト（lexical token・pure-UI mesh colouring）、[+] でセル追加（region_002+ spawn / dormant region_001 reuse）、
-[X] でセル削除（region_001 は hide-dormant・region_002+ は despawn・最後の 1 セルは削除不可）、単一セル時の host-API
+[X] でセル削除（region_001 は hide-dormant・region_002+ は despawn・**最後の 1 セルも削除可＝在庫 0 cell に到達**・#146/ADR-0033）、単一セル時の host-API
 placeholder hint、窓の move / click-to-front（floating window 共有ロジック）。File→New/Open/Save はメニューバー入口の
 notebook 効果なので参照行として載せる。
 
@@ -44,7 +44,7 @@ notebook 効果なので参照行として載せる。
 | STRATEGY-07 | [+] が dormant region_001 を再利用 | `NotebookCellCoordinator.cs:69`（`_region001Dormant` 分岐） | dormant 時は新規 spawn せず region_001 を `RevealAt`（**新 cascade 位置**・旧 hidden 座標は使わない findings 0050 trap2） | 1セル化→[X]で region_001 dormant→[+]で `RegionOf(c)==region_001` ＆ 再 active を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
 | STRATEGY-08 | [X] でセル削除（region_002+ despawn） | `BackcastWorkspaceRoot.cs:548`→`OnDeleteCell`→`NotebookCellCoordinator.cs:92`→`DeleteCell` | `Notebook.RemoveCell`→dirty・region_002 は `Close`（despawn+deregister）・`Untrack` | `DeleteCell(region_002)` 後に window 不在・CellCount-1 を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
 | STRATEGY-09 | [X] でセル削除（region_001 は hide-dormant） | `NotebookCellCoordinator.cs:99`（`regionId==AdoptedRegionId` 分岐） | region_001 は never-Destroy → `Hide`＋`_region001Dormant=true`＋`Bind(null)`（破棄しない・ADR-0013 Decision4） | 2セルで `DeleteCell(region_001)`→shell 残存・`activeSelf==false` を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
-| STRATEGY-10 | [X] で最後の 1 セル削除（≥1 ガードで拒否） | `MarimoNotebookDocument.cs:80`（`_cells.Count<=1`） | `RemoveCell` false・notebook 不変・shell 保全（marimo canDelete=!hasOnlyOneCell） | 単一セルで `DeleteCell` が false・CellCount==1・region_001 残存を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S10,S12) |
+| STRATEGY-10 | [X] で最後の 1 セルも削除（0 cell に到達） | `MarimoNotebookDocument.cs:RemoveCell`（≥1 床撤去・#146/ADR-0033） | `RemoveCell` true・CellCount 0 へ・false は null/未知 cell の本物の異常時のみ（旧 ≥1 床は ADR-0033 で撤去） | 単一セルで `RemoveCell` が true・CellCount==0・2 セルから 0 まで連続削除可・`RemoveCell(null)` は false を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S10,S12,S26) |
 | STRATEGY-11 | 単一セル時の host-API placeholder hint | `NotebookCellCoordinator.cs:226`→`UpdatePlaceholders`→`StrategyEditorView.cs:191`→`SetPlaceholderHint` | CellCount==1 のときのみ `HostApiHint` を表示・本体には焼き込まない（findings 0050） | Section20: 1 セルで placeholder active＋text==`HostApiHint`・2 セルで非 active・1 セルへ戻すと復活・どの遷移でも `Cell.Body` 空（hint 非焼き込み）を反射 assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S20) |
 | STRATEGY-12 | 供給可能性が著作操作で反転 | `MarimoNotebookDocument.cs:168`→`TryGetStrategyFile` | body 編集／add／delete のいずれでも dirty → not supplyable（5条件、CONTEXT「供給可能」） | 編集・add・delete 各々の後 `TryGetStrategyFile` false、Save 後 true を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S4,S10) |
 | STRATEGY-13 | セル窓を move / drag で移動 | `FloatingWindowController`（共有 drag ロジック） | drag で window rect 更新・位置は `CapturePositions`（cell-order parallel・regenerate from live）→layout sidecar | 窓 move ロジックは **FloatingWindow Surface 台本**で観測。本台本は `CapturePositions` の cell-order 整合のみ assert | 自動(E2E済)（CapturePositions cell-order は S12。move/drag 本体は FloatingWindow 台本） | `StrategyEditorNotebookE2ERunner`(S12) |
@@ -90,9 +90,14 @@ notebook 効果なので参照行として載せる。
 | STRATEGY-53 | #138 mode 条件可視性: authoring 表面（**全** `strategy_editor` cell 窓 region_001＋region_002＋[+] Add Cell）は **LiveManual で非表示**、Replay/LiveAuto で表示。order ticket は逆相（front-plane 排他） | `BackcastWorkspaceRoot.DriveStrategyEditor`（`Update` で `DriveOrderTicket` 直後・findings 0110）。`liveManual` なら `_windows.HideKind(KIND_STRATEGY_EDITOR, set)`、否なら `ShowHidden(set)`。`_addCellOverlay` は `!liveManual`。order ticket（`DriveOrderTicket`）は LiveManual のみ表示の鏡像 | 実 root（`OpenScene`+`BuildWorkspace`・FakeMarimoSynthesizer）で `New()`+`AddCell()` で 2 窓化し `ApplyPoll` で mode を振り `DriveStrategyEditor`+`DriveOrderTicket` 反射駆動 → **両 editor 窓**/Add Cell の `activeSelf` が `Replay=true / LiveAuto=true / LiveManual=false`、order ticket は逆相 | Section25: 実 `DriveStrategyEditor` 駆動で各 mode の region_001/region_002/Add Cell `activeSelf` を assert（exclusivity 込み・multi-window 実走） | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S25) |
 | STRATEGY-54 | #138 非破壊: LiveManual 非表示は **純可視性**＝窓を Destroy せず geometry を保持し、mode を抜けたら元位置で再表示（close+respawn でも reset でもない）。LiveManual 中の Save も位置を落とさない（AC5） | `DriveStrategyEditor` は `SetActive` のみ（findings 0110 Q3）。`CapturePositions()` は `RectOf().anchoredPosition` を読み active 非依存。永続化・run は不変 | Replay→LiveManual→Replay で region_001/region_002 が **同一 instance**（`GetInstanceID` 不変）・`anchoredPosition`/`sizeDelta` 保持・再表示。LiveManual 中（窓 inactive）の `CapturePositions()` が pre-hide と一致 | Section25: instanceId/pos/size を round-trip 前後で突合＋LiveManual 中 capture が pre-hide と一致（AC5） | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S25) |
 | STRATEGY-55 | #138 dormant 非蘇生: mode toggle は **自分が隠した窓だけ**を戻し、別理由で隠れた窓（cell 削除後の dormant region_001 殻・ADR-0013 D4）は蘇生しない | `DriveStrategyEditor` の `HideKind`（active 窓のみ記録）／`ShowHidden`（記録分のみ復帰）remembered-set。blanket `SetActive(true)` は dormant 殻を蘇生させる欠陥（レビューで発見） | region_001 の cell を `DeleteCell`→dormant（hidden）→ Replay drive・LiveManual round-trip いずれでも region_001 が再表示されず・region_002 は通常 toggle | Section25: DeleteCell 後の region_001 `activeSelf==false` を Replay drive 後と round-trip 後で assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S25) |
+| STRATEGY-56 | #146 全 cell 削除 → 在庫 0 cell（0 窓・[+] のみ残存） | `BackcastWorkspaceRoot.OnDeleteCell`→`NotebookCellCoordinator.DeleteCell`→`MarimoNotebookDocument.RemoveCell`（ADR-0033・≥1 床撤去） | region_002 は despawn・region_001 は never-Destroy 殻ゆえ hide-dormant（破棄せず）・CellCount 0・cell 窓 0。[+] Add Cell は screen-fixed root 所有でセル削除に非依存（構造的に残存） | Section26: 2 窓→[X]で両方削除→`CellCount==0`・`CellOf(R1/R2)==null`・region_001 `Has` 残存かつ `activeSelf==false`（dormant）を assert。**`[E2E STRATEGY-56 PASS]`** | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S26) |
+| STRATEGY-57 | #146 0 窓から [+] が dormant region_001 を再利用し 1 窓で復帰（File→New と同一動線） | `BackcastWorkspaceRoot.OnAddCell`→`NotebookCellCoordinator.AddCell`（`_region001Dormant` 分岐・ADR-0013 D4） | 0 セル到達時 region_001 は必ず dormant。次の `AddCell` は dormant region_001 を `RevealAt`（新 cascade 位置）で再利用＝File→New（`SyncWindowsToNotebook` i==0→region_001）と同一 host・特別分岐なし | Section26: 0 cell から `AddCell`→`RegionOf(reborn)==region_001`・再 active・region_002 stray 無し・CellCount==1 を assert。**`[E2E STRATEGY-57 PASS]`** | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S26) |
+| STRATEGY-58 | #146 X1 永続化の床=1: 空ノート保存→Open し直すと**空セル 1 枚**で戻る（0 ではない） | `MarimoNotebookDocument.Save`/`Open`（合成は marimo `generate_filecontents` がヘッダのみ `.py`・分解は `load_app` が空ファイルを空セル 1 枚に展開・ADR-0033 D2/findings 0114 §2） | 0 cell を Save→ヘッダのみ valid marimo `.py`→Open し直すと marimo の `load_app` が 1 空セルに膨らませて返す＝床 1 は marimo 由来（backcast 追加実装ゼロ）。fake は marimo の床=1 を鏡映 | Section26: 0 cell を SaveAs→別 coordinator で `Open`→`CellCount==1`・body 空・region_001 active を assert。Python 側 `decompose_json(synthesize_json("[]"))==1 cell` は `test_marimo_cell_synthesis_golden.py` が正本。**`[E2E STRATEGY-58 PASS]`** | 自動(E2E済)（C# 床＝AFK・marimo 床=1 は pytest） | `StrategyEditorNotebookE2ERunner`(S26) ＋ `test_marimo_cell_synthesis_golden.py` |
 
-> 物理窓 ≠ 論理セル（ADR-0013 Decision4）: region_001 は never-Destroy の adopted shell。**notebook は常に ≥1 セル**
-> （aggregate の ≥1 guard）。1 ノート = 1 `.py`（合成/分解は marimo 純正）。供給可能 = path バインド済 ∧ not dirty ∧
+> 物理窓 ≠ 論理セル（ADR-0013 Decision4）: region_001 は never-Destroy の adopted shell。**セッション中は在庫 0 セル
+> （0 窓）まで削除可**（#146/ADR-0033 が ADR-0013 D5「≥1・最後の 1 個は削除不可」を supersede）。ただし**永続化の床は 1**
+> （marimo 由来）＝空ノート保存→Open は空セル 1 枚で戻る（X1・STRATEGY-58）。1 ノート = 1 `.py`（合成/分解は marimo 純正）。
+> 供給可能 = path バインド済 ∧ not dirty ∧
 > 直近 Open/Save 成功 ∧ canonical absolute `.py` ∧ 呼出時点で実在（CONTEXT「strategy file provider」）。
 
 ## 観測点（詳細）
@@ -104,9 +109,11 @@ notebook 効果なので参照行として載せる。
   `Update`）は HITL（実 Keyboard）、**ロジック**（`DoUndo`/`DoRedo`→`ApplyTextAndSelection`）は反射 invoke で自動。
 - **STRATEGY-04/05（ハイライト）**: lexical token 計算（`PythonHighlighter.Tokenize`・S1）は純ロジックで自動。
   実 mesh 着色は non-scroll を real Text 頂点色で assert（S8）、**visible-range scroll 着色は HITL**（findings 0010 §9）。
-- **STRATEGY-06〜10（add/delete/≥1 ガード）**: `StrategyEditorNotebookE2ERunner` Section12 が REAL（bare-RT）window で
+- **STRATEGY-06〜10/56〜58（add/delete/0-cell 床）**: `StrategyEditorNotebookE2ERunner` Section12 が REAL（bare-RT）window で
   cell0→region_001 / AddCell→region_002 spawn / DeleteCell 振り分け（despawn region_002・hide-dormant region_001）/
-  ≥1 guard / dormant reuse / CapturePositions cell-order を assert。Section10 は aggregate 側 ≥1 guard。
+  **最後の 1 セルも削除可で 0 cell（#146・≥1 床撤去）** / 0→1 dormant reuse / CapturePositions cell-order を assert。Section10 は
+  aggregate 側の 0-cell 到達＋X1 round-trip。**Section26** が「全消し→0 窓→[+]再 spawn→X1 床=1」を per-Action-ID タグ
+  （`[E2E STRATEGY-56/57/58 PASS]`）付きで gate（surface 要約タグ `[E2E STRATEGY NOTEBOOK PASS]` は空白入りで rollup 非対象）。
 - **STRATEGY-11（placeholder）**: `single = CellCount==1` のときだけ `HostApiHint` を全セル窓へ付与し、それ以外は null。
   hint は placeholder Graphic で、**`Cell.Body` には決して書き込まない**（seed 焼き込み禁止・findings 0050）。
   **Section20 で昇格**（実 `StrategyEditorView` の `_placeholder` を反射読みし、CellCount 1↔2 遷移で hint 付与/解除＋body 非焼き込みを assert）。
@@ -120,9 +127,11 @@ notebook 効果なので参照行として載せる。
 - ログに `[E2E STRATEGY NOTEBOOK PASS] <要約>`、プロセス exit code 0（`-quit` 併用・self-failing gate）、
   `error CS\d+` が 0 件。
 - 各 `自動(*)` 行の観測点を 1 つでも落としたら `[E2E STRATEGY NOTEBOOK FAIL] <msg>` で exit 1。
-- delete-the-production-logic litmus: `MarimoNotebookDocument.RemoveCell` の `_cells.Count<=1` ガードを消すと
-  STRATEGY-10 が落ちる／`Cell.SetBody` の dirty hook を消すと STRATEGY-12 が落ちる／`NotebookCellCoordinator.DeleteCell`
-  の region_001 分岐（hide vs close）を入れ替えると STRATEGY-08/09 が落ちること。
+- delete-the-production-logic litmus: `MarimoNotebookDocument.RemoveCell` に `_cells.Count<=1` 床を**復活**させると
+  STRATEGY-10/56（最後の 1 セル削除）が落ちる（**実証済み RED→GREEN**・findings 0114 §6: 床ありで `[E2E STRATEGY NOTEBOOK
+  FAIL] S10/#146: the last cell must now be removable` を確認）／`FakeMarimoSynthesizer.Decompose` の empty→1 inflation を消すと
+  STRATEGY-58（X1 床=1）が落ちる（往復が 0 で戻る）／`Cell.SetBody` の dirty hook を消すと STRATEGY-12 が落ちる／
+  `NotebookCellCoordinator.DeleteCell` の region_001 分岐（hide vs close）を入れ替えると STRATEGY-08/09 が落ちること。
 - **STRATEGY-11（placeholder hint）litmus**: `NotebookCellCoordinator.UpdatePlaceholders` の `single ? HostApiHint : null` の
   `single`（CellCount==1）ゲートを外して常に `HostApiHint` を渡すと Section20 の「2 セルで非 active」assert が落ちる／hint を
   `Cell.Body` へ seed すると「body 空」assert が落ちる。
@@ -191,7 +200,7 @@ notebook 効果なので参照行として載せる。
 | Probe | 種別 | 本台本での扱い |
 |---|---|---|
 | `StrategyEditorNotebookE2ERunner` S1/S2 | EditMode・pure ロジック | STRATEGY-01〜04 の highlighter / history を昇格元として流用 |
-| `StrategyEditorNotebookE2ERunner` S4/S10 | pure aggregate | STRATEGY-12/15/17 の supplyable・round-trip・≥1 guard を昇格 |
+| `StrategyEditorNotebookE2ERunner` S4/S10/S26 | pure aggregate | STRATEGY-12/15/17 の supplyable・round-trip・0-cell 床（#146）＋ X1 を昇格 |
 | `StrategyEditorNotebookE2ERunner` S8 | real Text mesh | STRATEGY-05 の non-scroll 着色（scroll は HITL に残す） |
 | `StrategyEditorNotebookE2ERunner` S12 | batchmode・bare-RT window | STRATEGY-06〜10/13 の coordinator window lifecycle の正本 |
 | `MenuBarCutoverProbe` | batchmode・root 合成 | STRATEGY-15（File→New reset）は MenuBar `MENU-02` と共有。正本は MenuBar 側 |

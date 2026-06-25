@@ -475,7 +475,7 @@ marimo **3D モード**移植（#81・ADR-0013・findings 0050）。**1 セル =
 `.py`** を成し、本体↔`.py` の合成/分解と DAG 解析は **Python(marimo) 純正**（`generate_filecontents` /
 `load_app`）が担う——C# は空間 UI（窓・位置・矢印）だけを持ち def/ref 解析を再実装しない（[[ttwr-parity-first]]）。
 依存の **reactive 解決は marimo 側で閉じている**ので、窓間の依存矢印は refs/defs の**可視化**にすぎず実行には効かない。
-セルの追加 [+]・削除・drag/z-order・位置永続化を持つ（**notebook は常に ≥1 セル**＝最後の 1 個は削除不可・marimo parity）。
+セルの追加 [+]・削除・drag/z-order・位置永続化を持つ。**セッション中は 0 セル（0 窓）まで削除可**（[✕] で最後の 1 個も消せる＝ADR-0033 で ADR-0013 D5「≥1・最後の 1 個は削除不可」を supersede）。ただし**永続化の床は 1**：空ノートの `.py` はヘッダのみ（`import marimo` / `app = marimo.App()` / footer）で保存できるが、marimo の `load_app` がそれを**空セル 1 枚**に展開して返すため、保存→Open し直すと 0 ではなく空セル 1 枚で戻る（marimo 自身の仕様＝床 1 は marimo 由来・findings 0114）。0 窓から 1 枚目を足す動線は dormant `region_001` 再利用で File→New と同一（ADR-0013 D4）。
 **mode-conditional 可視性（findings 0110）**: この authoring 表面（全 `strategy_editor` cell 窓＋[+] Add Cell ボタン）は **`LiveManual` のとき非表示**（人間が order ticket で発注するモードで Python authoring 不要）。`Replay`（backtest に Python 要）／`LiveAuto`（cell が戦略を自動駆動）では表示維持。実装は **純可視性トグル**（`SetActive`・geometry/content/永続化は不変・run は止めない）で、order ticket（`LiveManual` のときだけ表示）の **完全な鏡像**＝front-plane は LiveManual で order ticket だけ・Replay/LiveAuto で strategy_editor だけ。
 _Avoid_: 窓ごとに別 `.py` ファイルを持つと解釈すること（ノート = 1 `.py`・[[strategy file provider（供給 seam）]] 参照）／
 mode 非表示を window close や永続化スキーマ変更と解釈すること（可視性のみ＝SetActive）／LiveAuto も隠すこと（cell が戦略を駆動するので Python 表面が要る・findings 0110 Q1）／

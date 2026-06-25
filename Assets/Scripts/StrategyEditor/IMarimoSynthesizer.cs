@@ -10,10 +10,11 @@
 //     (generate_filecontents / load_app) through WorkspaceEngineHost under the single Python
 //     owner's GIL (ADR-0009).
 //   * a fake — injected in the layer-1 AFK gate so the aggregate's model logic (synthesis order /
-//     dirty / >=1 delete guard / dormant reuse) is driven WITHOUT pythonnet. The fake satisfies the
-//     SAME contract (Decompose(Synthesize(cells)) preserves body+name+config + the >=1 invariant);
-//     layer 2 (real pythonnet, once) and layer 3 (real marimo, the pytest golden) assert the same
-//     scenarios so a fake that drifts from marimo is caught mechanically.
+//     dirty / delete-to-0 / dormant reuse) is driven WITHOUT pythonnet. The fake satisfies the
+//     SAME contract (Decompose(Synthesize(cells)) preserves body+name+config + #146/ADR-0033 D2's
+//     persistence floor=1: an empty notebook decomposes back to ONE empty cell, marimo's load_app
+//     behaviour); layer 2 (real pythonnet, once) and layer 3 (real marimo, the pytest golden) assert
+//     the same scenarios so a fake that drifts from marimo is caught mechanically.
 //
 // The seam carries body + name + config (NOT body-only): see Cell. UnityEngine-FREE.
 

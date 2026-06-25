@@ -20,11 +20,14 @@
 // NOT here). DIRTY sources: a body edit (Cell.SetBody -> MarkDirty) AND add/delete (structural change
 // also changes the `.py`), so "added a window but didn't save" correctly falls to not-supplyable.
 //
-// >=1 INVARIANT (marimo canDelete=!hasOnlyOneCell): the notebook is ALWAYS >=1 cell; RemoveCell
-// refuses the last cell. The 0-cell transient is bootstrapped to one empty cell by the constructor and
-// ResetUnboundEmpty (File->New). #113: Open no longer bootstraps — opening an empty/0-cell-but-valid
-// marimo `.py` is REJECTED as "not a marimo notebook" (Open upholds >=1 by rejection, not by seeding a
-// synthetic cell). UnityEngine-FREE so the layer-1 AFK gate drives the whole model.
+// ZERO-CELL FLOOR LIFTED (#146 / ADR-0033 supersedes ADR-0013 D5): during a session the notebook MAY
+// reach 0 cells — RemoveCell no longer refuses the last cell, so [✕] can delete the canvas down to an
+// empty state ([+] Add Cell only). A FRESH notebook still starts with one empty cell (constructor /
+// ResetUnboundEmpty = File->New), because a blank canvas has no typing start point. PERSISTENCE FLOOR = 1
+// (marimo-derived, ADR-0033 D2): a 0-cell notebook saves to a header-only `.py`, but marimo's load_app
+// inflates an empty valid-marimo file back to ONE empty cell, so Save→Open round-trips 0 → 1 (NOT 0) —
+// backcast adds no machinery to keep 0 across the disk hop (X1). UnityEngine-FREE so the layer-1 AFK gate
+// drives the whole model.
 
 using System;
 using System.Collections.Generic;
@@ -43,7 +46,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     public MarimoNotebookDocument(IMarimoSynthesizer synthesizer)
     {
         _synth = synthesizer ?? throw new ArgumentNullException(nameof(synthesizer));
-        _cells.Add(NewCell("", "_", "{}"));   // a fresh notebook starts unbound with one empty cell (>=1)
+        _cells.Add(NewCell("", "_", "{}"));   // a fresh notebook starts unbound with one empty cell (File→New floor=1)
     }
 
     public IReadOnlyList<Cell> Cells => _cells;
@@ -73,13 +76,16 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         return c;
     }
 
-    // Remove a cell, REFUSING the last one (>=1 invariant, marimo canDelete=!hasOnlyOneCell). A
-    // structural change -> dirty. Position re-packing is the caller's regenerate-from-live job
-    // (findings 0050 trap 1: never splice an index-parallel array).
+    // Remove a cell. #146 (ADR-0033 supersedes ADR-0013 D5): the >=1 floor is LIFTED — the last cell
+    // CAN be removed, reaching 0 cells (the empty-canvas state; the only authoring affordance left is
+    // the screen-fixed [+] Add Cell button). The down-stream (SyncWindowsToNotebook / CapturePositions /
+    // UpdatePlaceholders / run routing) is all 0-cell-safe (findings 0114 §3), so the floor removal does
+    // NOT crash. false is now returned ONLY for a genuine anomaly (a null or unknown cell). A structural
+    // change -> dirty. Position re-packing is the caller's regenerate-from-live job (findings 0050 trap 1:
+    // never splice an index-parallel array).
     public bool RemoveCell(Cell cell)
     {
         if (cell == null) return false;
-        if (_cells.Count <= 1) return false;   // >=1 guard: the last cell cannot be deleted
         if (!_cells.Remove(cell)) return false;
         _dirty = true;
         return true;
@@ -134,8 +140,9 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     // LONGER bootstrapped into a 1-cell wrap; it is an explicit Open failure. A broken-syntax source
     // surfaces as a DISTINCT "syntax error: ..." (AC#2), never masked. This makes the Open layer
     // consistent with the run/materialize contract (#112 ADR-0025 D4 NOT_A_MARIMO_NOTEBOOK). A VALID
-    // marimo `.py` opens unchanged; an empty/0-cell-but-valid marimo header is rejected too (Decompose
-    // returns an empty list -> not a notebook).
+    // marimo `.py` opens unchanged. #146 (ADR-0033 D2): a VALID-but-EMPTY marimo header (no `@app.cell`
+    // defs) is NOT rejected — marimo's load_app inflates it back to ONE empty cell, so Open succeeds with
+    // 1 cell (the X1 persistence floor; Save→Open round-trips 0 → 1). See the empty-list guard below.
     public bool Open(string path)
     {
         _lastError = null;
@@ -157,9 +164,11 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         // non-marimo / broken source as an Open failure — no 1-cell wrap, buffer untouched.
         IReadOnlyList<Cell> decomposed = _synth.Decompose(content, out string decErr);
         if (decomposed == null) return Fail(decErr ?? "not a marimo notebook");
-        // A valid marimo header (`app = marimo.App()`) with zero `@app.cell` defs decomposes to an
-        // EMPTY list — that is not a usable notebook, so reject it rather than binding a 0-cell doc
-        // (the >=1 invariant must never be satisfied by a synthetic empty cell on the Open path).
+        // #146 (ADR-0033 D2 / findings 0114 §2): on real marimo, load_app INFLATES a valid marimo
+        // header (`app = marimo.App()`) with zero `@app.cell` defs back into ONE empty cell, so a valid
+        // marimo file never decomposes to an empty list (and a non-marimo file already returned null
+        // above). This guard is therefore defensive dead code — kept as belt-and-suspenders so a
+        // hypothetical seam returning a non-null-but-empty list can't bind a windowless 0-cell doc.
         if (decomposed.Count == 0) return Fail("not a marimo notebook");
 
         _cells.Clear();

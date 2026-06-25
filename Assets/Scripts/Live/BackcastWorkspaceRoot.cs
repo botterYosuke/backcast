@@ -996,8 +996,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void OnDeleteCell(string regionId)
     {
         if (_coordinator == null) return;
+        // #146 (ADR-0033): the >=1 floor is gone — the last cell deletes to an empty canvas. DeleteCell
+        // now returns false ONLY for a genuine anomaly (an unknown / already-gone region), so the notice
+        // names that, not the retired "keeps at least one cell" rule.
         if (!_coordinator.DeleteCell(regionId))
-            _menuBarView?.ShowMessage("Delete cell: a notebook keeps at least one cell.");
+            _menuBarView?.ShowMessage("Delete cell: no such cell.");
     }
 
     // #95 Phase 2 土台: find-or-create the title-bar ▶ RUN on a cell window and wire it to run that

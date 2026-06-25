@@ -293,6 +293,35 @@ def test_entry_point_new_cell_is_anonymous_default():
     assert recovered[0]["body"] == ""
 
 
+def test_entry_point_empty_notebook_floor_is_one_cell():
+    """#146 / ADR-0033 D2 — the PERSISTENCE FLOOR = 1, marimo-derived.
+
+    A 0-cell notebook (the in-session empty-canvas state) synthesises to a HEADER-ONLY valid marimo
+    `.py` (`import marimo` / `app = marimo.App()` / `app.run()` footer, NO `@app.cell` defs). But
+    marimo's `load_app` cannot represent "cell 0": it inflates an empty valid-marimo file back into
+    EXACTLY ONE empty cell. So Save→Open round-trips 0 → 1 (NOT 0) — backcast adds no machinery to
+    keep 0 across the disk hop (X1). This is the real-marimo fact (verified on 0.20.4) that the C#
+    aggregate relies on and the FakeMarimoSynthesizer mirrors; it differs from a comment-only file,
+    which is NOT a marimo app at all (→ None, the test above).
+
+    LITMUS: if a marimo upgrade ever made `decompose_json(synthesize_json("[]"))` return 0 cells (or
+    None), this goes RED — the C# X1 floor (STRATEGY-58) would no longer hold and the design would
+    need to revisit ADR-0033 D2.
+    """
+    from engine.strategy_runtime.cell_synthesis import decompose_json, synthesize_json
+
+    empty_py = synthesize_json("[]")
+    # the saved empty notebook IS a valid marimo app (header only), not a comment-only file.
+    assert "app = marimo.App()" in empty_py
+    assert "@app.cell" not in empty_py
+
+    recovered_json = decompose_json(empty_py)
+    assert recovered_json is not None, "an empty (header-only) marimo .py must NOT be 'not a marimo notebook'"
+    recovered = json.loads(recovered_json)
+    assert len(recovered) == 1, "marimo's load_app must inflate an empty notebook back to exactly 1 cell (floor=1)"
+    assert recovered[0]["body"] == "", "the floor cell must be empty"
+
+
 def _write_golden() -> None:
     """Refresh the checked-in golden from live marimo output (run this module as __main__ after a
     deliberate skeleton/marimo change). Keeps the fixture byte-faithful, never hand-edited."""

@@ -14,6 +14,11 @@
 // anonymous cell, so the notebook binds (this is a TEST-DOUBLE seeding convenience, NOT production
 // policy — the seeding probes only need a bound document, they do not assert marimo detection).
 //
+// #146 (ADR-0033 D2): the persistence floor = 1 is marimo-derived. A 0-cell notebook synthesises to a
+// header-only blob (marker + "[]"), but real marimo's load_app inflates an empty valid-marimo file back
+// into ONE empty cell — so this fake's Decompose inflates an empty marker blob to one empty cell too,
+// keeping the AFK X1 gate faithful to marimo (findings 0114 §2).
+//
 // #113: the production aggregate is now "marimo or error" at Open time (the 1-cell auto-wrap of
 // findings 0054 was retired). The two PRODUCTION decompose-failure legs are modelled explicitly so
 // the #113 AFK gates can drive them: FailDecompose => the non-marimo leg (Decompose -> null,
@@ -48,7 +53,15 @@ public sealed class FakeMarimoSynthesizer : IMarimoSynthesizer
         error = null;
         int nl = py.IndexOf('\n');
         if (nl >= 0 && py.Substring(0, nl).Trim() == Marker)
-            return CellJson.TryParse(py.Substring(nl + 1));   // null on a corrupt fake blob
+        {
+            var cells = CellJson.TryParse(py.Substring(nl + 1));   // null on a corrupt fake blob
+            // #146 (ADR-0033 D2 / findings 0114 §2): mirror marimo's PERSISTENCE FLOOR = 1. A 0-cell
+            // notebook synthesises to a header-only `.py` (here: marker + "[]"), but real marimo's
+            // load_app inflates an empty valid-marimo file back to ONE empty cell — so the fake must
+            // too, else the shared-golden discipline drifts (the AFK X1 gate would see 0, real marimo 1).
+            if (cells != null && cells.Count == 0) cells.Add(new Cell("", "_", "{}"));
+            return cells;
+        }
 
         // arbitrary real `.py` (no marker): wrap the whole text as one anonymous cell so the notebook
         // can bind to it (the seeding probes read the file off disk, independent of cell decomposition).

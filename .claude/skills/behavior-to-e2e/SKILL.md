@@ -31,10 +31,15 @@ description: >-
   ThemeProbe が退役済み farm パレットを、BackcastWorkspaceProbe が `_windows`/`startup` を assert したまま RED だった）。
   ⚠️ **最重要の不変条件**: ユーザーが他スラッシュコマンド（`/grill-with-docs` `/parallel-agent-dev`
   `/nautilus-trader` `/tdd` `/simplify` `/plan` 等）を**明示タイプ**していても、台本・E2E・網羅・挙動保証・
-  RED の語が出たら **設計インタビュー/実装に入る前に最初に本スキルを formal invoke** する。過去 12+ 回、
+  RED の語が出たら **設計インタビュー/実装に入る前に最初に本スキルを formal invoke** する。過去 13+ 回、
   タイプ済み他スキルや grill の設計に注意が奪われて invoke を飛ばし、成果物だけ後付けで揃える miss を繰り返した
   ——**成果物の品質・設計済み度・新規性と formal invoke は独立**（詳細と masking phrase の一覧は本体「過去の
-  invoke 漏れ」節）。TTWR(Bevy) リポで E2E を触るときだけ `references/ttwr-bevy-legacy.md` を読む。
+  invoke 漏れ」節）。**オーケストレーター役（「あなたがオーケストレーターになって専門 Agent を spawn して
+  レビュー」「test-coverage agent に E2E を担当させる」）でも同じ——専門 Agent に E2E/カバレッジ分析を spawn
+  委譲しても orchestrator 自身の formal invoke 義務は消えない**（#133-135 review 実例 2026-06-25: ユーザーが
+  `/behavior-to-e2e` を明示タイプ＋「テストはユーザーの行動をカバ―してるか」をレビュー基準に列挙したのに、
+  test-coverage agent を spawn して TKTEARDOWN-03〔Action-ID + rollup + RED native crash 実証〕を正しく著しながら
+  本スキルの formal invoke を飛ばした＝miss #13）。TTWR(Bevy) リポで E2E を触るときだけ `references/ttwr-bevy-legacy.md` を読む。
 ---
 
 # behavior-to-e2e — 挙動の言葉を backcast の E2E ゲートに変える

@@ -78,7 +78,13 @@ public static class PythonRuntimeLocator
         Python.Runtime.Runtime.PythonDLL = _libPython;
         Environment.SetEnvironmentVariable("PYTHONHOME", _pythonHome);
         Environment.SetEnvironmentVariable("PYTHONPATH", _venvSite + Path.PathSeparator + _projectRoot);
+        // REGRESSION GATE (#134) — DO NOT DELETE THIS LINE.
         // Prevent matplotlib from loading GUI backends (like TkAgg) which can cause Tcl_Panic on background threads.
+        // Without MPLBACKEND=Agg, matplotlib auto-resolves an interactive backend (TkAgg → tkinter/Tcl). If anything
+        // imports matplotlib on a background thread — e.g. PickerInstrumentFetch → InvokeListInstruments running on a
+        // worker — Tcl is touched off its creating thread and Tcl_Panic crashes Unity (native, hard to catch in AFK).
+        // Gate: python/tests/test_mplbackend_agg_gate.py (scenario MPLBACKEND-01); removing this env makes that pytest
+        // RED. Companion fix: #133 (login-dialog tkinter teardown). See docs/findings/0107.
         Environment.SetEnvironmentVariable("MPLBACKEND", "Agg");
         PythonEngine.PythonHome = _pythonHome;
 

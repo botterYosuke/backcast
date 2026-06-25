@@ -14,6 +14,7 @@ ADR-0027: prod 解禁の env ゲート (TACHIBANA_ALLOW_PROD) と DEV_* prefill 
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import threading
 from datetime import datetime
@@ -28,7 +29,7 @@ from engine.exchanges.tachibana_login_form_state import (
     build_form_init,
     validate_submission,
 )
-from engine.exchanges._login_dialog import apply_cancel_timeout
+from engine.exchanges._login_dialog import apply_cancel_timeout, teardown_tk
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +72,20 @@ def _map_exception(exc: BaseException) -> str:
 
 
 def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> dict:
-    """Open the Tachibana login dialog and return {"success", "error_code"}."""
+    """Open the Tachibana login dialog and return {"success", "error_code"}.
+
+    #133: every tkinter object lives inside ``_run_dialog_impl``'s frame (released the
+    instant it returns); the trailing ``gc.collect()`` is the *decisive* same-thread
+    sweep (see ``_login_dialog.teardown_tk``) that finalizes the now-unreachable
+    reference-cycle garbage HERE, on the creating thread, so no Tk/Tcl object is left for
+    a later cross-thread sweep (Tcl_AsyncDelete crash). The result dict holds only strings.
+    """
+    result = _run_dialog_impl(env_hint, cancel_event)
+    gc.collect()  # load-bearing: frame is popped, so this reclaims the Tk cycle (#133)
+    return result
+
+
+def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None) -> dict:
     import tkinter as tk
     from tkinter import filedialog
 
@@ -247,7 +261,14 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
             return
         root.after(200, _poll_cancel)
 
-    if cancel_event is not None:
-        root.after(200, _poll_cancel)
-    root.mainloop()
-    return {"success": bool(result["success"]), "error_code": str(result["error_code"])}
+    try:
+        if cancel_event is not None:
+            root.after(200, _poll_cancel)
+        root.mainloop()
+        return {"success": bool(result["success"]), "error_code": str(result["error_code"])}
+    finally:
+        # #133: destroy on the creating thread (idempotent). The decisive same-thread
+        # gc.collect() runs in the run_dialog wrapper once this frame is popped and the
+        # Tk cycle is finally unreachable — so no Tk/Tcl object survives for a
+        # cross-thread finalize (Tcl_AsyncDelete).
+        teardown_tk(root)

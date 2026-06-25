@@ -7,6 +7,7 @@ extracted from DataEngineBackend.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import sys
 import threading
@@ -77,15 +78,24 @@ _ENV_PER_VENUE: dict[str, frozenset[str]] = {
 
 
 def _try_create_tk() -> bool:
-    """tkinter import + Tk() probe. False on headless hosts (no display)."""
+    """tkinter import + Tk() probe. False on headless hosts (no display).
+
+    #133: the probe creates a real Tcl interpreter, so it must be torn down on THIS
+    (creating) thread — ``teardown_tk`` destroys it here; the probe's reference cycle is
+    then reclaimed by ``_run``'s ``finally: gc.collect()`` (this frame is popped by then),
+    on this same thread — never left for a later cross-thread finalize (Tcl_AsyncDelete).
+    On a headless host ``Tk()`` raises before any interpreter exists, so we return
+    False with nothing to tear down (no regression to the NO_DISPLAY_AVAILABLE path).
+    """
     try:
         import tkinter
         root = tkinter.Tk()
         root.withdraw()
-        root.destroy()
-        return True
     except Exception:
         return False
+    from engine.exchanges._login_dialog import teardown_tk
+    teardown_tk(root)
+    return True
 
 
 @dataclass
@@ -586,11 +596,20 @@ class LiveLoopManager:
             # mainloop() must share a thread; the Tk-probe runs here too).
             if not _try_create_tk():
                 return {"success": False, "error_code": "NO_DISPLAY_AVAILABLE", "token": None}
-            if venue == "tachibana":
-                from engine.exchanges.tachibana_login_flow import run_dialog
+            try:
+                if venue == "tachibana":
+                    from engine.exchanges.tachibana_login_flow import run_dialog
+                    return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
+                from engine.exchanges.kabusapi_login_flow import run_dialog
                 return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
-            from engine.exchanges.kabusapi_login_flow import run_dialog
-            return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
+            finally:
+                # #133: a same-thread collect that (a) reclaims the _try_create_tk
+                # probe's Tk cycle — only unreachable now that _try_create_tk's frame is
+                # popped (teardown_tk destroyed it but cannot collect it from inside) —
+                # and (b) catches any late ref drop from the dialog's daemon auth thread
+                # that outlives run_dialog's own wrapper collect. Both finalize HERE, on
+                # this creating thread, never on a picker-fetch worker (Tcl_AsyncDelete).
+                gc.collect()
 
         loop = asyncio.get_running_loop()
         # Dedicated single-use executor: the dialog blocks on human input for up

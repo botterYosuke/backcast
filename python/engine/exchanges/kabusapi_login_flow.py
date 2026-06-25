@@ -9,6 +9,7 @@ cred-path file, never emitted to stdout.
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
 import threading
 from typing import Any, Optional
@@ -24,7 +25,7 @@ from engine.exchanges.kabusapi_login_form_state import (
     probe_station,
     validate_submission,
 )
-from engine.exchanges._login_dialog import apply_cancel_timeout
+from engine.exchanges._login_dialog import apply_cancel_timeout, teardown_tk
 
 log = logging.getLogger(__name__)
 
@@ -59,7 +60,21 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
 
     On success the bearer token is returned in ``token`` (in-memory, #122). On
     failure/cancel ``token`` is None.
+
+    #133: every tkinter object lives inside ``_run_dialog_impl``'s frame, which is
+    released the instant it returns. The trailing ``gc.collect()`` is the *decisive*
+    same-thread sweep (see ``_login_dialog.teardown_tk``): it finalizes the now-unreachable
+    reference-cycle garbage (Tk root / widgets / StringVars) HERE, on the creating
+    thread — never later on a ``PickerInstrumentFetch`` worker, which would trip
+    ``Tcl_AsyncDelete`` and crash Unity. The result dict holds only plain strings, so
+    nothing tkinter-shaped escapes this function.
     """
+    result = _run_dialog_impl(env_hint, cancel_event)
+    gc.collect()  # load-bearing: frame is popped, so this reclaims the Tk cycle (#133)
+    return result
+
+
+def _run_dialog_impl(env_hint: str, cancel_event: threading.Event | None = None) -> dict:
     import tkinter as tk
 
     # ADR-0027: prod 解禁 env ゲートは廃止。env_hint をそのまま初期モードにし、Prod ラジオは
@@ -203,11 +218,19 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     _refresh_station_status()
     pw_entry.focus_set()
 
-    if cancel_event is not None:
-        root.after(200, _poll_cancel)
-    root.mainloop()
-    return {
-        "success": bool(result["success"]),
-        "error_code": str(result["error_code"]),
-        "token": result["token"],
-    }
+    try:
+        if cancel_event is not None:
+            root.after(200, _poll_cancel)
+        root.mainloop()
+        return {
+            "success": bool(result["success"]),
+            "error_code": str(result["error_code"]),
+            "token": result["token"],
+        }
+    finally:
+        # #133: destroy on the creating thread (idempotent — the dialog callbacks
+        # already called root.destroy()). The decisive same-thread gc.collect() runs
+        # in the run_dialog wrapper, once this frame is popped and the Tk cycle is
+        # finally unreachable — so no Tk/Tcl object survives for a cross-thread
+        # finalize (Tcl_AsyncDelete).
+        teardown_tk(root)

@@ -8,8 +8,9 @@
 //
 // VENUE comes from LIVE_VENUE env (the root builds the one-per-server venue at Awake; connecting any
 // other would hit VENUE_MISMATCH), so the harness offers a SINGLE Connect button for the CONFIGURED
-// venue, gated by the durable VenueMenuViewModel.CanConnectEnv (prod greys out unless *_ALLOW_PROD) —
-// no per-variant buttons that could drive a mismatched or prod venue. INSTRUMENT comes from
+// venue, gated by the durable VenueMenuViewModel.CanConnectEnv (ADR-0027: prod no longer env-gated;
+// CanConnectEnv has collapsed to CanConnect) — no per-variant buttons that could drive a mismatched
+// venue. INSTRUMENT comes from
 // LIVE_INSTRUMENT env (else the menu preset), and is pushed into SelectedSymbol so the Order ticket
 // and chart actually point at it (not merely displayed).
 //

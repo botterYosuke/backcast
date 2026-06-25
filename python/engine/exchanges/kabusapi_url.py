@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import Literal
 
-from ._env_guard import require_prod_env
-
 BASE_URL_PROD = "http://localhost:18080/kabusapi/"
 BASE_URL_VERIFY = "http://localhost:18081/kabusapi/"
 
@@ -15,13 +13,14 @@ Env = Literal["prod", "verify"]
 def base_url(env: Env) -> str:
     """Return base URL for given env.
 
-    - verify: always allowed (kabu skill R1: 検証 18081 が既定).
-    - prod: only when env var KABU_ALLOW_PROD == "1" (二重ガード).
+    - verify: 検証 18081 (kabu skill R1: 既定).
+    - prod: 本番 18080. ADR-0027: prod 解禁の env ゲート (KABU_ALLOW_PROD) は廃止。
+      本番接続の可否はユーザーがダイアログで prod を選ぶこと・本物の prod 資格情報・
+      prod 本体 (18080) の起動で決まる (D2)。URL builder は env をそのまま URL にする。
     """
     if env == "verify":
         return BASE_URL_VERIFY
     if env == "prod":
-        require_prod_env("KABU_ALLOW_PROD")
         return BASE_URL_PROD
     raise ValueError("invalid env")
 
@@ -45,8 +44,5 @@ KabuEnv = Env
 
 
 def ws_url(env: Env) -> str:
-    """Return WebSocket URL for given env (PUSH 配信は ws://.../kabusapi/websocket).
-
-    base_url(env) 経由で呼ぶことで prod 時の KABU_ALLOW_PROD 二重ガードが自動発火する。
-    """
+    """Return WebSocket URL for given env (PUSH 配信は ws://.../kabusapi/websocket)."""
     return base_url(env).replace("http://", "ws://", 1) + "websocket"

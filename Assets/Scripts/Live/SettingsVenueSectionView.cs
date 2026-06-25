@@ -55,10 +55,11 @@ public sealed class SettingsVenueSectionView
             string venueId = v, envId = env;
             var btn = MakeButton(container, label, ref y, rowH, gap,
                 () => { _onConnect?.Invoke(venueId, envId); });
-            // MOCK is a plain dev connect (CanConnect); prod variants grey out unless *_ALLOW_PROD is set
-            // (Python is the safety authority). All disabled while connected / mid-auth.
-            if (venueId == "MOCK") _items.Add((btn, () => Ready() && _venue.CanConnect));
-            else _items.Add((btn, () => Ready() && _venue.CanConnectEnv(venueId, envId)));
+            // ADR-0027: prod 解禁の env ゲートは廃止。MOCK も prod も含め全 variant は同一述語で gate される
+            // （切断中は enable・接続中/認証中は disable）。CanConnectEnv は per-(venue,env) enablement の唯一の
+            // seam＝env はもう結果を変えないが、将来 per-env ゲートが戻るならここ（PRODGATE-07 が pin する場所）。
+            // 旧 MOCK 特例分岐は CanConnectEnv("MOCK","")⇒CanConnect と恒等なので撤去（dead branch / #130 simplify）。
+            _items.Add((btn, () => Ready() && _venue.CanConnectEnv(venueId, envId)));
         }
         var dis = MakeButton(container, "Disconnect", ref y, rowH, gap, () => { _onDisconnect?.Invoke(); });
         _items.Add((dis, () => Ready() && _venue.CanDisconnect));

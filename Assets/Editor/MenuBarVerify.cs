@@ -1,7 +1,8 @@
 // MenuBarVerify.cs — headless EditMode verification of the issue-#42 menu bar decision logic.
 //
 // Runs the PURE decision logic (no Python engine) so it executes in `Unity -batchmode
-// -executeMethod MenuBarVerify.Run`. Asserts the AC behaviour: prod grey-out gate, File→New
+// -executeMethod MenuBarVerify.Run`. Asserts the AC behaviour: prod connect always enabled
+// (ADR-0027: prod-allow env gate abolished — #130), File→New
 // refuse-when-running / clear / guarded-LiveManual no-op, File→Open LiveAuto side-effect, and
 // ScenarioStartupController.Clear(). The engine-touching mode round-trip (get_state_json) is
 // the separate Play-mode MenuBarHitlHarness; this proves the branch logic deterministically.
@@ -23,18 +24,27 @@ public static class MenuBarVerify
         var conn = new VenueConnectionViewModel();          // starts DISCONNECTED
         var coord = new LiveLogoutCoordinator();
 
-        // ---- prod grey-out gate (findings 0017 §6) ----
-        var deny = new VenueMenuViewModel(conn, coord, _ => false);
-        var allow = new VenueMenuViewModel(conn, coord, _ => true);
-        Check(!deny.CanConnectEnv("TACHIBANA", "prod"), "prod grey-out when *_ALLOW_PROD unset");
-        Check(deny.CanConnectEnv("TACHIBANA", "demo"), "demo connectable while disconnected");
-        Check(deny.CanConnectEnv("KABU", "verify"), "verify connectable while disconnected");
-        Check(allow.CanConnectEnv("KABU", "prod"), "prod enabled when ALLOW_PROD set");
+        // ---- prod connect ALWAYS enabled (ADR-0027: prod-allow env gate abolished) ----
+        // 旧挙動 (KABU_ALLOW_PROD / TACHIBANA_ALLOW_PROD でのグレーアウト) は廃止。prod variant は
+        // env フラグ無しでも切断中なら常に enable。これが「Connect (Prod) を押しても無反応」の不具合修正の核。
+        var vm = new VenueMenuViewModel(conn, coord);
+        Check(vm.CanConnectEnv("TACHIBANA", "prod"), "tachibana prod connectable when disconnected (no env flag — ADR-0027)");
+        Check(vm.CanConnectEnv("KABU", "prod"), "kabu prod connectable when disconnected (no env flag — ADR-0027)");
+        Check(vm.CanConnectEnv("TACHIBANA", "demo"), "demo connectable while disconnected");
+        Check(vm.CanConnectEnv("KABU", "verify"), "verify connectable while disconnected");
         Check(VenueMenuViewModel.ConnectVariants.Length == 4, "4 connect variants present");
+        // delete-litmus: prod は CanConnect に収斂しただけ（常時 true ではない）。接続中は prod も無効。
+        var connectedConn = new VenueConnectionViewModel();
+        connectedConn.ApplyStatePoll("{\"venue_state\":\"CONNECTED\",\"venue_id\":\"KABU\"}");
+        var connectedVm = new VenueMenuViewModel(connectedConn, coord);
+        Check(!connectedVm.CanConnectEnv("KABU", "prod"), "prod NOT connectable once connected (follows CanConnect)");
+        // Action-ID rollup tag (#130 / ADR-0027): prod-enable マイルストンに到達したら PASS を吐く。
+        // prod チェックは先頭なので、ここで _fail==0 ならそれらは全て通っている（失敗時はタグ不在＝未到達）。
+        if (_fail == 0) Debug.Log("[E2E PRODGATE-07 PASS] prod connect enabled without env flag (ADR-0027)");
 
         // ---- MenuBarViewModel decision logic ----
         string mode = "Replay"; bool autoRun = false, replayRun = false;
-        var mb = new MenuBarViewModel(allow, conn, () => mode, () => autoRun, () => replayRun);
+        var mb = new MenuBarViewModel(vm, conn, () => mode, () => autoRun, () => replayRun);
 
         // refuse while running (ADR-0001 safety) — both run signals independently.
         replayRun = true;

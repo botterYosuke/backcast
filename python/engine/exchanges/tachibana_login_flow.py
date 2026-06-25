@@ -8,8 +8,8 @@ Tachibana path uses session_cache on disk, not an in-memory token).
 
 v4r9 公開鍵認証: パスワード欄は廃止。利用者は **認証ID** と **秘密鍵 PEM ファイル** を
 指定する（ファイル選択ダイアログ付き）。本人性は「秘密鍵で復号できること」で証明する。
-debug ビルドでは初期モード（demo/prod）に応じた env を初期値に使う（本番=無印 /
-デモ=`_DEMO` サフィックス。tachibana_credentials の規約と一致）。
+ADR-0027: prod 解禁の env ゲート (TACHIBANA_ALLOW_PROD) と DEV_* prefill は廃止。
+ダイアログは認証ID・秘密鍵欄が空欄で開き、Prod ラジオは常時選択可能。
 """
 from __future__ import annotations
 
@@ -29,7 +29,6 @@ from engine.exchanges.tachibana_login_form_state import (
     validate_submission,
 )
 from engine.exchanges._login_dialog import apply_cancel_timeout
-from engine.live._build_mode import IS_DEBUG_BUILD
 
 log = logging.getLogger(__name__)
 
@@ -76,12 +75,9 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     import tkinter as tk
     from tkinter import filedialog
 
-    init = build_form_init(env_hint=env_hint, is_debug_build=IS_DEBUG_BUILD)
-    if env_hint == "prod" and not init.allow_prod:
-        # Defensive: _handle_prompt_login front-stops prod without the allow
-        # flag, but if a caller bypasses the gate we still refuse without
-        # prompting the user.
-        return {"success": False, "error_code": "PROD_NOT_ALLOWED"}
+    # ADR-0027: prod 解禁 env ゲートは廃止。env_hint で初期モードを決め、Prod ラジオは
+    # 常時選択可能。認証ID・秘密鍵パスは prefill せず常にユーザーが入力する (空欄で開く)。
+    init = build_form_init(env_hint=env_hint)
 
     from engine.exchanges.tachibana_auth import PNoCounter
 
@@ -92,8 +88,8 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     root.title("Tachibana ログイン (公開鍵認証)")
     root.resizable(False, False)
 
-    auth_id_var = tk.StringVar(value=init.dev_auth_id or "")
-    key_path_var = tk.StringVar(value=init.dev_private_key_path or "")
+    auth_id_var = tk.StringVar(value="")
+    key_path_var = tk.StringVar(value="")
     mode_var = tk.StringVar(value=init.initial_mode)
     status_var = tk.StringVar(value="")
 
@@ -114,8 +110,6 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     prod_radio = tk.Radiobutton(frm, text="Prod", variable=mode_var, value="prod")
     demo_radio.grid(row=2, column=0, sticky="w")
     prod_radio.grid(row=2, column=1, sticky="w")
-    if not init.allow_prod:
-        prod_radio.config(state="disabled")
 
     status_lbl = tk.Label(frm, textvariable=status_var, fg="#a00")
     status_lbl.grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
@@ -143,8 +137,7 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
         key_entry.config(state=state)
         browse_btn.config(state=state)
         demo_radio.config(state=state)
-        if init.allow_prod:
-            prod_radio.config(state=state)
+        prod_radio.config(state=state)
 
     def _on_cancel(*_args: Any) -> None:
         result["success"] = False
@@ -204,9 +197,6 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
         if err:
             status_var.set("認証 ID と秘密鍵ファイルを指定してください")
             return
-        if mode == "prod" and not init.allow_prod:
-            status_var.set("Prod は TACHIBANA_ALLOW_PROD=1 が必要")
-            return
 
         status_var.set("Authenticating...")
         _set_busy(True)
@@ -246,11 +236,8 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     root.bind("<Return>", _on_ok)
     root.bind("<Escape>", _on_cancel)
 
-    # 認証 ID が既に入っていれば秘密鍵欄へ、無ければ認証 ID 欄へフォーカス。
-    if init.is_debug_build and auth_id_var.get():
-        key_entry.focus_set()
-    else:
-        auth_id_entry.focus_set()
+    # ADR-0027: 認証ID は prefill しない (常に空欄) ので認証 ID 欄へフォーカス。
+    auth_id_entry.focus_set()
 
     def _poll_cancel() -> None:
         # Tk-thread-safe close on an external timeout (#122 in-proc login).

@@ -16,8 +16,9 @@ refuse the wrong endpoint at function boundaries (MEDIUM-C4):
 The HTTP/REST scheme of the four virtual URLs is `https://`; only
 `sUrlEventWebSocket` is `wss://` (validated in `tachibana_auth`, not here).
 
-Prod guard (TACHIBANA_ALLOW_PROD) is intentionally OUT-OF-SCOPE for A1.1; it
-will land in a later step alongside the auth flow.
+env (demo/prod) selection rides on the virtual URLs the login flow persists; the
+former machine-level prod-allow gate (TACHIBANA_ALLOW_PROD) was abolished in
+ADR-0027 (prod permission = user picks prod in the dialog + real creds).
 """
 
 from __future__ import annotations

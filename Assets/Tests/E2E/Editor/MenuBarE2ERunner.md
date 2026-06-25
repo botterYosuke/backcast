@@ -39,7 +39,7 @@ Help（Settings＝現状 stub）、メニュー外クリックで閉じる backd
 | MENU-09 | Edit → Redo | `MenuBarView.cs:199` | 無効 stub | — | 対象外（同上） | — |
 | MENU-10 | ~~Venue メニューを開閉~~ | — | — | — | **対象外（#128/ADR-0026: Venue dropdown＋トップレベル退役 → [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) SETTINGS-08）** | — |
 | MENU-11 | Venue → Connect MOCK（dev・Editor 限定） | `SettingsVenueSectionView`（旧 menu dropdown） | `_onConnect("MOCK","")` 発火、Python 起動・接続 | mock venue で接続 ACK を assert（実 venue 不要） | 自動(E2E済・移設) | `VenueMenuM3Probe` `VenueLoginSecretProbe`（venue 表面は SETTINGS-08） |
-| MENU-12 | Venue → Connect（4 parity variant・prod grey-out） | `VenueMenuViewModel.CanConnectEnv` | prod は `*_ALLOW_PROD` 未設定で `interactable=false`、demo/verify は接続可（VM 不変） | `VenueMenuViewModel` の gate を assert（接続自体は HITL） | 自動(Probe有・要昇格) | `MenuBarVerify`（表面は SETTINGS-08） |
+| MENU-12 | Venue → Connect（4 parity variant・prod 常時 enable） | `VenueMenuViewModel.CanConnectEnv` | **ADR-0027: prod 解禁の env ゲート廃止**。切断中は prod も含め全 variant が `interactable=true`、接続中は全 disable（`CanConnect` に収斂） | `VenueMenuViewModel` の gate を assert（接続自体は HITL）。Action-ID `PRODGATE-07` | 自動(Probe有・要昇格) | `MenuBarVerify`（表面は SETTINGS-08） |
 | MENU-13 | Venue → Connect（実 venue へ接続） | `SettingsVenueSectionView` → `_host.VenueLogin` | 実 kabu/立花 へログイン、secret modal が Settings の上に重なる、badge が `CONNECTED` | — | HITL専用（実 venue 接続・外部認証/秘密情報依存） | `VenueLoginSecretHitlMenu` |
 | MENU-14 | Venue → Disconnect | `SettingsVenueSectionView` → `_onDisconnect` | `venue.CanDisconnect` のとき発火、badge が `DISCONNECTED` へ収束 | gate は自動（SETTINGS-08）、切断 RPC は mock で assert | 自動(E2E済・移設) | `VenueMenuM3Probe`（表面は SETTINGS-08） |
 | MENU-15 | Help メニューを開閉 | `MenuBarView.cs:116`→`Toggle` | `_open` が `Help`⇄`None` | 反射で `_open` 遷移 | 要新規自動化 | — |
@@ -61,9 +61,11 @@ Help（Settings＝現状 stub）、メニュー外クリックで閉じる backd
   本 Surface 台本では「StubFileDialog のパスが `coordinator.Open` に渡り mode 副作用が出る」までを観測する。
 - **MENU-05/06（Save / Save As）**: layout sidecar の round-trip と `.py`/`.json` ペア fork。`MultiDocLayoutProbe`/
   `ReplayLayoutProbe` の assert を昇格。
-- **MENU-12（prod grey-out）**: `VenueMenuViewModel.CanConnectEnv` の gate（`MenuBarVerify` の 5 assert）。
+- **MENU-12（prod 常時 enable・ADR-0027）**: `VenueMenuViewModel.CanConnectEnv` の gate（`MenuBarVerify`）。prod 解禁の
+  env ゲート（`*_ALLOW_PROD` グレーアウト）は廃止＝`CanConnectEnv` は `CanConnect` に収斂し、切断中は prod も含め全 variant が
+  enable・接続中は全 disable。delete-litmus: prod を再びグレーアウトすると prod-enable assert が RED（`[E2E PRODGATE-07 PASS]`）。
 - **MENU-19（LIVE_VENUE 絞り込み・ADR-0021）**: どの venue variant が *出現するか* を `VenueMenuViewModel.VisibleConnectItems`
-  が決める（MENU-12 は出現した変種の *enable/grey-out*、MENU-19 は *出現集合* ＝直交）。`VenueMenuM3Probe.VenueMenuFilterByLiveVenue`
+  が決める（MENU-12 は出現した変種の *enable 状態*、MENU-19 は *出現集合* ＝直交）。`VenueMenuM3Probe.VenueMenuFilterByLiveVenue`
   が未設定/Editor=5・未設定/Player=4・pin Tachibana/kabu=2・pin MOCK=1 を assert。delete-the-filter litmus: `VisibleConnectItems`
   が絞り込みを止めると pinned ケースが他 venue を漏らし RED。engine 側の再バインド（VENUE_MISMATCH 撤去）は Python seam
   `python/tests/test_venue_mismatch_inproc_server.py`（findings 0085）が正本＝この台本は menu 出現集合のみを担当。

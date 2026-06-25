@@ -1735,8 +1735,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // Gate for the harness connect affordance. MOCK is the credential-less dev venue (always connectable
-    // when ready); real venues defer to the durable CanConnectEnv, which greys out *prod* unless the
-    // matching *_ALLOW_PROD flag is set (the #42 prod-safety parity, not regressed by the harness).
+    // when ready); real venues defer to the durable CanConnectEnv, which (ADR-0027) no longer greys out
+    // prod by an env flag — it has collapsed to CanConnect (enable while disconnected, disable once live).
     public bool CanConnectConfigured()
     {
         if (!_isOwner || !_host.ServerReady || _host.Conn.IsConnected || _host.LoginRunning) return false;

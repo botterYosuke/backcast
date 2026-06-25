@@ -26,22 +26,24 @@ SENTINEL = "SECOND_PW_DO_NOT_LEAK_4242"
 # --- 1. env 非保持 ---------------------------------------------------------
 
 
-def test_login_form_ignores_second_password_env() -> None:
-    """第二暗証番号 env を渡しても FormInit はそれを surface しない。"""
-    init = build_form_init(
-        "demo",
-        env_dict={
-            "DEV_TACHIBANA_AUTH_ID_DEMO": "authid1",
-            "DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO": "/tmp/key.pem",
-            "DEV_TACHIBANA_SECOND_PASSWORD": SENTINEL,
-            "DEV_TACHIBANA_SECRET": SENTINEL,
-        },
-    )
+def test_login_form_ignores_second_password_env(monkeypatch) -> None:
+    """第二暗証番号 env / DEV_* 資格情報を env に置いても FormInit はそれを surface しない。
+
+    ADR-0027 D3: ログインダイアログは DEV_* を prefill しない (空欄で開く)。よって
+    build_form_init は env を一切読まず、FormInit に資格情報フィールドを持たない。
+    """
+    monkeypatch.setenv("DEV_TACHIBANA_AUTH_ID_DEMO", "authid1")
+    monkeypatch.setenv("DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO", "/tmp/key.pem")
+    monkeypatch.setenv("DEV_TACHIBANA_SECOND_PASSWORD", SENTINEL)
+    monkeypatch.setenv("DEV_TACHIBANA_SECRET", SENTINEL)
+    init = build_form_init("demo")
     assert isinstance(init, FormInit)
-    # FormInit に第二暗証番号フィールドは存在せず、どの値にも漏れていない。
+    # FormInit に資格情報フィールドは存在せず、どの値にも漏れていない。
     assert SENTINEL not in repr(init)
+    assert "authid1" not in repr(init)  # ADR-0027 D3: prefill しない
     field_names = {f.lower() for f in vars(init)}
     assert not any("second" in n or "secret" in n for n in field_names)
+    assert not any("dev_" in n or "auth_id" in n or "private_key" in n for n in field_names)
 
 
 def test_no_second_password_env_constant_in_tachibana_sources() -> None:

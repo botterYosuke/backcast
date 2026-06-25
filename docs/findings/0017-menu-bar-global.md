@@ -61,6 +61,11 @@ backcast の layout は **単一固定パス auto-sidecar**（`LayoutPathResolve
 
 ## 6. Venue connect variants — 4 全出し＋prod は ALLOW_PROD grey-out（既存ガード流用）
 
+> **⚠️ SUPERSEDED by ADR-0027（2026-06-25・#130/#131）**: 本節の prod-gate 設計（`*_ALLOW_PROD` グレーアウト・
+> `PROD_NOT_ALLOWED` / `require_prod_env` 二重ガード・DEV_* prefill）は **廃止された**。prod variant は env フラグ無しでも
+> 常時 enable で、本番接続の可否は「ユーザーがダイアログで prod を選ぶ＋本物の prod 資格情報＋prod 本体の起動」だけで決まる。
+> 撤去の下位事実・反転した probe assert・RED→GREEN は `docs/findings/0105-issue130-131-prod-gate-abolished.md`。以下は履歴。
+
 prod 接続は**既に多層ガード済**: Python の `KABU_ALLOW_PROD`/`TACHIBANA_ALLOW_PROD == "1"` 環境変数 → 無いと login dialog で prod grey-out → backend `PROD_NOT_ALLOWED` / `require_prod_env` で二重拒否（`kabusapi_login_flow.py` / `tachibana_login_flow.py` / `kabusapi_url.py`）。
 
 - **#42 範囲**: Connect Tachibana(Demo/Prod) / Connect kabu(Verify/Prod) / Disconnect の 4 variants を出す。prod は `VenueMenuViewModel` を拡張し、**login dialog と同じ作法**で `*_ALLOW_PROD` env が "1" のときだけ enable（無ければ grey-out）。Python が安全 authority（C# grey-out は UX parity）。新しい安全装置は作らない（既存流用＝AC③整合）。

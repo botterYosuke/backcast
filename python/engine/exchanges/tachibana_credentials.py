@@ -50,7 +50,8 @@ class EnvKeys:
 
 
 # owner 規約: 本番=無印、デモ=`_DEMO` サフィックス（demo の認証情報を prod へ送る取り違えを
-# 構造的に防ぐ。prod live は別途 TACHIBANA_ALLOW_PROD=1 ゲート / R1 配下）。
+# 構造的に防ぐ）。これらの DEV_* は credentials_source="env" の自動 E2E 専用（ADR-0027 D3 で保持）——
+# 手動ログインダイアログの prefill は ADR-0027 で廃止済みで、この経路とは別物。
 _DEMO_KEYS = EnvKeys(
     decrypt_key="API_DECRYPT_KEY_DEMO",
     secure_config_path="TACHIBANA_SECURE_CONFIG_PATH_DEMO",

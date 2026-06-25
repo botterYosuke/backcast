@@ -13,7 +13,8 @@
 // 一括購読として駆動し（テスト自身は購読 RPC を呼ばない）、実 demo PUSH の板（depth）が届くことをゲートする
 // （AC#3: 選択銘柄の板が live 更新される）。kabu に第二暗証は無い（X-API-KEY トークンのみ・R3）。
 //
-// verify 固定: KABU_ALLOW_PROD=1 を検出したら拒否（本番 18080 への誤接続防止）。environment_hint は "verify"。
+// verify 固定: environment_hint は "verify" ハードコード（本番 18080 へは触れない）。ADR-0027 で
+// KABU_ALLOW_PROD トリップワイヤは廃止（死にコード）。本番非接触は environment_hint 固定が保証。
 
 using System;
 using System.Threading;
@@ -73,8 +74,8 @@ public static class KabuLiveE2ERunner
         string apiPw = EnvConfig.Get("DEV_KABU_API_PASSWORD");
         if (string.IsNullOrEmpty(apiPw))
             return "missing DEV_KABU_API_PASSWORD (process env or .env)";
-        if (Environment.GetEnvironmentVariable("KABU_ALLOW_PROD") == "1")
-            return "refusing to run: KABU_ALLOW_PROD=1 is set (this gate is verify-only; never touches 本番 18080)";
+        // ADR-0027: KABU_ALLOW_PROD トリップワイヤは廃止 (見るべきフラグが消えた死にコード)。
+        // 本番非接触は environment_hint = "verify" のハードコード固定 (下) が引き続き保証する。
 
         // ── step 1: live-configured server を venue=KABU で構築。 ──
         var host = new WorkspaceEngineHost();

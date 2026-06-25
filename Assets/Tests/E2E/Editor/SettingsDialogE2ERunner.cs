@@ -228,9 +228,10 @@ public static class SettingsDialogE2ERunner
             if (items.Count != expectConnect + 1)
                 return $"venue section built {items.Count} items, expected {expectConnect} connects + 1 Disconnect";
 
-            // disconnected (default poll state) → non-prod connects enabled (MOCK/demo/verify), Disconnect
-            // disabled (CanDisconnect needs IsConnected). NOTE: prod variants may be greyed out by the
-            // *_ALLOW_PROD env gate (prod grey-out), so we assert "≥1 connect enabled", not "all".
+            // disconnected (default poll state) → ALL connects enabled, Disconnect disabled
+            // (CanDisconnect needs IsConnected). ADR-0027: the *_ALLOW_PROD env gate is abolished, so
+            // prod variants are no longer greyed out — every connect button (incl. prod) is enabled
+            // while disconnected (re-grey-out a prod variant → connectEnabled < connectCount → RED).
             view.Refresh();
             var btns = ((RectTransform)go.transform).GetComponentsInChildren<Button>(true);
             Button disconnect = null, firstConnect = null; int connectEnabled = 0, connectCount = 0;
@@ -245,7 +246,8 @@ public static class SettingsDialogE2ERunner
             }
             if (disconnect == null) return "no Disconnect button in the venue section";
             if (connectCount == 0) return "no connect buttons in the venue section (vacuous)";
-            if (connectEnabled < 1) return "disconnected: no connect button is enabled (gating wiring broken)";
+            if (connectEnabled != connectCount)
+                return $"disconnected: {connectCount - connectEnabled} connect button(s) greyed out — ADR-0027 requires all (incl. prod) enabled";
             if (disconnect.interactable) return "disconnected: Disconnect is enabled (must require IsConnected)";
 
             // (c) onClick WIRING (not just gating): exercise the actual button → brain callback. The asserts
@@ -258,6 +260,21 @@ public static class SettingsDialogE2ERunner
             if (firedEnv == "<unset>") return "connect onClick fired but env arg not threaded through — wiring broken";
             disconnect.onClick.Invoke();
             if (!disconnectFired) return "Disconnect button onClick did not fire _onDisconnect — wiring broken";
+
+            // ADR-0027 / #130 — the enabled prod button actually DISPATCHES onConnect(venue,"prod").
+            // This is the EXACT bug surface: the old grey-out left prod interactable=false so onClick
+            // never fired ("press → nothing happens"). (c) proves wiring generically; this proves the
+            // PROD click specifically reaches the handler with env="prod" (the variant that was greyed out).
+            Button prodBtn = null;
+            foreach (var b in btns)
+                if (b.gameObject.name.IndexOf("Prod", StringComparison.Ordinal) >= 0) { prodBtn = b; break; }
+            if (prodBtn == null) return "no prod connect button found to exercise dispatch";
+            if (!prodBtn.interactable) return "prod connect button not interactable while disconnected";
+            prodBtn.onClick.Invoke();
+            if (firedEnv != "prod")
+                return $"prod button dispatched env={firedEnv ?? "null"} (expected \"prod\")";
+            if (firedVenue != "TACHIBANA" && firedVenue != "KABU")
+                return $"prod button dispatched venue={firedVenue ?? "null"} (expected a live venue)";
 
             // connected → connects disable (CanConnect false). Proves Refresh re-reads the live VM gating.
             conn.ApplyStatePoll(Poll("CONNECTED"));

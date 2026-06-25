@@ -19,7 +19,8 @@
 //
 // 厳密ゲート: 約定（FILLED OrderEvent）が来なければ FAIL（owner 決定）。成行は場中（前場 09:00–11:30 /
 // 後場 12:30–15:30 JST）のみ約定するため、閉局時は is_market_open 診断を FAIL メッセージに添える。
-// demo 固定: TACHIBANA_ALLOW_PROD=1 を検出したら発注前に拒否し、environment_hint は常に "demo"。
+// demo 固定: environment_hint は常に "demo" ハードコード（実弾を撃たない）。ADR-0027 で
+// TACHIBANA_ALLOW_PROD トリップワイヤは廃止（死にコード）。実弾防止は environment_hint 固定が保証。
 
 using System;
 using System.Threading;
@@ -110,9 +111,8 @@ public static class TachibanaLiveE2ERunner
             return "missing DEV_TACHIBANA_SECOND (process env or .env; required for order placement)";
         second = secondStr.ToCharArray();
 
-        // demo 二重ガード: 本番フラグが立っていたら何もせず拒否（実弾防止）。
-        if (Environment.GetEnvironmentVariable("TACHIBANA_ALLOW_PROD") == "1")
-            return "refusing to run: TACHIBANA_ALLOW_PROD=1 is set (this gate is demo-only; never fires real orders)";
+        // ADR-0027: TACHIBANA_ALLOW_PROD トリップワイヤは廃止 (見るべきフラグが消えた死にコード)。
+        // 実弾防止は environment_hint = "demo" のハードコード固定 (ENV_HINT) が引き続き保証する。
 
         // ── step 1: live-configured server を venue=TACHIBANA で構築（Python を直 claim） ──
         var host = new WorkspaceEngineHost();

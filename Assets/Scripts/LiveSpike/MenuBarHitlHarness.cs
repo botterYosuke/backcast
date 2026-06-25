@@ -6,7 +6,8 @@
 // workspace (StrategyProviderRegistry + ScenarioStartupController) over a real in-proc engine.
 //
 // AFK probe (deterministic, headless-style — runs on a worker, logs [MENU BAR HITL PASS]/[FAIL]):
-//   A. pure-VM gates (no engine): prod grey-out (*_ALLOW_PROD), File→New refuse-when-running.
+//   A. pure-VM gates (no engine): prod connect always enabled (ADR-0027 — prod-allow env gate abolished),
+//      File→New refuse-when-running.
 //   B. full-workspace clear: register provider + seed universe → File→New → registry 1→0,
 //      universe emptied, scenario buffer cleared.
 //   C. engine mode side-effects: MOCK connect → CONNECTED → File→Open WHILE Live → engine
@@ -90,12 +91,11 @@ public class MenuBarHitlHarness : MonoBehaviour
         try
         {
             // ---- A. pure-VM gates (no engine needed) ----
-            // prod grey-out: a VM whose ALLOW_PROD predicate is false refuses prod; true allows it.
-            var denyVm = new VenueMenuViewModel(_conn, _coord, prodAllowed: _ => false);
-            var allowVm = new VenueMenuViewModel(_conn, _coord, prodAllowed: _ => true);
-            Check(!denyVm.CanConnectEnv("TACHIBANA", "prod"), "A1 prod grey-out when *_ALLOW_PROD unset");
-            Check(denyVm.CanConnectEnv("TACHIBANA", "demo"), "A2 demo always connectable when disconnected");
-            Check(allowVm.CanConnectEnv("KABU", "prod"), "A3 prod enabled when KABU_ALLOW_PROD set");
+            // ADR-0027: prod-allow env gate abolished — prod variant is connectable with NO env flag
+            // (this is the fix for "Connect (Prod) を押しても無反応": disabled なボタンは onClick しない)。
+            Check(_menu.CanConnectEnv("TACHIBANA", "prod"), "A1 prod connectable without env flag (ADR-0027)");
+            Check(_menu.CanConnectEnv("TACHIBANA", "demo"), "A2 demo always connectable when disconnected");
+            Check(_menu.CanConnectEnv("KABU", "prod"), "A3 kabu prod connectable without env flag (ADR-0027)");
 
             // File→New refused while a run is in flight (ADR-0001 safety).
             _replayRunning = true;

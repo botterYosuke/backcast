@@ -10,7 +10,6 @@
 //
 // Pure logic (no UGUI) so the AFK gate drives it deterministically; the actual buttons
 // + badge GameObjects live in the owner-manual playmode harness and bind to this.
-using System;
 using System.Collections.Generic;
 
 public struct VenueConnectRequest
@@ -24,43 +23,22 @@ public class VenueMenuViewModel
 {
     readonly VenueConnectionViewModel _conn;
     readonly LiveLogoutCoordinator _coord;
-    readonly Func<string, bool> _prodAllowed;
 
-    // prodAllowed: gates the prod connect variants (#42 / findings 0017 §6). Defaults to the
-    // SAME env mechanism the login dialog already uses — KABU_ALLOW_PROD / TACHIBANA_ALLOW_PROD
-    // == "1" — so the menu reuses the existing guard rather than inventing a new one. Python
-    // (PROD_NOT_ALLOWED / require_prod_env) remains the safety authority; this C# read is only
-    // UX parity (grey-out). Injectable so the AFK probe drives prod gating deterministically.
-    public VenueMenuViewModel(VenueConnectionViewModel conn, LiveLogoutCoordinator coord,
-                              Func<string, bool> prodAllowed = null)
+    public VenueMenuViewModel(VenueConnectionViewModel conn, LiveLogoutCoordinator coord)
     {
         _conn = conn;
         _coord = coord;
-        _prodAllowed = prodAllowed ?? DefaultProdAllowed;
-    }
-
-    static bool DefaultProdAllowed(string venue)
-    {
-        switch (venue)
-        {
-            case "TACHIBANA": return Environment.GetEnvironmentVariable("TACHIBANA_ALLOW_PROD") == "1";
-            case "KABU": return Environment.GetEnvironmentVariable("KABU_ALLOW_PROD") == "1";
-            default: return false;
-        }
     }
 
     // Connect is offered only when fully disconnected — not mid-auth, not connected.
     public bool CanConnect => !_conn.IsConnected && !_conn.IsAuthenticating;
 
-    // Per-(venue, env) connect enablement for the 4 menu variants. A prod variant is enabled
-    // only when the venue is connectable AND its *_ALLOW_PROD flag is set (else grey-out),
-    // mirroring the login dialog. Non-prod (demo/verify) is enabled whenever connectable.
-    public bool CanConnectEnv(string venue, string env)
-    {
-        if (!CanConnect) return false;
-        if (env == "prod") return _prodAllowed(venue);
-        return true;
-    }
+    // Per-(venue, env) connect enablement for the 4 menu variants. ADR-0027: the prod-allow
+    // env gate (KABU_ALLOW_PROD / TACHIBANA_ALLOW_PROD grey-out) is abolished — prod is no
+    // longer special-cased, so every variant is enabled whenever the venue is connectable.
+    // Production接続の可否はユーザーがダイアログで prod を選ぶこと・本物の prod 資格情報・
+    // prod 本体の起動だけで決まる (D2)。signature は呼び出し側互換のため据え置く。
+    public bool CanConnectEnv(string venue, string env) => CanConnect;
 
     // The 4 TTWR connect variants, in menu order (findings 0017 §6).
     public static readonly (string Venue, string Env, string Label)[] ConnectVariants =

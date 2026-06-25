@@ -34,7 +34,6 @@ from engine.live.order_types import (
     OrderResult,
 )
 from engine.exchanges import tachibana_orders as _orders
-from engine.exchanges._env_guard import require_prod_env
 from engine.exchanges.tachibana_auth import (
     ApiError,
     PNoCounter,
@@ -259,10 +258,10 @@ class TachibanaAdapter:
             raise ValueError(f"unknown credentials_source: {source!r}")
 
         is_demo = self._env == "demo"
-        if not is_demo:
-            # Production double-guard (R1 / spec). require_prod_env raises
-            # RuntimeError if TACHIBANA_ALLOW_PROD != '1'.
-            require_prod_env("TACHIBANA_ALLOW_PROD")
+        # ADR-0027: prod 解禁の env ゲート (TACHIBANA_ALLOW_PROD) は廃止。本番接続の可否は
+        # 「呼び出し側が明示的に prod env を選ぶ＋本物の prod 資格情報」で決まり、マシン単位の
+        # 解禁フラグは持たない (D2)。自動 E2E runner は environment_hint を demo/verify に
+        # ハードコード固定しており本番に触れない。
 
         # v4r9 公開鍵認証 (ADR-0023): 認証ID + RSA 秘密鍵を Fernet/dev-env から解決する。
         # demo/prod は別セットなので is_demo で読む env を切り替える。鍵素材を含まない

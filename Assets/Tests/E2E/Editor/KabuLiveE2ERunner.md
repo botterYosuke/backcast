@@ -12,7 +12,8 @@
 
 - **kabuステーション本体（Windows GUI）が起動・ログイン済み**で、設定→API→「APIを利用する」が有効、API パスワード設定済み。
 - **検証モード（localhost:18081）** で起動していること（本番 18080 は触らない）。
-- `DEV_KABU_API_PASSWORD` を process env / `.env` で供給。`KABU_ALLOW_PROD=1` は設定しない（verify-only ガード）。
+- `DEV_KABU_API_PASSWORD` を process env / `.env` で供給。**ADR-0027**: `KABU_ALLOW_PROD` トリップワイヤは廃止（削除）。
+  本番非接触は runner が `environment_hint = "verify"` をハードコード固定することで保証する（端末フラグには依存しない）。
 - **場中**（板 PUSH が来る時間帯）であること。
 - macOS / Linux / CI では走らない（kabuステーション本体が Windows 専用）。
 

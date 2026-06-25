@@ -570,13 +570,10 @@ class LiveLoopManager:
             return False, "UNKNOWN_VENUE", None
         if env_hint not in _ENV_PER_VENUE.get(venue, frozenset()):
             return False, "INVALID_ENV", None
-        if env_hint == "prod":
-            from engine.exchanges._env_guard import require_prod_env
-            allow_flag = "TACHIBANA_ALLOW_PROD" if venue == "tachibana" else "KABU_ALLOW_PROD"
-            try:
-                require_prod_env(allow_flag)
-            except RuntimeError:
-                return False, "PROD_NOT_ALLOWED", None
+        # ADR-0027 (D1/D2): prod 解禁の env ゲート (PROD_NOT_ALLOWED front-stop) は廃止。
+        # 本番接続の可否は「ユーザーがダイアログで prod を選ぶ＋本物の prod 資格情報＋prod
+        # 本体の起動」だけで決まる。env_hint="prod" もそのままダイアログ経路へ進む
+        # （未知 env は上の INVALID_ENV で弾く——prod は valid env として通す）。
 
         # Cross-thread cancel: on timeout we cannot kill the dialog thread, but we
         # can ask the Tk dialog to close itself (it polls this event via root.after,

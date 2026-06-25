@@ -242,12 +242,29 @@ def test_dispatcher_invalid_env():
     assert (success, ec, token) == (False, "INVALID_ENV", None)
 
 
-def test_dispatcher_prod_not_allowed(monkeypatch):
+@pytest.mark.scenario("PRODGATE-01")
+def test_dispatcher_prod_reaches_dialog_without_allow_flag(monkeypatch):
+    """ADR-0027 D1/D2: prod env_hint は env フラグ無しでもダイアログ経路へ進む。
+
+    旧挙動 (PROD_NOT_ALLOWED front-stop) は廃止。KABU_ALLOW_PROD が未設定でも
+    prod login は run_dialog に到達する——再導入すれば PROD_NOT_ALLOWED で RED。
+    """
     monkeypatch.delenv("KABU_ALLOW_PROD", raising=False)
+    monkeypatch.setattr(live_orchestrator, "_try_create_tk", lambda: True, raising=False)
+    monkeypatch.setattr(
+        kabusapi_login_flow,
+        "run_dialog",
+        lambda env_hint, cancel_event=None: {
+            "success": True,
+            "error_code": "",
+            "token": "PROD_TOKEN_VIA_DIALOG",
+        },
+    )
     success, ec, token = _run_on_selector_loop(
         _bare_manager()._handle_prompt_login("KABU", "prod")
     )
-    assert (success, ec, token) == (False, "PROD_NOT_ALLOWED", None)
+    # gate を通過してダイアログに到達 (PROD_NOT_ALLOWED ではない)。
+    assert (success, ec, token) == (True, "", "PROD_TOKEN_VIA_DIALOG")
 
 
 def test_dispatcher_kabu_missing_token_is_invalid_response(monkeypatch):

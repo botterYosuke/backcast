@@ -27,10 +27,10 @@ brain は不変——ビュー層のみ再構築（ADR-0026）。
 | SETTINGS-05 | `[x]` クリック / 表示トグル | `SettingsModalOverlay.SetVisible` / `CloseClicked` | Build 後 `IsVisible=false`・SetVisible 反映・`btn_x` クリックで `CloseClicked` 発火 | overlay を built し `[x]` onClick を invoke | 自動(E2E済) | `SettingsDialogE2ERunner`(S05) |
 | SETTINGS-06 | z-order（secret が Settings の上） | `SettingsModalOverlay.SETTINGS_SORT=900` | menu(600) < footer(550) < settings(900) < secret/save-guard(1000)。**#128: Venue 接続の second password は secret(1000) が Settings の上に重なる** | 定数の relation を assert（`<1000`） | 自動(E2E済) | `SettingsDialogE2ERunner`(S06) |
 | SETTINGS-07 | （観測点）chrome ＋ 3 セクション container | `SettingsModalOverlay.Build` | backdrop・panel・`btn_x`・Venue/Mode/Scenario container が存在し相互に別 RectTransform・自前 ScreenSpaceOverlay canvas が SETTINGS_SORT | built tree を反射 | 自動(E2E済) | `SettingsDialogE2ERunner`(S07) |
-| SETTINGS-08 | Venue セクションで Connect/Disconnect・menu Venue 退役 | `SettingsVenueSectionView.Build/Refresh` / `MenuBarView`（Venue dropdown 削除） | 接続項目数＝`VisibleConnectItems`+Disconnect・切断時は非 prod connect が enable / Disconnect disable・接続時は connect 全 disable（gating が VM 追従）・`MenuBarView.OpenMenu` enum に Venue 無し | view の `_items`/interactable を反射＋enum 反射 | 自動(E2E済) | `SettingsDialogE2ERunner`(S08) |
+| SETTINGS-08 | Venue セクションで Connect/Disconnect・menu Venue 退役 | `SettingsVenueSectionView.Build/Refresh` / `MenuBarView`（Venue dropdown 削除） | 接続項目数＝`VisibleConnectItems`+Disconnect・**切断時は全 connect（prod 含む / ADR-0027）が enable / Disconnect disable**・接続時は connect 全 disable（gating が VM 追従）・`MenuBarView.OpenMenu` enum に Venue 無し | view の `_items`/interactable を反射＋enum 反射（切断時 connectEnabled==connectCount） | 自動(E2E済) | `SettingsDialogE2ERunner`(S08) |
 | SETTINGS-09 | 実 OS でモーダルを目視操作（実 EventSystem raycast・実ピクセル・secret over settings の実描画） | findings 0102 D3 | backdrop が下層クリックを食う・secret が Settings の前面に実描画・送信後 Settings 残存 | — | HITL専用（実 GPU/EventSystem・実 venue secret） | — |
 
-> Venue 接続の **実 RPC（login/logout）/ prod grey-out env / LIVE_VENUE 絞り込み**は `VenueMenuViewModel` が brain で、
+> Venue 接続の **実 RPC（login/logout）/ LIVE_VENUE 絞り込み**は `VenueMenuViewModel` が brain で、（ADR-0027: prod 解禁の env ゲートは廃止）
 > `VenueMenuM3Probe`（MENU-11/14/19）が正本。本台本は「Settings の venue 表面が同じ VM を gating 込みで宿す」までを観測する。
 
 ## 自動判定（合格条件）

@@ -1,6 +1,5 @@
 """kabuStation login form state — pure presenter logic, no tkinter dependency."""
 from __future__ import annotations
-import os
 import socket
 from dataclasses import dataclass
 from typing import Optional
@@ -9,9 +8,6 @@ from typing import Optional
 @dataclass(frozen=True)
 class FormInit:
     env_hint: str
-    allow_prod: bool
-    is_debug_build: bool
-    dev_api_password: Optional[str]
     station_port: int
 
 
@@ -23,34 +19,15 @@ USER_CANCELLED = "USER_CANCELLED"
 EMPTY_FIELDS = "EMPTY_FIELDS"
 
 
-def build_form_init(
-    env_hint: str,
-    env_dict: Optional[dict] = None,
-    is_debug_build: bool = True,
-) -> FormInit:
-    if env_dict is None:
-        env_dict = dict(os.environ)
+def build_form_init(env_hint: str) -> FormInit:
+    """Presenter state for the kabu login dialog.
 
-    allow_prod = env_dict.get("KABU_ALLOW_PROD") == "1"
-
-    if is_debug_build:
-        dev_api_password = env_dict.get("DEV_KABU_API_PASSWORD") or None
-    else:
-        dev_api_password = None
-
-    # ポート: verify=18081, prod=18080
-    if env_hint == "prod" and allow_prod:
-        station_port = 18080
-    else:
-        station_port = 18081
-
-    return FormInit(
-        env_hint=env_hint,
-        allow_prod=allow_prod,
-        is_debug_build=is_debug_build,
-        dev_api_password=dev_api_password,
-        station_port=station_port,
-    )
+    ADR-0027: prod 解禁の env ゲート (KABU_ALLOW_PROD) と debug ビルドの DEV_*
+    prefill は廃止。ポートは env_hint だけで決め (prod=18080 / verify=18081)、
+    API パスワードは常にユーザーが入力する (空欄で開く / D2・D3)。
+    """
+    station_port = 18080 if env_hint == "prod" else 18081
+    return FormInit(env_hint=env_hint, station_port=station_port)
 
 
 def probe_station(host: str = "127.0.0.1", port: int = 18081) -> bool:

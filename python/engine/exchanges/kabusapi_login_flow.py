@@ -25,7 +25,6 @@ from engine.exchanges.kabusapi_login_form_state import (
     validate_submission,
 )
 from engine.exchanges._login_dialog import apply_cancel_timeout
-from engine.live._build_mode import IS_DEBUG_BUILD
 
 log = logging.getLogger(__name__)
 
@@ -63,9 +62,9 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     """
     import tkinter as tk
 
-    init = build_form_init(env_hint=env_hint, is_debug_build=IS_DEBUG_BUILD)
-    if env_hint == "prod" and not init.allow_prod:
-        return {"success": False, "error_code": "PROD_NOT_ALLOWED", "token": None}
+    # ADR-0027: prod 解禁 env ゲートは廃止。env_hint をそのまま初期モードにし、Prod ラジオは
+    # 常時選択可能。API パスワードは prefill せず常にユーザーが入力する (空欄で開く)。
+    init = build_form_init(env_hint=env_hint)
 
     result: dict[str, Any] = {"success": False, "error_code": USER_CANCELLED, "token": None}
 
@@ -73,8 +72,8 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     root.title("kabuStation ログイン")
     root.resizable(False, False)
 
-    pw_var = tk.StringVar(value=init.dev_api_password or "")
-    mode_var = tk.StringVar(value="prod" if (env_hint == "prod" and init.allow_prod) else "verify")
+    pw_var = tk.StringVar(value="")
+    mode_var = tk.StringVar(value="prod" if env_hint == "prod" else "verify")
     status_var = tk.StringVar(value="")
     port_var = tk.StringVar(value=str(init.station_port))
 
@@ -89,8 +88,6 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     prod_radio = tk.Radiobutton(frm, text="Prod", variable=mode_var, value="prod")
     verify_radio.grid(row=1, column=0, sticky="w")
     prod_radio.grid(row=1, column=1, sticky="w")
-    if not init.allow_prod:
-        prod_radio.config(state="disabled")
 
     tk.Label(frm, text="本体ポート:").grid(row=2, column=0, sticky="w")
     tk.Label(frm, textvariable=port_var).grid(row=2, column=1, sticky="w")
@@ -108,7 +105,7 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
     cancel_btn.grid(row=0, column=2, padx=4)
 
     def _current_port() -> int:
-        return 18080 if (mode_var.get() == "prod" and init.allow_prod) else 18081
+        return 18080 if mode_var.get() == "prod" else 18081
 
     def _refresh_station_status() -> None:
         port = _current_port()
@@ -128,8 +125,7 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
         recheck_btn.config(state=state)
         pw_entry.config(state=state)
         verify_radio.config(state=state)
-        if init.allow_prod:
-            prod_radio.config(state=state)
+        prod_radio.config(state=state)
         if not busy and ok_btn_active is None:
             _refresh_station_status()
 
@@ -162,9 +158,6 @@ def run_dialog(env_hint: str, cancel_event: threading.Event | None = None) -> di
             status_var.set("API パスワードを入力してください")
             return
         mode = mode_var.get()
-        if mode == "prod" and not init.allow_prod:
-            status_var.set("Prod は KABU_ALLOW_PROD=1 が必要")
-            return
         port = _current_port()
         if not probe_station(port=port):
             status_var.set(f"{KABU_STATION_NOT_RUNNING}: port {port}")

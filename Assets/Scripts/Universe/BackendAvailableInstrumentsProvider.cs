@@ -143,7 +143,9 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
     }
 
     // `isTransient` lets the caller skip caching for warm-up statuses (Slice review F1).
-    static AvailableInstrumentsResult MapError(string errorCode, out bool isTransient)
+    // `public` so the AFK E2E runner can gate the error-code→status mapping directly (the load-
+    // bearing distinction between NotConnected and Unsupported lives here — findings 0103).
+    public static AvailableInstrumentsResult MapError(string errorCode, out bool isTransient)
     {
         switch (errorCode ?? "")
         {
@@ -156,9 +158,14 @@ public sealed class BackendAvailableInstrumentsProvider : IAvailableInstrumentsP
                 isTransient = true;
                 return AvailableInstrumentsResult.Error(errorCode);
             case BackendErrorCodes.LiveVenueNotLoggedIn:
-            case BackendErrorCodes.LiveUniverseUnsupported:
                 isTransient = false;
                 return AvailableInstrumentsResult.NotConnected;
+            case BackendErrorCodes.LiveUniverseUnsupported:
+                // The venue IS logged in but cannot enumerate instruments (kabu MVP). Do NOT
+                // collapse into NotConnected — that produced the "Connected: KABU" badge vs.
+                // "Venue not connected" sidebar contradiction (findings 0103).
+                isTransient = false;
+                return AvailableInstrumentsResult.Unsupported;
             case BackendErrorCodes.LocalUniverseUnavailable:
                 isTransient = false;
                 return AvailableInstrumentsResult.Error("BACKCAST_JQUANTS_DUCKDB_ROOT / listed_info.duckdb not configured");

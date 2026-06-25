@@ -78,6 +78,8 @@ public static class PythonRuntimeLocator
         Python.Runtime.Runtime.PythonDLL = _libPython;
         Environment.SetEnvironmentVariable("PYTHONHOME", _pythonHome);
         Environment.SetEnvironmentVariable("PYTHONPATH", _venvSite + Path.PathSeparator + _projectRoot);
+        // Prevent matplotlib from loading GUI backends (like TkAgg) which can cause Tcl_Panic on background threads.
+        Environment.SetEnvironmentVariable("MPLBACKEND", "Agg");
         PythonEngine.PythonHome = _pythonHome;
 
         // Windows: uv-bundled vcruntime140.dll / msvcp140.dll live next to python313.dll

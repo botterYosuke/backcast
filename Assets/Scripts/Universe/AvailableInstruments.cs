@@ -27,7 +27,13 @@ public enum UniverseStatusKind
     Empty,         // supply succeeded but the source has 0 instruments
     Loading,       // fetch in flight
     Error,         // fetch failed (Message carries the reason)
-    NotConnected,  // Live only: no venue connection
+    NotConnected,  // Live only: no venue connection (NOT logged in)
+    // Live only: the venue IS connected/logged-in but cannot enumerate an instrument master
+    // (kabu MVP: fetch_instruments() returns [] → enumerates_instruments=False). DISTINCT from
+    // NotConnected so the picker does not contradict the menu badge ("Connected: KABU") with a
+    // "Venue not connected" message (bug 2026-06-25: LIVE_UNIVERSE_UNSUPPORTED was collapsed
+    // into NotConnected — findings 0103).
+    Unsupported,
     EndUnset,      // Replay only: scenario.end not set, cannot date-scope the catalog
 }
 
@@ -47,6 +53,8 @@ public struct AvailableInstrumentsResult
         new AvailableInstrumentsResult { Kind = UniverseStatusKind.Error, Ids = Array.Empty<string>(), Message = message };
     public static readonly AvailableInstrumentsResult NotConnected =
         new AvailableInstrumentsResult { Kind = UniverseStatusKind.NotConnected, Ids = Array.Empty<string>() };
+    public static readonly AvailableInstrumentsResult Unsupported =
+        new AvailableInstrumentsResult { Kind = UniverseStatusKind.Unsupported, Ids = Array.Empty<string>() };
     public static readonly AvailableInstrumentsResult EndUnset =
         new AvailableInstrumentsResult { Kind = UniverseStatusKind.EndUnset, Ids = Array.Empty<string>() };
 }

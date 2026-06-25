@@ -101,6 +101,10 @@ public sealed class InstrumentPickerController
                 return One("Error: " + (result.Message ?? ""));
             case UniverseStatusKind.NotConnected:
                 return One("Venue not connected");
+            case UniverseStatusKind.Unsupported:
+                // Connected, but the venue exposes no instrument master (kabu MVP). Must NOT say
+                // "Venue not connected" — that contradicts the menu badge (findings 0103).
+                return One("Venue has no instrument list");
             case UniverseStatusKind.Empty:
                 return One(EmptyMessage(mode));
         }

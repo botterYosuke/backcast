@@ -85,7 +85,8 @@ public static class UniverseSidebarE2ERunner
                 ?? Section12_PickerListGuiRendersCandidatesAndPlaceholder()
                 ?? Section13_PickerAutoRefreshesWhenAsyncSupplyResolves()
                 ?? Section14_FullUniverseNoCapVirtualizedRender()
-                ?? Section15_PickerListFillsToFooter();
+                ?? Section15_PickerListFillsToFooter()
+                ?? Section16_UnsupportedDistinctFromNotConnected();
         }
         catch (Exception e)
         {
@@ -94,7 +95,7 @@ public static class UniverseSidebarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized + list-fills-to-footer verified");
+            Debug.Log("[E2E UNIVERSE SIDEBAR PASS] picker + status + select + writeback + depth-follow + view-reflect + context-driven-end + picker-list-gui + async-refresh + full-universe-virtualized + list-fills-to-footer + unsupported-distinct-from-notconnected verified");
             EditorApplication.Exit(0);
         }
         else
@@ -170,6 +171,10 @@ public static class UniverseSidebarE2ERunner
         r = OnePlaceholder(UniverseSourceMode.Replay, "Error: timeout"); if (r != null) return r;
         provider.Next = AvailableInstrumentsResult.NotConnected;
         r = OnePlaceholder(UniverseSourceMode.Live, "Venue not connected"); if (r != null) return r;
+        // Connected-but-unenumerable venue (kabu MVP) gets a DISTINCT message — it must NOT reuse the
+        // not-logged-in "Venue not connected" string (bug 2026-06-25 / findings 0103).
+        provider.Next = AvailableInstrumentsResult.Unsupported;
+        r = OnePlaceholder(UniverseSourceMode.Live, "Venue has no instrument list"); if (r != null) return r;
         provider.Next = AvailableInstrumentsResult.Empty;
         r = OnePlaceholder(UniverseSourceMode.Replay, "No instruments for this date"); if (r != null) return r;
         r = OnePlaceholder(UniverseSourceMode.Live, "No instruments in venue"); if (r != null) return r;
@@ -820,6 +825,51 @@ public static class UniverseSidebarE2ERunner
         // (d) the two lists never exceed the shared room (no overrun of the pinned focus label / footer).
         if (rEmpty + pEmpty > roomForLists + 0.5f || rBig + pBig > roomForLists + 0.5f)
             return "rows + picker list exceed the shared room (would overrun the footer)";
+        return null;
+    }
+
+    // ---- 16. THE bug seam (2026-06-25 / findings 0103): the backend error-code → picker-status map.
+    // Report: after logging into kabu the menu badge read "Connected: KABU" but the sidebar showed
+    // "Venue not connected" — because BackendAvailableInstrumentsProvider.MapError collapsed BOTH
+    // LIVE_VENUE_NOT_LOGGED_IN and LIVE_UNIVERSE_UNSUPPORTED into NotConnected. kabu is logged in but
+    // cannot enumerate instruments (enumerates_instruments=False → the engine returns the typed
+    // LIVE_UNIVERSE_UNSUPPORTED — gated end-to-end by python/tests/test_live_instrument_universe_unsupported.py),
+    // so the picker must show a DISTINCT "Venue has no instrument list", never the not-logged-in string.
+    // RED→GREEN litmus: revert the MapError split (map LiveUniverseUnsupported back to NotConnected) →
+    // the Unsupported assert FAILs; the two-code pairing keeps it non-vacuous (a single always-NotConnected
+    // or always-Unsupported map fails one leg).
+    // Covers: SIDEBAR-09 (供給ステータス別 placeholder — 接続済み非列挙 venue は未接続と別ラベル)
+    static string Section16_UnsupportedDistinctFromNotConnected()
+    {
+        // not-logged-in → NotConnected → "Venue not connected" (unchanged, correct).
+        var notConn = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveVenueNotLoggedIn, out _);
+        if (notConn.Kind != UniverseStatusKind.NotConnected)
+            return $"LIVE_VENUE_NOT_LOGGED_IN mapped to {notConn.Kind}, expected NotConnected";
+
+        // logged-in-but-unenumerable → Unsupported (NOT NotConnected) → distinct picker message.
+        var unsup = BackendAvailableInstrumentsProvider.MapError(BackendErrorCodes.LiveUniverseUnsupported, out _);
+        if (unsup.Kind == UniverseStatusKind.NotConnected)
+            return "LIVE_UNIVERSE_UNSUPPORTED still collapses into NotConnected — the 'Connected: KABU' vs 'Venue not connected' bug is back (findings 0103)";
+        if (unsup.Kind != UniverseStatusKind.Unsupported)
+            return $"LIVE_UNIVERSE_UNSUPPORTED mapped to {unsup.Kind}, expected Unsupported";
+
+        // and the two genuinely render DIFFERENT placeholder text in the picker.
+        string LabelFor(AvailableInstrumentsResult res)
+        {
+            var prov = new StubProvider { Next = res };
+            var c = NewController(out _, out _, prov);
+            c.TogglePicker(UniverseSourceMode.Live, null);
+            var rows = c.PickerList(UniverseSourceMode.Live);
+            return rows.Count == 1 && rows[0].IsPlaceholder ? rows[0].Label : "<not-a-single-placeholder>";
+        }
+        string notConnLabel = LabelFor(AvailableInstrumentsResult.NotConnected);
+        string unsupLabel = LabelFor(AvailableInstrumentsResult.Unsupported);
+        if (notConnLabel != "Venue not connected")
+            return $"NotConnected label '{notConnLabel}' != 'Venue not connected'";
+        if (unsupLabel != "Venue has no instrument list")
+            return $"Unsupported label '{unsupLabel}' != 'Venue has no instrument list'";
+        if (notConnLabel == unsupLabel)
+            return "Unsupported and NotConnected render the SAME label (still indistinguishable)";
         return null;
     }
 }

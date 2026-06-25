@@ -1,4 +1,4 @@
-// AppearanceStore.cs — ADR-0028 / findings 0106 D8 (appearance persistence)
+// AppearanceStore.cs — ADR-0028 / findings 0108 D8 (appearance persistence)
 //
 // The app-GLOBAL persisted Dark/Light choice. Appearance is NOT per-document (a strategy/layout sidecar)
 // — persisting it there would flip the theme every time a different strategy opens. So it rides a single

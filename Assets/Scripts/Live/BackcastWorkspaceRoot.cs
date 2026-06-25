@@ -382,7 +382,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
     void BuildWorkspace()
     {
-        // ADR-0028 / findings 0106 D8: restore the persisted Dark/Light appearance BEFORE any surface builds,
+        // ADR-0028 / findings 0108 D8: restore the persisted Dark/Light appearance BEFORE any surface builds,
         // so the whole workspace (incl. window chrome baked at build time) comes up in the saved theme.
         ApplyPersistedAppearance();
 
@@ -744,7 +744,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         AppearanceStore.Save(appearance);
     }
 
-    // ADR-0028 / findings 0106 D8: restore the persisted appearance at boot. Dark is the lazy default, so
+    // ADR-0028 / findings 0108 D8: restore the persisted appearance at boot. Dark is the lazy default, so
     // only Light needs an explicit SetTheme (avoids a redundant Changed before any subscribers exist).
     void ApplyPersistedAppearance()
     {

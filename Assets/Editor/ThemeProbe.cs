@@ -135,7 +135,7 @@ public static class ThemeProbe
 
     // 1b — Light (Miro-風 whiteboard) variant: derivation parity on the REAL Radix light scales + the
     // canvas owner literals, AND non-vacuity (light != dark) so the appearance switch genuinely moves both
-    // the scale-derived chrome AND the canvas (ADR-0028 / findings 0106 S1+S2). Without this, a regression
+    // the scale-derived chrome AND the canvas (ADR-0028 / findings 0108 S1+S2). Without this, a regression
     // that left Light()==Dark() (the old 案A stub) would pass every other section silently.
     static void Section1b_LightVariant()
     {

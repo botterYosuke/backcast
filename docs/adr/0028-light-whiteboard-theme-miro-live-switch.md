@@ -20,7 +20,7 @@ status: accepted
 - **実トレードオフ**：parity 厳守（dark のみ・HUD のみ）と owner の Miro 体感要件が衝突。複数の現実的選択肢
   （下記 Considered Options）から特定の理由で 1 つを選んだ。
 
-## Decision の細目（下位決定の正本は本 ADR ではなく findings 0106）
+## Decision の細目（下位決定の正本は本 ADR ではなく findings 0108）
 
 - **Dark は退役しない**。Light を**追加**し、`Appearance`（Dark / Light）を切替値に格上げ。移植元 TTWR も
   dark/light 両方を持つので「light の存在自体」は parity 沿い——divergence は **light を実 shipped 変種にし、
@@ -69,7 +69,7 @@ status: accepted
 - Settings ダイアログに Appearance セグメント＋`PlayerPrefs` 永続化＋boot 読み込みを追加。
 - `ThemeProbe.cs:87` の stale assert（`workspace_background == #7fa4be` の旧農場値）を現値へ修正し、light/構造切替の
   非空検証を追加。
-- 下位の実装事実（採用ウィジェット・seam・E2E gate）は本 ADR に書き戻さず findings 0106 に記録し、本 ADR を
+- 下位の実装事実（採用ウィジェット・seam・E2E gate）は本 ADR に書き戻さず findings 0108 に記録し、本 ADR を
   「方針: ADR-0028」として参照する。
 
 ## 自己保護

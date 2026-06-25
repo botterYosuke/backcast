@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # kabu code: 本体がブローカー口座へ未ログイン (R7, ptal/error.html)。4001007=ログイン認証エラー /
 # 4001017=未ログイン状態。「アプリ起動済み」≠「口座ログイン済み」で、kabu は早朝に本体を強制ログアウト
-# する。/token の HTTP 401 body code 判別 (findings 0106) と watchdog の logout 検知 (kabusapi.py)
+# する。/token の HTTP 401 body code 判別 (findings 0109) と watchdog の logout 検知 (kabusapi.py)
 # の単一正本。
 STATION_LOGGED_OUT_CODES = frozenset({4001007, 4001017})
 
@@ -45,7 +45,7 @@ class KabuTokenExpiredError(KabuApiError):
     「パラメータ変換エラー」であり再認証対象ではない。一次資料に基づき 401 へ訂正。)
 
     ``.code`` は契約どおり決定的に 401 だが、401 応答の body に載る kabu code は
-    ``.body_code`` に温存する。/token の 401 は body code で意味が分かれる (findings 0106):
+    ``.body_code`` に温存する。/token の 401 は body code で意味が分かれる (findings 0109):
     4001007/4001017=本体未ログイン、4001013=ログイン済みだが API パスワード不正。
     """
 

@@ -1,5 +1,5 @@
 """KABU-AUTH-REJECT-01 — login ダイアログの HTTP 401 は「トークン期限切れ」ではなく
-「API パスワード不正」として提示する (findings 0106 / D1)。
+「API パスワード不正」として提示する (findings 0109 / D1)。
 
 機序: login flow の唯一の auth 呼び出しは /token (fetch_token)。その HTTP 401 実体は
 kabu code 4001013「kabuステーションはログイン済みだが API パスワードが不正」(ptal/error.html)
@@ -39,7 +39,7 @@ def test_http_401_with_wrong_password_code_maps_to_auth_rejected() -> None:
 def test_http_401_with_logged_out_code_maps_to_not_logged_in() -> None:
     """4001007 / 4001017 (本体が口座へ未ログイン) → KABU_STATION_NOT_LOGGED_IN。
 
-    owner 環境の実 prod 応答が 4001007 を返したことの empirical 回帰 (findings 0106)。
+    owner 環境の実 prod 応答が 4001007 を返したことの empirical 回帰 (findings 0109)。
     旧実装はこれを「トークン期限切れ」と誤表示し「API パスワードを確認」と誤誘導していた。
     """
     assert _map_exception(KabuTokenExpiredError(401, "ログイン認証エラー", body_code=4001007)) \

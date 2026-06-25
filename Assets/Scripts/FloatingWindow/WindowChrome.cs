@@ -6,7 +6,7 @@
 // cyan HUD (corner brackets + edge glow), light = the Miro Card (rounded + drop shadow) — and re-applies
 // the card SURFACE color from the theme so a live dark↔light switch re-paints the body too (the frames
 // bake their body color at build and are otherwise not theme subscribers — HudFrameChrome's long-standing
-// gap, findings 0106 D6). Attach() wires a WindowChromeApplier so the switch is LIVE.
+// gap, findings 0108 D6). Attach() wires a WindowChromeApplier so the switch is LIVE.
 
 using UnityEngine;
 using UnityEngine.UI;

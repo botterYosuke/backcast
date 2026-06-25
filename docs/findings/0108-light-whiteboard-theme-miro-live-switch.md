@@ -1,4 +1,4 @@
-# findings 0106 — Light（Miro 風ホワイトボード）テーマの追加とライブ切替（ADR-0028）
+# findings 0108 — Light（Miro 風ホワイトボード）テーマの追加とライブ切替（ADR-0028）
 
 方針の正本は **[ADR-0028](../adr/0028-light-whiteboard-theme-miro-live-switch.md)**（immutable）と
 **CONTEXT.md「Appearance（Dark / Light）」/「Whiteboard（light テーマ・Miro 風）」/「Card chrome ⇔ HUD chrome」**。

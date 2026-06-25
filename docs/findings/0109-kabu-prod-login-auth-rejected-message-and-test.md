@@ -1,4 +1,4 @@
-# 0106 — kabu prod login: 「トークン期限切れ」誤表示の修正 + PROD_KABU_API_PASSWORD 本番ログインテスト
+# 0109 — kabu prod login: 「トークン期限切れ」誤表示の修正 + PROD_KABU_API_PASSWORD 本番ログインテスト
 
 方針: ADR-0027（prod-allow env ゲート廃止 / DEV_* prefill 廃止）を参照する。本 ADR は編集しない
 （自己保護条項）。本スライスの下位決定をここに固定する。

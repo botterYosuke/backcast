@@ -11,12 +11,12 @@ using UnityEngine;
 
 // Light / dark label. Since ADR-0028 it IS a switch input: ThemeColors.FromScales branches the
 // canvas-isolated owner literals on it (CanvasLiterals.For), and the active variant is persisted
-// (#43 / findings 0106 D8). Scale-derived roles still do NOT branch on it (Radix from_scales is
+// (#43 / findings 0108 D8). Scale-derived roles still do NOT branch on it (Radix from_scales is
 // appearance-agnostic — the scale swap carries the dark↔light difference for those).
 public enum Appearance { Dark, Light }
 
 // CanvasLiterals — the per-Appearance canvas-ISOLATED owner literals (workspace_background + hakoniwa_*),
-// raw sRGB, NOT scale-derived (ADR-0028 / findings 0106 D3). ONE place so a re-skin is "swap values + Play"
+// raw sRGB, NOT scale-derived (ADR-0028 / findings 0108 D3). ONE place so a re-skin is "swap values + Play"
 // (no scene re-bake). The isolation seam (findings 0054) holds in BOTH variants: these are the only roles
 // the chart / ladder / tiles / field read, so a scale change can't bleed into the canvas and vice-versa.
 struct CanvasLiterals
@@ -121,7 +121,7 @@ public sealed class ThemeColors
         {
             background = n.Step1,
             // workspace_background + hakoniwa_* are the canvas-ISOLATED owner literals (NOT scale steps) —
-            // switched per Appearance (ADR-0028 / findings 0106 D3). The isolation seam (findings 0054) is
+            // switched per Appearance (ADR-0028 / findings 0108 D3). The isolation seam (findings 0054) is
             // preserved in BOTH variants so a future scale can't silently recolor the canvas; the dark =
             // cyan-HUD deep-space field, the light = Miro-風 whiteboard. See CanvasLiterals below for the
             // raw sRGB values + rationale per variant.

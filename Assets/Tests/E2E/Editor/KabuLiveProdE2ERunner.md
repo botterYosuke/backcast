@@ -2,7 +2,7 @@
 
 `KabuLiveProdE2ERunner.cs` が駆動する **kabu（kabuステーション）本番（prod 18080）の実ログイン leg**。
 方針: [ADR-0027](../../../../docs/adr/0027-abolish-prod-allow-env-gate.md)、下位事実:
-[findings 0106](../../../../docs/findings/0106-kabu-prod-login-auth-rejected-message-and-test.md)。
+[findings 0109](../../../../docs/findings/0109-kabu-prod-login-auth-rejected-message-and-test.md)。
 共通規約は [E2E-CONVENTIONS.md](./E2E-CONVENTIONS.md) / [ADR-0015](../../../../docs/adr/0015-e2e-runner-layout-and-script-convention.md)。
 
 > **位置づけ**: owner 報告（2026-06-25)「Connect kabuStation (Prod) のログインがエラー」を**本番経路で**回帰ゲートする
@@ -13,14 +13,14 @@
 
 - **kabuステーション本体を本番モードで起動・ログイン済み**、設定→API→「APIを利用する」有効、API パスワード設定済み。
 - **本番ポート localhost:18080** で listen していること。
-- `PROD_KABU_API_PASSWORD` を process env / `.env` で供給（**verify の `DEV_KABU_API_PASSWORD` とは別パスワード**・findings 0106 / D2）。
+- `PROD_KABU_API_PASSWORD` を process env / `.env` で供給（**verify の `DEV_KABU_API_PASSWORD` とは別パスワード**・findings 0109 / D2）。
 - macOS / Linux / CI では走らない。前提未充足（env 未設定 / 本体未起動）は **SKIP** として exit 0（rollup 中立）。
 
 ## ADR-0027 との整合
 
 ADR-0027 D4 は「自動 runner は verify/demo 固定で本番非接触」とする。本 runner は **意図的に prod を叩く唯一の例外**で、
 owner HITL 専用・`PROD_KABU_API_PASSWORD` 未設定や本体未起動では走らない二重ガードで守る。新たな端末フラグは足さない
-（ADR-0027 の中核＝prod-allow env ゲート廃止に矛盾しない）。詳細は findings 0106 を参照（ADR-0027 には書き戻さない）。
+（ADR-0027 の中核＝prod-allow env ゲート廃止に矛盾しない）。詳細は findings 0109 を参照（ADR-0027 には書き戻さない）。
 
 ## 操作一覧表
 

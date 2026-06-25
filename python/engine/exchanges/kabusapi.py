@@ -49,13 +49,13 @@ logger = logging.getLogger(__name__)
 
 # credentials_source="env" の自動 E2E が読む API パスワード env 名 (ADR-0027 D3: env は
 # 自動テスト専用・手動ダイアログは prefill しない)。prod と verify は kabuステーション本体で
-# 別パスワードなので env を出し分ける (findings 0106 / D2)。verify=DEV_* / prod=PROD_*。
+# 別パスワードなので env を出し分ける (findings 0109 / D2)。verify=DEV_* / prod=PROD_*。
 _ENV_API_PASSWORD = "DEV_KABU_API_PASSWORD"
 _ENV_API_PASSWORD_PROD = "PROD_KABU_API_PASSWORD"
 
 
 def _env_password_var(env: str) -> str:
-    """credentials_source='env' が読む env 名を環境別に返す (findings 0106 / D2)。"""
+    """credentials_source='env' が読む env 名を環境別に返す (findings 0109 / D2)。"""
     return _ENV_API_PASSWORD_PROD if env == "prod" else _ENV_API_PASSWORD
 
 

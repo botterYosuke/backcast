@@ -43,7 +43,7 @@ def _map_exception(exc: BaseException) -> str:
 
     if isinstance(exc, KabuTokenExpiredError):
         # この flow の唯一の auth 呼び出しは /token (fetch_token)。その HTTP 401 は
-        # 失効トークンではなく、body code で意味が分かれる (findings 0106 / D1):
+        # 失効トークンではなく、body code で意味が分かれる (findings 0109 / D1):
         #   STATION_LOGGED_OUT_CODES → 本体が口座へ未ログイン (アプリ起動済みでも未ログイン・早朝強制ログアウト)
         #   4001013 ほか             → ログイン済みだが API パスワード不正
         # いずれも旧実装は一律「トークン期限切れ」と誤表示していた。

@@ -2,7 +2,7 @@
 //
 // The per-window theme subscriber HudFrameChrome's header lamented backcast lacked: attached to each
 // floating-window root by WindowChrome.Attach, it re-applies the appearance-appropriate chrome + surface
-// on every ThemeService.Changed, so a dark↔light switch transforms the windows LIVE (findings 0106 D6).
+// on every ThemeService.Changed, so a dark↔light switch transforms the windows LIVE (findings 0108 D6).
 // Mirrors the ChartView / DepthLadderView self-subscription pattern (OnEnable subscribe, OnDisable drop) —
 // OnEnable is play-mode-only, so headless edit-time builds/probes call Apply() explicitly (via Attach).
 

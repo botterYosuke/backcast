@@ -13,13 +13,13 @@ class FormInit:
 
 KABU_STATION_NOT_RUNNING = "KABU_STATION_NOT_RUNNING"
 # ポートは listen しているが本体がブローカーへ未ログイン (kabu code 4001007/4001017)。
-# 「アプリ起動済み」≠「口座ログイン済み」。kabu は早朝に本体を強制ログアウトする (findings 0106)。
+# 「アプリ起動済み」≠「口座ログイン済み」。kabu は早朝に本体を強制ログアウトする (findings 0109)。
 KABU_STATION_NOT_LOGGED_IN = "KABU_STATION_NOT_LOGGED_IN"
 KABU_API_DISABLED = "KABU_API_DISABLED"
 # login ダイアログの唯一の auth 呼び出しは /token (fetch_token)。その HTTP 401 実体は kabu
 # code 4001013「kabuステーションはログイン済みだが API パスワードが不正」(ptal/error.html) で、
 # トークン失効ではない (発行時点で失効すべき既存トークンは無い)。よって「期限切れ」ではなく
-# 「パスワード不正」として提示する (findings 0106 / D1)。
+# 「パスワード不正」として提示する (findings 0109 / D1)。
 KABU_AUTH_REJECTED = "KABU_AUTH_REJECTED"
 AUTH_FAILED = "AUTH_FAILED"
 USER_CANCELLED = "USER_CANCELLED"

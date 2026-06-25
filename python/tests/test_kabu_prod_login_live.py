@@ -1,4 +1,4 @@
-"""KABU-LIVE-PROD-01 — owner HITL: 本番 kabuステーション (18080) への実ログイン (findings 0106 / D3)。
+"""KABU-LIVE-PROD-01 — owner HITL: 本番 kabuステーション (18080) への実ログイン (findings 0109 / D3)。
 
 ADR-0027 D4 の「自動 runner は verify/demo 固定で本番非接触」に対する**唯一の意図的例外**。
 owner HITL 専用で、二重ガードにより通常 CI では走らない:

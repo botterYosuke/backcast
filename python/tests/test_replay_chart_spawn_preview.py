@@ -190,6 +190,91 @@ def test_run_start_naturally_clears_preview(tmp_path) -> None:
     assert eng._rs.per_id_ohlc_points == {}, "load_replay_data must reset per_id_ohlc_points"
 
 
+@pytest.mark.scenario("PREVIEW-08")
+def test_preview_surfaces_through_get_current_state_projection(tmp_path) -> None:
+    """#129 layer 3 (真因) — the faithful gate.
+
+    The earlier PREVIEW-01..07 asserted ``eng._rs.per_id_ohlc_points[iid]`` *directly*. That
+    never builds the poll projection, so it missed the real ship-breaking bug:
+    ``_build_trading_state_locked`` iterated ``per_id_close`` only, dropping any preview-only iid
+    (present in per_id_ohlc_points, absent from per_id_close because RUN was never pressed). The
+    poll JSON ships ``get_current_state().per_instrument``, so the chart decoder saw HasSeries=false
+    and rendered nothing — the empty chart the owner saw on the real screen.
+
+    This gate drives the *projection* (get_current_state), which is what production actually polls.
+    RED before the union fix (per_instrument is empty), GREEN after.
+    """
+    _build_daily(tmp_path, n=10)
+    eng = DataEngine(duckdb_root=str(tmp_path))
+
+    ok, _, count = eng.populate_replay_preview(_IID, "2024-10-01", "2024-10-10", "Daily")
+    assert ok and count == 10
+    # Preview only wrote per_id_ohlc_points; per_id_close stays empty (no streamed close yet).
+    assert _IID in eng._rs.per_id_ohlc_points
+    assert _IID not in eng._rs.per_id_close
+
+    state = eng.get_current_state()
+    # The projection MUST surface the preview iid (this is the line that was broken).
+    assert _IID in state.per_instrument, (
+        "preview iid dropped from per_instrument projection — chart renders empty (#129 layer 3)"
+    )
+    pi = state.per_instrument[_IID]
+    assert len(pi.ohlc_points) == 10, "preview bars must reach the polled projection, not just _rs"
+    # price falls back to the last candle's close when no streamed close exists yet.
+    assert pi.price == eng._rs.per_id_ohlc_points[_IID][-1].close
+
+
+@pytest.mark.scenario("PREVIEW-09")
+def test_projection_union_does_not_disturb_streamed_instruments(tmp_path) -> None:
+    """The union projection must not change behaviour for normal streamed instruments.
+
+    When per_id_close IS present (the streaming case), price stays the streamed last close and
+    the iid is not duplicated. A second preview-only iid coexists in the same projection.
+    """
+    from engine.models import OhlcPoint
+
+    eng = DataEngine(duckdb_root=str(tmp_path))
+    # Simulate a streamed instrument: both dicts populated together (reducer.py invariant).
+    streamed = "9999.TSE"
+    eng._rs.per_id_close[streamed] = 1234.0
+    eng._rs.per_id_ohlc_points[streamed] = [
+        OhlcPoint(timestamp_ms=1, open_time_ms=1, open=1230, high=1240, low=1220, close=1234)
+    ]
+    # And a preview-only instrument: ohlc points but no close.
+    eng._rs.per_id_ohlc_points[_IID] = [
+        OhlcPoint(timestamp_ms=2, open_time_ms=2, open=1000, high=1010, low=990, close=1005)
+    ]
+
+    pi_map = eng.get_current_state().per_instrument
+    assert set(pi_map) == {streamed, _IID}
+    # Streamed iid keeps its streamed close as price (union changed nothing for it).
+    assert pi_map[streamed].price == 1234.0
+    # Preview-only iid derives price from its last candle close.
+    assert pi_map[_IID].price == 1005.0
+
+
+@pytest.mark.scenario("PREVIEW-10")
+def test_projection_surfaces_quote_only_instrument_with_empty_series(tmp_path) -> None:
+    """Characterize the close-only direction the union now iterates.
+
+    A TradeUpdate writes ``per_id_close[iid]`` (reducer.py:76) but NOT ``per_id_ohlc_points``
+    (that fires only for KlineUpdate, reducer.py:102-103). So a quote/trade-only instrument has a
+    close with no candles — the asymmetric case opposite to a preview iid. The union must still
+    surface it (price = streamed close, empty series), exactly as the old per_id_close-only loop did.
+    Pins the one behaviour the union touches that PREVIEW-08/09 don't cover, so a future refactor of
+    the dict.fromkeys union can't silently drop or phantom it.
+    """
+    eng = DataEngine(duckdb_root=str(tmp_path))
+    quote_only = "7777.TSE"
+    eng._rs.per_id_close[quote_only] = 500.0  # TradeUpdate set a close; no KlineUpdate → no candles
+    assert quote_only not in eng._rs.per_id_ohlc_points
+
+    pi_map = eng.get_current_state().per_instrument
+    assert quote_only in pi_map, "close-only iid must still surface (union must not regress streaming)"
+    assert pi_map[quote_only].price == 500.0, "price comes from the streamed close, not None"
+    assert pi_map[quote_only].ohlc_points == [], "no candles → empty series, no phantom OHLC"
+
+
 def test_bad_granularity_is_rejected(tmp_path) -> None:
     """A malformed granularity is rejected loudly (BAD_GRANULARITY, no state mutation)."""
     _build_daily(tmp_path, n=3)

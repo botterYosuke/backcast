@@ -696,6 +696,14 @@ sidecar に焼くと strategy+sidecar が非可搬になる。既存 harness の
 直読み）]] へ移り、catalog_path の代わりに DuckDB ルート（`BACKCAST_JQUANTS_DUCKDB_ROOT`・`.env`）を同じ「環境/配置の関心」
 として env/config で解決する**（ctor 引数 > `.env`・panel/sidecar には焼かない）。未設定は hard error で、nautilus catalog への
 silent fallback は持たない（root が解決すれば catalog 引数より優先）。legacy catalog 解決は #50 の nautilus 撤去まで code として残る。
+**（grill 2026-06-25・findings 0107）DuckDB root は Settings ダイアログの「Data」節からも設定でき、正本は app-global の
+`JquantsDuckdbRootStore`（PlayerPrefs・`AppearanceStore` と同型）。アプリは起動時/保存時に `Py.GIL()` 内で `os.environ`
+へ書き込み、Python は従来どおり `os.environ.get` で解決する（＝既存 env 解決 seam への書き手追加で ADR-0006 と無矛盾）。
+実効優先順位は `ctor 引数 > os.environ（UI/PlayerPrefs、無ければ .env setdefault）`。これは「panel/sidecar に焼かない」を
+破らない——PlayerPrefs は per-machine の app-global 設定であって per-run scenario panel でも sidecar でもないため
+（「panel フィールドへの昇格ではない」が否定したのは Scenario への per-run 昇格・非可搬化であり app-global Settings 面は別物）。
+`.env` ローダ（`engine/paths.py:_load_dotenv_once`）は pytest/E2E/hitl の Python 単体経路向けに残す。**_Avoid_: PlayerPrefs から
+`os.environ` への注入を Replay 実行の直前にだけ行うこと（init 時に未注入だと初回 run が .env 値で走る）。**
 _Avoid_: catalog を panel フィールド / scenario sidecar に入れること（環境設定・非可搬・engine が unknown key で reject）／
 catalog の真実源を per-run panel state にすること（config 層が正）／DuckDB root 未設定時に nautilus catalog へ fallback すること
 （runtime nautilus-free が env 依存で非決定的になる・ADR-0006）

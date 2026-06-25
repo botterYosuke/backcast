@@ -25,6 +25,11 @@ public interface IFileDialog
 {
     string SaveStrategyAs(string initialDir, string initialFileName);
     string OpenStrategy(string initialDir);
+
+    // #137 S4 (findings 0107 D4): pick a FOLDER (the Settings「Data」DuckDB root [...] button). Returns the
+    // chosen ABSOLUTE directory, or null on cancel / when native folder selection is unavailable (Player
+    // off the supported OS) — the caller keeps the typed text field working regardless (fail-soft).
+    string BrowseFolder(string title, string initialDir);
 }
 
 // Picks the native dialog for the current OS: Win32 (comdlg32) on Windows, the Editor's Cocoa panel
@@ -63,5 +68,18 @@ public sealed class StubFileDialog : IFileDialog
     {
         LastInitialDir = initialDir; LastInitialFile = null;
         return NextResult;
+    }
+
+    // #137 S4: the folder-pick seam. Records the title/initial dir so a probe can assert the default
+    // landing, and returns NextFolderResult (null = cancel). Separate from NextResult so a single Stub can
+    // serve both the .py picker and the folder picker without their results colliding.
+    public string NextFolderResult;
+    public string LastBrowseTitle;
+    public string LastBrowseInitialDir;
+
+    public string BrowseFolder(string title, string initialDir)
+    {
+        LastBrowseTitle = title; LastBrowseInitialDir = initialDir;
+        return NextFolderResult;
     }
 }

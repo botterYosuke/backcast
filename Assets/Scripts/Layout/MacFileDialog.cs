@@ -20,6 +20,20 @@ public sealed class MacFileDialog : IFileDialog
 
     public string SaveStrategyAs(string initialDir, string initialFileName) => Pick(save: true, initialDir, initialFileName);
 
+    // #137 S4 (findings 0107 D4): the Settings「Data」DuckDB root folder picker. EditorUtility.OpenFolderPanel
+    // gives the native Cocoa folder panel with ZERO plugin — the owner's Mac/Editor运用 primary path. Off the
+    // Editor (non-shipping Mac standalone) this is a graceful no-op (null) so the typed field still works.
+    public string BrowseFolder(string title, string initialDir)
+    {
+#if UNITY_EDITOR
+        string p = EditorUtility.OpenFolderPanel(title ?? "Select folder", initialDir ?? "", "");
+        return string.IsNullOrEmpty(p) ? null : p;   // "" on cancel → null (IFileDialog cancel contract)
+#else
+        Debug.LogWarning("[FILEDIALOG] macOS native folder picker is Editor-only -> cancelled.");
+        return null;
+#endif
+    }
+
     // One funnel for Open and Save (mirrors Win32FileDialog.Show): a single off-Editor no-op and a
     // single ""→null cancel normalisation. Save As passes the suggested name WITHOUT its extension
     // because EditorUtility.SaveFilePanel re-appends "py"; a name that already ends in .py would round

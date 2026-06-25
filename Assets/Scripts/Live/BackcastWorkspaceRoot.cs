@@ -198,6 +198,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     SettingsModeSegmentView _settingsModeView;     // #127: mode segments, re-homed from the footer
     SettingsAppearanceSegmentView _settingsAppearanceView;   // ADR-0028: Dark/Light theme switch
     SettingsVenueSectionView _settingsVenueView;   // #128: venue connect/disconnect, re-homed from the menu
+    SettingsDataSectionView _settingsDataView;     // #137 S4: DuckDB root editor (os.environ injection)
     bool _settingsOpenPrev;
     SecretModalOverlay _secretOverlay;
     bool _secretModalOpenPrev;
@@ -282,8 +283,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _isOwner = WorkspaceOwnership.ShouldClaim(_ownPlay, Application.isBatchMode, PythonEngine.IsInitialized, _host.PythonInitialized);
         if (_isOwner)
         {
-            try { _host.InitializePython(_venue); }   // build the server for the configured venue (not always MOCK)
+            try { _host.InitializePython(_venue); }    // build the server for the configured venue (not always MOCK)
             catch (Exception e) { Debug.LogError("[BackcastWorkspaceRoot] Python init failed: " + e); _isOwner = false; }
+
+            // #137 S4 (findings 0107 D1 ①): inject the persisted DuckDB root into os.environ AFTER Python init and
+            // BEFORE the first Replay, so an init-time run doesn't fall back to the `.env` value. No-op when the
+            // field is unset (engine keeps the `.env` setdefault — D3). Its OWN try/catch: a bad persisted root
+            // must NOT tear down a successfully-initialized interpreter / drop Python ownership for the session.
+            if (_isOwner)
+            {
+                try { JquantsDuckdbRootInjector.Inject(JquantsDuckdbRootStore.Load()); }
+                catch (Exception e) { Debug.LogError("[BackcastWorkspaceRoot] DuckDB root injection failed: " + e); }
+            }
         }
         else
         {
@@ -630,6 +641,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             () => _host.ServerReady && !_host.TeardownComplete, _font);
         _settingsVenueView.Build(_settingsOverlay.VenueSection);
 
+        // Data section (#137 S4 / findings 0107 D1-D5): the DuckDB root editor, re-homed off `.env`. Browse →
+        // native folder picker (the same IFileDialog seam the .py picker uses; AFK injects a StubFileDialog);
+        // commit → persist to JquantsDuckdbRootStore + inject os.environ so the next Replay reads the UI value
+        // (no restart — D4). engine/paths.py's `.env` loader stays for the pytest/E2E/hitl Python paths (D-C).
+        _settingsDataView = new SettingsDataSectionView(
+            dir => _fileDialog.BrowseFolder("Select J-Quants DuckDB folder", dir),
+            JquantsDuckdbRootInjector.Inject,
+            _font);
+        _settingsDataView.Build(_settingsOverlay.DataSection);
+
         // sidebar (V-host): reuse the durable controller brain. The sidebar edits the SAME universe
         // SoT the startup tile edits and OnRun reads (_scenario.Universe) — "one universe per workspace"
         // (#31 designed controller.Registry to be host-wired; the cutover shell wires it here, #59).
@@ -704,6 +725,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _ordersView?.ApplyTheme();
         _positionsView?.ApplyTheme();
         _runResultView?.ApplyTheme();
+        // #137 (findings 0107 F2): the Settings switch lives in THIS modal's Appearance tab, so re-theme the
+        // modal chrome (panel/cards/headers/tabs) + the redesigned input面 (Scenario tile fields, Data field)
+        // LIVE on a Dark/Light flip — none of these self-subscribe (plain classes / baked-at-build chrome).
+        _settingsOverlay?.ApplyTheme();
+        _tile?.ApplyTheme();
+        _settingsDataView?.ApplyTheme();
         // keep the Settings Appearance segment highlight in sync when the theme changes from elsewhere.
         _settingsAppearanceView?.Refresh();
     }

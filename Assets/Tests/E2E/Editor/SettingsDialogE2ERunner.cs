@@ -38,12 +38,17 @@ public static class SettingsDialogE2ERunner
         Section("SETTINGS-06", Section06_ZOrderContract);
         Section("SETTINGS-07", Section07_OverlayChromeNonVacuity);
         Section("SETTINGS-08", Section08_VenueSectionAndMenuRetired);
+        Section("SETTINGS-09", Section09_InputFieldDistinction);
+        Section("SETTINGS-10", Section10_TwoTabSwitch);
+        Section("SETTINGS-11", Section11_CardSurfacesAndRoles);
 
         if (_fail.Count == 0)
             Debug.Log("[E2E SETTINGS DIALOG PASS] modal shell open/close (SETTINGS-01) / ESC guard: " +
                       "drag-revert (SETTINGS-02), secret+save-guard consume (SETTINGS-03), toggle (SETTINGS-04) / " +
-                      "[x]+SetVisible (SETTINGS-05) / z-order menu<settings<secret (SETTINGS-06) / chrome+3 sections " +
-                      "(SETTINGS-07) / venue section + menu Venue retired (SETTINGS-08) — ADR-0026, findings 0102");
+                      "[x]+SetVisible (SETTINGS-05) / z-order menu<settings<secret (SETTINGS-06) / chrome+sections " +
+                      "(SETTINGS-07) / venue section + menu Venue retired (SETTINGS-08) / input-field border+placeholder+" +
+                      "muted label (SETTINGS-09) / 2-tab 実行↔外観 switch (SETTINGS-10) / card面+role解決 (SETTINGS-11) " +
+                      "— ADR-0026, findings 0102/0107");
         else
             Debug.LogError("[E2E SETTINGS DIALOG FAIL]\n  - " + string.Join("\n  - ", _fail));
 
@@ -286,5 +291,182 @@ public static class SettingsDialogE2ERunner
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    static bool SameColor(Color a, Color b) =>
+        Mathf.Abs(a.r - b.r) < 0.003f && Mathf.Abs(a.g - b.g) < 0.003f &&
+        Mathf.Abs(a.b - b.b) < 0.003f && Mathf.Abs(a.a - b.a) < 0.003f;
+
+    // SETTINGS-09 (#137 S1 / findings 0107 D5): every Settings InputField reads as an input — a visible
+    // BORDER (Outline, role `border`), a PLACEHOLDER (role `text_placeholder`, non-empty), a sunk fill (role
+    // `surface_background`) — and is paired with a MUTED label (role `text_muted`), so the owner's「どれが入力欄か
+    // 分からない」不満 is fixed. Exercised on the Scenario tile (the representative Settings input form). The
+    // Data field's own border/placeholder is pinned by DUCKROOT-03. RED litmus: drop the Outline, or paint a
+    // field/label with an inline color instead of the role, → the role-equality asserts fail.
+    static string Section09_InputFieldDistinction()
+    {
+        var go = new GameObject("settings_inputfield_e2e", typeof(RectTransform));
+        try
+        {
+            var c = ThemeService.Current.colors;
+            var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+            var ctrl = new ScenarioStartupController();
+            var tile = new ScenarioStartupTile(ctrl, font);
+            tile.Build((RectTransform)go.transform);
+
+            var fields = go.GetComponentsInChildren<InputField>(true);
+            if (fields.Length < 4) return $"tile built {fields.Length} InputFields, expected ≥4 (Start/End/cash/universe)";
+
+            foreach (var f in fields)
+            {
+                var border = f.GetComponent<Outline>();
+                if (border == null) return "an InputField has no Outline border (S1 requires a visible border)";
+                if (!SameColor(border.effectColor, c.border))
+                    return "InputField border color is not the `border` role (inline color or wrong role)";
+
+                var fill = f.GetComponent<Image>();
+                if (fill == null || !SameColor(fill.color, c.surface_background))
+                    return "InputField fill is not the `surface_background` role (sunk input面 — D5)";
+
+                var ph = f.placeholder as Text;
+                if (ph == null) return "an InputField has no Text placeholder (S1 requires a placeholder)";
+                if (string.IsNullOrEmpty(ph.text)) return "InputField placeholder text is empty (must hint e.g. YYYY-MM-DD)";
+                if (!SameColor(ph.color, c.text_placeholder))
+                    return "InputField placeholder color is not the `text_placeholder` role";
+
+                var body = f.textComponent;
+                if (body == null || !SameColor(body.color, c.text))
+                    return "InputField body text is not the `text` role";
+            }
+
+            // a YYYY-MM-DD placeholder must actually be present (non-vacuity for the date fields).
+            bool sawDateHint = false;
+            foreach (var f in fields)
+                if ((f.placeholder as Text)?.text?.Contains("YYYY-MM-DD") == true) sawDateHint = true;
+            if (!sawDateHint) return "no field carries the YYYY-MM-DD placeholder hint";
+
+            // a muted label exists and is visually DISTINCT from the body text (label≠input — the core不満).
+            bool sawMutedLabel = false;
+            foreach (var t in go.GetComponentsInChildren<Text>(true))
+                if (t.gameObject.name == "label" && SameColor(t.color, c.text_muted)) sawMutedLabel = true;
+            if (!sawMutedLabel) return "no `text_muted` field label found (labels must be muted, distinct from inputs)";
+            if (SameColor(c.text_muted, c.text)) return "text_muted == text role (labels would not be distinguishable)";
+
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // SETTINGS-10 (#137 S2 / findings 0107 D6): the two tabs「実行 / 外観」. 実行 hosts Venue/Mode/Scenario/Data,
+    // 外観 hosts Appearance; SelectTab toggles the group containers' activeSelf and the tab buttons recolor.
+    // RED litmus: make SelectTab a no-op (or alias the two groups) → the activeSelf / section-parent asserts fail.
+    static string Section10_TwoTabSwitch()
+    {
+        var go = new GameObject("settings_tabs_e2e");
+        try
+        {
+            var overlay = go.AddComponent<SettingsModalOverlay>();
+            overlay.Build(Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            var c = ThemeService.Current.colors;
+
+            var run = overlay.RunTabContent; var app = overlay.AppearanceTabContent;
+            if (run == null || app == null) return "tab content groups missing";
+            if (run == app) return "the two tab groups alias each other";
+
+            // the 実行 sections live under the run group; Appearance lives under the appearance group.
+            if (overlay.DataSection == null) return "DataSection container missing (#137 S4)";
+            if (!IsDescendant(overlay.VenueSection, run)) return "Venue section not under the 実行 tab group";
+            if (!IsDescendant(overlay.ModeSection, run)) return "Mode section not under the 実行 tab group";
+            if (!IsDescendant(overlay.ScenarioSection, run)) return "Scenario section not under the 実行 tab group";
+            if (!IsDescendant(overlay.DataSection, run)) return "Data section not under the 実行 tab group";
+            if (!IsDescendant(overlay.AppearanceSection, app)) return "Appearance section not under the 外観 tab group";
+
+            // tab buttons exist.
+            Button runTab = null, appTab = null;
+            foreach (var b in go.GetComponentsInChildren<Button>(true))
+            {
+                if (b.gameObject.name == "tab_run") runTab = b;
+                else if (b.gameObject.name == "tab_appearance") appTab = b;
+            }
+            if (runTab == null || appTab == null) return "tab buttons (tab_run / tab_appearance) not built";
+
+            // default = 実行 active.
+            if (overlay.ActiveTab != SettingsTab.Run) return "default ActiveTab is not Run";
+            if (!run.gameObject.activeSelf) return "default: 実行 group not active";
+            if (app.gameObject.activeSelf) return "default: 外観 group active behind 実行";
+            if (!SameColor(runTab.GetComponent<Image>().color, c.tab_active_background))
+                return "active 実行 tab not painted tab_active_background";
+            if (!SameColor(appTab.GetComponent<Image>().color, c.tab_inactive_background))
+                return "inactive 外観 tab not painted tab_inactive_background";
+
+            // click 外観 → groups swap + tab colors swap.
+            appTab.onClick.Invoke();
+            if (overlay.ActiveTab != SettingsTab.Appearance) return "clicking 外観 did not switch ActiveTab";
+            if (run.gameObject.activeSelf) return "外観 selected but 実行 group still active";
+            if (!app.gameObject.activeSelf) return "外観 selected but 外観 group not active";
+            if (!SameColor(appTab.GetComponent<Image>().color, c.tab_active_background))
+                return "外観 tab not painted active after click";
+
+            // click 実行 → back.
+            runTab.onClick.Invoke();
+            if (overlay.ActiveTab != SettingsTab.Run) return "clicking 実行 did not switch back";
+            if (!run.gameObject.activeSelf || app.gameObject.activeSelf) return "実行 click did not restore group visibility";
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    // SETTINGS-11 (#137 S3 / findings 0107 D5): each section sits in a themed CARD面
+    // (elevated_surface_background, raised from the panel_background face) with a muted/uppercase header; all
+    // chrome resolves through ThemeService roles (no inline color). RED litmus: paint a card with an inline
+    // color, or remove the elevated card surface, → the role-equality asserts fail.
+    static string Section11_CardSurfacesAndRoles()
+    {
+        var go = new GameObject("settings_cards_e2e");
+        try
+        {
+            var overlay = go.AddComponent<SettingsModalOverlay>();
+            overlay.Build(Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
+            var c = ThemeService.Current.colors;
+
+            // panel face = panel_background role.
+            var panel = FindByName(go, "SettingsPanel");
+            if (panel == null) return "SettingsPanel missing";
+            var panelImg = panel.GetComponent<Image>();
+            if (panelImg == null || !SameColor(panelImg.color, c.panel_background))
+                return "panel face is not the `panel_background` role";
+
+            // every named section card is an elevated surface raised above the panel face.
+            string[] cards = { "card:VENUE", "card:MODE", "card:SCENARIO", "card:DATA", "card:APPEARANCE" };
+            int seen = 0;
+            foreach (var name in cards)
+            {
+                var card = FindByName(go, name);
+                if (card == null) return $"section card '{name}' missing";
+                var img = card.GetComponent<Image>();
+                if (img == null || !SameColor(img.color, c.elevated_surface_background))
+                    return $"card '{name}' is not the `elevated_surface_background` role";
+                seen++;
+            }
+            if (seen != cards.Length) return "not all section cards built";
+            if (SameColor(c.elevated_surface_background, c.panel_background))
+                return "card surface == panel face (cards would not be visually grouped)";
+
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(go); }
+    }
+
+    static bool IsDescendant(Transform child, Transform ancestor)
+    {
+        for (var t = child; t != null; t = t.parent) if (t == ancestor) return true;
+        return false;
+    }
+
+    static GameObject FindByName(GameObject root, string name)
+    {
+        foreach (var rt in root.GetComponentsInChildren<RectTransform>(true))
+            if (rt.gameObject.name == name) return rt.gameObject;
+        return null;
     }
 }

@@ -1,28 +1,30 @@
 // ScenarioStartupTile.cs — issue #29 "Replay 実行設定パネル" (uGUI tile content)
 //
-// Builds + binds the Hakoniwa PanelKind::Startup tile content (slot 0; TTWR
-// populate_startup_tile parity) as legacy uGUI, and wires it to ScenarioStartupController.
-// A PLAIN C# builder (not a MonoBehaviour): the harness owns the GameObject lifecycle and
-// the Run trigger; this class only constructs widgets and forwards edits to the controller.
+// Builds + binds the Scenario section content (TTWR populate_startup_tile parity) as legacy uGUI, and
+// wires it to ScenarioStartupController. A PLAIN C# builder (not a MonoBehaviour): the harness owns the
+// GameObject lifecycle and the Run trigger; this class only constructs widgets and forwards edits to the
+// controller.
+//
+// #137 S1/S3 REDESIGN (findings 0107 F1/D5): the tile is now hosted ONLY inside the Settings modal's
+// Scenario card (ADR-0026 re-home) + ThemeHitlHarness preview — it is NOT on the Hakoniwa canvas, so its
+// input面 moves OFF the Hakoniwa-isolated roles (findings 0054) ONTO the Settings input roles:
+//   * each InputField gets a visible BORDER (Outline, role `border`), a PLACEHOLDER (role `text_placeholder`)
+//     and a sunk fill (role `surface_background`) so it reads as an input — the owner's #1 不満点 (S1).
+//   * labels are MUTED (role `text_muted`) and laid out LEFT-of the field in a 2-COLUMN row (S3) so the
+//     label↔field correspondence is obvious. Field body text = role `text`.
+//   * the card (SettingsModalOverlay) provides the surrounding surface, so the tile no longer paints a tile
+//     background of its own (transparent) and drops its redundant inline title (the card header is "SCENARIO").
 //
 // FIELDS (CONTEXT "run 期間 (start/end) vs lookback" + universe SoT):
-//   Start / End (YYYY-MM-DD InputFields) · Granularity (Daily | Minute toggle buttons) ·
-//   Initial cash (InputField) · Universe (one InputField, whitespace/comma-separated ids →
-//   InstrumentRegistry.ReplaceAll — the minimal text-list editor #31's picker later replaces) ·
-//   per-field error labels.
+//   Start / End (YYYY-MM-DD) · Granularity (Daily | Minute) · Initial cash · Universe (comma/space ids →
+//   InstrumentRegistry.ReplaceAll) · per-field error labels.
 //
-// #76 S6b-β-clean U5: the tile is SCENARIO-EDITING-ONLY. The Run button + run-readiness display
-// moved to the Strategy Editor title bar (RunReadinessViewModel / StrategyEditorRunButton); the
-// tile keeps the scenario fields and their per-field error labels. Every edit calls the controller
-// setter then Refresh(), so the field errors are visible live.
-//
-// COLORS (issue #44): no inline color constants — every graphic reads ThemeService.Current
-// (findings 0020). Retained graphic refs let ApplyTheme() repaint on a theme switch; the
-// owning harness wires `ThemeService.Changed += tile.ApplyTheme`.
+// COLORS (issue #44 / findings 0020): no inline color constants — every graphic reads ThemeService.Current.
+// Retained graphic refs let ApplyTheme() repaint on a theme switch; the owning harness wires
+// `ThemeService.Changed += tile.ApplyTheme`.
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -35,11 +37,19 @@ public sealed class ScenarioStartupTile
     Button _dailyBtn, _minuteBtn;
     Text _startErr, _endErr, _cashErr, _universeErr, _granErr;
 
-    // Retained themed graphics (issue #44) so ApplyTheme() can repaint on a theme switch.
+    // Retained themed graphics (issue #44 / S1 redesign) so ApplyTheme() can repaint on a theme switch.
     Image _tileBg;
-    readonly List<Image> _fieldBgs = new List<Image>();   // role: hakoniwa_tile_background (findings 0054 — Hakoniwa-isolated inset surface)
-    readonly List<Text> _bodyTexts = new List<Text>();    // role: hakoniwa_text
-    readonly List<Text> _errorTexts = new List<Text>();   // role: status.error
+    readonly List<Image> _fieldBgs = new List<Image>();      // role: surface_background (sunk input面 — S1/D5)
+    readonly List<Outline> _fieldBorders = new List<Outline>(); // role: border (the visible input frame — S1/D5)
+    readonly List<Text> _placeholders = new List<Text>();    // role: text_placeholder (S1/D5)
+    readonly List<Text> _labelTexts = new List<Text>();      // role: text_muted (the 2-col left labels — S1/S3)
+    readonly List<Text> _bodyTexts = new List<Text>();       // role: text (field body + button captions)
+    readonly List<Image> _btnBgs = new List<Image>();        // role: element_background (granularity off-state)
+    readonly List<Text> _errorTexts = new List<Text>();      // role: status.error
+
+    // 2-column layout (S3): label left, input right; shared spacing constants (findings 0107 D5).
+    const float LabelXMin = 0.04f, LabelXMax = 0.40f, FieldXMin = 0.42f, FieldXMax = 0.96f;
+    const float RowH = 22f, ErrH = 13f, RowGap = 4f;
 
     public ScenarioStartupTile(ScenarioStartupController ctrl, Font font)
     {
@@ -47,40 +57,39 @@ public sealed class ScenarioStartupTile
         _font = font;
     }
 
-    // Build the tile UI under `tile` (a full-stretch RectTransform owned by the harness).
+    // Build the tile UI under `tile` (a card content RectTransform owned by the harness/overlay).
     public void Build(RectTransform tile)
     {
         var bg = tile.gameObject.GetComponent<Image>();
         if (bg == null) bg = tile.gameObject.AddComponent<Image>();
         _tileBg = bg;
-        bg.color = ThemeService.Current.colors.hakoniwa_panel_surface;   // findings 0054: Hakoniwa-isolated startup surface
+        bg.color = Color.clear;          // S3: the card provides the surface; the tile面 is transparent
+        bg.raycastTarget = false;
 
-        float y = -8f;
-        const float rowH = 22f, errH = 14f, gap = 2f;
+        float y = -2f;
 
-        MakeLabel(tile, "Replay Scenario", ref y, 18f, bold: true);
-        y -= 4f;
+        _startField = MakeField(tile, "Start", "YYYY-MM-DD", ref y, v => { _ctrl.SetStart(v); Refresh(); });
+        _startErr = MakeError(tile, ref y);
+        _endField = MakeField(tile, "End", "YYYY-MM-DD", ref y, v => { _ctrl.SetEnd(v); Refresh(); });
+        _endErr = MakeError(tile, ref y);
 
-        _startField = MakeField(tile, "Start (YYYY-MM-DD)", ref y, rowH, v => { _ctrl.SetStart(v); Refresh(); });
-        _startErr = MakeError(tile, ref y, errH);
-        _endField = MakeField(tile, "End (YYYY-MM-DD)", ref y, rowH, v => { _ctrl.SetEnd(v); Refresh(); });
-        _endErr = MakeError(tile, ref y, errH);
+        MakeRowLabel(tile, "Granularity", y);
+        _dailyBtn = MakeButton(tile, "Daily", FieldXMin, FieldXMin + (FieldXMax - FieldXMin) / 2f - 0.01f, y,
+            () => { _ctrl.SetGranularity(GranularityChoice.Daily); Refresh(); });
+        _minuteBtn = MakeButton(tile, "Minute", FieldXMin + (FieldXMax - FieldXMin) / 2f + 0.01f, FieldXMax, y,
+            () => { _ctrl.SetGranularity(GranularityChoice.Minute); Refresh(); });
+        y -= RowH + RowGap;
+        _granErr = MakeError(tile, ref y);
 
-        MakeLabel(tile, "Granularity", ref y, rowH);
-        _dailyBtn = MakeButton(tile, "Daily", 0f, ref y, rowH, () => { _ctrl.SetGranularity(GranularityChoice.Daily); Refresh(); }, advanceY: false);
-        _minuteBtn = MakeButton(tile, "Minute", 0.5f, ref y, rowH, () => { _ctrl.SetGranularity(GranularityChoice.Minute); Refresh(); }, advanceY: true);
-        _granErr = MakeError(tile, ref y, errH);
+        _cashField = MakeField(tile, "Initial cash", "1000000", ref y, v => { _ctrl.SetInitialCash(v); Refresh(); });
+        _cashErr = MakeError(tile, ref y);
 
-        _cashField = MakeField(tile, "Initial cash", ref y, rowH, v => { _ctrl.SetInitialCash(v); Refresh(); });
-        _cashErr = MakeError(tile, ref y, errH);
-
-        _universeField = MakeField(tile, "Universe (ids, comma/space)", ref y, rowH, OnUniverseChanged);
-        // On blur/submit, re-pull the field from the SoT (never ReplaceAll the text). A field that
-        // went stale while focused (the focus-guarded skip path) otherwise survives, so the NEXT
-        // keystroke's OnUniverseChanged would ReplaceAll(stale ids) and erase a sidebar add
-        // (findings 0025 §12, Finding 2).
+        _universeField = MakeField(tile, "Universe", "9984.TSE, 7203.TSE", ref y, OnUniverseChanged);
+        // On blur/submit, re-pull the field from the SoT (never ReplaceAll the text). A field that went stale
+        // while focused otherwise survives, so the NEXT keystroke's OnUniverseChanged would ReplaceAll(stale
+        // ids) and erase a sidebar add (findings 0025 §12, Finding 2).
         _universeField.onEndEdit.AddListener(_ => PullUniverseField());
-        _universeErr = MakeError(tile, ref y, errH);
+        _universeErr = MakeError(tile, ref y);
 
         SyncFieldsFromController();
         Refresh();
@@ -100,9 +109,9 @@ public sealed class ScenarioStartupTile
         Refresh();
     }
 
-    // Re-pull ONLY the universe text field from the shared SoT (never the reverse — this never
-    // mutates the registry). Used after build/restore, on focus-loss recovery (onEndEdit), and when
-    // the SoT changes elsewhere (#31 sidebar/picker, #59 one-universe-per-workspace).
+    // Re-pull ONLY the universe text field from the shared SoT (never the reverse — this never mutates the
+    // registry). Used after build/restore, on focus-loss recovery (onEndEdit), and when the SoT changes
+    // elsewhere (#31 sidebar/picker, #59 one-universe-per-workspace).
     void PullUniverseField()
     {
         if (_universeField != null)
@@ -119,12 +128,10 @@ public sealed class ScenarioStartupTile
         Refresh();
     }
 
-    // The universe SoT changed from ELSEWHERE (#31 sidebar/picker editing the SHARED
-    // InstrumentRegistry, #59 one-universe-per-workspace). Re-pull the held-mode text field so a
-    // subsequent edit here does not ReplaceAll(stale ids) and erase the sidebar's add. FOCUS-GUARD:
-    // skip the text rewrite while the user is typing in this field (the field is the live editor
-    // then — and our own OnUniverseChanged→ReplaceAll re-enters here; rewriting mid-type would
-    // reformat under the caret). Refresh() still re-derives error labels / Run enablement.
+    // The universe SoT changed from ELSEWHERE (#31 sidebar/picker, #59). Re-pull the held-mode text field so
+    // a subsequent edit here does not ReplaceAll(stale ids) and erase the sidebar's add. FOCUS-GUARD: skip
+    // the rewrite while the user is typing in this field (the field is the live editor then — and our own
+    // OnUniverseChanged→ReplaceAll re-enters here). Refresh() still re-derives error labels.
     void OnUniverseRegistryChanged()
     {
         if (_universeField != null && !_universeField.isFocused)
@@ -132,16 +139,13 @@ public sealed class ScenarioStartupTile
         Refresh();
     }
 
-    // Unsubscribe from the shared universe SoT so a destroyed tile leaves no orphan handler
-    // pinning the controller. Idempotent; the owning host calls this on teardown.
+    // Unsubscribe from the shared universe SoT so a destroyed tile leaves no orphan handler. Idempotent.
     public void Dispose()
     {
         if (_ctrl?.Universe != null) _ctrl.Universe.Changed -= OnUniverseRegistryChanged;
     }
 
     // Recompute the per-field error labels + the granularity selection highlight from validation.
-    // #76 S6b-β-clean U5: the tile is scenario-editing-only — Run + run-readiness moved to the
-    // Strategy Editor title bar (RunReadinessViewModel / StrategyEditorRunButton).
     public void Refresh()
     {
         var e = _ctrl.Validate();
@@ -155,16 +159,19 @@ public sealed class ScenarioStartupTile
         Highlight(_minuteBtn, _ctrl.Params.Granularity == GranularityChoice.Minute);
     }
 
-    // Repaint every retained graphic from the active theme (issue #44). Called by the owning
-    // harness on ThemeService.Changed. Re-runs Refresh() so the granularity selection highlight
-    // (element_selected vs hakoniwa_tile_background) re-derives from controller state under the new theme.
+    // Repaint every retained graphic from the active theme (issue #44 / S1 roles). Called by the owning
+    // harness on ThemeService.Changed. Re-runs Refresh() so the granularity selection highlight re-derives.
     public void ApplyTheme()
     {
-        var t = ThemeService.Current;
-        if (_tileBg != null) _tileBg.color = t.colors.hakoniwa_panel_surface;
-        foreach (var img in _fieldBgs) if (img != null) img.color = t.colors.hakoniwa_tile_background;
-        foreach (var txt in _bodyTexts) if (txt != null) txt.color = t.colors.hakoniwa_text;
-        foreach (var txt in _errorTexts) if (txt != null) txt.color = t.status.error;
+        var c = ThemeService.Current.colors;
+        if (_tileBg != null) _tileBg.color = Color.clear;
+        foreach (var img in _fieldBgs) if (img != null) img.color = c.surface_background;
+        foreach (var ol in _fieldBorders) if (ol != null) ol.effectColor = c.border;
+        foreach (var ph in _placeholders) if (ph != null) ph.color = c.text_placeholder;
+        foreach (var lbl in _labelTexts) if (lbl != null) lbl.color = c.text_muted;
+        foreach (var txt in _bodyTexts) if (txt != null) txt.color = c.text;
+        foreach (var bb in _btnBgs) if (bb != null) bb.color = c.element_background;
+        foreach (var txt in _errorTexts) if (txt != null) txt.color = ThemeService.Current.status.error;
         Refresh();
     }
 
@@ -182,93 +189,86 @@ public sealed class ScenarioStartupTile
         var img = b.GetComponent<Image>();
         if (img == null) return;
         var c = ThemeService.Current.colors;
-        img.color = on ? c.element_selected : c.hakoniwa_tile_background;   // findings 0054: off-state matches inset surface
+        img.color = on ? c.element_selected : c.element_background;
     }
 
-    Text MakeLabel(RectTransform parent, string text, ref float y, float h, bool bold = false)
+    // A 2-column input row (S3): muted label LEFT, bordered+placeholdered field RIGHT. The field widget is
+    // the shared ThemedInputFieldBuilder (so the Scenario card and the Data card stay identical — D5).
+    // Advances `y`.
+    InputField MakeField(RectTransform parent, string label, string placeholder, ref float y,
+        UnityEngine.Events.UnityAction<string> onChanged)
+    {
+        MakeRowLabel(parent, label, y);
+
+        var tf = ThemedInputFieldBuilder.Build(parent, _font, placeholder);
+        Anchor(tf.field.GetComponent<RectTransform>(), FieldXMin, FieldXMax, y, RowH);
+        _fieldBgs.Add(tf.fill);
+        _fieldBorders.Add(tf.border);
+        _placeholders.Add(tf.placeholder);
+        _bodyTexts.Add(tf.body);
+
+        tf.field.onValueChanged.AddListener(onChanged);
+        y -= RowH + RowGap;
+        return tf.field;
+    }
+
+    // A 2-col LEFT label (muted) on the row at `yTop` — does NOT advance y (the field shares the row).
+    Text MakeRowLabel(RectTransform parent, string text, float yTop)
     {
         var go = new GameObject("label", typeof(RectTransform), typeof(Text));
         var rt = go.GetComponent<RectTransform>();
         rt.SetParent(parent, false);
-        Anchor(rt, 0.04f, 0.96f, y, h);
+        Anchor(rt, LabelXMin, LabelXMax, yTop, RowH);
         var t = go.GetComponent<Text>();
-        t.font = _font; t.color = ThemeService.Current.colors.hakoniwa_text; t.text = text; t.fontSize = bold ? 14 : 11;
-        t.fontStyle = bold ? FontStyle.Bold : FontStyle.Normal;
+        t.font = _font; t.color = ThemeService.Current.colors.text_muted; t.text = text; t.fontSize = 11;
         t.alignment = TextAnchor.MiddleLeft;
-        _bodyTexts.Add(t);
-        y -= h + 2f;
+        _labelTexts.Add(t);
         return t;
     }
 
-    InputField MakeField(RectTransform parent, string label, ref float y, float h, UnityEngine.Events.UnityAction<string> onChanged)
-    {
-        MakeLabel(parent, label, ref y, 13f);
-        var go = new GameObject("field", typeof(RectTransform), typeof(Image), typeof(InputField));
-        var rt = go.GetComponent<RectTransform>();
-        rt.SetParent(parent, false);
-        Anchor(rt, 0.04f, 0.96f, y, h);
-        var fieldBg = go.GetComponent<Image>();
-        fieldBg.color = ThemeService.Current.colors.hakoniwa_tile_background;
-        _fieldBgs.Add(fieldBg);
-
-        var textGo = new GameObject("text", typeof(RectTransform), typeof(Text));
-        var trt = textGo.GetComponent<RectTransform>();
-        trt.SetParent(rt, false);
-        Stretch(trt, 4f);
-        var txt = textGo.GetComponent<Text>();
-        txt.font = _font; txt.color = ThemeService.Current.colors.hakoniwa_text; txt.fontSize = 11; txt.alignment = TextAnchor.MiddleLeft;
-        txt.supportRichText = false;
-        _bodyTexts.Add(txt);
-
-        var field = go.GetComponent<InputField>();
-        field.textComponent = txt;
-        field.onValueChanged.AddListener(onChanged);
-        y -= h + 2f;
-        return field;
-    }
-
-    Text MakeError(RectTransform parent, ref float y, float h)
+    Text MakeError(RectTransform parent, ref float y)
     {
         var go = new GameObject("err", typeof(RectTransform), typeof(Text));
         var rt = go.GetComponent<RectTransform>();
         rt.SetParent(parent, false);
-        Anchor(rt, 0.04f, 0.96f, y, h);
+        Anchor(rt, FieldXMin, FieldXMax, y, ErrH);
         var t = go.GetComponent<Text>();
         t.font = _font; t.color = ThemeService.Current.status.error; t.fontSize = 10; t.alignment = TextAnchor.MiddleLeft;
         t.enabled = false;
         _errorTexts.Add(t);
-        y -= h + 1f;
+        y -= ErrH + 1f;
         return t;
     }
 
-    Button MakeButton(RectTransform parent, string label, float xMin, ref float y, float h,
-        UnityEngine.Events.UnityAction onClick, bool advanceY)
+    // A granularity toggle button (named btn:Daily / btn:Minute — pinned by SCENARIO-15). Off-state =
+    // element_background, on-state highlight = element_selected (Highlight()).
+    Button MakeButton(RectTransform parent, string label, float xMin, float xMax, float yTop,
+        UnityEngine.Events.UnityAction onClick)
     {
         var go = new GameObject("btn:" + label, typeof(RectTransform), typeof(Image), typeof(Button));
         var rt = go.GetComponent<RectTransform>();
         rt.SetParent(parent, false);
-        float left = 0.04f + xMin * 0.92f;
-        float right = 0.04f + (xMin + 0.5f) * 0.92f - 0.01f;
-        Anchor(rt, left, right, y, h);
-        go.GetComponent<Image>().color = ThemeService.Current.colors.hakoniwa_tile_background;
+        Anchor(rt, xMin, xMax, yTop, RowH);
+        var img = go.GetComponent<Image>();
+        img.color = ThemeService.Current.colors.element_background;
+        _btnBgs.Add(img);
 
         var textGo = new GameObject("text", typeof(RectTransform), typeof(Text));
         var trt = textGo.GetComponent<RectTransform>();
         trt.SetParent(rt, false);
         Stretch(trt, 0f);
         var t = textGo.GetComponent<Text>();
-        t.font = _font; t.color = ThemeService.Current.colors.hakoniwa_text; t.text = label; t.fontSize = 12;
+        t.font = _font; t.color = ThemeService.Current.colors.text; t.text = label; t.fontSize = 12;
         t.alignment = TextAnchor.MiddleCenter;
         _bodyTexts.Add(t);
 
         var btn = go.GetComponent<Button>();
         btn.onClick.AddListener(onClick);
-        if (advanceY) y -= h + 2f;
         return btn;
     }
 
-    // Anchor a row at vertical pixel offset `yTop` (from the tile top), height `h`, between
-    // normalized x [xMin,xMax]. Uses top-stretch anchors so rows stack from the top.
+    // Anchor a row at vertical pixel offset `yTop` (from the tile top), height `h`, between normalized x
+    // [xMin,xMax]. Top-stretch anchors so rows stack from the top.
     static void Anchor(RectTransform rt, float xMin, float xMax, float yTop, float h)
     {
         rt.anchorMin = new Vector2(xMin, 1f);

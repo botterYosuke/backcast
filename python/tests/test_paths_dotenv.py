@@ -72,6 +72,36 @@ def test_jquants_duckdb_root_absolute_kept(monkeypatch) -> None:
     assert paths.jquants_duckdb_root() == Path(configured)
 
 
+def test_jquants_duckdb_root_lazy_reread_after_runtime_update(monkeypatch) -> None:
+    """#137 S4 (findings 0107 D4): a RUNTIME os.environ update takes effect on the NEXT call — no restart.
+
+    This is the engine-boundary contract the Settings「Data」injection relies on: the Unity host writes
+    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] when the field commits, and the next Replay's
+    jquants_duckdb_root() must read the new value (it lazy-reads os.environ.get every call, never caches).
+    """
+    monkeypatch.setattr(os, "environ", {})
+    assert paths.jquants_duckdb_root() is None                 # unset → no override
+
+    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = "/first/root"  # simulate the host's first injection
+    assert paths.jquants_duckdb_root() == Path("/first/root")
+
+    os.environ["BACKCAST_JQUANTS_DUCKDB_ROOT"] = "/second/root"  # the owner edits the field again
+    assert paths.jquants_duckdb_root() == Path("/second/root")  # next call reflects it (no restart — D4)
+
+
+def test_jquants_listed_info_path_resolves_under_injected_root(monkeypatch, tmp_path) -> None:
+    """#137 S4: jquants_listed_info_path() resolves `<root>/listed_info.duckdb` from os.environ when present.
+
+    Mirrors DUCKROOT-04's C# end-to-end assertion (host inject → os.environ → engine resolves the real file),
+    and the validator contract (a root WITHOUT listed_info.duckdb → None, so the field surfaces a red error).
+    """
+    monkeypatch.setattr(os, "environ", {"BACKCAST_JQUANTS_DUCKDB_ROOT": str(tmp_path)})
+    assert paths.jquants_listed_info_path() is None            # root set but file missing → None (validator errors)
+
+    (tmp_path / "listed_info.duckdb").write_text("")
+    assert paths.jquants_listed_info_path() == tmp_path / "listed_info.duckdb"
+
+
 def test_db_path_rejects_unconfigured_root() -> None:
     """An empty/unset root must fail loudly, not resolve to a relative cwd path (#48 review)."""
     import pytest

@@ -7,12 +7,16 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（16 本）
+## Surface E2E（17 本）
 
 > #125–#128（ADR-0026・findings 0102）: **SettingsDialogE2ERunner** 新設（SETTINGS-01..09＝modal shell / ESC-guard /
 > z-order / chrome+3 section / venue 表面）。**MenuBar** の Venue dropdown 退役（MENU-10 対象外・MENU-11/14 を SETTINGS-08 へ移設・
 > MENU-16 Settings 実体化）／**FooterMode** の mode セグメントを Settings へ移設（FOOTER-06/07 view を `SettingsModeSegmentView` に
 > retarget・FOOTER-13 を「footer ボタン 0」へ反転）／**ScenarioStartup** に SCENARIO-16（dock 5→4）・SCENARIO-17（forward-compat skip）追加。
+>
+> #137（ADR-0026・findings 0107）: Settings 刷新——**SettingsDialog** に SETTINGS-09（入力欄判別）・SETTINGS-10（2タブ切替）・
+> SETTINGS-11（カード面/role 解決）追加、旧 HITL 行を SETTINGS-12 へ採番替え。**DuckDbRootSettingsE2ERunner** 新設
+> （DUCKROOT-01..05＝DuckDB root の store/validation/browse/os.environ 注入。`.env` から Settings「Data」節へ移設）。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -25,7 +29,8 @@
 | [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..52` | 52 | 49 | 0 | 0 | 2 | 1 |
 | [StrategyEditorZoomCrispnessE2ERunner](./StrategyEditorZoomCrispnessE2ERunner.md) ✅ | `ZOOM-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..17` | 17 | 15 | 0 | 0 | 2 | 0 |
-| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
+| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..12` | 12 | 11 | 0 | 0 | 1 | 0 |
+| [DuckDbRootSettingsE2ERunner](./DuckDbRootSettingsE2ERunner.md) ✅ | `DUCKROOT-01..05` | 5 | 4 | 0 | 0 | 1 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |
 | [ModifyOrderE2ERunner](./ModifyOrderE2ERunner.md) ✅ | `MODIFY-01..11,20,21` | 15 | 13 | 0 | 1 | 1 | 0 |

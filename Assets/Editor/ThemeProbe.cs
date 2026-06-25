@@ -226,16 +226,27 @@ public static class ThemeProbe
     {
         var font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
-        // -- 4a ScenarioStartupTile (panel) --
+        // -- 4a ScenarioStartupTile (input field面) --
+        // #137 (findings 0107 F1): the tile no longer paints a Hakoniwa panel surface — it is hosted in the
+        // Settings card, which provides the surface, so the tile面 is now Color.clear. The wiring-kill samples
+        // the field FILL role (surface_background) instead, proving the redesigned input面 follows a switch.
         ThemeService.ResetForTests();
         var tileGo = Spawn("probe_tile", typeof(RectTransform));
         var tile = new ScenarioStartupTile(new ScenarioStartupController(), font);
         tile.Build(tileGo.GetComponent<RectTransform>());
-        var tileBg = tileGo.GetComponent<Image>();
-        Eq(tileBg.color, Theme.Dark().colors.hakoniwa_panel_surface, "tile bg == dark hakoniwa_panel_surface (findings 0054)");
-        ThemeService.SetTheme(Theme.NonDefault());
-        tile.ApplyTheme();
-        Eq(tileBg.color, ThemeService.Current.colors.hakoniwa_panel_surface, "tile bg switched to NonDefault hakoniwa_panel_surface");
+        Image tileFieldBg = null;
+        foreach (var img in tileGo.GetComponentsInChildren<Image>(true))
+            if (img.gameObject.name == "field") { tileFieldBg = img; break; }
+        if (tileFieldBg == null) _fails.Add("4a: tile built no input field面 (surface_background sample missing)");
+        else
+        {
+            Ne(Theme.Dark().colors.surface_background, Theme.NonDefault().colors.surface_background,
+               "surface_background dark != NonDefault (4a non-vacuity)");
+            Eq(tileFieldBg.color, Theme.Dark().colors.surface_background, "tile field fill == dark surface_background (#137 S1)");
+            ThemeService.SetTheme(Theme.NonDefault());
+            tile.ApplyTheme();
+            Eq(tileFieldBg.color, ThemeService.Current.colors.surface_background, "tile field fill switched to NonDefault surface_background");
+        }
 
         // -- 4b PythonSyntaxMeshEffect (syntax) --
         ThemeService.ResetForTests();

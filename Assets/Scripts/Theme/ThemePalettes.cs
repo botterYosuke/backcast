@@ -9,9 +9,64 @@
 
 using UnityEngine;
 
-// Light / dark label. NOT a behavioural switch — like TTWR, nothing branches on it; it just
-// records "which variant is active" for #43 to read/persist.
+// Light / dark label. Since ADR-0028 it IS a switch input: ThemeColors.FromScales branches the
+// canvas-isolated owner literals on it (CanvasLiterals.For), and the active variant is persisted
+// (#43 / findings 0106 D8). Scale-derived roles still do NOT branch on it (Radix from_scales is
+// appearance-agnostic — the scale swap carries the dark↔light difference for those).
 public enum Appearance { Dark, Light }
+
+// CanvasLiterals — the per-Appearance canvas-ISOLATED owner literals (workspace_background + hakoniwa_*),
+// raw sRGB, NOT scale-derived (ADR-0028 / findings 0106 D3). ONE place so a re-skin is "swap values + Play"
+// (no scene re-bake). The isolation seam (findings 0054) holds in BOTH variants: these are the only roles
+// the chart / ladder / tiles / field read, so a scale change can't bleed into the canvas and vice-versa.
+struct CanvasLiterals
+{
+    public Color workspace_background, hakoniwa_root_background, hakoniwa_tile_background, hakoniwa_tile_header;
+    public Color hakoniwa_chart_background, hakoniwa_panel_surface, hakoniwa_tile_header_text, hakoniwa_text, hakoniwa_text_muted;
+    public Color hakoniwa_up, hakoniwa_down, hakoniwa_last;
+
+    public static CanvasLiterals For(Appearance appearance) =>
+        appearance == Appearance.Light ? Light() : Dark();
+
+    // DARK — cyan-HUD deep-space (2026-06-20/21 owner re-skin; supersedes the farm theme from findings 0054).
+    // Tile = an instrument panel floating in deep space; outer field is the darkest void; tiles read as an
+    // illuminated card on void; steel-blue header frames the tile; chart face a hair lighter than void for
+    // ink contrast; up/down/LAST = muted aurora-teal / mars-rust / gold-star so candles glow without screaming.
+    static CanvasLiterals Dark() => new CanvasLiterals
+    {
+        workspace_background      = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a near-black cyan-navy HUD field
+        hakoniwa_root_background  = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a near-black HUD void (ground)
+        hakoniwa_tile_background  = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 illuminated panel card
+        hakoniwa_tile_header      = new Color(0.0824f, 0.3294f, 0.4078f), // #155368 cyan-steel header / frame
+        hakoniwa_chart_background = new Color(0.0235f, 0.0431f, 0.0824f), // #060b15 near-void chart face
+        hakoniwa_panel_surface    = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 same panel hue (startup tile)
+        hakoniwa_tile_header_text = new Color(0.7843f, 0.9647f, 0.9922f), // #c8f6fd pale cyan header text
+        hakoniwa_text             = new Color(0.8784f, 0.9059f, 0.9608f), // #e0e7f5 starlight white text
+        hakoniwa_text_muted       = new Color(0.6588f, 0.7059f, 0.8314f), // #a8b4d4 cool grey-blue axes
+        hakoniwa_up               = new Color(0.2314f, 0.7686f, 0.5961f), // #3bc498 aurora teal
+        hakoniwa_down             = new Color(0.8510f, 0.3882f, 0.2627f), // #d96343 mars rust
+        hakoniwa_last             = new Color(0.8471f, 0.6588f, 0.2314f), // #d8a83b gold star
+    };
+
+    // LIGHT — Miro-風 whiteboard (ADR-0028). Off-white field (the dotted grid rides on this), white cards
+    // that pop against the field, near-black ink text, and candles tuned to read on a WHITE chart face
+    // (deeper / more saturated than the dark aurora set so they don't wash out). Owner literals — swap + Play.
+    static CanvasLiterals Light() => new CanvasLiterals
+    {
+        workspace_background      = new Color(0.9333f, 0.9412f, 0.9529f), // #eef0f3 soft cool off-white field
+        hakoniwa_root_background  = new Color(0.9333f, 0.9412f, 0.9529f), // #eef0f3 same ground
+        hakoniwa_tile_background  = new Color(1.0000f, 1.0000f, 1.0000f), // #ffffff white card
+        hakoniwa_tile_header      = new Color(0.9255f, 0.9333f, 0.9451f), // #eceef1 light grey header band
+        hakoniwa_chart_background = new Color(1.0000f, 1.0000f, 1.0000f), // #ffffff white chart face (ink contrast)
+        hakoniwa_panel_surface    = new Color(1.0000f, 1.0000f, 1.0000f), // #ffffff white panel (startup tile)
+        hakoniwa_tile_header_text = new Color(0.0667f, 0.0941f, 0.1098f), // #11181c near-black ink on light header
+        hakoniwa_text             = new Color(0.0667f, 0.0941f, 0.1098f), // #11181c near-black ink text
+        hakoniwa_text_muted       = new Color(0.4078f, 0.4392f, 0.4627f), // #687076 grey axes / change% / ladder header
+        hakoniwa_up               = new Color(0.0863f, 0.5255f, 0.2471f), // #16863f deep green: candle up / gain / bid
+        hakoniwa_down             = new Color(0.8235f, 0.2471f, 0.2471f), // #d23f3f legible red: candle down / loss / ask
+        hakoniwa_last             = new Color(0.6902f, 0.4667f, 0.0000f), // #b07700 dark gold: ladder LAST marker
+    };
+}
 
 // -- ThemeColors (54 semantic UI roles, field naming mirrors Zed's ThemeColors) -----------
 public sealed class ThemeColors
@@ -58,31 +113,30 @@ public sealed class ThemeColors
     public Color gutter_background, line_number, line_number_active;
     public Color modal_background, notification_background, drag_overlay_background;
 
-    public static ThemeColors FromScales(ColorScales s)
+    public static ThemeColors FromScales(ColorScales s, Appearance appearance)
     {
         var n = s.neutral; var a = s.accent; var y = s.yellow;
+        var canvas = CanvasLiterals.For(appearance);
         return new ThemeColors
         {
             background = n.Step1,
-            workspace_background = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a — near-black cyan-navy HUD field behind floating panels (cyan-HUD re-skin 2026-06-21)
-            // hakoniwa SPACE palette (2026-06-20 owner re-skin, supersedes farm theme from findings 0054):
-            // tile is an instrument panel floating in deep space. Outer field is the darkest void (#030610);
-            // tiles sit on Neutral.Step3 so they read as illuminated card on void; steel-blue header frames
-            // the tile (Neutral.Step7, no extra primary); chart face is a hair lighter than void for ink
-            // contrast. Up/down/LAST use the muted aurora-teal / mars-rust / gold-star scale anchors so
-            // candles glow without screaming. Owner literals (raw sRGB) — a future light scale can't
-            // silently recolor them; swap + Play to tune.
-            hakoniwa_root_background  = new Color(0.0078f, 0.0196f, 0.0392f), // #02050a — near-black HUD void (ground)
-            hakoniwa_tile_background  = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 — illuminated panel card (Neutral.Step3)
-            hakoniwa_tile_header      = new Color(0.0824f, 0.3294f, 0.4078f), // #155368 — cyan-steel header / frame (Accent-tinted)
-            hakoniwa_chart_background = new Color(0.0235f, 0.0431f, 0.0824f), // #060b15 — near-void chart face for ink contrast
-            hakoniwa_panel_surface    = new Color(0.0549f, 0.0863f, 0.1490f), // #0e1626 — same panel hue (startup tile)
-            hakoniwa_tile_header_text = new Color(0.7843f, 0.9647f, 0.9922f), // #c8f6fd — pale cyan text on cyan-steel header
-            hakoniwa_text             = new Color(0.8784f, 0.9059f, 0.9608f), // #e0e7f5 — starlight white text
-            hakoniwa_text_muted       = new Color(0.6588f, 0.7059f, 0.8314f), // #a8b4d4 — cool grey-blue axes / change% / ladder header
-            hakoniwa_up               = new Color(0.2314f, 0.7686f, 0.5961f), // #3bc498 — aurora teal: candle up / change% gain / ladder bid
-            hakoniwa_down             = new Color(0.8510f, 0.3882f, 0.2627f), // #d96343 — mars rust: candle down / change% loss / ladder ask
-            hakoniwa_last             = new Color(0.8471f, 0.6588f, 0.2314f), // #d8a83b — gold star: ladder LAST marker
+            // workspace_background + hakoniwa_* are the canvas-ISOLATED owner literals (NOT scale steps) —
+            // switched per Appearance (ADR-0028 / findings 0106 D3). The isolation seam (findings 0054) is
+            // preserved in BOTH variants so a future scale can't silently recolor the canvas; the dark =
+            // cyan-HUD deep-space field, the light = Miro-風 whiteboard. See CanvasLiterals below for the
+            // raw sRGB values + rationale per variant.
+            workspace_background      = canvas.workspace_background,
+            hakoniwa_root_background  = canvas.hakoniwa_root_background,
+            hakoniwa_tile_background  = canvas.hakoniwa_tile_background,
+            hakoniwa_tile_header      = canvas.hakoniwa_tile_header,
+            hakoniwa_chart_background = canvas.hakoniwa_chart_background,
+            hakoniwa_panel_surface    = canvas.hakoniwa_panel_surface,
+            hakoniwa_tile_header_text = canvas.hakoniwa_tile_header_text,
+            hakoniwa_text             = canvas.hakoniwa_text,
+            hakoniwa_text_muted       = canvas.hakoniwa_text_muted,
+            hakoniwa_up               = canvas.hakoniwa_up,
+            hakoniwa_down             = canvas.hakoniwa_down,
+            hakoniwa_last             = canvas.hakoniwa_last,
             surface_background = n.Step2,
             elevated_surface_background = n.Step3,
             panel_background = n.Step2,

@@ -46,6 +46,15 @@ public sealed class LivePanelTileView
         _content.raycastTarget = false;   // data display only; body-drag falls through to canvas pan
     }
 
+    // ADR-0028: re-read the Hakoniwa panel text color from the active theme so a LIVE Dark↔Light switch
+    // re-paints the body text (else the baked #e0e7f5 starlight text stays on the now-white Light card and
+    // goes invisible). The owner (BackcastWorkspaceRoot.ApplyViewportTheme) calls this on ThemeService.Changed;
+    // this view is a plain class, not a MonoBehaviour, so it can't self-subscribe like ChartView/DepthLadderView.
+    public void ApplyTheme()
+    {
+        if (_content != null) _content.color = ThemeService.Current.colors.hakoniwa_text;
+    }
+
     // Rewrite the tile text from the VM ONLY when the formatted output changed. Returns true on a
     // real change (lets the caller fold this into a footer-style signature if desired).
     public bool Refresh(LivePanelViewModel panel)

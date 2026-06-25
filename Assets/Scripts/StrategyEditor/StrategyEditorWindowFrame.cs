@@ -15,7 +15,9 @@ public static class StrategyEditorWindowFrame
     public const float TitleHeight = 28f;
     // Cyan-HUD re-skin 2026-06-21: body = Neutral.Step3 (#0e1626), title = Accent.Step7 cyan-steel
     // (#1c87a3) — the editor title now rides the cyan brand instead of violet. TODO: route via ThemeService.
-    static readonly Color BodyColor = new Color(0.0549f, 0.0863f, 0.1490f, 0.98f);
+    // public so WindowChrome.Attach can preserve this exact dark body (hue + 0.98 alpha) on a live theme
+    // switch — its RGB equals panel_surface but its 0.98 translucency does not, so pass it explicitly.
+    public static readonly Color BodyColor = new Color(0.0549f, 0.0863f, 0.1490f, 0.98f);
     static readonly Color TitleColor = new Color(0.1098f, 0.5294f, 0.6392f, 1f);
 
     // Build a window-frame subtree rooted at a new GameObject (NOT parented/positioned — the caller
@@ -41,7 +43,7 @@ public static class StrategyEditorWindowFrame
         body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
         body.offsetMin = new Vector2(4f, 4f); body.offsetMax = new Vector2(-4f, -(TitleHeight + 2f));
 
-        HudFrameChrome.Decorate(root);   // cyan HUD edge glow + corner brackets (shared chrome)
+        WindowChrome.Attach(root, BodyColor);   // appearance-aware chrome; preserve authored dark body (ADR-0028)
         return root;
     }
 

@@ -36,6 +36,15 @@ public sealed class ColorScales
         ColorScale.YellowDark(),
         ColorScale.BlueDark());
 
-    // Stub to dark until #51 ships real Radix light scales (TTWR ColorScales::light() parity).
-    public static ColorScales Light() => Dark();
+    // Real Radix light scales (ADR-0028, the #51-reserved work) for the Miro-風 whiteboard variant.
+    // from_scales is appearance-agnostic, so swapping in the light scales re-derives every semantic role
+    // with no downstream change. The canvas-isolated owner literals (workspace_background / hakoniwa_*)
+    // are switched per-Appearance inside ThemeColors.FromScales, NOT here (they are not scale-derived).
+    public static ColorScales Light() => new ColorScales(
+        ColorScale.NeutralLight(),
+        ColorScale.AccentLight(),
+        ColorScale.RedLight(),
+        ColorScale.GreenLight(),
+        ColorScale.YellowLight(),
+        ColorScale.BlueLight());
 }

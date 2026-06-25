@@ -40,6 +40,7 @@ public static class ThemeProbe
         {
             ThemeService.ResetForTests();
             Section1_DerivationParity();
+            Section1b_LightVariant();
             Section2_NonDefaultDiffers();
             Section3_ServiceSemantics();
             Section4_WiringKill();
@@ -82,27 +83,29 @@ public static class ThemeProbe
         var blue = ColorScale.BlueDark();
 
         Eq(t.colors.background, n.Step1, "colors.background == neutral.1");
-        // workspace_background is an owner literal (#7fa4be), NOT a scale step — assert the value AND that
-        // it is DISTINCT from background, so the viewport field can't silently collapse back onto dark.
-        Eq(t.colors.workspace_background, new Color(0.4980f, 0.6431f, 0.7451f), "colors.workspace_background == #7fa4be (owner literal)");
+        // workspace_background is the DARK canvas owner literal (CanvasLiterals.Dark, ADR-0028), NOT a scale
+        // step — assert the SHIPPED space value AND that it is DISTINCT from background, so the viewport field
+        // can't silently collapse back onto the content bg. (Synced 2026-06-25 from the stale farm #7fa4be.)
+        Eq(t.colors.workspace_background, new Color(0.0078f, 0.0196f, 0.0392f), "colors.workspace_background == #02050a (dark owner literal)");
         Ne(t.colors.workspace_background, t.colors.background, "workspace_background != background (field stays distinct from content bg)");
-        // hakoniwa_* are owner literals (findings 0054), NOT scale steps — assert the bright sample values
-        // AND that the Hakoniwa bg roles differ from the shared dark roles they replaced (else the editor /
-        // footer / sidebar would leak back into Hakoniwa and the isolation is vacuous).
-        Eq(t.colors.hakoniwa_root_background,  new Color(0.4157f, 0.6078f, 0.2549f), "hakoniwa_root_background == #6a9b41 (grass field)");
-        Eq(t.colors.hakoniwa_tile_background,  new Color(0.8902f, 0.8353f, 0.6902f), "hakoniwa_tile_background == #e3d5b0 (tilled earth)");
-        Eq(t.colors.hakoniwa_tile_header,      new Color(0.5412f, 0.3843f, 0.2235f), "hakoniwa_tile_header == #8a6239 (soil brown)");
-        Eq(t.colors.hakoniwa_chart_background, new Color(0.9373f, 0.9059f, 0.8235f), "hakoniwa_chart_background == #efe7d2 (cream)");
-        Eq(t.colors.hakoniwa_panel_surface,    new Color(0.9216f, 0.8824f, 0.7843f), "hakoniwa_panel_surface == #ebe1c8 (warm cream)");
-        Eq(t.colors.hakoniwa_tile_header_text, new Color(0.9529f, 0.9255f, 0.8471f), "hakoniwa_tile_header_text == #f3ecd8 (cream label)");
-        Eq(t.colors.hakoniwa_text,             new Color(0.1843f, 0.1490f, 0.0863f), "hakoniwa_text == #2f2616 (dark soil)");
-        Eq(t.colors.hakoniwa_text_muted,       new Color(0.4353f, 0.3686f, 0.2471f), "hakoniwa_text_muted == #6f5e3f (mid brown)");
-        // hakoniwa trading colors (findings 0054 P1) — cream-legible, isolated from the dark-scale status.*.
-        Eq(t.colors.hakoniwa_up,   new Color(0.1804f, 0.4314f, 0.1922f), "hakoniwa_up == #2e6e31 (crop green)");
-        Eq(t.colors.hakoniwa_down, new Color(0.6275f, 0.1765f, 0.1216f), "hakoniwa_down == #a02d1f (barn red)");
-        Eq(t.colors.hakoniwa_last, new Color(0.4784f, 0.3529f, 0.0706f), "hakoniwa_last == #7a5a12 (dark amber)");
-        Ne(t.colors.hakoniwa_up, t.status.@long, "hakoniwa_up != status.long (cream-legible, not the dark-bg step)");
-        Ne(t.colors.hakoniwa_down, t.status.@short, "hakoniwa_down != status.short");
+        // hakoniwa_* are the DARK canvas owner literals (CanvasLiterals.Dark — cyan-HUD space re-skin), NOT
+        // scale steps. Assert the shipped values AND the structural isolation Ne (chart/panel bg differ from
+        // the shared roles, else the editor/footer/sidebar leak into the canvas and the isolation is vacuous).
+        Eq(t.colors.hakoniwa_root_background,  new Color(0.0078f, 0.0196f, 0.0392f), "hakoniwa_root_background == #02050a (HUD void)");
+        Eq(t.colors.hakoniwa_tile_background,  new Color(0.0549f, 0.0863f, 0.1490f), "hakoniwa_tile_background == #0e1626 (panel card)");
+        Eq(t.colors.hakoniwa_tile_header,      new Color(0.0824f, 0.3294f, 0.4078f), "hakoniwa_tile_header == #155368 (cyan-steel header)");
+        Eq(t.colors.hakoniwa_chart_background, new Color(0.0235f, 0.0431f, 0.0824f), "hakoniwa_chart_background == #060b15 (near-void chart face)");
+        Eq(t.colors.hakoniwa_panel_surface,    new Color(0.0549f, 0.0863f, 0.1490f), "hakoniwa_panel_surface == #0e1626 (panel hue)");
+        Eq(t.colors.hakoniwa_tile_header_text, new Color(0.7843f, 0.9647f, 0.9922f), "hakoniwa_tile_header_text == #c8f6fd (pale cyan)");
+        Eq(t.colors.hakoniwa_text,             new Color(0.8784f, 0.9059f, 0.9608f), "hakoniwa_text == #e0e7f5 (starlight white)");
+        Eq(t.colors.hakoniwa_text_muted,       new Color(0.6588f, 0.7059f, 0.8314f), "hakoniwa_text_muted == #a8b4d4 (cool grey-blue)");
+        // hakoniwa trading colors (CanvasLiterals.Dark): aurora-teal / mars-rust / gold-star. Under the space
+        // re-skin these intentionally SHARE the green/red/yellow scale anchors (hakoniwa_up == green.9 etc.),
+        // so the old "!= status.long" distinctness assert is GONE — the isolation is the separate ROLE (a future
+        // palette CAN diverge them), proven by the chart/panel Ne below + the Section-light switch kill.
+        Eq(t.colors.hakoniwa_up,   new Color(0.2314f, 0.7686f, 0.5961f), "hakoniwa_up == #3bc498 (aurora teal)");
+        Eq(t.colors.hakoniwa_down, new Color(0.8510f, 0.3882f, 0.2627f), "hakoniwa_down == #d96343 (mars rust)");
+        Eq(t.colors.hakoniwa_last, new Color(0.8471f, 0.6588f, 0.2314f), "hakoniwa_last == #d8a83b (gold star)");
         Ne(t.colors.hakoniwa_chart_background, t.colors.background, "hakoniwa_chart_background != background (chart/ladder isolated from editor)");
         Ne(t.colors.hakoniwa_panel_surface, t.colors.panel_background, "hakoniwa_panel_surface != panel_background (startup isolated from footer/sidebar)");
         Eq(t.colors.surface_background, n.Step2, "colors.surface_background == neutral.2");
@@ -128,6 +131,43 @@ public static class ThemeProbe
 
         Eq(t.players.Get(0), a.Step9, "players[0] == accent.9 (editor accent)");
         Eq(t.players.Get(2), yellow.Step9, "players[2] == yellow.9 (order accent)");
+    }
+
+    // 1b — Light (Miro-風 whiteboard) variant: derivation parity on the REAL Radix light scales + the
+    // canvas owner literals, AND non-vacuity (light != dark) so the appearance switch genuinely moves both
+    // the scale-derived chrome AND the canvas (ADR-0028 / findings 0106 S1+S2). Without this, a regression
+    // that left Light()==Dark() (the old 案A stub) would pass every other section silently.
+    static void Section1b_LightVariant()
+    {
+        var l = Theme.Light();
+        var dark = Theme.Dark();
+        var nL = ColorScale.NeutralLight();
+        var aL = ColorScale.AccentLight();
+        var greenL = ColorScale.GreenLight();
+
+        True(l.appearance == Appearance.Light, "Theme.Light().appearance == Light");
+
+        // scale-derived chrome follows the LIGHT scales (from_scales is appearance-agnostic — proves the
+        // scale swap, not a branch, carries the chrome difference).
+        Eq(l.colors.background, nL.Step1, "light colors.background == NeutralLight.1 (#fbfcfd near-white)");
+        Eq(l.colors.text, nL.Step12, "light colors.text == NeutralLight.12 (#11181c ink)");
+        Eq(l.colors.accent, aL.Step9, "light colors.accent == AccentLight.9 (#3e63dd Miro-blue)");
+        Eq(l.status.@long, greenL.Step9, "light status.long == GreenLight.9");
+
+        // canvas owner literals follow the LIGHT branch (CanvasLiterals.Light — Miro whiteboard).
+        Eq(l.colors.workspace_background, new Color(0.9333f, 0.9412f, 0.9529f), "light workspace_background == #eef0f3 (off-white field)");
+        Eq(l.colors.hakoniwa_tile_background, new Color(1f, 1f, 1f), "light hakoniwa_tile_background == #ffffff (white card)");
+        Eq(l.colors.hakoniwa_chart_background, new Color(1f, 1f, 1f), "light hakoniwa_chart_background == #ffffff (white chart face)");
+        Eq(l.colors.hakoniwa_text, new Color(0.0667f, 0.0941f, 0.1098f), "light hakoniwa_text == #11181c (ink)");
+        Eq(l.colors.hakoniwa_up, new Color(0.0863f, 0.5255f, 0.2471f), "light hakoniwa_up == #16863f (deep green)");
+
+        // NON-VACUITY: light must actually differ from dark, scale-derived AND canvas, else the switch is a no-op.
+        Ne(l.colors.background, dark.colors.background, "light background != dark (whiteboard vs void)");
+        Ne(l.colors.text, dark.colors.text, "light text != dark");
+        Ne(l.colors.accent, dark.colors.accent, "light accent != dark (Miro-blue vs cyan)");
+        Ne(l.colors.workspace_background, dark.colors.workspace_background, "light workspace_background != dark");
+        Ne(l.colors.hakoniwa_tile_background, dark.colors.hakoniwa_tile_background, "light hakoniwa_tile_background != dark");
+        Ne(l.colors.hakoniwa_up, dark.colors.hakoniwa_up, "light hakoniwa_up != dark");
     }
 
     // 2 — the verification palette genuinely differs from dark.

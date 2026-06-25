@@ -60,7 +60,7 @@ public static class DockWindowFrame
         body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
         body.offsetMin = new Vector2(4f, 4f); body.offsetMax = new Vector2(-4f, -(TitleHeight + 2f));
 
-        HudFrameChrome.Decorate(root);   // cyan HUD edge glow + corner brackets (shared chrome)
+        WindowChrome.Attach(root);   // appearance-aware chrome: dark HUD brackets ⇔ light Miro card (ADR-0028)
         return root;
     }
 }

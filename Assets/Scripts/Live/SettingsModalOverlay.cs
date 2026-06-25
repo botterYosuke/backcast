@@ -33,6 +33,7 @@ public sealed class SettingsModalOverlay : MonoBehaviour
     public RectTransform VenueSection { get; private set; }
     public RectTransform ModeSection { get; private set; }
     public RectTransform ScenarioSection { get; private set; }
+    public RectTransform AppearanceSection { get; private set; }   // ADR-0028: Dark/Light theme switch
 
     public bool IsVisible => _visible;
 
@@ -60,7 +61,7 @@ public sealed class SettingsModalOverlay : MonoBehaviour
         var prt = (RectTransform)panel.transform;
         prt.SetParent(brt, false);
         prt.anchorMin = prt.anchorMax = new Vector2(0.5f, 0.5f); prt.pivot = new Vector2(0.5f, 0.5f);
-        prt.sizeDelta = new Vector2(580f, 600f);
+        prt.sizeDelta = new Vector2(580f, 668f);   // grown for the Appearance section (ADR-0028)
         panel.GetComponent<Image>().color = new Color(0.0667f, 0.0863f, 0.1686f, 1f); // #11162b Neutral.Step3 (parity with secret panel)
 
         MakeLabel(prt, font, 16f, 12f, 360f, 24f, "<b>Settings</b>").supportRichText = true;
@@ -71,9 +72,10 @@ public sealed class SettingsModalOverlay : MonoBehaviour
         // Three labeled sections, stacked. Each header is a label; the content container is exposed for
         // the host to build the reused section view into (Scenario / Mode / Venue populate them). The Venue
         // section is sized for the unpinned/editor max (MOCK + 4 variants + Disconnect = 6 rows × 20px).
-        VenueSection    = MakeSection(prt, font, "Venue",    52f,  132f);
-        ModeSection     = MakeSection(prt, font, "Mode",     212f,  44f);
-        ScenarioSection = MakeSection(prt, font, "Scenario", 284f, 288f);
+        VenueSection      = MakeSection(prt, font, "Venue",      52f,  132f);
+        ModeSection       = MakeSection(prt, font, "Mode",       212f,  44f);
+        ScenarioSection   = MakeSection(prt, font, "Scenario",   284f, 288f);
+        AppearanceSection = MakeSection(prt, font, "Appearance", 600f,  36f);   // ADR-0028 Dark/Light
 
         SetVisible(false);
     }

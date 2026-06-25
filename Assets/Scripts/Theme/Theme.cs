@@ -32,7 +32,7 @@ public sealed class Theme
     public static Theme FromScales(ColorScales scales, Appearance appearance)
     {
         return new Theme(
-            ThemeColors.FromScales(scales),
+            ThemeColors.FromScales(scales, appearance),
             StatusColors.FromScales(scales),
             SyntaxColors.FromScales(scales),
             PlayerColors.FromScales(scales),

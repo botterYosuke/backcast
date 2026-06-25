@@ -10,8 +10,12 @@
 // RAW into new Color(r,g,b,1) — same流儀 as existing backcast inline colors. Project is in
 // Linear color space (findings 0020 known-risk); revisit only if HITL shows luminance drift.
 //
-// Light scales are NOT shipped in #44 (案A): the *_light factories stub to *_dark, mirroring
-// TTWR ColorScales::light() which returns dark. Real Radix light values land in #51.
+// Light scales: #44 (案A) stubbed *_light to *_dark (TTWR ColorScales::light() returns dark). ADR-0028
+// lands the REAL Radix light scales here (the #51-reserved work) so the Miro-風 whiteboard theme can be
+// switched live. The light scales are the PUBLISHED Radix LIGHT values (slate/indigo/red/grass/amber/blue)
+// — step_1 a near-white app bg, step_12 a near-black high-contrast text, by the same Radix role mapping
+// from_scales already consumes (so wiring the light scales needs ZERO downstream re-derivation). Accent =
+// Radix INDIGO (step_9 #3e63dd) — an electric Miro-blue, distinct from the status `blue` scale (info).
 
 using UnityEngine;
 
@@ -147,5 +151,113 @@ public sealed class ColorScale
         new Color(0.4039f, 0.6941f, 0.8902f), // 10 #67b1e3
         new Color(0.5804f, 0.7922f, 0.9333f), // 11 #94caee low-contrast text
         new Color(0.7843f, 0.8824f, 0.9608f), // 12 #c8e1f5 high-contrast text
+    });
+
+    // -- Light scales (Radix LIGHT: slate / indigo / red / grass / amber / blue) — ADR-0028 ----
+    // Published Radix LIGHT hex written as raw sRGB/255 (same流儀 as the dark scales above; Linear
+    // color space known-risk per findings 0020 — revisit only if HITL shows luminance drift). These
+    // drive the Miro-風 whiteboard variant: near-white app bg (step_1), near-black text (step_12).
+
+    // Hex → Color helper (raw sRGB/255). Light scales transcribe Radix hex, so a helper avoids the
+    // per-channel float transcription errors the dark scales risk with hand-divided literals.
+    static Color Rgb(int r, int g, int b) => new Color(r / 255f, g / 255f, b / 255f, 1f);
+
+    // NEUTRAL = Radix Slate (light): the off-white field + grey borders the whiteboard reads on.
+    public static ColorScale NeutralLight() => new ColorScale(new[]
+    {
+        Rgb(0xFB, 0xFC, 0xFD), //  1 #fbfcfd app bg (near-white)
+        Rgb(0xF8, 0xF9, 0xFA), //  2 #f8f9fa subtle bg
+        Rgb(0xF1, 0xF3, 0xF5), //  3 #f1f3f5 ui bg
+        Rgb(0xEC, 0xEE, 0xF0), //  4 #eceef0 ui hover
+        Rgb(0xE6, 0xE8, 0xEB), //  5 #e6e8eb ui pressed
+        Rgb(0xDF, 0xE3, 0xE6), //  6 #dfe3e6 subtle border
+        Rgb(0xD7, 0xDB, 0xDF), //  7 #d7dbdf ui border
+        Rgb(0xC1, 0xC8, 0xCD), //  8 #c1c8cd strong border
+        Rgb(0x88, 0x90, 0x96), //  9 #889096 solid
+        Rgb(0x7E, 0x86, 0x8C), // 10 #7e868c solid hover
+        Rgb(0x68, 0x70, 0x76), // 11 #687076 low-contrast text
+        Rgb(0x11, 0x18, 0x1C), // 12 #11181c high-contrast text (near-black ink)
+    });
+
+    // ACCENT = Radix Indigo (light): step_9 #3e63dd is an electric Miro-blue (drives accent / focus
+    // borders / Card-chrome accent / text-icon accent / PlayerColors[0] / syntax keyword+type).
+    public static ColorScale AccentLight() => new ColorScale(new[]
+    {
+        Rgb(0xFD, 0xFD, 0xFE), //  1 #fdfdfe
+        Rgb(0xF8, 0xFA, 0xFF), //  2 #f8faff
+        Rgb(0xF0, 0xF4, 0xFF), //  3 #f0f4ff
+        Rgb(0xE6, 0xED, 0xFE), //  4 #e6edfe
+        Rgb(0xD9, 0xE2, 0xFC), //  5 #d9e2fc
+        Rgb(0xC6, 0xD4, 0xF9), //  6 #c6d4f9 subtle border
+        Rgb(0xAE, 0xC0, 0xF5), //  7 #aec0f5 ui border
+        Rgb(0x8D, 0xA4, 0xEF), //  8 #8da4ef strong border
+        Rgb(0x3E, 0x63, 0xDD), //  9 #3e63dd brand solid (electric Miro-blue)
+        Rgb(0x33, 0x58, 0xD4), // 10 #3358d4 solid hover
+        Rgb(0x3A, 0x5B, 0xC7), // 11 #3a5bc7 low-contrast text
+        Rgb(0x1F, 0x2D, 0x5C), // 12 #1f2d5c high-contrast text
+    });
+
+    public static ColorScale RedLight() => new ColorScale(new[]
+    {
+        Rgb(0xFF, 0xFC, 0xFC), //  1 #fffcfc
+        Rgb(0xFF, 0xF8, 0xF8), //  2 #fff8f8
+        Rgb(0xFF, 0xEF, 0xEF), //  3 #ffefef
+        Rgb(0xFF, 0xE5, 0xE5), //  4 #ffe5e5
+        Rgb(0xFD, 0xD8, 0xD8), //  5 #fdd8d8
+        Rgb(0xF9, 0xC6, 0xC6), //  6 #f9c6c6
+        Rgb(0xF3, 0xAE, 0xAF), //  7 #f3aeaf
+        Rgb(0xEB, 0x90, 0x91), //  8 #eb9091
+        Rgb(0xE5, 0x48, 0x4D), //  9 #e5484d brand solid
+        Rgb(0xDC, 0x3D, 0x43), // 10 #dc3d43
+        Rgb(0xCD, 0x2B, 0x31), // 11 #cd2b31 low-contrast text
+        Rgb(0x38, 0x13, 0x16), // 12 #381316 high-contrast text
+    });
+
+    public static ColorScale GreenLight() => new ColorScale(new[]
+    {
+        Rgb(0xFB, 0xFE, 0xFB), //  1 #fbfefb
+        Rgb(0xF3, 0xFC, 0xF3), //  2 #f3fcf3
+        Rgb(0xEB, 0xF9, 0xEB), //  3 #ebf9eb
+        Rgb(0xDF, 0xF3, 0xDF), //  4 #dff3df
+        Rgb(0xCE, 0xEB, 0xCF), //  5 #ceebcf
+        Rgb(0xB7, 0xDF, 0xBA), //  6 #b7dfba
+        Rgb(0x97, 0xCF, 0x9C), //  7 #97cf9c
+        Rgb(0x65, 0xBA, 0x75), //  8 #65ba75
+        Rgb(0x46, 0xA7, 0x58), //  9 #46a758 brand solid (grass)
+        Rgb(0x3D, 0x9A, 0x50), // 10 #3d9a50
+        Rgb(0x29, 0x7C, 0x3B), // 11 #297c3b low-contrast text
+        Rgb(0x1B, 0x31, 0x1E), // 12 #1b311e high-contrast text
+    });
+
+    public static ColorScale YellowLight() => new ColorScale(new[]
+    {
+        Rgb(0xFE, 0xFD, 0xFB), //  1 #fefdfb
+        Rgb(0xFF, 0xF9, 0xED), //  2 #fff9ed
+        Rgb(0xFF, 0xF4, 0xD5), //  3 #fff4d5
+        Rgb(0xFF, 0xEC, 0xBC), //  4 #ffecbc
+        Rgb(0xFF, 0xE3, 0xA2), //  5 #ffe3a2
+        Rgb(0xFF, 0xD3, 0x86), //  6 #ffd386
+        Rgb(0xF3, 0xBA, 0x63), //  7 #f3ba63
+        Rgb(0xEE, 0x9D, 0x2B), //  8 #ee9d2b
+        Rgb(0xFF, 0xB2, 0x24), //  9 #ffb224 brand solid (amber)
+        Rgb(0xFF, 0xA0, 0x1C), // 10 #ffa01c
+        Rgb(0xAD, 0x57, 0x00), // 11 #ad5700 low-contrast text (dark amber for light bg legibility)
+        Rgb(0x4E, 0x20, 0x09), // 12 #4e2009 high-contrast text
+    });
+
+    public static ColorScale BlueLight() => new ColorScale(new[]
+    {
+        Rgb(0xFB, 0xFD, 0xFF), //  1 #fbfdff
+        Rgb(0xF5, 0xFA, 0xFF), //  2 #f5faff
+        Rgb(0xED, 0xF6, 0xFF), //  3 #edf6ff
+        Rgb(0xE1, 0xF0, 0xFF), //  4 #e1f0ff
+        Rgb(0xCE, 0xE7, 0xFE), //  5 #cee7fe
+        Rgb(0xB7, 0xD9, 0xF8), //  6 #b7d9f8
+        Rgb(0x96, 0xC7, 0xF2), //  7 #96c7f2
+        Rgb(0x5E, 0xB0, 0xEF), //  8 #5eb0ef
+        Rgb(0x00, 0x91, 0xFF), //  9 #0091ff brand solid (info blue)
+        Rgb(0x00, 0x81, 0xF1), // 10 #0081f1
+        Rgb(0x00, 0x6A, 0xDC), // 11 #006adc low-contrast text
+        Rgb(0x00, 0x25, 0x4D), // 12 #00254d high-contrast text
     });
 }

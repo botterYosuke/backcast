@@ -74,6 +74,21 @@ public static class HudFrameChrome
         Corner(chrome, "BR", new Vector2(1f, 0f), new Vector2(1f, 0f), bracketColor);
     }
 
+    // True when `root` already wears the HUD chrome ("HudChrome" child). Lets WindowChrome.Apply skip a
+    // redundant teardown+rebuild when the appearance hasn't actually changed (no per-Changed churn).
+    public static bool IsDecorated(RectTransform root) => root != null && FindChild(root, ChromeName) != null;
+
+    // Strip the HUD chrome (the "HudChrome" child) so the light Card chrome can take over on an appearance
+    // switch (ADR-0028 / WindowChrome.Apply). Null-safe; a no-op if no HUD chrome is present.
+    public static void Remove(RectTransform root)
+    {
+        if (root == null) return;
+        var existing = FindChild(root, ChromeName);
+        if (existing == null) return;
+        if (Application.isPlaying) Object.Destroy(existing.gameObject);
+        else Object.DestroyImmediate(existing.gameObject);
+    }
+
     // One stretched edge line. anchor min/max + pivot place it on a side; offsetMin/offsetMax give
     // its thickness (the side that doesn't stretch).
     static void Edge(RectTransform parent, string name, Vector2 aMin, Vector2 aMax, Vector2 pivot,

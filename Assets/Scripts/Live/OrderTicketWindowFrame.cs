@@ -16,7 +16,9 @@ public static class OrderTicketWindowFrame
     // Space re-skin 2026-06-20: body = Neutral.Step3; ORDER title keeps the amber semantic
     // (findings 0020) but in muted gold-star so it stays distinct from the editor's violet
     // title bar without screaming. TODO: route via ThemeService.
-    static readonly Color BodyColor = new Color(0.0667f, 0.0863f, 0.1686f, 0.98f); // #11162b
+    // public so WindowChrome.Attach can preserve this exact dark body (hue + 0.98 alpha) on a live theme
+    // switch — it is NOT the theme panel_surface, so the chrome seam must be told the authored color.
+    public static readonly Color BodyColor = new Color(0.0667f, 0.0863f, 0.1686f, 0.98f); // #11162b
     static readonly Color TitleColor = new Color(0.8471f, 0.6588f, 0.2314f, 1f);   // #d8a83b Yellow.Step9 gold star
 
     public static RectTransform Build(string id, out FloatingWindowTitleInput titleInput, out RectTransform body)
@@ -48,7 +50,7 @@ public static class OrderTicketWindowFrame
         body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
         body.offsetMin = new Vector2(4f, 4f); body.offsetMax = new Vector2(-4f, -(TitleHeight + 2f));
 
-        HudFrameChrome.Decorate(root);   // cyan HUD edge glow + corner brackets (shared chrome)
+        WindowChrome.Attach(root, BodyColor);   // appearance-aware chrome; preserve authored dark body (ADR-0028)
         return root;
     }
 }

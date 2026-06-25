@@ -196,6 +196,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     SettingsModalController _settings;
     SettingsModalOverlay _settingsOverlay;
     SettingsModeSegmentView _settingsModeView;     // #127: mode segments, re-homed from the footer
+    SettingsAppearanceSegmentView _settingsAppearanceView;   // ADR-0028: Dark/Light theme switch
     SettingsVenueSectionView _settingsVenueView;   // #128: venue connect/disconnect, re-homed from the menu
     bool _settingsOpenPrev;
     SecretModalOverlay _secretOverlay;
@@ -370,6 +371,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // ---- compose the authored Views into live widgets (existing builders fill inner elements) ----
     void BuildWorkspace()
     {
+        // ADR-0028 / findings 0106 D8: restore the persisted Dark/Light appearance BEFORE any surface builds,
+        // so the whole workspace (incl. window chrome baked at build time) comes up in the saved theme.
+        ApplyPersistedAppearance();
+
         // center workspace: infinite canvas (Content) hosts the BACK DockLayer (1.0×) + the FRONT
         // FloatingWindowLayer (1.2× parallax). Only the front layer gets the parallax depth cue; the
         // dock layer is a plain Content child (factor 1.0 ⇒ zero offset), so it rides Content at 1.0×
@@ -425,7 +430,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // InstrumentRegistry.Changed drives spawn/close. Replaces the #60 Hakoniwa chart tile family.
         SyncChartWindowsToUniverse();
         _scenario.Universe.Changed += SyncChartWindowsToUniverse;   // keep chart windows == universe
-        _scenario.Committed += RequestChartPreviewsForAllLiveCharts; // #129 (findings 0104 F1): params-only Commit reseeds preview
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
         // #81 cell-as-floating-window (ADR-0013): the notebook aggregate is the single `.py` owner and
@@ -504,7 +508,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
-        HudFrameChrome.Decorate(_strategyEditorWindow);   // cyan HUD chrome on the adopted editor (no scene rebuild needed)
+        WindowChrome.Attach(_strategyEditorWindow, StrategyEditorWindowFrame.BodyColor);   // adopted editor: HUD ⇔ Card, preserve authored dark body (ADR-0028)
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
         // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
@@ -523,7 +527,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _orderTicket.ModifyRowRequested += OnRowModify;
             _orderTicket.CancelRowRequested += OnRowCancel;
             _orderTicket.RefreshRequested += RefreshRestingOrders;
-            HudFrameChrome.Decorate(_orderWindow);   // cyan HUD chrome on the adopted order ticket
+            WindowChrome.Attach(_orderWindow, OrderTicketWindowFrame.BodyColor);   // adopted order ticket: HUD ⇔ Card, preserve authored dark body (ADR-0028)
             _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
         }
 
@@ -615,6 +619,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _settingsModeView = new SettingsModeSegmentView(_footerMode, OnFooterMode, _font);
         _settingsModeView.Build(_settingsOverlay.ModeSection);
 
+        // Appearance section (ADR-0028): Dark/Light theme switch. Click applies the theme LIVE (SetTheme →
+        // Changed re-themes every surface incl. the window chrome) AND persists the choice for next boot.
+        _settingsAppearanceView = new SettingsAppearanceSegmentView(ApplyAppearance, _font);
+        _settingsAppearanceView.Build(_settingsOverlay.AppearanceSection);
+
         // Venue section: same VenueMenuViewModel + login/logout as the retired menu dropdown (#128).
         _settingsVenueView = new SettingsVenueSectionView(
             _venueMenu, ResolveExplicitLiveVenue(), OnVenueConnect, OnVenueDisconnect,
@@ -688,6 +697,31 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // grid lives on CONTENT (pans/zooms with the canvas), not the viewport — ensure/re-tint here
         // so it tracks theme swaps; null-safe so a probe without a content transform is a no-op.
         HudGridBackground.Ensure(_content);
+        // ADR-0028: the 4 base dock panels (LivePanelTileView) are plain classes, not MonoBehaviours, so they
+        // can't self-subscribe like ChartView/DepthLadderView — re-apply their body text color here on every
+        // theme switch (else the baked starlight #e0e7f5 stays on the white Light card and goes invisible).
+        _buyingPowerView?.ApplyTheme();
+        _ordersView?.ApplyTheme();
+        _positionsView?.ApplyTheme();
+        _runResultView?.ApplyTheme();
+        // keep the Settings Appearance segment highlight in sync when the theme changes from elsewhere.
+        _settingsAppearanceView?.Refresh();
+    }
+
+    // ADR-0028: apply a Dark/Light choice LIVE and persist it. SetTheme fires ThemeService.Changed, which
+    // every themed surface (viewport field + grid, chart/ladder, and the window chrome via the per-window
+    // WindowChromeApplier subscription) re-applies — the switch transforms the running workspace in place.
+    void ApplyAppearance(Appearance appearance)
+    {
+        ThemeService.SetTheme(appearance == Appearance.Light ? Theme.Light() : Theme.Dark());
+        AppearanceStore.Save(appearance);
+    }
+
+    // ADR-0028 / findings 0106 D8: restore the persisted appearance at boot. Dark is the lazy default, so
+    // only Light needs an explicit SetTheme (avoids a redundant Changed before any subscribers exist).
+    void ApplyPersistedAppearance()
+    {
+        if (AppearanceStore.Load() == Appearance.Light) ThemeService.SetTheme(Theme.Light());
     }
 
     // The FRONT-plane (_windows) factory: order ticket + strategy_editor cell windows. Dispatches on
@@ -1060,36 +1094,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (_chartViews.ContainsKey(iid)) continue;
             missing.Add(iid);
         }
+        if (missing.Count == 0) return;
 
-        if (missing.Count > 0)
-        {
-            int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
-            var avoid = CollectChartGridAvoidRects();
-            var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
-                missing.Count, gridCols,
-                ChartGridPlacement.DefaultAnchorTopLeft,
-                _chartWindowSize,
-                ChartGridPlacement.DefaultGap,
-                avoid);
+        int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
+        var avoid = CollectChartGridAvoidRects();
+        var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
+            missing.Count, gridCols,
+            ChartGridPlacement.DefaultAnchorTopLeft,
+            _chartWindowSize,
+            ChartGridPlacement.DefaultGap,
+            avoid);
 
-            for (int i = 0; i < missing.Count; i++)
-                SpawnChartWindowAt(missing[i], slots[i]);
-        }
-
-        // Unconditional: covers layout-restored charts (RestoreFloating path) too. Python-side guard no-ops in Manual/Auto/RUN.
-        RequestChartPreviewsForAllLiveCharts();
-    }
-
-    // Per-iid cold preview seed; SoT is _chartViews.Keys, Python decides populate vs no-op.
-    void RequestChartPreviewsForAllLiveCharts()
-    {
-        if (_host == null || _chartViews.Count == 0) return;
-        var p = _scenario != null ? _scenario.Params : null;
-        string start = p != null ? (p.Start ?? "") : "";
-        string end = p != null ? (p.End ?? "") : "";
-        string granularity = (p != null && p.Granularity == GranularityChoice.Minute) ? "Minute" : "Daily";
-        foreach (var iid in _chartViews.Keys)
-            _host.RequestReplayChartPreview(iid, start, end, granularity);
+        for (int i = 0; i < missing.Count; i++)
+            SpawnChartWindowAt(missing[i], slots[i]);
     }
 
     // Collect the avoid rects for chart grid placement: every back-plane dock window that isn't itself
@@ -2636,7 +2653,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartWindowsToUniverse;   // #99 chart-window sync unsubscribe (no orphan handler)
-        _scenario.Committed -= RequestChartPreviewsForAllLiveCharts; // #129 chart preview reseed unsubscribe
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe
         _notebookRunLane?.Dispose();              // #95 Phase 2 土台: stop the per-cell RUN worker thread

@@ -441,6 +441,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // InstrumentRegistry.Changed drives spawn/close. Replaces the #60 Hakoniwa chart tile family.
         SyncChartWindowsToUniverse();
         _scenario.Universe.Changed += SyncChartWindowsToUniverse;   // keep chart windows == universe
+        _scenario.Committed += RequestChartPreviewsForAllLiveCharts; // #129 (findings 0104 F1): params-only Commit reseeds preview
         _pruneDriver = new UniversePruneDriver(_scenario.Universe);   // #41: prune driver over the same SoT
 
         // #81 cell-as-floating-window (ADR-0013): the notebook aggregate is the single `.py` owner and
@@ -1126,19 +1127,38 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             if (_chartViews.ContainsKey(iid)) continue;
             missing.Add(iid);
         }
-        if (missing.Count == 0) return;
+        if (missing.Count > 0)
+        {
+            int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
+            var avoid = CollectChartGridAvoidRects();
+            var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
+                missing.Count, gridCols,
+                ChartGridPlacement.DefaultAnchorTopLeft,
+                _chartWindowSize,
+                ChartGridPlacement.DefaultGap,
+                avoid);
 
-        int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
-        var avoid = CollectChartGridAvoidRects();
-        var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
-            missing.Count, gridCols,
-            ChartGridPlacement.DefaultAnchorTopLeft,
-            _chartWindowSize,
-            ChartGridPlacement.DefaultGap,
-            avoid);
+            for (int i = 0; i < missing.Count; i++)
+                SpawnChartWindowAt(missing[i], slots[i]);
+        }
 
-        for (int i = 0; i < missing.Count; i++)
-            SpawnChartWindowAt(missing[i], slots[i]);
+        // #129 (findings 0104 F1): unconditional tail — covers layout-restored charts (RestoreFloating
+        // path) too, where missing.Count == 0 but _chartViews already holds the restored iids. The
+        // Python-side guard (populate_replay_preview) no-ops in Manual/Auto/RUN, so this is a dumb trigger.
+        RequestChartPreviewsForAllLiveCharts();
+    }
+
+    // #129 (findings 0104 F1/F2): per-iid cold preview seed. SoT is _chartViews.Keys; Python decides
+    // populate-vs-no-op (D0 Replay-only / D2 IDLE-only guard live in engine.populate_replay_preview).
+    void RequestChartPreviewsForAllLiveCharts()
+    {
+        if (_host == null || _chartViews.Count == 0) return;
+        var p = _scenario != null ? _scenario.Params : null;
+        string start = p != null ? (p.Start ?? "") : "";
+        string end = p != null ? (p.End ?? "") : "";
+        string granularity = (p != null && p.Granularity == GranularityChoice.Minute) ? "Minute" : "Daily";
+        foreach (var iid in _chartViews.Keys)
+            _host.RequestReplayChartPreview(iid, start, end, granularity);
     }
 
     // Collect the avoid rects for chart grid placement: every back-plane dock window that isn't itself
@@ -2710,6 +2730,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_built) AutosaveCurrentDocument();
         _tile?.Dispose();                         // unsubscribe the tile from _scenario.Universe.Changed (no orphan handler)
         _scenario.Universe.Changed -= SyncChartWindowsToUniverse;   // #99 chart-window sync unsubscribe (no orphan handler)
+        _scenario.Committed -= RequestChartPreviewsForAllLiveCharts; // #129 chart preview reseed unsubscribe
         ThemeService.Changed -= ApplyViewportTheme;   // viewport-field theme unsubscribe (no orphan handler)
         if (!Application.isBatchMode) Application.wantsToQuit -= OnWantsToQuit;   // #89 quit-confirm unsubscribe
         _notebookRunLane?.Dispose();              // #95 Phase 2 土台: stop the per-cell RUN worker thread

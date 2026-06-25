@@ -44,8 +44,18 @@ public static class JquantsDuckdbRootInjector
                 _baselineCaptured = true;
             }
 
-            // empty UI value → fall back to the captured .env baseline (D3); else the UI value overrides it.
-            string effective = string.IsNullOrEmpty(root) ? _baseline : root;
+            // #129 fail-soft: a non-empty stored root that does NOT resolve (stale/dead path — e.g. leaked
+            // test residue, a folder the owner deleted, or a typo) must NOT be injected. Injecting a dead
+            // path silently poisons os.environ so EVERY DuckDB read (preview AND Replay RUN) fails with
+            // NO_DATA / FileNotFoundError — invisible until the chart is empty. Validate against the same
+            // contract the Settings field uses (folder exists + listed_info.duckdb); on failure treat the
+            // stored value as "no override" and revert to the .env baseline (never strand a dead override).
+            string uiValue = root;
+            if (!string.IsNullOrEmpty(uiValue) && JquantsDuckdbRootValidator.Validate(uiValue) != null)
+                uiValue = null;   // dead stored root → fall back to baseline below
+
+            // empty/invalid UI value → fall back to the captured .env baseline (D3); else the UI value overrides.
+            string effective = string.IsNullOrEmpty(uiValue) ? _baseline : uiValue;
             if (effective == null)
             {
                 using (var cur = get.Invoke(k)) if (!cur.IsNone()) environ.DelItem(k);  // leave UNSET (ADR-0006)

@@ -13,6 +13,13 @@
 // start/end/granularity. The Python-side IDLE/Replay guard owns the contract; this runner is
 // Python-FREE and captures host.RequestReplayChartPreview calls via TestReplayPreviewOverride.
 //
+// ⚠️ LIMITATION (findings 0104 第2回帰): this runner does NOT exercise real Python, real DuckDB, or the
+// DuckDB-root RESOLUTION. It stays GREEN even when the live engine returns NO_DATA because the resolved
+// root is wrong (e.g. a stale/dead PlayerPrefs root poisons os.environ — the actual #129 field failure).
+// Real-path coverage lives elsewhere: DuckDbRootSettingsE2ERunner DUCKROOT-05 (stale stored root must
+// fail soft, NOT poison os.environ) + pytest test_replay_chart_spawn_preview.py (populate_replay_preview
+// against a real DuckDB). Do NOT treat a green here as "preview renders on the owner's machine".
+//
 // The Python half (engine.populate_replay_preview: D0 mode guard / D2 RUN guard / D3 fallback /
 // S1 graceful) is gated by python/tests/test_replay_chart_spawn_preview.py (PREVIEW-01..07).
 //

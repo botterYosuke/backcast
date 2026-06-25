@@ -31,13 +31,14 @@ public static class DuckDbRootSettingsE2ERunner
             Section("DUCKROOT-02", Section02_PathValidation);
             Section("DUCKROOT-03", Section03_BrowseFolderSeamAndCommit);
             Section("DUCKROOT-04", Section04_OsEnvironInjectionMockPython);
+            Section("DUCKROOT-05", Section05_StaleStoredRootFailsSoft);
         }
         finally { JquantsDuckdbRootStore.ClearForTests(); }
 
         if (_fail.Count == 0)
             Debug.Log("[E2E DUCKROOT PASS] store round-trip (DUCKROOT-01) / path validation (DUCKROOT-02) / " +
                       "BrowseFolder stub seam + commit + fail-soft + red error (DUCKROOT-03) / os.environ inject → " +
-                      "engine.paths resolves (DUCKROOT-04) — #137 S4, findings 0107 D1-D5");
+                      "engine.paths resolves (DUCKROOT-04) / stale stored root fails soft (DUCKROOT-05) — #137 S4 + #129, findings 0107/0104");
         else
             Debug.LogError("[E2E DUCKROOT FAIL]\n  - " + string.Join("\n  - ", _fail));
 
@@ -202,7 +203,58 @@ public static class DuckDbRootSettingsE2ERunner
         }
     }
 
+    // DUCKROOT-05 (#129 regression — the bug the Python-FREE ChartSpawnPreviewE2ERunner could not catch):
+    // a stale/dead STORED root must NOT poison os.environ. The owner's PlayerPrefs held a leaked test temp
+    // path (backcast_duckroot_bad_…) that no longer existed; Inject blindly wrote it into os.environ, so the
+    // engine resolved a nonexistent DuckDB root and EVERY read (chart preview AND Replay RUN) returned
+    // NO_DATA / FileNotFoundError. The injector now validates the stored root and reverts to the .env
+    // baseline when it doesn't resolve. RED litmus: drop the Validate guard in
+    // JquantsDuckdbRootInjector.Inject → os.environ readback == the dead path → RED.
+    static string Section05_StaleStoredRootFailsSoft()
+    {
+        string good = Path.Combine(Path.GetTempPath(), "backcast_duckroot_good_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(good);
+        File.WriteAllText(Path.Combine(good, JquantsDuckdbRootValidator.ListedInfoFile), "");
+        string dead = Path.Combine(Path.GetTempPath(), "backcast_duckroot_dead_" + Guid.NewGuid().ToString("N")); // never created
+        WorkspaceEngineHost host = null;
+        try
+        {
+            host = new WorkspaceEngineHost();
+            host.InitializePython("MOCK");
+            if (!PythonEngine.IsInitialized) return "PythonEngine not initialized after InitializePython(MOCK)";
+
+            // seed a VALID .env-style baseline, then let the FIRST Inject capture it as the baseline.
+            JquantsDuckdbRootInjector.ResetBaselineForTests();
+            SetEnviron(JquantsDuckdbRootInjector.EnvKey, good);
+            JquantsDuckdbRootInjector.Inject("");        // first call captures baseline=good, no override
+            if (ReadEnviron(JquantsDuckdbRootInjector.EnvKey) != good) return "baseline seed lost before stale inject";
+
+            // a dead STORED root (folder doesn't exist) must be rejected → revert to the good baseline.
+            JquantsDuckdbRootInjector.Inject(dead);
+            string readback = ReadEnviron(JquantsDuckdbRootInjector.EnvKey);
+            if (readback == dead) return $"stale stored root POISONED os.environ (got dead path '{dead}') — the #129 bug";
+            if (readback != good) return $"stale stored root did not revert to baseline: got '{readback}' (expected '{good}')";
+            return null;
+        }
+        finally
+        {
+            try { host?.Stop(); } catch { }
+            try { JquantsDuckdbRootInjector.ResetBaselineForTests(); } catch { }
+            try { Directory.Delete(good, true); } catch { }
+        }
+    }
+
     // ── Python read helpers (mirror V19 SetOsEnviron's Py.GIL/PyString marshaling) ──
+    static void SetEnviron(string key, string val)
+    {
+        using (Py.GIL())
+        using (var os = Py.Import("os"))
+        using (var environ = os.GetAttr("environ"))
+        using (var k = new PyString(key))
+        using (var v = new PyString(val))
+            environ.SetItem(k, v);
+    }
+
     static string ReadEnviron(string key)
     {
         using (Py.GIL())

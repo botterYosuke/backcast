@@ -32,5 +32,10 @@ public static class JquantsDuckdbRootStore
     public static string Load() => PlayerPrefs.GetString(Key, "");
 
     // Test hook: drop the key so an AFK probe doesn't leave machine-global residue (AppearanceStore parity).
-    public static void ClearForTests() => PlayerPrefs.DeleteKey(Key);
+    // #129 regression: MUST PlayerPrefs.Save() the deletion. DUCKROOT-03 force-writes a `bad` path to disk
+    // (Save→PlayerPrefs.Save()), then this cleanup ran DeleteKey WITHOUT Save — leaving the deletion in-memory
+    // only. The runner's documented shutdown segfault (exit 139, findings 0107) skips Unity's normal-exit
+    // flush, so the on-disk key kept the dead `backcast_duckroot_bad_…` path and poisoned the owner's live
+    // app (Inject → os.environ → preview/RUN read a nonexistent root → NO_DATA). Persisting here closes that.
+    public static void ClearForTests() { PlayerPrefs.DeleteKey(Key); PlayerPrefs.Save(); }
 }

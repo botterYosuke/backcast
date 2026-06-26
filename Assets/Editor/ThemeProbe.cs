@@ -304,7 +304,7 @@ public static class ThemeProbe
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
         // ladder_bg == hakoniwa_chart_background (findings 0054: chart + ladder share one Hakoniwa-isolated bg role).
-        Eq(harness.Samples["ladder_bg"].color, d.colors.hakoniwa_chart_background, "DepthLadderView (production) ladder_bg == dark hakoniwa_chart_background");
+        // (ladder_bg / chart_bg assertions moved to LadderView.BackgroundColor / ChartView.BackgroundColor above — S8 #161)
         Eq(harness.Samples["editor_bg"].color, d.colors.background, "montage editor_bg == dark background");
         Eq(harness.Samples["accents_bg"].color, d.colors.surface_background, "montage accents_bg == dark surface");
         Eq(harness.Samples["code_text"].color, d.colors.text, "montage code_text == dark text");

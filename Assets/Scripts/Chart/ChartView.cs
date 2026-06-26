@@ -267,9 +267,16 @@ public class ChartView : MaskableGraphic,
     // Restore translation_ms / cell_width_px / auto_scale from a sidecar entry. cell_height_norm is
     // intentionally NOT persisted — recomputed every OnPopulateMesh from the visible price range, so
     // a restore that triggers an immediate Render gets autoscale recomputed automatically.
+    //
+    // JsonUtility quirk: a sidecar with NO chart_view_state field hydrates as a non-null instance of
+    // ChartViewStateLayout with all-zero fields (translation_ms=0 / cell_width_px=0 / auto_scale=false).
+    // Real captures clamp cell_width_px to ≥ MIN_CELL_WIDTH_PX (1.0), so cell_width_px=0 is a clean
+    // sentinel for "not actually captured" — treat as no-op so freshly-spawned chart keeps the
+    // ResetView() defaults that BuildChartContent left it at (PERSIST-02).
     public void ApplyViewStateLayout(ChartViewStateLayout l)
     {
         if (l == null) return;
+        if (l.cell_width_px < ChartViewState.MIN_CELL_WIDTH_PX) return;   // JsonUtility-default sentinel.
         ViewState.translation_ms = l.translation_ms;
         ViewState.cell_width_px = Mathf.Clamp(l.cell_width_px,
             ChartViewState.MIN_CELL_WIDTH_PX, ChartViewState.MAX_CELL_WIDTH_PX);
@@ -297,7 +304,14 @@ public class ChartView : MaskableGraphic,
     protected override void OnPopulateMesh(VertexHelper vh)
     {
         vh.Clear();
+        // Reset ALL observability counters at the very top so an early-return path leaves them at 0
+        // (a previous Render's count was leaking through when bars cleared — caught by LASTPRICE-01 RED).
         RenderedBarCount = 0;
+        LastGridLineCount = 0;
+        LastVolumeBarCount = 0;
+        LastVolumeAreaHeightPx = 0;
+        LastLastPriceLineCount = 0;
+        LastCrosshairLineCount = 0;
         _seenBull = _seenBear = false;
         _firstBullColor = ChartPalette.Bullish();
         _firstBearColor = ChartPalette.Bearish();

@@ -129,20 +129,33 @@ public static class ChartViewStatePersistenceE2ERunner
             return "S2 PERSIST-02: legacy v1 sidecar failed to load — version-tolerance regression";
         var fw = doc.FindWindow("chart:7203.TSE");
         if (fw == null) return "S2 PERSIST-02: legacy FW chart:7203.TSE missing after load";
-        if (fw.chart_view_state != null)
-            return "S2 PERSIST-02: legacy v1 sidecar somehow surfaced chart_view_state="
-                 + fw.chart_view_state.translation_ms + " — should be null on missing field";
+        // JsonUtility quirk: a missing reference-type field hydrates to a new instance with all-zero
+        // fields (NOT null). cell_width_px=0 is our "not actually captured" sentinel (real captures
+        // clamp cell_width to ≥ MIN=1.0). ApplyViewStateLayout must treat this as a no-op so the
+        // fresh chart keeps the ResetView() defaults BuildChartContent left it at.
+        if (fw.chart_view_state == null)
+        {
+            // The day JsonUtility changes its behavior and surfaces null instead, that's also fine
+            // (still PERSIST-02 conformant) — the null guard in ApplyViewStateLayout will no-op.
+        }
+        else if (fw.chart_view_state.cell_width_px >= 1f)
+        {
+            return "S2 PERSIST-02: legacy v1 sidecar somehow surfaced a REAL cell_width_px="
+                 + fw.chart_view_state.cell_width_px
+                 + " — should be the JsonUtility-zero sentinel (or null) on missing field";
+        }
 
-        // ApplyViewStateLayout(null) on a fresh chart must be a no-op.
+        // ApplyViewStateLayout(zero-sentinel or null) on a fresh chart must be a no-op.
         var cv = BuildStandaloneChart(out var canvasGo);
         try
         {
             float cwBefore = cv.ViewState.cell_width_px;
             bool asBefore = cv.ViewState.auto_scale;
             long tBefore = cv.ViewState.translation_ms;
-            cv.ApplyViewStateLayout(fw.chart_view_state);   // null → no-op
+            cv.ApplyViewStateLayout(fw.chart_view_state);   // zero-sentinel / null → no-op
             if (cv.ViewState.cell_width_px != cwBefore || cv.ViewState.auto_scale != asBefore || cv.ViewState.translation_ms != tBefore)
-                return "S2 PERSIST-02: ApplyViewStateLayout(null) mutated state — null guard missing";
+                return "S2 PERSIST-02: ApplyViewStateLayout(sentinel) mutated state from cw="
+                     + cwBefore + " ts=" + tBefore + " auto=" + asBefore + " — sentinel guard missing";
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
         return null;

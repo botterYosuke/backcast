@@ -1,4 +1,8 @@
-# findings 0118 — tachibana live を回帰テストする mock fixture（実 venue 採取・codec-replayable）
+# findings 0119 — tachibana live を回帰テストする mock fixture（実 venue 採取・codec-replayable）
+
+> **番号注記**: 本 finding は当初 `0118` で採番されたが、同日 commit 372f1e9 の
+> `0118-live-universe-churn-kabu-mock.md`（live universe churn gate）と番号衝突したため `0119` へ改番した
+> （grill-with-docs「finding 番号の重複を確認」）。churn gate（0118）はこの fixture を tachibana のデータ供給層として使う。
 
 2026-06-26。findings 0117（kabu mock）の tachibana 版。live チャート/集約の挙動を
 **実 venue に繋がず決定的に**回帰テストするための mock fixture と、その採取・再生

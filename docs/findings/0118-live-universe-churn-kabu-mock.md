@@ -2,8 +2,18 @@
 
 2026-06-26。owner 依頼「live 運用中に銘柄を追加/削除する strategy を作り、kabu live mock データで
 不具合が起きないかテストする」。`bt.universe.*`（#141-145 / [ADR-0031](../adr/0031-cell-driven-dynamic-universe-bt-universe-api.md)）と
-kabu mock fixture（[findings 0117](0117-kabu-live-mock-fixture.md)）を **1 本の縦串**に縫い、実 prod kabu
+kabu mock fixture（[findings 0117](0117-kabu-live-mock-fixture.md)）を **1 本の縦串**に縫い、実 prod
 キャプチャを流しながら戦略 cell が universe を mid-stream 編集する経路をゲート化した。方針は ADR-0031（無改変）。
+
+**追補（2026-06-26・owner 依頼「データ供給層を kabu か立花か選択可能に」）**: gate を **venue-selectable** に拡張。
+`_make_feed(venue)`／`_VENUES=["kabu","tachibana"]` を追加し、fixture を**両 venue で parametrize**（LIVEUNIV-01..05 ×
+{kabu, tachibana} ＝ **10 passed/3.5s**）。データ供給層だけが venue 別（kabu=`KabuPushFrameProcessor.process(frame)`／
+tachibana=`FdFrameProcessor.process(fields,recv_ts_ms)`・`row="1"`）で、`decode(rec)→TradesUpdate|None` に正規化＝
+それ以降の churn 駆動・assert は **venue 非依存**。tachibana mock は [findings 0119](0119-tachibana-live-mock-fixture.md)
+（`tachibana_live_mock_4sym.json` ＋ raw capture）。立花 RED litmus も確認（remove enqueue 削除→LIVEUNIV-02/03 RED）。
+**設計**: 各 venue feed は production adapter を忠実ミラー（`spike/kabu_replay_multi.py`／`spike/tachibana_replay_multi.py`）。
+tachibana は FD frame だけが market-data（KP/SS/US/ST は接続/account 層＝skip）・`recv` ISO から絶対 epoch ms を復元（raw t_ms は
+capture 相対で `ts_ms` fallback に使えない）・side="unknown" の trade は捨てる。
 
 ## 設計の確定（grill でコード裏取り・2026-06-26）
 

@@ -1,11 +1,14 @@
-"""LIVEUNIV-01..05 — a LiveAuto strategy cell that edits the universe MID-STREAM, gated against the
-real prod kabu capture replayed through the live data pipeline (#141-145 / ADR-0031 + findings 0117).
+"""LIVEUNIV-01..05 — a LiveAuto strategy cell that edits the universe MID-STREAM, gated against each
+venue's real prod capture replayed through the live data pipeline (#141-145 / ADR-0031 + findings
+0117/0119). VENUE-SELECTABLE data-supply layer: the gate parametrises over kabu AND tachibana — the
+churn behaviour must hold for both. See ``_make_feed`` / ``_VENUES``.
 
 WHY THIS GATE EXISTS — the seam no existing gate covers:
   * BTUNIV-* gates ``bt.universe.*`` enqueue/list against a FAKE registry; UNISUB-* gates the C#
-    Changed→subscribe/unsubscribe wiring against a MOCK venue with no real market data; the kabu
-    replay spikes (kabu_replay_multi) drive the codec→aggregator→reducer with a STATIC universe.
-  * NOBODY gated: a strategy cell that ADDS/REMOVES symbols WHILE real prod kabu frames flow
+    Changed→subscribe/unsubscribe wiring against a MOCK venue with no real market data; the venue
+    replay spikes (kabu_replay_multi / tachibana_replay_multi) drive codec→aggregator→reducer with a
+    STATIC universe.
+  * NOBODY gated: a strategy cell that ADDS/REMOVES symbols WHILE real prod venue frames flow
     through the live aggregation pipeline. That is exactly where a "live add/remove breaks the
     chart/feed" bug would live (frame for an unsubscribed symbol, _aggregators mutated during
     _partial_push, reducer per_id orphaning).
@@ -17,8 +20,9 @@ WHAT IT DRIVES (faithful LiveAuto, ADR-0025 + ADR-0031 S4/S5):
   cell's edits enqueue on the engine universe channel; a PUMP plays the C# host role — it drains
   ``engine.drain_universe_edits()`` and applies each op to ``runner.subscribe/unsubscribe`` +
   ``engine.push_universe_ids`` (mirroring DriveUniverseBridge → InstrumentRegistry.Changed →
-  LiveSubscriptionCoordinator). Market data is the REAL prod kabu capture (findings 0117) decoded
-  by the production ``KabuPushFrameProcessor`` and injected into a subscribe-gated MockVenueAdapter.
+  LiveSubscriptionCoordinator). Market data is the REAL prod capture of the selected venue, decoded
+  by that venue's production codec (kabu=KabuPushFrameProcessor / tachibana=FdFrameProcessor) via the
+  ``_make_feed`` data-supply layer, and injected into a subscribe-gated MockVenueAdapter.
 
 NON-VACUITY: the MockVenueAdapter is subscribe-gated (inject_tick drops events for unsubscribed
 ids), so ANY recorded market data for an id structurally proves it was subscribed at that moment.
@@ -48,7 +52,7 @@ import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 
@@ -56,6 +60,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.core import DataEngine  # noqa: E402
 from engine.exchanges.kabusapi_ws_codec import KabuPushFrameProcessor  # noqa: E402
+from engine.exchanges.tachibana_ws_codec import FdFrameProcessor  # noqa: E402
 from engine.kernel.live.controller import KernelLiveEngineController  # noqa: E402
 from engine.live.adapter import KlineUpdate, TradesUpdate  # noqa: E402
 from engine.live.live_runner import LiveRunner  # noqa: E402
@@ -67,25 +72,103 @@ from engine.strategy_runtime.universe_bridge import EngineUniverseBridge  # noqa
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _CELL = os.path.join(_HERE, "..", "spike", "fixtures", "strategies", "universe_churn_cell.py")
-# The user-named raw prod capture (findings 0117 §再生成). Fall back to the committed lightweight
-# fixture so the gate runs in CI where the 14MB raw is .gitignored.
-_RAW = os.path.join(_HERE, "..", "spike", "captures", "kabu_mock_20260626T013342Z.json")
-_FIXTURE = os.path.join(_HERE, "fixtures", "kabu_live_mock_4sym.json")
 
 _INITIAL = ["7203.TSE", "8306.TSE"]   # the run's universe = cell-driving symbols
 _ADDED = ["9984.TSE", "285A.TSE"]     # added mid-stream (data/chart subs; do NOT drive the cell)
 _FINAL = {"7203.TSE", "285A.TSE"}     # after: +9984+285A −8306 −9984
 _MINUTE_NS = 60 * 1_000_000_000
 
+# Venues this gate runs against. Each replays its OWN venue's real capture through its OWN
+# production codec — the churn behaviour (add→subscribe / remove→unsubscribe under live data)
+# must hold for kabu AND tachibana. The fixture parametrises over this list.
+_VENUES = ["kabu", "tachibana"]
 
-def _capture_path() -> str:
-    return _RAW if os.path.exists(_RAW) else _FIXTURE
+# (raw prod capture under spike/captures, committed lightweight fixture under tests/fixtures). The
+# raw is preferred; the committed mock is the CI fallback (findings 0117 / 0119 — both are
+# codec-replayable and produce identical trades to the raw).
+_CAPTURES = {
+    "kabu": ("kabu_mock_20260626T013342Z.json", "kabu_live_mock_4sym.json"),
+    "tachibana": ("tachibana_mock_20260626T021409Z.json", "tachibana_live_mock_4sym.json"),
+}
+
+
+def _capture_path(venue: str) -> str:
+    raw_name, fixture_name = _CAPTURES[venue]
+    raw = os.path.join(_HERE, "..", "spike", "captures", raw_name)
+    return raw if os.path.exists(raw) else os.path.join(_HERE, "fixtures", fixture_name)
+
+
+# ── venue-selectable data-supply layer ───────────────────────────────────────────────────────
+# Each venue's raw capture has a DIFFERENT frame shape and codec; a VenueFeed normalises both to a
+# stream of TradesUpdate (the live pipeline's input), mirroring the production adapter exactly:
+#   kabu      → KabuPushFrameProcessor.process(frame)         (ref: spike/kabu_replay_multi.py)
+#   tachibana → FdFrameProcessor.process(fields, recv_ts_ms)  (ref: spike/tachibana_replay_multi.py)
+# decode(rec) returns a TradesUpdate or None (no trade / non-market frame). The rest of the gate is
+# venue-agnostic — it only sees TradesUpdate.
+class _KabuFeed:
+    venue = "kabu"
+
+    def __init__(self, instrument_ids: list) -> None:
+        # frame["Symbol"] is the bare code (e.g. "7203"); map back to the full instrument_id.
+        self._bare_to_full = {iid.split(".")[0]: iid for iid in instrument_ids}
+        self._procs = {bare: KabuPushFrameProcessor(symbol=bare) for bare in self._bare_to_full}
+
+    def decode(self, rec: dict):
+        f = rec["frame"]
+        proc = self._procs.get(str(f.get("Symbol")))
+        if proc is None:
+            return None
+        trade, _ = proc.process(f)
+        if trade is None:
+            return None
+        return TradesUpdate(
+            kind="trades", instrument_id=self._bare_to_full[str(f.get("Symbol"))],
+            ts_ns=trade["ts_ns"], price=trade["price"], size=trade["size"],
+            aggressor_side=trade["aggressor_side"],
+        )
+
+
+class _TachibanaFeed:
+    venue = "tachibana"
+
+    def __init__(self, instrument_ids: list) -> None:
+        self._ids = set(instrument_ids)
+        # one FdFrameProcessor per ticker, row="1" = p_gyou_no fixed at subscribe (tachibana.py).
+        self._procs = {iid.split(".")[0]: FdFrameProcessor(row="1") for iid in instrument_ids}
+
+    def decode(self, rec: dict):
+        if rec.get("frame_type") != "FD":   # KP/SS/US/ST = connection/account frames, not market data
+            return None
+        iid = rec.get("instrument_id")
+        if iid not in self._ids:
+            return None
+        # raw t_ms is capture-relative; FdFrameProcessor needs absolute epoch ms — recover from recv.
+        recv_dt = datetime.fromisoformat(rec["recv"])
+        if recv_dt.tzinfo is None:
+            recv_dt = recv_dt.replace(tzinfo=timezone.utc)
+        recv_ts_ms = int(recv_dt.timestamp() * 1000)
+        trade, _ = self._procs[iid.split(".")[0]].process(rec["fields"], recv_ts_ms)
+        if trade is None or trade.get("side") == "unknown":
+            return None
+        return TradesUpdate(
+            kind="trades", instrument_id=iid, ts_ns=int(trade["ts_ms"]) * 1_000_000,
+            price=float(trade["price"]), size=float(trade["qty"]), aggressor_side=trade["side"],
+        )
+
+
+def _make_feed(venue: str, instrument_ids: list):
+    if venue == "kabu":
+        return _KabuFeed(instrument_ids)
+    if venue == "tachibana":
+        return _TachibanaFeed(instrument_ids)
+    raise ValueError(f"unknown venue {venue!r} (expected one of {_VENUES})")
 
 
 @dataclass
 class Churn:
-    """Observations from one full kabu-mock live-churn replay (built once, asserted per-id)."""
+    """Observations from one full live-churn replay of ONE venue (built once, asserted per-id)."""
 
+    venue: str
     capture: str
     worker_error: object
     reached_running: bool
@@ -101,12 +184,10 @@ class Churn:
     closed_klines: list = field(default_factory=list)   # recorded closed KlineUpdate [(iid, ts)]
 
 
-def _run_churn() -> Churn:
-    capture = _capture_path()
+def _run_churn(venue: str) -> Churn:
+    capture = _capture_path(venue)
     frames = json.load(open(capture, encoding="utf-8"))["frames"]
-    # bare kabu code (frame["Symbol"]) → full instrument_id used by the live pipeline.
-    bare_to_full = {iid.split(".")[0]: iid for iid in (_INITIAL + _ADDED)}
-    procs = {bare: KabuPushFrameProcessor(symbol=bare) for bare in bare_to_full}
+    feed = _make_feed(venue, _INITIAL + _ADDED)   # the venue-selected data-supply layer
 
     loop = asyncio.new_event_loop()
     thread = threading.Thread(target=loop.run_forever, name="churn-loop", daemon=True)
@@ -211,20 +292,12 @@ def _run_churn() -> Churn:
         )
         reached_running = controller._driver is not None
 
-        # --- replay the capture: decode each prod frame → trade → inject (subscribe-gated) --------
+        # --- replay the capture: venue feed decodes each frame → trade → inject (subscribe-gated) --
         injected = 0
         for rec in frames:
-            f = rec["frame"]
-            bare = str(f.get("Symbol"))
-            if bare not in procs:
+            ev = feed.decode(rec)
+            if ev is None:
                 continue
-            trade, _ = procs[bare].process(f)
-            if trade is None:
-                continue
-            ev = TradesUpdate(
-                kind="trades", instrument_id=bare_to_full[bare], ts_ns=trade["ts_ns"],
-                price=trade["price"], size=trade["size"], aggressor_side=trade["aggressor_side"],
-            )
             loop.call_soon_threadsafe(adapter.inject_tick, ev)
             injected += 1
             if injected % 20 == 0:
@@ -279,6 +352,7 @@ def _run_churn() -> Churn:
         thread.join(timeout=2.0)
 
     return Churn(
+        venue=venue,
         capture=os.path.basename(capture),
         worker_error=worker_error,
         reached_running=reached_running,
@@ -319,9 +393,11 @@ def _poll(predicate, timeout=8.0) -> bool:
     return False
 
 
-@pytest.fixture(scope="module")
-def churn() -> Churn:
-    return _run_churn()
+@pytest.fixture(scope="module", params=_VENUES)
+def churn(request) -> Churn:
+    """Run the full live-churn replay once per venue (kabu / tachibana). Each test below asserts a
+    facet for BOTH venues — pytest tags the invocation as ``[kabu]`` / ``[tachibana]``."""
+    return _run_churn(request.param)
 
 
 @pytest.mark.scenario("LIVEUNIV-01")

@@ -768,15 +768,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return new DragGhostLayer(rt, _catalog);
     }
 
-    // Re-paint the infinite-canvas field (the viewport bg) from the active theme's workspace_background.
-    // Subscribed to ThemeService.Changed in BuildWorkspace; null-safe so a probe that never authored the
-    // viewport Image is a no-op.
     // issues #166-168 / findings 0123 §2.1: the single "view をどう apply するか" callback every
     // FloatingWindowTitleInput.Initialize hands off to. Plane-unaware (the title input has already baked
     // its plane's parallax factor into `target` via CanvasViewMath.FrameWindow), so the same hook serves
-    // dock and floating windows. _glideDriver is wired in BuildWorkspace BEFORE any caller captures this
-    // delegate (review finding: no S1-fallback path is reachable in production), so a null check would be
-    // dead code; we just early-return on null target (a defensive arg guard, not a lifecycle one).
+    // dock and floating windows. `_glideDriver` is wired in BuildWorkspace before any title-input
+    // Initialize captures this delegate on the production path; the `?.` is the defensive belt for probes
+    // / bare HITL harnesses that skip BuildWorkspace and never assign the driver. Null `target` is the
+    // FrameWindow degenerate fallback (viewportSize<=0) — we early-return without disturbing the current
+    // view.
     void BeginFramingGlide(CanvasView target)
     {
         if (target == null) return;
@@ -791,20 +790,41 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // が inactive のとき activeSelf は true のままで「非表示」を見逃す。AC#3 を構造的に満たすには inherited
     // visibility が正。**FRAME_MARGIN_DEFAULT** と **DOCK_PLANE_PARALLAX** は CanvasViewMath 側で正本化
     // した共有 const を参照（FloatingWindowTitleInput と数値が割れない構造）。
+    //
+    // review finding M3: 旧 inline 実装は FramingProbe.S3Noop の `frameChart` lambda と **verbatim mirror** で、
+    // 片方を改修してもう片方を忘れると AFK gate が drift を見逃す。pure helper として TryFrameChartWindowForInstrument
+    // に抽出し、production / AFK 両方が **同じ static** を呼ぶ構造に倒す。本 instance method は FocusChartHook 代入
+    // (line ~753) と既存 grep を壊さないための 1-line trampoline。helper 戻り値 `bool` は glide を始めたか否か
+    // （全 early-out は false）で、AFK の sanity 判定にそのまま使える（S3-INTEGRATION）。
     void FrameChartWindowForInstrument(string iid)
+        => TryFrameChartWindowForInstrument(iid, _dockWindows, _viewport, _canvas, BeginFramingGlide);
+
+    // M3 抽出 helper — production の FrameChartWindowForInstrument (上) と AFK FramingProbe の S3 系セクションが
+    // **同じコードパス** を辿るための pure static。`public` (not `internal`) は同 file の SplitCrossPlaneGroups
+    // (line ~2993) と同じ理由 — Assembly-CSharp と Assembly-CSharp-Editor は asmdef 無しの素状態で別アセンブリで、
+    // InternalsVisibleTo も無いので Editor 側からは internal が見えない。戻り値 `true` は glide を開始したとき
+    // のみ（iid 空・依存 null・viewport degenerate・chartId 空・rt null / inactive はすべて false）。
+    public static bool TryFrameChartWindowForInstrument(
+        string iid,
+        FloatingWindowController dockWindows,
+        RectTransform viewport,
+        InfiniteCanvasController canvas,
+        System.Action<CanvasView> beginFramingGlide)
     {
-        if (string.IsNullOrEmpty(iid) || _dockWindows == null || _viewport == null || _canvas == null) return;
-        Vector2 viewportSize = _viewport.rect.size;
-        if (viewportSize.x <= 0f || viewportSize.y <= 0f) return;   // mid-reflow no-op
+        if (string.IsNullOrEmpty(iid) || dockWindows == null || viewport == null || canvas == null) return false;
+        if (beginFramingGlide == null) return false;
+        Vector2 viewportSize = viewport.rect.size;
+        if (viewportSize.x <= 0f || viewportSize.y <= 0f) return false;   // mid-reflow no-op
         string chartId = DockShape.ChartId(iid);
-        if (string.IsNullOrEmpty(chartId)) return;
-        RectTransform rt = _dockWindows.RectOf(chartId);
-        if (rt == null || !rt.gameObject.activeInHierarchy) return;   // S3 AC#3: no-op when 窓未生成 / 非表示
+        if (string.IsNullOrEmpty(chartId)) return false;
+        RectTransform rt = dockWindows.RectOf(chartId);
+        if (rt == null || !rt.gameObject.activeInHierarchy) return false;   // S3 AC#3: no-op when 窓未生成 / 非表示
         CanvasView target = CanvasViewMath.FrameWindow(
             rt.anchoredPosition, rt.sizeDelta, viewportSize,
             CanvasViewMath.DOCK_PLANE_PARALLAX, CanvasViewMath.FRAME_MARGIN_DEFAULT,
-            _canvas.CaptureView());
-        BeginFramingGlide(target);
+            canvas.CaptureView());
+        beginFramingGlide(target);
+        return true;
     }
 
     void ApplyViewportTheme()
@@ -926,10 +946,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // cache) gets the name on the常用パス; layout-restore cold paths fall back to id alone.
         string title = ResolveChartTitleForId(spec.kind, id, spec.title);
         var dockRoot = DockWindowFrame.Build(id, title, spec.accent, _font, out var dockTitle, out var dockBody);
-        // issues #166-168 / findings 0123: dock plane = 1.0× parallax (factor=1), framing routes via the
-        // same glide driver. Explicit 1f here documents the plane invariant (the default would also be 1f,
-        // but stating it keeps intent grep-able next to the floating-plane 1.2 callers).
-        dockTitle.Initialize(_dockWindows, _canvas, _viewport, id, 1f, BeginFramingGlide);
+        // issues #166-168 / findings 0123: dock plane parallax を CanvasViewMath 側の正本 const から参照する
+        // （別 file の数値と割れない構造、findings 0123 §2 / FloatingWindowTitleInput 同調）。
+        dockTitle.Initialize(_dockWindows, _canvas, _viewport, id, CanvasViewMath.DOCK_PLANE_PARALLAX, BeginFramingGlide);
         BuildDockContent(spec.kind, id, dockBody);
         return dockRoot;
     }

@@ -21,17 +21,24 @@
 .PARAMETER Method
   Also run a specific Unity -executeMethod runner via run-live-e2e.ps1.
 
+.PARAMETER IncludeFraming
+  Also run FramingProbe.Run as an independent Unity leg (logs to Temp/Unity_E2E_Framing.log). Default OFF
+  so the heavy Unity legs stay opt-in. Composes with -Venue / -Method (each leg runs in series and its
+  Action-ID tags merge into the single rollup).
+
 .EXAMPLE
   pwsh scripts/run-all-tests.ps1
   pwsh scripts/run-all-tests.ps1 -PytestArgs 'tests/test_subscribe_market_data_batch.py'
   pwsh scripts/run-all-tests.ps1 -Venue kabu
+  pwsh scripts/run-all-tests.ps1 -IncludeFraming
 #>
 [CmdletBinding()]
 param(
     [string]$PytestArgs,
     [ValidateSet('kabu', 'tachibana')]
     [string]$Venue,
-    [string]$Method
+    [string]$Method,
+    [switch]$IncludeFraming
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,8 +47,9 @@ $RepoRoot = Split-Path -Parent $PSScriptRoot
 
 $tempDir = Join-Path $RepoRoot 'Temp'
 if (-not (Test-Path -LiteralPath $tempDir)) { New-Item -ItemType Directory -Path $tempDir -Force | Out-Null }
-$pytestLog = Join-Path $tempDir 'pytest_e2e.log'
-$unityLog  = Join-Path $tempDir 'Unity_E2E.log'
+$pytestLog        = Join-Path $tempDir 'pytest_e2e.log'
+$unityLog         = Join-Path $tempDir 'Unity_E2E.log'
+$unityFramingLog  = Join-Path $tempDir 'Unity_E2E_Framing.log'
 
 # 1) pytest (streamed via Tee; $LASTEXITCODE keeps uv/pytest's code -- Tee-Object is a cmdlet
 #    and does not overwrite it).
@@ -79,6 +87,22 @@ if ($Venue -or $Method) {
         $unityFail = $true
     }
     if (Test-Path -LiteralPath $unityLog) { $logs += $unityLog }
+}
+
+# 2b) Framing probe (optional, opt-in via -IncludeFraming). Runs in series after the Venue/Method leg so
+# Unity project lock is released. Separate log keeps the Action-ID tags grep-able per leg.
+if ($IncludeFraming) {
+    Write-Host ''
+    Write-Host '=== Unity E2E (Framing) ==='
+    $launcher = Join-Path $PSScriptRoot 'run-live-e2e.ps1'
+    try {
+        & $launcher -Method 'FramingProbe.Run' -LogFile $unityFramingLog
+        if ($LASTEXITCODE -ne 0) { $unityFail = $true }
+    } catch {
+        Write-Warning "Framing leg did not run: $_"
+        $unityFail = $true
+    }
+    if (Test-Path -LiteralPath $unityFramingLog) { $logs += $unityFramingLog }
 }
 
 # 3) Merged rollup across both logs.

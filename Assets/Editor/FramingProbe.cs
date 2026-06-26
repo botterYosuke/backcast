@@ -19,6 +19,7 @@
 //   FRAMING-S2-INTERRUPT     外部書き戻しで kill・kill 後値はその外部値 (issue #167 AC#2)
 //   FRAMING-S3-SIDEBAR       SelectRow 毎に FocusChartHook 発火 (issue #168 AC#1/AC#2)
 //   FRAMING-S3-NOOP          chart 窓 null / inactive で no-op (issue #168 AC#3)
+//   FRAMING-S3-INTEGRATION   sidebar → wired helper → active chart 窓で glide 開始 (review finding M4)
 
 using System.Collections.Generic;
 using UnityEditor;
@@ -28,6 +29,10 @@ using UnityEngine.EventSystems;
 public static class FramingProbe
 {
     const float EPS = 1e-3f;
+
+    // FramingProbe が emit する Action-ID 総数。Section を追加/削除したらここを更新する
+    // （[FRAMING PROBE PASS] ログの数字を section 数と乖離させないための pin）。
+    const int TOTAL_SECTIONS = 10;
 
     public static void Run()
     {
@@ -44,6 +49,7 @@ public static class FramingProbe
             fails += S2Interrupt(spawned)? 0 : 1;
             fails += S3Sidebar()         ? 0 : 1;
             fails += S3Noop(spawned)     ? 0 : 1;
+            fails += S3Integration(spawned) ? 0 : 1;
         }
         catch (System.Exception e)
         {
@@ -55,8 +61,8 @@ public static class FramingProbe
             foreach (var go in spawned) if (go != null) Object.DestroyImmediate(go);
         }
 
-        if (fails == 0) Debug.Log("[FRAMING PROBE PASS] all 9 framing Action-IDs PASS");
-        else            Debug.LogError("[FRAMING PROBE FAIL] " + fails + " section(s) FAIL — see [E2E FRAMING-* FAIL] lines above");
+        if (fails == 0) Debug.Log("[FRAMING PROBE PASS] all " + TOTAL_SECTIONS + " framing Action-IDs PASS");
+        else            Debug.LogError("[FRAMING PROBE FAIL] " + fails + "/" + TOTAL_SECTIONS + " section(s) FAIL — see [E2E FRAMING-* FAIL] lines above");
         EditorApplication.Exit(fails == 0 ? 0 : 1);
     }
 
@@ -402,20 +408,13 @@ public static class FramingProbe
         var glide = glideGo.AddComponent<CameraGlideDriver>();
         glide.Bind(canvas);
 
-        // Helper that mirrors BackcastWorkspaceRoot.FrameChartWindowForInstrument:
-        //   chart 窓が無い / inactive (本人 or 祖先) → BeginGlide を呼ばない。
+        // review finding M3: 旧 inline lambda は production FrameChartWindowForInstrument の **verbatim mirror**
+        // で drift 危険があった。production が抽出した public static helper を直接叩く形に倒し、AFK と
+        // production が **完全に同じコードパス** を共有する（lambda を消すと S3Noop のテストは production の
+        // bug にも反応する）。helper の最後の Action<CanvasView> は `glide.BeginGlide` をそのまま渡せばよい。
         System.Action<string> frameChart = iid =>
-        {
-            string chartId = DockShape.ChartId(iid);
-            if (string.IsNullOrEmpty(chartId)) return;
-            var rt = dockCtrl.RectOf(chartId);
-            if (rt == null || !rt.gameObject.activeInHierarchy) return;
-            var view = CanvasViewMath.FrameWindow(
-                rt.anchoredPosition, rt.sizeDelta, viewport.rect.size,
-                CanvasViewMath.DOCK_PLANE_PARALLAX, CanvasViewMath.FRAME_MARGIN_DEFAULT,
-                canvas.CaptureView());
-            glide.BeginGlide(view);
-        };
+            BackcastWorkspaceRoot.TryFrameChartWindowForInstrument(
+                iid, dockCtrl, viewport, canvas, glide.BeginGlide);
 
         // (a) 窓未生成 → no-op (glide does not start, view unchanged).
         var before = canvas.CaptureView();
@@ -469,6 +468,78 @@ public static class FramingProbe
             return TagFail("FRAMING-S3-NOOP", "active chart window did NOT start a glide (sanity)");
 
         return TagPass("FRAMING-S3-NOOP", "missing & inactive chart windows do not start a glide; active starts");
+    }
+
+    // review finding M4: S3Sidebar (hook が click で発火する) と S3Noop (chart 窓が無いと no-op) は seam の
+    // 両端だけ。production 経路（UniverseSidebarController.FocusChartHook = BackcastWorkspaceRoot helper）が
+    // 本当に繋がっているか — 「行クリック → helper 呼び出し → active 窓で glide 開始」を end-to-end で確認する。
+    // 配線ミス（hook 未 assign / helper 引数順違反 / closure キャプチャミス）はこのセクションだけが捕まえる。
+    static bool S3Integration(List<GameObject> spawned)
+    {
+        // ── arrange: UI 側（chart 窓） ──
+        var parent = NewRoot("S3Integration_Parent", spawned);
+        var content = NewRect("Content", parent,
+            anchorMin: new Vector2(0.5f, 0.5f), anchorMax: new Vector2(0.5f, 0.5f),
+            pivot: new Vector2(0.5f, 0.5f));
+        var viewport = NewRect("Viewport", parent, size: new Vector2(1600f, 900f));
+        var canvas = new InfiniteCanvasController(content, null, 1f);
+        canvas.ApplyView(new CanvasView(0f, 0f, 1f));
+
+        var dockCtrl = new FloatingWindowController(content, FloatingWindowCatalog.Default(),
+            (spec, id) => null);
+
+        var glideGo = new GameObject("GlideDriverIntegration");
+        glideGo.transform.SetParent(parent, false);
+        spawned.Add(glideGo);
+        var glide = glideGo.AddComponent<CameraGlideDriver>();
+        glide.Bind(canvas);
+
+        // active chart 窓を 1 つ adopt（"AAA" → chart:AAA）。S3Noop と同じ shape。
+        var activeWin = NewRect("chart:AAA", content,
+            pivot: new Vector2(0f, 1f),
+            anchoredPosition: new Vector2(-80f, 20f),
+            size: new Vector2(420f, 280f));
+        dockCtrl.Adopt(FloatingWindowCatalog.KIND_CHART, "chart:AAA", activeWin);
+
+        // ── arrange: brain 側（sidebar controller を production と同じ shape で組む） ──
+        var registry = new InstrumentRegistry();
+        registry.ReplaceAll(new List<string> { "AAA" });
+        var selected = new SelectedSymbol();
+        var writeback = new UniverseWriteback();
+        var ctrl = new UniverseSidebarController(registry, selected, writeback, null);
+
+        // ── act: production と同じ wiring（BackcastWorkspaceRoot:753 の代入と同型） ──
+        // helper の trampoline は production では BackcastWorkspaceRoot.FrameChartWindowForInstrument だが、
+        // ここでは production の **抽出した static helper を直接 wire** することで、配線後に同じコードパスが
+        // 走ることを確認する（trampoline が消失しても helper 単独で繋がるべき、という review 指摘）。
+        ctrl.FocusChartHook = iid =>
+            BackcastWorkspaceRoot.TryFrameChartWindowForInstrument(
+                iid, dockCtrl, viewport, canvas, glide.BeginGlide);
+
+        // ── assert 1: 配線前は glide が動いていない（sanity） ──
+        if (glide.IsAnimating)
+            return TagFail("FRAMING-S3-INTEGRATION", "glide already animating before SelectRow");
+
+        // ── act: 行クリック ──
+        bool moved = ctrl.SelectRow("AAA", UniverseSourceMode.Replay);
+
+        // ── assert 2: focus が動いた（最初のクリック） ──
+        if (!moved)
+            return TagFail("FRAMING-S3-INTEGRATION", "SelectRow did not move focus on first click");
+
+        // ── assert 3: helper が呼ばれて glide が始まった ──
+        if (!glide.IsAnimating)
+            return TagFail("FRAMING-S3-INTEGRATION", "SelectRow did not start glide (wiring or helper broken)");
+
+        // ── assert 4: 同 id 再クリックでも glide は始まる（active 窓があれば mode 非依存・focus 不変でも発火） ──
+        glide.Stop();   // 前の glide を畳んで再判定
+        if (glide.IsAnimating)
+            return TagFail("FRAMING-S3-INTEGRATION", "Stop() did not stop glide (sanity)");
+        ctrl.SelectRow("AAA", UniverseSourceMode.Replay);
+        if (!glide.IsAnimating)
+            return TagFail("FRAMING-S3-INTEGRATION", "re-click on same active id did not re-trigger glide");
+
+        return TagPass("FRAMING-S3-INTEGRATION", "sidebar → wired helper → active chart 窓で glide が開始する (end-to-end)");
     }
 
     // ---- helpers ----

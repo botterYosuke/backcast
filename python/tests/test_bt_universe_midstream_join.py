@@ -17,18 +17,18 @@ import pytest
 from engine.kernel.duckdb_bars import Bar
 from engine.kernel.stepper import KernelStepper, StepEvent
 from engine.strategy_runtime.backtester import Backtester
+from engine.synth import explicit, linear_grid, synth_bars  # #153: 合成バーを生成器へ集約
 
 _CASH = 10_000_000.0
 _BASE = 1_700_000_000_000_000_000
 _STEP = 1_000_000_000  # 1s between bars
 
 
-def _bar(iid: str, i: int, close: float) -> Bar:
-    return Bar(iid, _BASE + i * _STEP, close, close + 1.0, close - 1.0, close, 10.0)
-
-
 def _series(iid: str, closes: list[float]) -> list[Bar]:
-    return [_bar(iid, i, c) for i, c in enumerate(closes)]
+    # #153: 旧アドホック _bar/_series（open=close, high=close+1, low=close-1, vol=10, 1s grid）を
+    # synth_bars + explicit ビルダー（spread=1.0, volume=10.0）+ linear_grid で再現（byte-identical）。
+    grid = linear_grid(len(closes), base=_BASE, step=_STEP)
+    return synth_bars([iid], path=explicit(closes, spread=1.0, volume=10.0), grid=grid)[iid]
 
 
 class _NullSink:

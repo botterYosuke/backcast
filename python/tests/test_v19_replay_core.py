@@ -27,25 +27,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest  # noqa: E402
 
 import engine.kernel.runner as runner_mod  # noqa: E402
-from engine.kernel.duckdb_bars import Bar, merge_bars_by_ts  # noqa: E402
+from engine.kernel.duckdb_bars import Bar  # noqa: E402
 from engine.kernel.orders import OrderFilled, OrderSide  # noqa: E402
 from engine.kernel.runner import KernelRunner  # noqa: E402
 from engine.kernel.strategy import Strategy as KernelStrategy  # noqa: E402
 from engine.strategy_runtime.strategy_loader import load as load_strategy  # noqa: E402
+from engine.synth import BarPoint, from_fn, synth_bars, ts_to_jst_minute, universe_bars  # noqa: E402  #153
 
 _JST = ZoneInfo("Asia/Tokyo")
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _V19 = os.path.join(_HERE, "..", "strategies", "v19", "v19_morning.py")
-
-
-def _ts(year: int, month: int, day: int, hh: int, mm: int) -> int:
-    """JST HH:MM bar-end label (:59.999999) → UTC ns, matching duckdb_bars convention."""
-    dt = datetime(year, month, day, hh, mm, 59, 999999, tzinfo=_JST)
-    return int(dt.timestamp() * 1_000_000_000)
-
-
-def _bar(iid: str, ts: int, close: float) -> Bar:
-    return Bar(iid, ts, open=close, high=close, low=close, close=close, volume=1000.0)
 
 
 class _CapSink:
@@ -72,20 +63,30 @@ class _StubModel:
 # Layer 1 — fast deterministic timing logic
 # ---------------------------------------------------------------------------------------
 
+_RC_UNIVERSE = ["7203.TSE", "6758.TSE", "1306.TSE"]
+_RC_PRICES = {"7203.TSE": 100.0, "6758.TSE": 120.0, "1306.TSE": 200.0}
+_RC_SESSION = [(9, 55), (9, 56), (9, 57), (9, 58), (9, 59), (10, 0), (10, 30), (14, 55)]
+
+
 def _synthetic_bars() -> list[Bar]:
     """Two business days, 3 instruments (A, B, rs-ref). Per day: five 09:5x snapshots, a
-    10:00 entry bar, a 10:30 bar (must NOT re-enter), a 14:55 exit bar. Time-merged."""
-    universe = ["7203.TSE", "6758.TSE", "1306.TSE"]
-    prices = {"7203.TSE": 100.0, "6758.TSE": 120.0, "1306.TSE": 200.0}
-    bars: list[Bar] = []
-    for (y, m, d) in [(2025, 1, 6), (2025, 1, 7)]:
-        slots = [(9, 55), (9, 56), (9, 57), (9, 58), (9, 59), (10, 0), (10, 30), (14, 55)]
-        for (hh, mm) in slots:
-            for i, iid in enumerate(universe):
-                # Drift prices a touch per slot so features are non-degenerate.
-                px = prices[iid] + (hh * 60 + mm) * 0.01 + i
-                bars.append(_bar(iid, _ts(y, m, d, hh, mm), px))
-    return merge_bars_by_ts([bars])  # canonical stable ts-merge (duckdb_bars)
+    10:00 entry bar, a 10:30 bar (must NOT re-enter), a 14:55 exit bar. Time-merged.
+
+    #153: 旧アドホック生成（flat 足・vol=1000・px=prices[iid]+(分)*0.01+idx）を synth_bars + from_fn で
+    再現（byte-identical）。ts 規約・スロット・価格式は据え置き。"""
+    idx = {iid: i for i, iid in enumerate(_RC_UNIVERSE)}
+
+    def _path(iid: str):
+        def _f(i: int, ts: int, prev_close):
+            px = _RC_PRICES[iid] + ts_to_jst_minute(ts) * 0.01 + idx[iid]
+            return BarPoint(close=px, open=px, volume=1000.0)  # flat 足
+        return from_fn(_f)
+
+    by_iid = synth_bars(
+        _RC_UNIVERSE, "2025-01-06", "2025-01-07", "Minute",
+        session=_RC_SESSION, path={iid: _path(iid) for iid in _RC_UNIVERSE},
+    )
+    return universe_bars(by_iid)
 
 
 def _make_v19(stub_model: bool = True):

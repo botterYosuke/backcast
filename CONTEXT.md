@@ -881,6 +881,33 @@ list_instruments RPC が唯一の source・SoT 二重化禁止）／spawn 後に
 非同期 seam を入れること（owner 決定で却下・常用パスでは cache が温く・cold path は id 単独で許容）／
 collapse 条件を picker と chart 窓で別実装すること（必ず `InstrumentLabel.Compose` 経由・drift 禁止）
 
+**合成マーケットデータ生成器（synth_bars / PricePath）**:
+テストから関数呼び出しで**任意期間・任意 OHLCV** の合成バーを生成する単一供給源（[[市場データソース（J-Quants
+DuckDB 直読み）]] の実データに対する、決定論テスト用の人工データ源）。価格パターンは **`PricePath`**（callable
+Protocol `(bar_index, ts_event_ns, prev_close) -> BarPoint | float`）で表現し、新パターンは**ビルダーを足すだけ**で
+拡張できる（生成器コアは不変）。**`BarPoint`** = 1 足の値で `close` 必須・他は close から既定（`open` 既定＝
+**前足終値**なので gap を表現できる）。`synth_bars(symbols, start, end, granularity)` は Daily（平日 15:30 引け）と
+Minute（東証セッション足）の両軸で `{instrument_id: [Bar]}` を返す。ビルダーは explicit / constant / trend /
+from_fn（決定論）＋ gbm / sine / ramp（確率過程・seed 固定で再現可能）。volume も価格パスと同じ callable で
+時間変化させられる。記録: findings 0120。
+_Avoid_: テストごとに合成バーを手書きすること（散在・volume 定数バラバラの旧状態へ逆戻り）／実 venue データ
+（DuckDB / 実 capture）を合成器で置換すること（合成は決定論テスト専用・実データ回帰は [[市場データソース（J-Quants
+DuckDB 直読み）]] と kabu/tachibana mock fixture が正本・findings 0117–0119）／生成器コアを新ビルダーのために
+改変すること（拡張は `PricePath` 実装の追加のみ＝コア無改変が拡張性の floor）
+
+**Replay↔Auto パリティ（合成シナリオ）**:
+**同一の戦略 cell・同一の合成シナリオ**を Replay 経路（[[Backcast Execution Kernel（kernel）]] の KernelStepper）と
+Auto 経路（live runner → tick→bar aggregator → [[mode-aware bt（ADR-0025）]] の LiveCellBridge）の両方で駆動し、
+**同じ決定（orders/picks）が出る**ことを担保するゲート（= アプリの「Replay と Auto をシームレスに行き来する」概念の
+floor・方針 ADR-0025）。合成バーは Replay には merge 済み `list[Bar]` として、Auto には `auto_trades` で
+**aggregator が同じ OHLCV を再構成する `TradesUpdate` 列**として供給する（subscribe-gated な MockVenueAdapter へ
+注入・kabu/tachibana と同じ `decode(rec)->TradesUpdate` 正規化規約の `"synthetic"` feed）。比較は **ts ラベルでは
+なく (instrument, signed_qty) の決定列**で行う（Replay の bar END ラベルと Auto の aggregator bucket 開始ラベルは
+一致しないが、time-of-day は保存される）。記録: findings 0120。
+_Avoid_: Auto パリティで `KlineUpdate` を直接注入して aggregator を迂回すること（trade→aggregator→bar の
+production 経路を通さないと「Auto で本当に同じ決定が出る」証明にならない・#152 の本旨）／parity を ts ラベル一致で
+比較すること（Replay/Auto で bar.ts の意味が違う・決定列で比較する）
+
 ## Flagged ambiguities
 
 - **「本番」**: backcast の文脈では将来の本線を指すが、移行期間中の **live 実弾**は当面 TTWR(Bevy) が

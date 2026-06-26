@@ -28,6 +28,7 @@
 - venv の python を直接: `python/.venv/Scripts/python.exe -m pytest python/tests`
 - 構文/ import 健全性の素早い確認: `cd python && ./.venv/Scripts/python.exe -c "import engine.live.live_orchestrator; print('import OK')"`
 - 静的解析 / Linter: **未設定**（ruff/black/flake8/mypy はプロジェクトに無い）。新設するまで lint コマンドは存在しない（捏造しない）。
+- **live venue（kabu）の集約/チャート挙動を回帰テストするときは実 venue に繋がない**。実 prod 採取の codec-replayable mock `python/tests/fixtures/kabu_live_mock_4sym.json` を `KabuPushFrameProcessor` で再生する（4銘柄同時更新・partial-append ワートを決定的に再現）。採取は `python/spike/kabu_capture_mock.py`、再生リファレンスは `python/spike/kabu_replay_multi.py` / `kabu_replay_wart.py`。詳細は **findings 0117**。検証 18081 は無配信なので mock が唯一の決定的経路。
 
 ### Unity フロントエンド (headless / batchmode)
 

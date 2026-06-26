@@ -1359,7 +1359,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a per-instrument property (review altitude fix 2026-06-25).
     void DriveSidebarContext()
     {
-        if (_sidebarView == null) return;
+        // #147: guard the RUNTIME field actually dereferenced below (_footerMode), not just _sidebarView.
+        // A domain-reload-mid-Play restores _sidebarView ([SerializeField], non-null) but leaves
+        // _footerMode null (BuildWorkspace-built, no [Serializable]) — so guarding only _sidebarView let
+        // `_footerMode.DisplayMode` NRE every frame and aborted the rest of Update (DrivePrune /
+        // DriveDepthLadders). Sibling drivers (DriveFooter / DriveOrderTicket / DriveDepthLadders) all
+        // guard _footerMode; match them so this no-ops until the workspace is (re)built.
+        if (_sidebarView == null || _footerMode == null) return;
         var mode = DockShape.IsLiveShape(_footerMode.DisplayMode)
             ? UniverseSourceMode.Live : UniverseSourceMode.Replay;
         string end = _scenario.Params != null ? _scenario.Params.End : null;

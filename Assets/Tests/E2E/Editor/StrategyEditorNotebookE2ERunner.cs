@@ -78,7 +78,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section27_EnterStaysNewline(spawned)
                 ?? Section28_EscapeKeepsEditing(spawned)
                 ?? Section29_EscapeKeyPumpKeepsEditing(spawned)
-                ?? Section30_CaretVisible(spawned);
+                ?? Section30_CaretVisible(spawned)
+                ?? Section31_RichOutputSample(spawned);
         }
         catch (Exception e)
         {
@@ -168,6 +169,12 @@ public static class StrategyEditorNotebookE2ERunner
                       "+ #150 Escape key-pump (STRATEGY-61 / findings 0117 §HITL: the SECOND Escape revert " +
                       "path — the multiline editor OWNS the IMGUI key pump (OnUpdateSelected) and SWALLOWS " +
                       "Escape before base.KeyPressed deactivates+reverts; single-line keeps the default pump) " +
+                      "+ #165 rich output sample (STRATEGY-63/64 / findings 0123: the shipping per-cell-RUN demo " +
+                      "docs/samples/code/07_rich_output.py, captured into Fixtures/RichOutputSample.json, routes its " +
+                      "REAL marimo payloads through SetOutput — markdown (<strong>-><b>) / pandas <table> -> pipe rows / " +
+                      "mo.ui.slider -> html rich-text fallback all to the rich-text pane, and a self-contained matplotlib " +
+                      "image/png into the image codepath; GPU pixel decode is HITL, the production payloads + fixture " +
+                      "freshness are pytest test_rich_output_sample.py) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1380,6 +1387,184 @@ public static class StrategyEditorNotebookE2ERunner
 
         Debug.Log("[E2E STRATEGY-62 PASS] code editor caret PRECONDITION pinned (renderer creation + on-screen visibility are isPlaying-gated -> HITL): the builder wires textComponent before the field's first enable (subtree built inactive; OnEnable sees it -> in Play mode TMP would create the caret renderer), textViewport+RectMask2D assigned, explicit caretWidth (zoom-survival) + opaque customCaretColor; real blinking caret across 0.2-5x zoom is HITL (STRATEGY-18)");
         return null;
+    }
+
+    // ======================================================================
+    // 31. #165 — rich output sample notebook (docs/samples/code/07_rich_output.py) routes per-cell.
+    //     Covers STRATEGY-63 (markdown / table / mo.ui payloads route to the rich-text pane, NOT the
+    //     image pane) and STRATEGY-64 (the matplotlib image/png payload routes into the image codepath).
+    //
+    //     The difference from Section19 (which feeds HAND-AUTHORED synthetic payloads to pin the
+    //     mt-branch dispatch): this feeds the REAL marimo output captured from the shipping sample into a
+    //     committed fixture (Fixtures/RichOutputSample.json, written by `python -m
+    //     tests.capture_rich_output_sample`). So it pins that the ACTUAL marimo markup — rendered-HTML
+    //     markdown (<strong>), a pandas <table> with its <style> block, a self-contained PNG data URL,
+    //     and a <marimo-slider> widget — routes correctly through the REAL NotebookRunController ->
+    //     ApplyResult -> StrategyEditorView.SetOutput. The Python half (each cell genuinely PRODUCES that
+    //     payload + fixture freshness) is test_rich_output_sample.py.
+    //
+    //     RED litmus (AFK): collapse every mimetype to the Text pane -> the chart's image routing breaks
+    //     (decode-capable env: RawImage inactive; headless: no [image/png] label) -> STRATEGY-64 RED. Drop
+    //     the controller Mimetype passthrough -> markdown/table land in the plain bucket (no <b>/no pipe) ->
+    //     STRATEGY-63 RED. Plain-ify a sample cell -> the committed fixture's mimetype changes (Python gate
+    //     RED) and the fixture re-capture flows here.
+    //     image GPU decode + RawImage activation stays HITL in headless batch (S3/S8/Section19-style降格).
+    // ======================================================================
+    static string Section31_RichOutputSample(List<GameObject> spawned)
+    {
+        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
+
+        string fixturePath = Path.Combine(Application.dataPath, "Tests/E2E/Editor/Fixtures/RichOutputSample.json");
+        if (!File.Exists(fixturePath))
+            return "S31: fixture missing at " + fixturePath + " (run `python -m tests.capture_rich_output_sample`)";
+        RichOutputFixture fx;
+        try { fx = JsonUtility.FromJson<RichOutputFixture>(File.ReadAllText(fixturePath)); }
+        catch (Exception e) { return "S31: fixture JSON parse failed: " + e.Message; }
+        if (fx == null || fx.cells == null || fx.cells.Length != 4)
+            return "S31: fixture did not parse to 4 cells (sample drifted? re-capture)";
+        var byName = new Dictionary<string, RichOutputCell>();
+        foreach (var c in fx.cells) if (c != null && c.name != null) byName[c.name] = c;
+        foreach (var n in new[] { "markdown", "table", "chart", "ui" })
+        {
+            if (!byName.ContainsKey(n)) return "S31: fixture missing the '" + n + "' cell";
+            // Freshness floor: the capture script only writes cells that ran, so a not-ok cell means a
+            // hand-edited / stale fixture — feeding a failed payload would gate the wrong thing.
+            if (!byName[n].ok) return "S31: fixture cell '" + n + "' was captured as not-ok (re-capture)";
+        }
+
+        // Build a real StrategyEditorView + adopted region + controller, exactly like Section19, then route
+        // each fixture payload through the production NotebookRunController -> view.SetOutput path.
+        var views = new Dictionary<string, StrategyEditorView>();
+        var layerGo = new GameObject("FWLayer31", typeof(RectTransform));
+        spawned.Add(layerGo);
+        var controller = new FloatingWindowController(
+            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+            (spec, id) =>
+            {
+                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
+                spawned.Add(rt.gameObject);
+                var v = StrategyEditorContentBuilder.Build(body);
+                if (v != null) views[id] = v;
+                return rt;
+            },
+            go => UnityEngine.Object.DestroyImmediate(go));
+
+        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        spawned.Add(adoptRoot.gameObject);
+        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
+        if (view1 == null) return "S31: adopted view build failed";
+        views[R1] = view1;
+        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+
+        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+        var coord = new NotebookCellCoordinator(
+            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
+        coord.SyncWindowsToNotebook(null);
+        if (coord.RegionOf(nb.Cells[0]) != R1) return "S31: precondition — cell0 not bound to region_001";
+
+        var exec = new _RichExecutor();
+        var lane = new NotebookRunLane(exec, startWorker: false);
+        var run = new NotebookRunController(coord, r => views.TryGetValue(r, out var v) ? v : null, lane);
+        var view = views[R1];
+
+        // The real path passes Output = text_projection(mimetype, data) (HostNotebookCellExecutor /
+        // _backend_impl.run_cell:881); the fixture stores that projection, so we feed it as the Text arg.
+        System.Action<RichOutputCell> feed = cell =>
+        {
+            exec.Set(cell.projection, cell.mimetype, cell.data);
+            run.RunCell(R1);
+            run.DrainAndRoute();
+        };
+
+        // STRATEGY-63 (markdown): marimo emits markdown as rendered HTML; the <strong> becomes the
+        // rich-text subset <b>. Routed to the rich-text pane, never the image pane.
+        var md = byName["markdown"];
+        if (md.mimetype != "text/markdown") return "S31/STRATEGY-63: fixture markdown mimetype != text/markdown, got [" + md.mimetype + "]";
+        // The #165 emphasis-preservation fix only runs on the HtmlToUnity leg (data carries tags). marimo
+        // emits mo.md as RENDERED HTML, so the fixture MUST contain <strong>. Pin it: a raw-markdown
+        // re-capture would take the MarkdownToUnity leg (no _tagRe) and pass the <b> assert below even with
+        // the OLD broken regex — silently un-gating the fix. (ui/chart pin their data shape the same way.)
+        if (md.data == null || md.data.IndexOf("<strong>", StringComparison.OrdinalIgnoreCase) < 0)
+            return "S31/STRATEGY-63: fixture markdown is not rendered HTML with <strong> — the HtmlToUnity emphasis-preservation fix (#165) would not be exercised (sample drifted to raw markdown?)";
+        feed(md);
+        if (view.OutputIsImage) return "S31/STRATEGY-63: markdown wrongly routed to the image pane";
+        if (!view.RichBlockVisible) return "S31/STRATEGY-63: markdown did not populate the rich block";
+        if (view.CurrentOutput == null || !view.CurrentOutput.Contains("<b>"))
+            return "S31/STRATEGY-63: real marimo markdown not rich-converted (no <b> from <strong>), got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-63 (table): a real pandas DataFrame <table> projects to pipe rows; a data value survives.
+        var tbl = byName["table"];
+        if (tbl.mimetype != "text/html") return "S31/STRATEGY-63: fixture table mimetype != text/html, got [" + tbl.mimetype + "]";
+        feed(tbl);
+        if (view.OutputIsImage) return "S31/STRATEGY-63: table wrongly routed to the image pane";
+        if (view.CurrentOutput == null || !view.CurrentOutput.Contains("|"))
+            return "S31/STRATEGY-63: real pandas table not projected to pipe rows (no '|'), got [" + view.CurrentOutput + "]";
+        if (!view.CurrentOutput.Contains("7203.TSE"))
+            return "S31/STRATEGY-63: a real table data value (7203.TSE) did not survive the html->pipe projection, got [" + view.CurrentOutput + "]";
+
+        // STRATEGY-63 (mo.ui boundary): the interactive widget folds into the html bucket and routes to the
+        // rich-text pane (Strategy Editor cannot drive interaction). The widget carries no static text, so
+        // CurrentOutput is empty after the tag strip — we pin only that it routed to the text/rich pane.
+        var ui = byName["ui"];
+        if (ui.mimetype != "text/html") return "S31/STRATEGY-63: fixture ui mimetype != text/html, got [" + ui.mimetype + "]";
+        if (ui.data == null || ui.data.IndexOf("<marimo-slider", StringComparison.Ordinal) < 0)
+            return "S31/STRATEGY-63: fixture ui payload is not a marimo slider widget (sample drifted?)";
+        feed(ui);
+        if (view.OutputIsImage) return "S31/STRATEGY-63: mo.ui widget wrongly routed to the image pane";
+        if (!view.RichBlockVisible) return "S31/STRATEGY-63: mo.ui widget did not populate the rich block (html fallback expected)";
+
+        Debug.Log("[E2E STRATEGY-63 PASS] real sample rich output routes by mimetype: marimo markdown (<strong>-><b>), "
+            + "a pandas <table> -> pipe rows (data value survives), and a mo.ui.slider -> html rich-text fallback (no image, "
+            + "no static text — the honest interactive boundary). Payloads captured from docs/samples/code/07_rich_output.py "
+            + "into Fixtures/RichOutputSample.json; the production half is pytest test_rich_output_sample.py.");
+
+        // STRATEGY-64 (chart): a self-contained image/png data URL routes into the image codepath. GPU
+        // decode + RawImage activation is HITL in a headless batch (no graphics device); AFK still pins that
+        // the mimetype propagated end-to-end (the [image/png] label proves routing did NOT collapse it).
+        var chart = byName["chart"];
+        if (chart.mimetype != "image/png") return "S31/STRATEGY-64: fixture chart mimetype != image/png, got [" + chart.mimetype + "]";
+        if (chart.data == null || !chart.data.StartsWith("data:image/png;base64,", StringComparison.Ordinal))
+            return "S31/STRATEGY-64: fixture chart payload is not a self-contained PNG data URL, got [" + (chart.data == null ? "null" : chart.data.Substring(0, Math.Min(40, chart.data.Length))) + "]";
+        feed(chart);
+        string b64 = chart.data;
+        int comma = b64.IndexOf("base64,", StringComparison.Ordinal);
+        if (comma >= 0) b64 = b64.Substring(comma + "base64,".Length);
+        var imgProbe = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+        bool canDecode = imgProbe.LoadImage(Convert.FromBase64String(b64));
+        UnityEngine.Object.DestroyImmediate(imgProbe);
+        if (canDecode)
+        {
+            if (!view.OutputIsImage) return "S31/STRATEGY-64: image/png did not route to the RawImage (RawImage inactive) in a decode-capable env";
+        }
+        else
+        {
+            if (view.OutputIsImage) return "S31/STRATEGY-64: image/png reported RawImage active despite no decode capability";
+            if (view.CurrentOutput == null || !view.CurrentOutput.Contains("[image/png]"))
+                return "S31/STRATEGY-64: image/png mimetype did not propagate (no [image/png] label in the decode-failure fallback), got [" + view.CurrentOutput + "]";
+            Debug.LogWarning("[E2E STRATEGY NOTEBOOK] S31/STRATEGY-64: real sample chart image/png mimetype propagated end-to-end; Texture2D.LoadImage cannot decode in this headless batch -> RawImage activation is HITL-only (S3/S8/Section19-style降格; the routing is pinned via the [image/png] label).");
+        }
+
+        Debug.Log("[E2E STRATEGY-64 PASS] real sample matplotlib image/png (a self-contained data: URL) routes into the "
+            + "image codepath (decode-capable -> RawImage active; headless -> [image/png] label proves the mimetype propagated); "
+            + "GPU pixel decode is HITL.");
+
+        lane.Dispose();
+        return null;
+    }
+
+    // #165 Section31 fixture schema (Fixtures/RichOutputSample.json) — parsed by JsonUtility. Mirrors the
+    // capture script's per-cell {name, mimetype, data, projection, ok}; extra top-level keys are ignored.
+    [Serializable]
+    sealed class RichOutputFixture { public RichOutputCell[] cells; }
+
+    [Serializable]
+    sealed class RichOutputCell
+    {
+        public string name;
+        public string mimetype;
+        public string data;
+        public string projection;
+        public bool ok;
     }
 
     // ======================================================================

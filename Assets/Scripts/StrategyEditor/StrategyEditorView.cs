@@ -483,7 +483,11 @@ public class StrategyEditorView : MonoBehaviour
         return (mimetype == "text/html" || looksHtml) ? HtmlToUnity(data) : MarkdownToUnity(data);
     }
 
-    static readonly Regex _tagRe = new Regex("<[^>]+>");
+    // Strips every tag EXCEPT the Unity-native <b>/<i> emphasis HtmlToUnity just produced from
+    // <strong>/<em> — a blanket `<[^>]+>` would delete those too, making the emphasis conversion dead
+    // (the bug #165 hit: real marimo markdown is rendered HTML, so it takes the HTML leg and lost its
+    // bold; synthetic raw-markdown took the MarkdownToUnity leg which has no final strip and kept <b>).
+    static readonly Regex _tagRe = new Regex(@"<(?!/?[bi]>)[^>]+>", RegexOptions.IgnoreCase);
 
     static string HtmlToUnity(string html)
     {
@@ -494,12 +498,14 @@ public class StrategyEditorView : MonoBehaviour
         // block breaks → newlines, list items → bullets.
         s = Regex.Replace(s, @"<br\s*/?>|</p>|</div>|</h[1-6]>", "\n", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<li[^>]*>", "• ", RegexOptions.IgnoreCase);
-        // inline emphasis → Unity tags.
+        // inline emphasis → Unity tags. These MUST stay attribute-free bare <b>/<i>: _tagRe's lookahead
+        // below preserves exactly those forms, so emitting `<b style=…>` here would let the blanket strip
+        // delete the emphasis again (the #165 regression).
         s = Regex.Replace(s, @"<(b|strong)>", "<b>", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"</(b|strong)>", "</b>", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"<(i|em)>", "<i>", RegexOptions.IgnoreCase);
         s = Regex.Replace(s, @"</(i|em)>", "</i>", RegexOptions.IgnoreCase);
-        s = _tagRe.Replace(s, string.Empty);   // drop every remaining tag (general HTML not reproduced)
+        s = _tagRe.Replace(s, string.Empty);   // drop remaining tags but KEEP the converted <b>/<i> (general HTML not reproduced)
         return Unescape(s).Trim();
     }
 

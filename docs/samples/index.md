@@ -110,6 +110,37 @@
 
 ---
 
+## 8. リッチ output（per-cell RUN デモ） { #rich-output }
+
+ここまでの 1–7 は **Replay エンジンで毎バー走らせる戦略**でしたが、これは毛色が違います。
+marimo の **per-cell RUN**（セル右上の ▶ ボタン）は、バックテスト（`get_bar` / Replay）とは別に
+**各セルを単独実行**して、Markdown・テーブル・チャート・UI ウィジェットといった**リッチな表示**を
+確認するための経路です。このサンプルは `bt` 非依存で、4 種類の出力を 1 セルずつ示します。
+
+```python title="07_rich_output.py"
+--8<-- "samples/code/07_rich_output.py"
+```
+
+**確認ポイント**（各セルを ▶ で実行）:
+
+- **Markdown** … 見出し・太字・箇条書きが整形されて出る（`mo.md`）。
+- **テーブル** … pandas DataFrame が表として出る。
+- **チャート** … matplotlib の図が**画像**として出る。
+- **UI** … `mo.ui.slider` が出る（ただし Strategy Editor では**静的表示**＝操作はできない。
+  interactive 操作は marimo web 版の境界）。
+
+!!! note "これは戦略ではありません"
+    このサンプルは Replay で走らせる戦略ではなく、**per-cell RUN の表示デモ**です。
+    Replay の期間設定や発注は関係ありません。各セルの ▶ を押して、その型が描画されるかを見ます。
+
+!!! warning "実画素の確認は目視で"
+    各セルが**本物のリッチ payload を産出し、正しい表示 pane へ振り分けられる**ことは自動テストで
+    担保しています（`test_rich_output_sample.py` ＋ AFK `StrategyEditorNotebookE2ERunner` STRATEGY-63/64・
+    findings 0123）。ただし**画像が実際に画素として描かれる**ことだけは headless 環境で検証できないため、
+    最終確認は目視（HITL）です。
+
+---
+
 ## 付録: imperative 形式 { #imperative }
 
 新規作成は marimo 形式を推奨しますが、`Strategy` サブクラス（命令型）も使えます。同じ

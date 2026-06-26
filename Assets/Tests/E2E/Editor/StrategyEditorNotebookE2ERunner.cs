@@ -33,7 +33,7 @@ using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.EventSystems;   // STRATEGY-59: EventSystem / BaseEventData / ISubmitHandler
+using UnityEngine.EventSystems;   // STRATEGY-59/60: EventSystem / BaseEventData / ISubmitHandler / ICancelHandler
 using UnityEngine.UI;
 
 public static class StrategyEditorNotebookE2ERunner
@@ -75,7 +75,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section24_LiveLifecycleEdges(spawned)
                 ?? Section25_ModeConditionalVisibility(spawned)
                 ?? Section26_ZeroCellsFloor(spawned)
-                ?? Section27_EnterStaysNewline(spawned);
+                ?? Section27_EnterStaysNewline(spawned)
+                ?? Section28_EscapeKeepsEditing(spawned);
         }
         catch (Exception e)
         {
@@ -158,6 +159,10 @@ public static class StrategyEditorNotebookE2ERunner
                       "CONSUMES the new Input System Submit action so Enter inserts a newline instead of " +
                       "blurring the field — TMP_InputField.OnSubmit deactivates unconditionally; single-line " +
                       "keeps the default submit; the production builder stays MultiLineNewline) " +
+                      "+ findings 0117 Escape-keeps-editing (STRATEGY-60 / #148 sibling: the multiline code " +
+                      "editor CONSUMES the new Input System Cancel action so Escape does nothing instead of " +
+                      "reverting the edit and blurring — TMP_InputField.OnCancel deactivates+reverts " +
+                      "unconditionally; single-line keeps the default cancel) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1113,6 +1118,63 @@ public static class StrategyEditorNotebookE2ERunner
             return "S27c: single-line field consumed the Submit (consume must be MultiLineNewline-only)";
 
         Debug.Log("[E2E STRATEGY-59 PASS] multiline code editor consumes the EventSystem Submit (Enter stays a newline, no blur); single-line keeps default submit; production builder is MultiLineNewline");
+        return null;
+    }
+
+    // ======================================================================
+    // 28. Escape does NOT discard the in-progress edit in the code editor (findings 0117 / #148 sibling)
+    // Covers: STRATEGY-60 — the new Input System's Cancel action (bound to Escape) dispatches
+    //         ICancelHandler.OnCancel to the focused field; TMP_InputField.OnCancel
+    //         (com.unity.ugui 2.0.0:4505) sets m_WasCanceled and DeactivateInputField()s, and
+    //         DeactivateInputField reverts text=m_OriginalText (:4436, restoreOriginalTextOnEscape
+    //         default true) — so Escape REVERTED every edit made since focus AND blurred the editor
+    //         (silent data loss, strictly worse than the Enter blur). StrategyInputField overrides
+    //         OnCancel to CONSUME the cancel for MultiLineNewline (no revert, focus + edit retained),
+    //         while single-line fields keep the default cancel/revert (owner decision 2026-06-26: Esc
+    //         does nothing in the code editor).
+    //     DETERMINISTIC half: it invokes the production OnCancel (the exact EventSystem entry point) on
+    //     a REAL builder-produced field and asserts the consume decision. The real keystroke→focus path
+    //     is HITL (STRATEGY-18): -batchmode -nographics has no EventSystem focus to drive a real Escape.
+    // ======================================================================
+    static string Section28_EscapeKeepsEditing(List<GameObject> spawned)
+    {
+        var esGo = new GameObject("ES28", typeof(EventSystem));
+        spawned.Add(esGo);
+        var evt = new BaseEventData(esGo.GetComponent<EventSystem>());
+
+        // (a) PRODUCTION config invariant: the real builder editor is MultiLineNewline (shared with S27;
+        //     re-asserted here because the Escape consume branch is ALSO MultiLineNewline-gated).
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s28", out _, out var body);
+        spawned.Add(root.gameObject);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S28: editor build failed";
+        var field = root.GetComponentInChildren<StrategyInputField>(true);
+        if (field == null) return "S28: StrategyInputField not found in the built editor";
+        if (field.lineType != TMP_InputField.LineType.MultiLineNewline)
+            return $"S28a: production editor lineType is {field.lineType}, expected MultiLineNewline";
+
+        // (b) OnCancel on the multiline field CONSUMES (does not revert/deactivate) — the Esc-discards fix.
+        //     Remove the StrategyInputField.OnCancel override → base TMP OnCancel runs → m_WasCanceled +
+        //     deactivate (reverting text on a focused field) → count stays 0 → RED (findings 0117 litmus).
+        if (field.CancelConsumedCount != 0) return "S28b: fresh field already counted a consumed cancel";
+        ((ICancelHandler)field).OnCancel(evt);
+        if (field.CancelConsumedCount != 1)
+            return "S28b: multiline OnCancel did NOT consume the Cancel (Escape would revert the edit and blur the editor instead of doing nothing)";
+
+        // (c) NEGATIVE control: a SINGLE-line StrategyInputField keeps the default cancel (consume is
+        //     MultiLineNewline-gated, not a blanket swallow — else a single-line search/name field could
+        //     never abandon on Escape). Inactive GO so base.OnCancel early-returns (IsActive()==false)
+        //     without touching TMP internals headlessly.
+        var slGo = new GameObject("S28SingleLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(StrategyInputField));
+        slGo.SetActive(false);
+        spawned.Add(slGo);
+        var single = slGo.GetComponent<StrategyInputField>();
+        single.lineType = TMP_InputField.LineType.SingleLine;
+        ((ICancelHandler)single).OnCancel(evt);
+        if (single.CancelConsumedCount != 0)
+            return "S28c: single-line field consumed the Cancel (consume must be MultiLineNewline-only)";
+
+        Debug.Log("[E2E STRATEGY-60 PASS] multiline code editor consumes the EventSystem Cancel (Escape does nothing — no revert, no blur; edits kept); single-line keeps default cancel; production builder is MultiLineNewline");
         return null;
     }
 

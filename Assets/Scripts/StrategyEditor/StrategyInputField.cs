@@ -52,4 +52,32 @@ public class StrategyInputField : TMP_InputField
         }
         base.OnSubmit(eventData);
     }
+
+    // #148 sibling (findings 0117): Escape must NOT discard the in-progress edit in the code editor.
+    //
+    // Exact same Input System seam as OnSubmit above. The InputSystemUIInputModule's default `Cancel`
+    // action is bound to Escape; while this field is focused the module dispatches ICancelHandler.OnCancel.
+    // TMP_InputField.OnCancel (com.unity.ugui 2.0.0, TMP_InputField.cs:4505) sets m_WasCanceled=true and
+    // DeactivateInputField()s — and DeactivateInputField then does `text = m_OriginalText`
+    // (TMP_InputField.cs:4436, restoreOriginalTextOnEscape defaults true). So Escape REVERTED every edit
+    // made since the field was focused AND blurred it: silent data loss, strictly worse than the Enter blur.
+    //
+    // Fix (owner decision 2026-06-26): for MultiLineNewline, Escape does NOTHING — consume it so the field
+    // is neither deactivated nor reverted; the edit and focus are retained. Single-line fields keep the
+    // default cancel/revert semantics (a search/name field SHOULD abandon on Escape). CancelConsumedCount
+    // is the AFK-observable seam (STRATEGY-60): the gate invokes OnCancel on a real built field and asserts
+    // it took the consume branch (no revert) rather than the base deactivate. The real keystroke→focus path
+    // stays HITL (STRATEGY-18): -batchmode -nographics has no EventSystem focus to drive a real Escape.
+    public int CancelConsumedCount { get; private set; }
+
+    public override void OnCancel(BaseEventData eventData)
+    {
+        if (lineType == LineType.MultiLineNewline)
+        {
+            CancelConsumedCount++;
+            eventData?.Use();   // handled — Escape must not revert/blur the multiline code editor
+            return;
+        }
+        base.OnCancel(eventData);
+    }
 }

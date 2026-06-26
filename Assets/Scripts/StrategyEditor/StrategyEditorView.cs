@@ -361,6 +361,10 @@ public class StrategyEditorView : MonoBehaviour
             var img = _input.GetComponent<Image>();
             if (img != null) img.color = c.background;
             if (_input.textComponent != null) _input.textComponent.color = c.text;
+            // #149 (findings 0121): the caret uses an explicit opaque colour (customCaretColor=true, set by
+            // the builder) so it no longer auto-follows textComponent.color — re-seed it from the theme here
+            // on every theme switch so the caret stays themed and opaque.
+            var caretCol = c.text; caretCol.a = 1f; _input.caretColor = caretCol;
         }
         if (_placeholder != null) { var pc = c.text; pc.a = 0.4f; _placeholder.color = pc; }
         if (_effect != null) _effect.ApplyTheme();

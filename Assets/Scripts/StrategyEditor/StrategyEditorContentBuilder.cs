@@ -67,10 +67,17 @@ public static class StrategyEditorContentBuilder
         // stays crisp — the shader reconstructs glyph outlines instead of stretching the dynamic-font
         // atlas bitmap the legacy uGUI Text did (the migration's root cause). ----
 
+        // #149 (findings 0121): build the editor subtree INACTIVE and add StrategyInputField while inactive
+        // so its FIRST (and only) OnEnable fires after textComponent is wired (below). TMP_InputField creates
+        // its caret CanvasRenderer in OnEnable ONLY when textComponent != null (TMP_InputField.cs:1172); if
+        // the field were added active via the GameObject constructor, OnEnable would run with a null
+        // textComponent and the caret renderer would never be created -> invisible caret at every zoom
+        // (owner HITL 2026-06-26). StrategyInputField is therefore NOT in the constructor type list.
         var inputGo = new GameObject("StrategyCodeInput",
-            typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(StrategyInputField), typeof(LayoutElement));
+            typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(LayoutElement));
         var inputRt = (RectTransform)inputGo.transform;
         inputRt.SetParent(body, false);
+        inputGo.SetActive(false);   // wire textComponent before the field's first enable (see SetActive(true) below)
         inputGo.GetComponent<Image>().color = ThemeService.Current.colors.background;
         var inputLE = inputGo.GetComponent<LayoutElement>();
         inputLE.flexibleHeight = 1f;            // absorbs all space the output blocks do not claim
@@ -119,13 +126,29 @@ public static class StrategyEditorContentBuilder
 
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
-        var input = inputGo.GetComponent<StrategyInputField>();
+        var input = inputGo.AddComponent<StrategyInputField>();   // added while inactive -> no premature OnEnable
         input.textViewport = areaRt;
         input.textComponent = text;
         input.placeholder = placeholder;
         input.lineType = TMP_InputField.LineType.MultiLineNewline;
         input.characterLimit = 0;
         input.richText = false;   // user code may contain '<...>'; never parse it as a TMP tag
+
+        // #149 (findings 0121): explicit caret config so the caret survives the InfiniteCanvas zoom and never
+        // silently tracks a dimmed text colour. A wider caret (TMP's default caretWidth=1 is sub-pixel at
+        // MIN_ZOOM 0.2x) and customCaretColor=true so the caret no longer auto-follows textComponent.color.
+        // The opaque caret COLOUR is owned by StrategyEditorView.ApplyTheme — called once from Initialize
+        // (below, before this Build returns) and again on every theme switch — so seeding caretColor here too
+        // would just be overwritten by that same-frame call. Width + the customCaretColor flag are NOT touched
+        // by ApplyTheme, so they stay here.
+        input.caretWidth = CaretWidthPx;
+        input.customCaretColor = true;
+
+        // #149 ROOT-CAUSE FIX: activate now that textComponent is wired, so the field's first (and only)
+        // OnEnable runs with it present -> TMP creates its caret CanvasRenderer (TMP_InputField.cs:1172).
+        // Headless -batchmode leaves the Application.isPlaying-gated renderer uncreated, which is expected —
+        // the AFK gate (STRATEGY-62) pins the precondition (OnEnable saw textComponent), the real caret is HITL.
+        inputGo.SetActive(true);
 
         // ---- 2) Rich output block — middle, ScrollRect (findings 0079 §6 D5) ----
 
@@ -337,6 +360,12 @@ public static class StrategyEditorContentBuilder
         public LayoutElement LayoutElement;
         public ScrollRect ScrollRect;
     }
+
+    // #149 (findings 0121): explicit caret width for the code editor. The solid caret quad scales with the
+    // InfiniteCanvas zoom (Content.localScale), so the TMP default caretWidth=1 is sub-pixel — invisible —
+    // at MIN_ZOOM (0.2x). This value keeps the caret visible across the 0.2-5x zoom range (HITL-tuned; the
+    // AFK gate STRATEGY-62 only asserts it is > the invisible default). > 1 by contract.
+    public const int CaretWidthPx = 6;
 
     // Fractional constants exposed for the AFK gate so its layout assertions are not magic numbers
     // (S20 reads them to compute "editor min" and "per-block max" against the body rect).

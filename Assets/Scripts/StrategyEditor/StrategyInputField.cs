@@ -24,6 +24,34 @@ using UnityEngine.EventSystems;
 
 public class StrategyInputField : TMP_InputField
 {
+    // #149 (findings 0121): the blinking text caret was INVISIBLE at every zoom (owner HITL 2026-06-26) —
+    // typing/Backspace worked (focus was fine) but no caret was ever drawn. Root cause: TMP_InputField
+    // creates its caret CanvasRenderer (m_CachedInputRenderer) in EXACTLY ONE place — OnEnable
+    // (com.unity.ugui 2.0.0, TMP_InputField.cs:1172) — and ONLY when m_TextComponent != null. The builder
+    // adds StrategyInputField via the `new GameObject(typeof(StrategyInputField))` constructor, which fires
+    // OnEnable synchronously while textComponent is still null (the builder assigns textComponent on the
+    // NEXT line), so the caret renderer was never created and the caret mesh path (UpdateGeometry) early-
+    // returns on the null renderer (TMP_InputField.cs:3769) — caret never drawn, at any zoom. The fix builds the editor
+    // subtree INACTIVE and wires textComponent BEFORE the field's first enable, so OnEnable fires once with
+    // it present (Play mode → caret created); see StrategyEditorContentBuilder.
+    //
+    // OnEnableCount / TextComponentReadyAtLastEnable are the AFK-observable seam (STRATEGY-62). The caret
+    // CanvasRenderer creation itself is `Application.isPlaying`-gated (TMP_InputField.cs:1170), so it cannot
+    // be observed in -batchmode -nographics EditMode (the TMP caret/mesh trap, findings 0096) — the real
+    // blinking caret is HITL (STRATEGY-18). But OnEnable DOES run in EditMode, so the gate can pin the
+    // EXACT condition the caret creation depends on: "the latest OnEnable saw a non-null textComponent".
+    // The buggy ordering (field enabled before textComponent was wired) records false (RED); building the
+    // subtree inactive and wiring textComponent before the first enable records true (GREEN).
+    public int OnEnableCount { get; private set; }
+    public bool TextComponentReadyAtLastEnable { get; private set; }
+
+    protected override void OnEnable()
+    {
+        base.OnEnable();
+        OnEnableCount++;
+        TextComponentReadyAtLastEnable = textComponent != null;
+    }
+
     // #148 (findings 0116): Enter must stay a NEWLINE in the multiline code editor.
     //
     // The production EventSystem is the new Input System's InputSystemUIInputModule

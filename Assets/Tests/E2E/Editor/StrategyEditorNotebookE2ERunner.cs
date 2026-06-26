@@ -77,7 +77,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section26_ZeroCellsFloor(spawned)
                 ?? Section27_EnterStaysNewline(spawned)
                 ?? Section28_EscapeKeepsEditing(spawned)
-                ?? Section29_EscapeKeyPumpKeepsEditing(spawned);
+                ?? Section29_EscapeKeyPumpKeepsEditing(spawned)
+                ?? Section30_CaretVisible(spawned);
         }
         catch (Exception e)
         {
@@ -1299,6 +1300,86 @@ public static class StrategyEditorNotebookE2ERunner
             throw new InvalidOperationException(
                 $"S29: TMP_InputField.{name} not found via reflection — the Escape base-revert model can no longer be set up (TMP package field renamed?)");
         fi.SetValue(f, value);
+    }
+
+    // ======================================================================
+    // 30. The blinking text caret is created + VISIBLE in the code editor (#149 / findings 0121)
+    // Covers: STRATEGY-62 — TMP_InputField creates its caret CanvasRenderer (m_CachedInputRenderer) in
+    //         EXACTLY ONE place, OnEnable (com.unity.ugui 2.0.0:1172), and ONLY when textComponent != null;
+    //         GenerateCaret's mesh path early-returns on a null renderer (:3769). The builder added
+    //         StrategyInputField via the GameObject constructor, so its first OnEnable ran while
+    //         textComponent was still null (assigned on the next line) → the caret renderer was NEVER
+    //         created → the caret was invisible at every zoom (owner HITL 2026-06-26: text/Backspace worked,
+    //         no caret). Fix: the builder builds the editor subtree inactive and wires textComponent before
+    //         the field's first enable so OnEnable runs with it present (Play mode → caret created), sets an explicit caretWidth (the default 1
+    //         is sub-pixel at MIN_ZOOM 0.2x), and pins an opaque customCaretColor so the caret never
+    //         silently inherits a dimmed text colour.
+    //     DETERMINISTIC half: the real caret CanvasRenderer creation is Application.isPlaying-gated
+    //     (:1170) — un-observable in -batchmode -nographics EditMode (the TMP caret/mesh trap, findings
+    //     0096) — so the gate pins the EXACT precondition the creation depends on (OnEnable saw a non-null
+    //     textComponent) plus the explicit caret config. The real blinking-caret-at-zoom path is HITL
+    //     (STRATEGY-18): EditMode has no Play-mode caret renderer / pixels to sample.
+    // ======================================================================
+    static string Section30_CaretVisible(List<GameObject> spawned)
+    {
+        // (a) PRODUCTION config invariant: the real builder editor is MultiLineNewline (shared w/ S27-29).
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s30", out _, out var body);
+        spawned.Add(root.gameObject);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S30: editor build failed";
+        var field = root.GetComponentInChildren<StrategyInputField>(true);
+        if (field == null) return "S30: StrategyInputField not found in the built editor";
+        if (field.lineType != TMP_InputField.LineType.MultiLineNewline)
+            return $"S30a: production editor lineType is {field.lineType}, expected MultiLineNewline";
+
+        // (b) AC「textViewport 割当 / RectMask2D viewport との関係」: the caret lives in — and is clipped by —
+        //     the TextArea viewport, which must be assigned and carry the RectMask2D the caret clips to.
+        if (field.textViewport == null)
+            return "S30b: production editor has no textViewport assigned (the caret has no masked viewport to live in)";
+        if (field.textViewport.GetComponent<RectMask2D>() == null)
+            return "S30b: production editor textViewport has no RectMask2D (the caret/text clip viewport relationship is broken)";
+
+        // (c) THE FIX (root cause). The caret CanvasRenderer is born in OnEnable ONLY when textComponent is
+        //     already wired (:1172). EditMode cannot create the isPlaying-gated renderer, but OnEnable DID
+        //     run — so we pin the exact precondition. Buggy ordering (the constructor's OnEnable saw a null
+        //     textComponent because it was built+enabled active before wiring) records false → RED. Building
+        //     the subtree inactive and wiring textComponent before the first enable records true → GREEN.
+        //     Revert to constructing the field active (enabled before wiring) → this fails.
+        if (field.OnEnableCount == 0)
+            return "S30c: StrategyInputField.OnEnable never ran in the harness — cannot observe the caret-renderer precondition (refusing to false-PASS)";
+        if (!field.TextComponentReadyAtLastEnable)
+            return "S30c: the editor field's latest OnEnable saw a NULL textComponent → TMP never creates its caret CanvasRenderer (TMP_InputField.cs:1172) → caret invisible at every zoom. The builder must wire textComponent before the field's first enable (build the subtree inactive, then activate).";
+
+        // (d) AC「width>0」+ zoom survival: the default caretWidth (1) makes the solid caret quad sub-pixel
+        //     when the InfiniteCanvas zooms out to MIN_ZOOM (Content.localScale 0.2x) — invisible. The
+        //     builder sets an explicit width chosen to stay visible across 0.2-5x. Default 1 fails this.
+        if (StrategyEditorContentBuilder.CaretWidthPx <= 1)
+            return "S30d: CaretWidthPx must be > 1 (the default caretWidth=1 is sub-pixel at MIN_ZOOM 0.2x)";
+        if (field.caretWidth < StrategyEditorContentBuilder.CaretWidthPx)
+            return $"S30d: production editor caretWidth is {field.caretWidth}, expected >= {StrategyEditorContentBuilder.CaretWidthPx} (default 1 is invisible when zoomed out)";
+
+        // (e) AC「色の alpha>0」: the caret colour is explicit + opaque (customCaretColor=true), so it never
+        //     silently inherits a dimmed/transparent base text colour. caretColor.a>0 is the visibility floor.
+        if (!field.customCaretColor)
+            return "S30e: production editor relies on the default caret colour (customCaretColor=false) — set an explicit opaque caret colour so it cannot silently track a dimmed/recoloured text colour";
+        if (field.caretColor.a <= 0f)
+            return $"S30e: production editor caretColor alpha is {field.caretColor.a} (<=0) — the caret would be fully transparent / invisible";
+
+        // (f) NON-VACUITY: TextComponentReadyAtLastEnable tracks "textComponent present at the latest enable",
+        //     not a constant. A field enabled with NO textComponent records false (so (c)'s GREEN on the real
+        //     field is a genuine signal, not an always-true). The "true" half is proven by (c)/(f-real) above.
+        var probeGo = new GameObject("S30Probe", typeof(RectTransform), typeof(CanvasRenderer));
+        probeGo.SetActive(false);
+        spawned.Add(probeGo);
+        var probe = probeGo.AddComponent<StrategyInputField>();   // added while inactive → no OnEnable yet
+        probeGo.SetActive(true);                                  // OnEnable: textComponent still null
+        if (probe.OnEnableCount == 0)
+            return "S30f: control field OnEnable did not run on activation (harness cannot observe the enable edge)";
+        if (probe.TextComponentReadyAtLastEnable)
+            return "S30f: control field reported textComponent-ready with NO textComponent wired (the observable is constant-true, not tracking real wiring)";
+
+        Debug.Log("[E2E STRATEGY-62 PASS] code editor caret PRECONDITION pinned (renderer creation + on-screen visibility are isPlaying-gated -> HITL): the builder wires textComponent before the field's first enable (subtree built inactive; OnEnable sees it -> in Play mode TMP would create the caret renderer), textViewport+RectMask2D assigned, explicit caretWidth (zoom-survival) + opaque customCaretColor; real blinking caret across 0.2-5x zoom is HITL (STRATEGY-18)");
+        return null;
     }
 
     // ======================================================================

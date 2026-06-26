@@ -19,7 +19,37 @@
 // (findings 0096 §#119/#120 refinement).
 
 using TMPro;
+using UnityEngine.EventSystems;
 
 public class StrategyInputField : TMP_InputField
 {
+    // #148 (findings 0116): Enter must stay a NEWLINE in the multiline code editor.
+    //
+    // The production EventSystem is the new Input System's InputSystemUIInputModule
+    // (BackcastWorkspaceSceneBuilder.cs:47), whose `Submit` action is bound to Enter. When this field
+    // is focused and the user presses Enter, the module dispatches ISubmitHandler.OnSubmit ALONGSIDE
+    // the IMGUI key pump. TMP_InputField.OnSubmit (com.unity.ugui 2.0.0, TMP_InputField.cs:4501) calls
+    // DeactivateInputField() UNCONDITIONALLY — it does NOT spare MultiLineNewline fields — so Enter
+    // BLURRED the editor (focus left, edit ended) instead of inserting a newline. The newline itself IS
+    // produced by the key pump in OnUpdateSelected (TMP_InputField.cs:2263, the MultiLineNewline
+    // branch); the only defect was the spurious deactivate.
+    //
+    // Fix: for MultiLineNewline we CONSUME the Submit (no deactivate) so focus is retained and the
+    // pumped newline survives. Single-line fields keep the default submit/deactivate so they still
+    // commit on Enter. SubmitConsumedCount is the AFK-observable seam (STRATEGY-59): the gate invokes
+    // OnSubmit on a real built field and asserts it took the consume branch rather than deactivating.
+    // The real keystroke→visible-newline→focus path stays HITL (STRATEGY-18): -batchmode -nographics
+    // has no IMGUI key pump / EventSystem focus to drive a real Enter.
+    public int SubmitConsumedCount { get; private set; }
+
+    public override void OnSubmit(BaseEventData eventData)
+    {
+        if (lineType == LineType.MultiLineNewline)
+        {
+            SubmitConsumedCount++;
+            eventData?.Use();   // handled — the Submit action must not blur the multiline code editor
+            return;
+        }
+        base.OnSubmit(eventData);
+    }
 }

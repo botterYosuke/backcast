@@ -33,6 +33,7 @@ using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.EventSystems;   // STRATEGY-59: EventSystem / BaseEventData / ISubmitHandler
 using UnityEngine.UI;
 
 public static class StrategyEditorNotebookE2ERunner
@@ -73,7 +74,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section23_ModeAwareLiveLaunch(spawned)
                 ?? Section24_LiveLifecycleEdges(spawned)
                 ?? Section25_ModeConditionalVisibility(spawned)
-                ?? Section26_ZeroCellsFloor(spawned);
+                ?? Section26_ZeroCellsFloor(spawned)
+                ?? Section27_EnterStaysNewline(spawned);
         }
         catch (Exception e)
         {
@@ -152,6 +154,10 @@ public static class StrategyEditorNotebookE2ERunner
                       "never-Destroy shell; STRATEGY-57 0->1 AddCell reuses the dormant region_001 = File->New と同一動線; " +
                       "STRATEGY-58 X1 a 0-cell notebook saved as a header-only .py reopens as exactly ONE empty cell — marimo's " +
                       "load_app floor, mirrored by the fake) " +
+                      "+ #148 Enter-stays-newline (STRATEGY-59 / findings 0116: the multiline code editor " +
+                      "CONSUMES the new Input System Submit action so Enter inserts a newline instead of " +
+                      "blurring the field — TMP_InputField.OnSubmit deactivates unconditionally; single-line " +
+                      "keeps the default submit; the production builder stays MultiLineNewline) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1051,6 +1057,62 @@ public static class StrategyEditorNotebookE2ERunner
         if (!controller2.Has(R1) || !controller2.RectOf(R1).gameObject.activeSelf)
             return "S26/STRATEGY-58: the floor cell did not land on an active region_001 window";
         Debug.Log("[E2E STRATEGY-58 PASS] empty notebook Save->Open returns 1 empty cell (X1 marimo floor=1)");
+        return null;
+    }
+
+    // ======================================================================
+    // 27. Enter stays a NEWLINE in the multiline code editor (#148 / findings 0116)
+    // Covers: STRATEGY-59 — the new Input System's Submit action (bound to Enter) dispatches
+    //         ISubmitHandler.OnSubmit to the focused field; TMP_InputField.OnSubmit
+    //         (com.unity.ugui 2.0.0:4501) DeactivateInputField()s UNCONDITIONALLY, so Enter blurred
+    //         the editor instead of inserting a newline. StrategyInputField overrides OnSubmit to
+    //         CONSUME the submit for MultiLineNewline (focus retained → the pumped newline survives),
+    //         while single-line fields keep the default submit/deactivate.
+    //     This is the DETERMINISTIC half: it invokes the production OnSubmit (the exact EventSystem
+    //     entry point) on a REAL builder-produced field and asserts the consume decision. The real
+    //     keystroke→visible-newline→focus path is HITL (STRATEGY-18): -batchmode -nographics has no
+    //     IMGUI key pump / EventSystem focus to drive a real Enter.
+    // ======================================================================
+    static string Section27_EnterStaysNewline(List<GameObject> spawned)
+    {
+        // BaseEventData needs an EventSystem (also sets EventSystem.current).
+        var esGo = new GameObject("ES27", typeof(EventSystem));
+        spawned.Add(esGo);
+        var evt = new BaseEventData(esGo.GetComponent<EventSystem>());
+
+        // (a) PRODUCTION config invariant: the real builder keeps the editor MultiLineNewline so the
+        //     IMGUI key pump treats Enter as a newline (TMP_InputField.cs:2263). Flip this → no newline.
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s27", out _, out var body);
+        spawned.Add(root.gameObject);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S27: editor build failed";
+        var field = root.GetComponentInChildren<StrategyInputField>(true);
+        if (field == null) return "S27: StrategyInputField not found in the built editor";
+        if (field.lineType != TMP_InputField.LineType.MultiLineNewline)
+            return $"S27a: production editor lineType is {field.lineType}, expected MultiLineNewline (Enter would not be a newline)";
+
+        // (b) OnSubmit on the multiline field CONSUMES (does not deactivate) — the Enter-blur fix.
+        //     Remove the StrategyInputField.OnSubmit override → base TMP OnSubmit runs → deactivate →
+        //     count stays 0 → RED (the gate's RED→GREEN litmus, findings 0116).
+        if (field.SubmitConsumedCount != 0) return "S27b: fresh field already counted a consumed submit";
+        ((ISubmitHandler)field).OnSubmit(evt);
+        if (field.SubmitConsumedCount != 1)
+            return "S27b: multiline OnSubmit did NOT consume the Submit (Enter would blur/deactivate the editor instead of inserting a newline)";
+
+        // (c) NEGATIVE control: a SINGLE-line StrategyInputField keeps the default submit (consume is
+        //     MultiLineNewline-gated, not a blanket swallow — else single-line fields never commit on
+        //     Enter). Inactive GO so base.OnSubmit early-returns (IsActive()==false) without touching
+        //     TMP internals headlessly.
+        var slGo = new GameObject("S27SingleLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(StrategyInputField));
+        slGo.SetActive(false);
+        spawned.Add(slGo);
+        var single = slGo.GetComponent<StrategyInputField>();
+        single.lineType = TMP_InputField.LineType.SingleLine;
+        ((ISubmitHandler)single).OnSubmit(evt);
+        if (single.SubmitConsumedCount != 0)
+            return "S27c: single-line field consumed the Submit (consume must be MultiLineNewline-only)";
+
+        Debug.Log("[E2E STRATEGY-59 PASS] multiline code editor consumes the EventSystem Submit (Enter stays a newline, no blur); single-line keeps default submit; production builder is MultiLineNewline");
         return null;
     }
 

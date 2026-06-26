@@ -1,5 +1,7 @@
 # findings 0050 — #81 やり直し: 1 cell = 1 Strategy Editor（canvas 上の floating window）
 
+> **stale-marker（2026-06-26）**: 本 finding の §placeholder「本体への seed 焼き込みは却下＝空セル＋placeholder」決定は **ADR-0036 / findings 0124 が supersede**（New/初期化は `bt.replay` 観察コードを本体に種付けし placeholder 機構を撤去）。cell-as-floating-window 集約モデル（本 finding の他の決定）は不変。
+
 issue #81 やり直し（前任設計＝findings 0049 は SUPERSEDED）。owner が HITL で確定したモデル:
 **marimo 3D モードそのもの — 各セルが infinite canvas 上の独立した floating window**（drag 移動・
 z-order・位置永続化を持つ）。前任の「1 窓 = .py 丸ごとにテキスト追記」（0049）でも、grill 中盤に検討した

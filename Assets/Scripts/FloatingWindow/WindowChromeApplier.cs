@@ -17,6 +17,10 @@ public sealed class WindowChromeApplier : MonoBehaviour
     // happened while the window was hidden (e.g. the order ticket, hidden until LiveManual) is picked up.
     public Color? DarkSurface;
 
+    // True for a FloatingWindowLayer front-plane window (editor / order ticket) — carries the deeper float
+    // shadow in both appearances (set by WindowChrome.Attach). False for dock windows (depth via parallax).
+    public bool Elevated;
+
     void Awake() => _root = (RectTransform)transform;
 
     void OnEnable()
@@ -30,6 +34,6 @@ public sealed class WindowChromeApplier : MonoBehaviour
     public void Apply()
     {
         if (_root == null) _root = (RectTransform)transform;
-        WindowChrome.Apply(_root, DarkSurface);
+        WindowChrome.Apply(_root, DarkSurface, Elevated);
     }
 }

@@ -43,7 +43,7 @@ public static class StrategyEditorWindowFrame
         body.anchorMin = Vector2.zero; body.anchorMax = Vector2.one;
         body.offsetMin = new Vector2(4f, 4f); body.offsetMax = new Vector2(-4f, -(TitleHeight + 2f));
 
-        WindowChrome.Attach(root, BodyColor);   // appearance-aware chrome; preserve authored dark body (ADR-0028)
+        WindowChrome.Attach(root, BodyColor, elevated: true);   // appearance-aware chrome + front-plane float shadow; preserve authored dark body (ADR-0028)
         return root;
     }
 

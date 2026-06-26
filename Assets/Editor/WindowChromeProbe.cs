@@ -87,6 +87,36 @@ public static class WindowChromeProbe
             ThemeService.SetTheme(Theme.Dark());
             WindowChrome.Apply(w2, authored);
             ProbeAssert.Eq(img2.color, authored, "back-to-dark: authored darkSurface restored (incl. 0.98 alpha)");
+
+            // -- ELEVATED (FloatingWindowLayer) drop shadow: the strategy-editor / order-ticket windows ride
+            // the 1.2× front plane and must read as FLOATING above the dock back plane. With elevated:true the
+            // window wears a STRONGER drop shadow in BOTH appearances (dark HUD gets a shadow it otherwise lacks;
+            // light card gets a deeper lift than the dock card's subtle shadow). Dock windows (elevated:false,
+            // asserted above) keep the appearance-default shadow, so the front/back depth split is non-vacuous. --
+            ThemeService.ResetForTests();   // back to dark
+            var w3 = BuildFakeWindow();
+            WindowChrome.Apply(w3, null, true);   // elevated, dark
+            var sh3 = w3.GetComponent<Shadow>();
+            ProbeAssert.True(sh3 != null, "elevated dark: drop shadow present (HUD otherwise has none)");
+            ProbeAssert.True(sh3 != null && sh3.effectColor.a > 0.30f, "elevated dark: shadow is a strong float lift (alpha > 0.30)");
+            ProbeAssert.True(sh3 != null && Mathf.Abs(sh3.effectDistance.y) > 3f, "elevated dark: shadow offset deeper than the dock card subtle (|y| > 3)");
+
+            // no-churn: same-appearance re-apply REUSES the one Shadow (no Destroy+recreate).
+            WindowChrome.Apply(w3, null, true);
+            var shadows3 = w3.GetComponents<Shadow>();
+            ProbeAssert.True(shadows3.Length == 1 && shadows3[0].GetInstanceID() == sh3.GetInstanceID(),
+               "elevated dark no-churn: re-apply REUSES the single Shadow");
+
+            // switch to light: still elevated, shadow SURVIVES the HUD→Card structural swap and stays strong.
+            ThemeService.SetTheme(Theme.Light());
+            WindowChrome.Apply(w3, null, true);
+            var sh3L = w3.GetComponent<Shadow>();
+            ProbeAssert.True(sh3L != null && sh3L.effectColor.a > 0.30f, "elevated light: strong float shadow survives switch (alpha > 0.30)");
+
+            // back to dark must still carry the shadow (HUD→ no shadow only for the NON-elevated dock case).
+            ThemeService.SetTheme(Theme.Dark());
+            WindowChrome.Apply(w3, null, true);
+            ProbeAssert.True(w3.GetComponent<Shadow>() != null, "elevated back-to-dark: float shadow retained (not stripped like dock)");
         }
         catch (Exception e)
         {

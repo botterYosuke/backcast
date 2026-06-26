@@ -557,7 +557,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
-        WindowChrome.Attach(_strategyEditorWindow, StrategyEditorWindowFrame.BodyColor);   // adopted editor: HUD ⇔ Card, preserve authored dark body (ADR-0028)
+        WindowChrome.Attach(_strategyEditorWindow, StrategyEditorWindowFrame.BodyColor, elevated: true);   // adopted editor: HUD ⇔ Card + front-plane float shadow, preserve authored dark body (ADR-0028)
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
         // editor adopt (never destroyed+respawned, findings 0025 §8 / 0014 RH4). Content = OrderTicketView;
@@ -576,7 +576,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _orderTicket.ModifyRowRequested += OnRowModify;
             _orderTicket.CancelRowRequested += OnRowCancel;
             _orderTicket.RefreshRequested += RefreshRestingOrders;
-            WindowChrome.Attach(_orderWindow, OrderTicketWindowFrame.BodyColor);   // adopted order ticket: HUD ⇔ Card, preserve authored dark body (ADR-0028)
+            WindowChrome.Attach(_orderWindow, OrderTicketWindowFrame.BodyColor, elevated: true);   // adopted order ticket: HUD ⇔ Card + front-plane float shadow, preserve authored dark body (ADR-0028)
             _orderWindow.gameObject.SetActive(false);   // hidden until LiveManual
         }
 

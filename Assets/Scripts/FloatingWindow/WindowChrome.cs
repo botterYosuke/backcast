@@ -13,16 +13,25 @@ using UnityEngine.UI;
 
 public static class WindowChrome
 {
+    // A FloatingWindowLayer window rides the 1.2× front plane and reads as FLOATING above the dock back plane —
+    // so it carries a deeper drop shadow in BOTH appearances (the dark HUD has none by default; the light card's
+    // dock shadow is subtler). Centralized here so the lift can't diverge across the editor / order frames.
+    static readonly Color ElevationShadowColor = new Color(0f, 0f, 0f, 0.42f);
+    static readonly Vector2 ElevationShadowOffset = new Vector2(5f, -7f);
+
     // Wire a window root to follow appearance switches AND apply the right chrome NOW. Idempotent.
     // `darkSurface` is the frame's AUTHORED dark body color (incl. alpha) — pass it for windows whose dark
     // fill is NOT the theme panel_surface (editor / order ticket bake bespoke navies). Pass null (default)
     // for windows that track hakoniwa_panel_surface in BOTH appearances (the dock cluster).
-    public static void Attach(RectTransform root, Color? darkSurface = null)
+    // `elevated` = a front-plane FloatingWindowLayer window (editor / order ticket) — gets the deeper float
+    // shadow in both appearances. Dock windows pass false (their depth comes from parallax, not a shadow).
+    public static void Attach(RectTransform root, Color? darkSurface = null, bool elevated = false)
     {
         if (root == null) return;
         var applier = root.GetComponent<WindowChromeApplier>();
         if (applier == null) applier = root.gameObject.AddComponent<WindowChromeApplier>();
         applier.DarkSurface = darkSurface;
+        applier.Elevated = elevated;
         applier.Apply();   // OnEnable is play-mode-only; apply explicitly so edit-time builds get chrome too
     }
 
@@ -31,7 +40,7 @@ public static class WindowChrome
     // body: Light ⇒ the white Miro panel_surface for EVERY window; Dark ⇒ `darkSurface` if the frame supplied
     // its authored color (editor/order — preserves their exact hue + 0.98 translucency), else the theme
     // panel_surface (the dock cluster, which tracks the theme in both appearances).
-    public static void Apply(RectTransform root, Color? darkSurface)
+    public static void Apply(RectTransform root, Color? darkSurface, bool elevated = false)
     {
         if (root == null) return;
 
@@ -65,5 +74,25 @@ public static class WindowChrome
                 HudFrameChrome.Decorate(root);
             }
         }
+
+        // FLOAT LIFT: a front-plane window gets the deeper shadow LAST, so it overrides whatever the chrome
+        // variant just set — the light Card's subtle dock shadow is re-tuned up, and the dark HUD (which has no
+        // shadow of its own) gains one. Find-or-create keeps it to ONE Shadow (no churn on same-appearance
+        // re-apply). Non-elevated dock windows are left with the appearance default (light subtle / dark none).
+        ApplyElevationShadow(root, elevated);
+    }
+
+    // Ensure the front-plane float shadow on `root` (idempotent). No-op for non-elevated (dock) windows so
+    // their appearance-default shadow stands. A live HUD↔Card switch may Destroy the Card's Shadow on the way
+    // to dark — this re-creates it, so an elevated window keeps its lift in BOTH appearances.
+    static void ApplyElevationShadow(RectTransform root, bool elevated)
+    {
+        if (!elevated) return;
+        if (root.GetComponent<Image>() == null) return;   // Shadow is a mesh effect; needs the root Graphic
+        var sh = root.GetComponent<Shadow>();
+        if (sh == null) sh = root.gameObject.AddComponent<Shadow>();
+        sh.effectColor = ElevationShadowColor;
+        sh.effectDistance = ElevationShadowOffset;
+        sh.useGraphicAlpha = true;
     }
 }

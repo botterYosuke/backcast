@@ -232,8 +232,14 @@ public class ChartViewStateLayout
 
     public static bool Approx(ChartViewStateLayout a, ChartViewStateLayout b, float eps)
     {
-        if (a == null && b == null) return true;
-        if (a == null || b == null) return false;
+        // null ("no captured state") and the all-default instance (0,0,false) are EQUIVALENT: JsonUtility
+        // cannot represent a null nested [Serializable] field, so it round-trips null -> a default object
+        // (#165 en-passant: Section6's non-chart windows carry a null chart_view_state and reloaded as the
+        // default broke round-trip identity — a real regression of #155-163's schema add affecting every
+        // non-chart window). A real captured state always has cell_width_px > 0, so it never coalesces to
+        // null here. Mirrors LayoutStore's groupId blank->null coercion at the persistence boundary.
+        a ??= new ChartViewStateLayout();
+        b ??= new ChartViewStateLayout();
         return a.translation_ms == b.translation_ms
             && Math.Abs(a.cell_width_px - b.cell_width_px) <= eps
             && a.auto_scale == b.auto_scale;

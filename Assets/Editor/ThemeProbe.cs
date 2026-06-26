@@ -273,21 +273,22 @@ public static class ThemeProbe
         var harness = mGo.AddComponent<ThemeHitlHarness>();
         harness.BuildMontage(mGo.GetComponent<RectTransform>());
         var d = Theme.Dark();
-        var candleUp = harness.Samples["candle_up"];
-        var candleDown = harness.Samples["candle_down"];
+        // S1 #155 (findings 0119 D-8): ChartView's chart_bg / candle_up / candle_down are Color seams
+        // on the MaskableGraphic widget itself, not Graphic samples — query the new API directly.
+        // DepthLadderView still ships its #54 Text/Image API until S8 #161 (findings 0120) migrates it
+        // to Color seams, so samples["ladder_*"] stays.
         var ladderBid = harness.Samples["ladder_bid"];   // #54: best-bid row Text (production)
         var ladderAsk = harness.Samples["ladder_ask"];   // #54: best-ask row Text (production)
         var ladderLast = harness.Samples["ladder_last"]; // #54 follow-up: TTWR LAST row Text (production)
         // Guard BEFORE the .color reads: True() only records a fail (non-aborting), so without these
         // short-circuits a null sample would NRE and crash the whole gate instead of failing cleanly.
-        True(candleUp != null, "ChartView produced a bullish candle to sample");
-        True(candleDown != null, "ChartView produced a bearish candle to sample");
+        True(harness.ChartView != null, "harness exposed the production ChartView (Mesh widget, S1 #155)");
         True(ladderBid != null, "DepthLadderView produced a best-bid row to sample");
         True(ladderAsk != null, "DepthLadderView produced a best-ask row to sample");
         True(ladderLast != null, "DepthLadderView produced a LAST row to sample");
-        Eq(harness.Samples["chart_bg"].color, d.colors.hakoniwa_chart_background, "ChartView (production) chart_bg == dark hakoniwa_chart_background (findings 0054)");
-        if (candleUp != null) Eq(candleUp.color, d.colors.hakoniwa_up, "ChartView (production) candle_up == hakoniwa_up (findings 0054 P1)");
-        if (candleDown != null) Eq(candleDown.color, d.colors.hakoniwa_down, "ChartView (production) candle_down == hakoniwa_down");
+        Eq(harness.ChartView.BackgroundColor, d.colors.hakoniwa_chart_background, "ChartView (production) BackgroundColor == dark hakoniwa_chart_background (findings 0054 + 0119 D-8)");
+        Eq(harness.ChartView.FirstCandleColor(true), d.colors.hakoniwa_up, "ChartView (production) FirstCandleColor(true) == hakoniwa_up (findings 0054 P1 + 0119 D-8)");
+        Eq(harness.ChartView.FirstCandleColor(false), d.colors.hakoniwa_down, "ChartView (production) FirstCandleColor(false) == hakoniwa_down");
 
         // -- 4c-ii title bar (#53): the 2-bar mock is firstOpen=100 / lastClose=105 → +5.00% gain.
         // Value-asserts the NEW title port (price/change% formatting incl. sign) AND that the change%
@@ -319,9 +320,9 @@ public static class ThemeProbe
         Eq(harness.Samples["editor_bg"].color, nd.colors.background, "montage editor_bg switched");
         Eq(harness.Samples["accents_bg"].color, nd.colors.surface_background, "montage accents_bg switched");
         Eq(harness.Samples["code_text"].color, nd.colors.text, "montage code_text switched");
-        Eq(harness.Samples["chart_bg"].color, nd.colors.hakoniwa_chart_background, "ChartView (production) chart_bg switched");
-        if (candleUp != null) Eq(candleUp.color, nd.colors.hakoniwa_up, "ChartView (production) candle_up switched");
-        if (candleDown != null) Eq(candleDown.color, nd.colors.hakoniwa_down, "ChartView (production) candle_down switched");
+        Eq(harness.ChartView.BackgroundColor, nd.colors.hakoniwa_chart_background, "ChartView (production) BackgroundColor switched (S1 #155)");
+        Eq(harness.ChartView.FirstCandleColor(true), nd.colors.hakoniwa_up, "ChartView (production) FirstCandleColor(true) switched");
+        Eq(harness.ChartView.FirstCandleColor(false), nd.colors.hakoniwa_down, "ChartView (production) FirstCandleColor(false) switched");
         // title change% color must ALSO follow the switch (gain stays long, now NonDefault's long) (#53).
         if (title != null) Eq(title.ChangeText.color, nd.colors.hakoniwa_up, "ChartView title change% recolors on switch");
         if (ladderBid != null) Eq(ladderBid.color, nd.colors.hakoniwa_up, "DepthLadderView (production) ladder_bid switched");

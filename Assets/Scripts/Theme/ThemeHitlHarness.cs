@@ -97,10 +97,12 @@ public class ThemeHitlHarness : MonoBehaviour
         _tile = new ScenarioStartupTile(new ScenarioStartupController(), _font);
         _tile.Build(panel);
 
-        // -- chart strip (top-right) — the REAL production ChartView (#53), not a swatch. A 2-bar
+        // -- chart strip (top-right) — the REAL production ChartView (#53→#155 Mesh upgrade). A 2-bar
         // mock (one bearish, one bullish) gives ThemeProbe a real candle of EACH direction to sample,
-        // so AC③ verifies the PRODUCTION part's color switch (findings 0023). No Image on the host —
-        // ChartView paints its own themed bg. (Plain RectTransform: Destroy in EditMode is illegal.) --
+        // so AC③ verifies the PRODUCTION part's color switch (findings 0023 + 0119). No Image on the
+        // host — ChartView IS a MaskableGraphic (S1 #155) and paints its own themed bg + candles in
+        // ONE Mesh batch. samples["chart_bg/candle_up/candle_down"] are retired — ThemeProbe reads
+        // `harness.ChartView.BackgroundColor` / `FirstCandleColor(bool)` directly (Color, not Graphic). --
         var chartGo = new GameObject("chart_strip", typeof(RectTransform));
         var chartArea = chartGo.GetComponent<RectTransform>();
         chartArea.SetParent(parent, false);
@@ -109,9 +111,6 @@ public class ThemeHitlHarness : MonoBehaviour
         _chartView = chartGo.AddComponent<ChartView>();
         _chartView.Build(chartArea, showTitleBar: true);
         _chartView.Render(MockTwoBarFrame());
-        _samples["chart_bg"] = _chartView.Background;
-        _samples["candle_up"] = _chartView.FirstCandle(bullish: true);
-        _samples["candle_down"] = _chartView.FirstCandle(bullish: false);
 
         // -- depth ladder (mid-right) — the REAL production DepthLadderView (#54), not fake Text rows.
         // A mock snapshot (one ask + one bid) gives ThemeProbe a real best-ask/best-bid of EACH side to

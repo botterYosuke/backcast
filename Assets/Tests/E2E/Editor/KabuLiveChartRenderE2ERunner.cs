@@ -31,8 +31,15 @@
 //     decode/render fault. 01 vs 03 pin "candles appear  <=>  per_instrument ohlc_points non-empty".
 //
 // LITMUS (delete-the-production-logic): break InstrumentOhlcDecoder (return Empty for valid ohlc) or
-// ChartView.Render (skip AddCandleRect) -> CHARTRENDER-01 RED. Make Render paint on an empty series
-// -> CHARTRENDER-03 RED. Python-FREE: no InitializePython; pure C# decode+paint on synthetic state.
+// ChartView.Render (skip the OnPopulateMesh emit / Render no-op the data ingest) -> CHARTRENDER-01 RED.
+// Make Render paint on an empty series -> CHARTRENDER-03 RED. Python-FREE: no InitializePython; pure
+// C# decode+paint on synthetic state.
+//
+// S1 #155 (findings 0119 D-8) migration: the legacy "Candles GameObject child count = 2*n" seam is
+// retired (ChartView is now a single MaskableGraphic that emits all candle quads in OnPopulateMesh).
+// Assertions migrated to `cv.TotalBarCount` (bars in the data) + `cv.RenderedBarCount > 0` (Mesh actually
+// emitted vertices for the visible window). RenderedBarCount is populated by OnPopulateMesh — call
+// Canvas.ForceUpdateCanvases() after Render() so the test sees a deterministic post-emit count.
 
 using System;
 using System.Collections.Generic;
@@ -90,7 +97,7 @@ public static class KabuLiveChartRenderE2ERunner
         }
     }
 
-    // ── CHARTRENDER-01: real prod capture -> per-instrument decode (14) -> 2*14 candles painted. ──
+    // ── CHARTRENDER-01: real prod capture -> per-instrument decode (14) -> Mesh emitted candle quads. ──
     static string Section1_RealProdJsonPaintsCandles()
     {
         string fixturePath = Path.Combine(Application.dataPath, "Tests/E2E/Editor/Fixtures/KabuProdChartState.json");
@@ -109,17 +116,22 @@ public static class KabuLiveChartRenderE2ERunner
 
         var cv = BuildChart(out var host);
         cv.Render(new ReplayBarFrame { Ohlc = f.Ohlc });
-        int candles = CountCandles(host);
-        if (candles != 2 * n)
-            return "S1 CHARTRENDER-01: painted " + candles + " candle rects, want " + (2 * n)
-                 + " (2 per bar: wick+body). ChartView.Render regression.";
+        Canvas.ForceUpdateCanvases();   // force OnPopulateMesh to fire so RenderedBarCount is post-emit.
+        if (cv.TotalBarCount != n)
+            return "S1 CHARTRENDER-01: TotalBarCount=" + cv.TotalBarCount + ", want " + n
+                 + " (Render() did not ingest all decoded bars).";
+        if (cv.RenderedBarCount <= 0)
+            return "S1 CHARTRENDER-01: RenderedBarCount=" + cv.RenderedBarCount + " for " + n
+                 + " bars in data — Mesh emit produced no visible candle vertices (visible-window virtualization "
+                 + "shut out every bar, or OnPopulateMesh no-op'd).";
         Debug.Log("[E2E CHARTRENDER-01 PASS] real prod 9501 live-state -> per_instrument decode (14 bars, "
-                + "not the top-level series) -> ChartView painted " + candles + " candle rects.");
+                + "not the top-level series) -> ChartView Mesh emitted vertices for " + cv.RenderedBarCount
+                + " visible bars (TotalBarCount=" + cv.TotalBarCount + ").");
         UnityEngine.Object.DestroyImmediate(host.parent.gameObject);  // canvas root (host + canvas)
         return null;
     }
 
-    // ── CHARTRENDER-02: absent id -> HasSeries=false -> Render(empty) -> 0 candles (non-vacuity floor). ──
+    // ── CHARTRENDER-02: absent id -> HasSeries=false -> Render(empty) -> 0 bars (non-vacuity floor). ──
     static string Section2_AbsentIdPaintsNothing()
     {
         string fixturePath = Path.Combine(Application.dataPath, "Tests/E2E/Editor/Fixtures/KabuProdChartState.json");
@@ -132,17 +144,18 @@ public static class KabuLiveChartRenderE2ERunner
 
         var cv = BuildChart(out var host);
         cv.Render(new ReplayBarFrame { Ohlc = f.Ohlc });   // empty series
-        int candles = CountCandles(host);
-        if (candles != 0)
-            return "S2 CHARTRENDER-02: painted " + candles + " candles for an absent id — Render paints on "
-                 + "empty (CHARTRENDER-01 vacuous)";
-        Debug.Log("[E2E CHARTRENDER-02 PASS] absent id -> HasSeries=false -> ChartView painted 0 candles "
-                + "(floors CHARTRENDER-01: candles require a real decoded series).");
+        Canvas.ForceUpdateCanvases();
+        if (cv.TotalBarCount != 0 || cv.RenderedBarCount != 0)
+            return "S2 CHARTRENDER-02: TotalBarCount=" + cv.TotalBarCount + " RenderedBarCount="
+                 + cv.RenderedBarCount + " for an absent id — Render must ingest 0 and Mesh must emit 0 "
+                 + "(CHARTRENDER-01 vacuous if the decoder/render ignore the empty series).";
+        Debug.Log("[E2E CHARTRENDER-02 PASS] absent id -> HasSeries=false -> ChartView TotalBarCount=0 "
+                + "RenderedBarCount=0 (floors CHARTRENDER-01: candles require a real decoded series).");
         UnityEngine.Object.DestroyImmediate(host.parent.gameObject);  // canvas root (host + canvas)
         return null;
     }
 
-    // ── CHARTRENDER-03: depth present + ohlc empty -> 0 candles (the reported symptom, deterministic). ──
+    // ── CHARTRENDER-03: depth present + ohlc empty -> 0 bars (the reported symptom, deterministic). ──
     static string Section3_EmptyOhlcPaintsNothing()
     {
         InstrumentOhlcFrame f = InstrumentOhlcDecoder.Decode(EMPTY_OHLC_STATE, IID);
@@ -156,12 +169,14 @@ public static class KabuLiveChartRenderE2ERunner
 
         var cv = BuildChart(out var host);
         cv.Render(new ReplayBarFrame { Ohlc = f.Ohlc });
-        int candles = CountCandles(host);
-        if (candles != 0)
-            return "S3 CHARTRENDER-03: painted " + candles + " candles for an EMPTY trade series — the "
-                 + "'board full, chart empty' symptom would be a render fault, not an empty series";
-        Debug.Log("[E2E CHARTRENDER-03 PASS] depth present + ohlc_points=[] -> ChartView painted 0 candles "
-                + "= the reported '板満杯・チャート空' is exactly an empty TRADE series (not a decode/render bug).");
+        Canvas.ForceUpdateCanvases();
+        if (cv.TotalBarCount != 0 || cv.RenderedBarCount != 0)
+            return "S3 CHARTRENDER-03: TotalBarCount=" + cv.TotalBarCount + " RenderedBarCount="
+                 + cv.RenderedBarCount + " for an EMPTY trade series — the 'board full, chart empty' symptom "
+                 + "would be a render fault, not an empty series.";
+        Debug.Log("[E2E CHARTRENDER-03 PASS] depth present + ohlc_points=[] -> ChartView TotalBarCount=0 "
+                + "RenderedBarCount=0 = the reported '板満杯・チャート空' is exactly an empty TRADE series "
+                + "(not a decode/render bug).");
         UnityEngine.Object.DestroyImmediate(host.parent.gameObject);  // canvas root (host + canvas)
         return null;
     }
@@ -255,13 +270,5 @@ public static class KabuLiveChartRenderE2ERunner
         var cv = hostGo.AddComponent<ChartView>();
         cv.Build(host, showTitleBar: false);
         return cv;
-    }
-
-    // ChartView paints candle rects as GameObjects named "c" under a "Candles" RectTransform.
-    static int CountCandles(RectTransform host)
-    {
-        foreach (var t in host.GetComponentsInChildren<Transform>(true))
-            if (t.name == "Candles") return t.childCount;
-        return 0;
     }
 }

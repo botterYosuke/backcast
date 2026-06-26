@@ -412,6 +412,45 @@ _Avoid_: chart の集合を layout doc 側の正本にすること（正本は u
 ある instrument を人に見せるときの **正規表示文字列**。形は **`<id> <name>`**（例「7203.TSE トヨタ自動車」）で、name が null/空/id と同一のときは **id 単独へ collapse**（listed_info の CompanyName が NULL だと engine が id を代入するので二重表示を避ける）。**id は venue suffix 付きのフル id**（`7203.TSE`・picker と一致）で、コードだけに切り詰めない。name の源は `list_instruments()`（[[universe registry（instruments SoT）vs scenario panel]] の SoT には name は入らない・state JSON の `per_instrument` にも name は無い）。この規約は **picker の候補行**（`PickerRow.Candidate`）と **[[chart tile family / base tile（銘柄別 chart・計画＝受け皿 issue「動的 N チャート」）]] の窓タイトル**（chrome title bar）で**共有**し、整形ロジックは 1 箇所に抽出して drift を防ぐ。chart 窓タイトルの name 解決は **spawn 時に provider cache から取れた分だけ**（非同期 RPC が未到達なら id 単独・後追い更新はしない＝owner 決定）。
 _Avoid_: id をコードだけに切り詰めて picker と不一致にすること／name を universe SoT や state JSON から取ろうとすること（源は `list_instruments()` だけ）／整形を picker と chart で別実装して `<id> <name>` 規約を二重持ちすること
 
+**ChartView（candle 描画ウィジェット・本線）** ※**2026-06-26 方式置換 [[ADR-0034]]**（findings 0119）:
+`Assets/Scripts/Chart/ChartView.cs`。**単一 `CanvasRenderer` + custom `MaskableGraphic` + Mesh** で **visible window 内の全 candle（wick + body）＋ grid ＋ volume bar ＋ last-price line を 1 つの UIVertex バッチへ統合**し **GPU draw call=1 / GameObject=1**。旧 #53 / findings 0023 の Image rect ベース（bar 数 n に対し 2n 個の `Image` GameObject を Destroy/Create）は **退役**。データの全 bar 数（`TotalBarCount`）と直近 OnPopulateMesh で実際に描いた件数（`RenderedBarCount`）を public で持ち、E2E は GameObject 名 (`Candles` の child) ではなく **public API** を assert する（CHARTRENDER-01..03 は新 assertion 版へ migrate）。ThemeProbe / ThemeHitlHarness の seam は `FirstCandle(bool)→Image` から `FirstCandleColor(bool)→Color` に置換。pan / zoom / reset の UX は ScrollRect を使わず **drag pan + wheel zoom + double-click reset**（flowsurface 直訳）。
+_Avoid_: ChartView を Image rect 並べと呼ぶこと（ADR-0034 で Mesh へ置換）／`Candles` GameObject の child count で E2E を組むこと（新 public API を使う）／ScrollRect / 横スクロールバーを足すこと（drag pan + wheel zoom が正）
+
+**[[ChartViewState]]（チャートの視窓 + pan/zoom 状態・per-window 独立な pure data）** ※2026-06-26 新設・[[ADR-0034]]（findings 0119）:
+flowsurface `data/src/chart/kline.rs::ViewState` の Unity 翻訳。フィールドは `translation_ms`（visible window の左端 timestamp）／`cell_width_px`（1 bar の横 px・`MIN_CELL_WIDTH_PX=1.0` / `DEFAULT_CELL_WIDTH_PX=6.0` / `MAX_CELL_WIDTH_PX=64.0` でクランプ）／`auto_scale: bool`（pan/zoom で false・ResetView で true）／`basis_ms: long?`（granularity 由来の派生・`Daily→86_400_000` / `Minute→60_000` / 未知→null=維持）／`cell_height_norm`（autoscale 時のみ書き換え）。派生 `visible_time_range()` / `visible_price_range()` / `price_to_y` / `y_to_price` / `time_to_x` / `x_to_time` を提供し、これが [[視窓仮想化（virtualized chart）]] の gate になる。**per-window で独立**＝同一 instrument を別 window で開けば独立 ChartViewState。永続化は **layout sidecar**（findings 0048 multi-document）に `translation_ms` / `cell_width_px` / `auto_scale` の 3 つだけを保存（cell_height_norm は autoscale で再計算されるので持たない）。
+_Avoid_: ChartViewState を per-instrument グローバルにすること（per-window 独立が正）／cell_height_norm を永続化すること（autoscale 派生）／basis_ms を spawn 時固定にすること（[[ScenarioMetadata.granularity]] 由来の派生表示状態・findings 0023 同型）
+
+**視窓仮想化（virtualized chart）** ※2026-06-26 新設・[[ADR-0034]]（findings 0119）:
+ChartView が [[ChartViewState]] の `visible_time_range()` で gate して **visible window 内の bar だけ UIVertex を生成**する仕組み。Python reducer が `max_history_len=1000` 本（Live）や scenario 全期間（Replay）を投げてきても、描画 vertex 数は **plot_width_px / cell_width_px ≈ 90 本**（plot 540px / DEFAULT_CELL_WIDTH_PX=6.0 のとき）に圧縮。範囲外 bar は計算ごとスキップ。`SetVerticesDirty()` の trigger 源は (a) ChartViewState の変化（pan/zoom/reset）(b) TotalBarCount の変化（新 bar 着）の 2 つだけで毎フレーム再生成ではない。`RenderedBarCount` で E2E 観測可能。
+_Avoid_: 全 bar を vertex 化すること（D-1 / D-2 違反）／毎フレーム SetVerticesDirty すること（dirty コストが乗る）／visible window 外を表示するために cell_width を 0 へ落とすこと（MIN_CELL_WIDTH_PX で防ぐ）
+
+**DepthLadderView（板表示ウィジェット・Live モード本線）** ※**2026-06-26 方式置換 [[ADR-0035]]**（findings 0120）:
+`Assets/Scripts/Live/DepthLadderView.cs`。**単一 `CanvasRenderer` + custom `MaskableGraphic` + Mesh** で **21 行（10 ask + LAST + 10 bid）の per-side alpha 背景 quad + 差分/hover highlight tint quad** を **1 つの UIVertex バッチへ統合**し **GPU draw call=1**。`Text` (label) は uGUI Text のまま retain（TMP/SDF 移行は別 slice）。21 行は固定なので [[視窓仮想化（virtualized chart）]] は適用しない。findings 0024 / #54 の Image rect ベース（per-render 21 行を destroy/recreate）は**退役**。Bid/Ask 色は **[[ChartPalette（chart/ladder 共通色定義 SoT）]]** を参照（hakoniwa_up / hakoniwa_down への直接参照は禁止・[[ChartView（candle 描画ウィジェット・本線）]] と single-source）。E2E / ThemeProbe seam は `Text` から `Color` ベースに移行（`BestBidColor` / `BestAskColor` / `LastRowColor` / `RowCount` / `GetRowHighlightTint(rowIndex)` / `CurrentSnapshot`）。配線（`BuildChartContent` の `_lastLadderLive` / `ApplyDepthLadderMode`）は無改変。
+_Avoid_: DepthLadderView を per-row `Image` Build と呼ぶこと（ADR-0035 で Mesh へ置換）／`_rowsRoot` の child count で E2E を組むこと（`RowCount` を使う）／Bid/Ask 色を `hakoniwa_up`/`hakoniwa_down` から直接参照すること（ChartPalette 経由が正）
+
+**ChartPalette（chart/ladder 共通色定義 SoT）** ※2026-06-26 新設・[[ADR-0035]]（findings 0120）:
+`public static class ChartPalette { Color Bullish() / Color Bearish() ... }`。`ThemeService.Current.colors.hakoniwa_up` / `hakoniwa_down` への参照を 1 箇所に集約し、[[ChartView（candle 描画ウィジェット・本線）]] の BULLISH/BEARISH と [[DepthLadderView（板表示ウィジェット・Live モード本線）]] の Bid/Ask を**同 source**にする（findings 0054 P1 の cream-legible 規約継承）。theme 切替で chart 候 と ladder の色がずれる事故を構造的に消す。
+_Avoid_: chart と ladder で別々に `ThemeService.Current.colors.hakoniwa_up/down` を参照すること（drift の元）／ChartPalette を ThemeService を経由せず const Color にすること（theme 切替に追従しない）
+
+**ChartLadderRoot / chart↔ladder インタラクション（CrosshairState 共有 SoT）** ※2026-06-26 新設・[[ADR-0035]]（findings 0120）:
+Live モードの chart+ladder 複合 widget の **親 Component**（`BuildChartContent` が chart window root に張る）で、[[ChartViewState]] と [[CrosshairState（chart hover 状態・chart↔ladder seam）]] を所有する。[[ChartView（candle 描画ウィジェット・本線）]] は `CrosshairState.hovered_price` を書き、[[DepthLadderView（板表示ウィジェット・Live モード本線）]] は同じ Component を `GetComponentInParent<ChartLadderRoot>()` で読んで **price 最近接の 1 行**（ask / LAST / bid のいずれか）を hover highlight tint で Mesh バッチに追加する。**chart → ladder の単方向**（ladder hover で chart に逆 highlight は v2 別 slice）。同一 instrument を別 window で開けば各 window が独立した ChartLadderRoot を持つ。
+_Avoid_: ChartView と DepthLadderView を bidirectional Component 参照で繋ぐこと（複数 window で曖昧化）／CrosshairState を per-instrument グローバル Resource にすること（per-window 独立が正）
+
+**CrosshairState（chart hover 状態・chart↔ladder seam）** ※2026-06-26 新設・[[ADR-0034]] + [[ADR-0035]]（findings 0119/0120）:
+flowsurface `chart_crosshair.rs::CrosshairState` の Unity 翻訳。`cursor_world: Vector2?` / `hovered_price: double?` / `hovered_time_ms: long?` / `hovered_volume: double?` を持つ pure data。所有は [[ChartLadderRoot / chart↔ladder インタラクション（CrosshairState 共有 SoT）]]。[[ChartView]] の hover handler が `cursor_world` を書き、派生量（hovered_price / time / volume）は ChartView の derive system で計算。DepthLadderView は `hovered_price` だけを読む。
+_Avoid_: derive を ChartView 外で行うこと（座標変換は ChartView の単一責任）／hover 抜けで `cursor_world = null` に戻し忘れて stale highlight が残ること
+
+**板差分 highlight（depth diff tint・Timer 減衰）** ※2026-06-26 新設・[[ADR-0035]]（findings 0120）:
+[[DepthLadderView]] が `_lastSnapshot` を 1 frame 保持し、次の `Render(newSnapshot)` で **price key で同一視**して level ごとに `size` 差分を計算。差分 ≥ `MIN_SIZE_DIFF_TO_HIGHLIGHT`（既定 1 株）の level に `DEPTH_DIFF_HIGHLIGHT_MS = 300ms` の Timer で **linear 減衰する tint quad** を Mesh バッチへ加える。size 増加 = Bid/Ask 色（[[ChartPalette]]）を高 alpha でブースト、size 減少 = grey tint。price key 同一視は `Mathf.Abs(price_a - price_b) < PRICE_KEY_EPSILON`（flowsurface skill caveat #7 の Decimal 精度規約に従う）。新規 level = 増加扱い／消えた level = 減少扱い。
+_Avoid_: 配列 index で level を同一視すること（best が ticked up/down で破綻・price key で同一視）／毎フレーム SetVerticesDirty すること（Timer 進行は state diff 検出時のみ dirty）
+
+**chart 全期間 supply（Replay 全期間 cold load / Live は 1000 本維持）** ※2026-06-26 新設・[[ADR-0034]]（findings 0119）:
+chart に渡るデータの上限ポリシーが mode 別:
+- **Replay**: scenario `start..end` の全 bar を DuckDB cold load（findings 0104 ChartSpawnPreview の preview seed 経路を「scenario 全期間」に拡張）。`per_id_ohlc_points` の `max_history_len` キャップは Replay 中**撤廃**または scenario bar 数まで自動拡張。`InstrumentOhlcDecoder` / state JSON 形は無改変。
+- **Live**: `max_history_len=1000` を**維持**。kabu historical backfill での「Live 全期間」は本決定スコープ外（必要時は別 issue）。当日 + reducer リングバッファに留める。
+描画側（ChartView / [[視窓仮想化（virtualized chart）]]）はデータ件数に依存せず一定コスト。
+_Avoid_: Live で `max_history_len` を上げて当日外の bar を kabu から自動 backfill すること（別 issue・本決定スコープ外）／Replay の cold seed を「streaming で代替できる」と見なすこと（findings 0104 で証明済の症状）
+
 **mode-conditional base tile / base retile（モード別 base・[[ExecutionMode（実行モード）]] 所有）** ※**縮退 SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）:
 despawn/respawn の base retile は廃止。mode 差は **`startup` window を Replay のときだけ Show / Live で Hide** の可視性トグルだけに縮退
 （`FloatingWindowController.Show`/`Hide`・dormant 温存）。chart は mode をまたいで identity 保持（spawn したまま）。以下は履歴:

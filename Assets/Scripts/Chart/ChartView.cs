@@ -77,6 +77,26 @@ public class ChartView : MaskableGraphic,
     // is the plot rect computed inside the most recent OnPopulateMesh (gutter inset of rectTransform.rect).
     public Rect LastPlotRect { get; private set; }
 
+    // S3 #158 observability: counters that the AXIS-PRICE-01 / AXIS-TIME-01 / GRID-01 gates read
+    // to assert the axis labels / grid lines were emitted in the last OnPopulateMesh + label rebuild.
+    public int LastGridLineCount { get; private set; }
+    public int LastPriceLabelCount => _priceLabels.Count;
+    public int LastTimeLabelCount => _timeLabels.Count;
+    // S3 + S4: list of price/time tick values the most recent OnPopulateMesh used. Reused by the
+    // axis label rebuild path so labels and grid lines stay in lockstep.
+    List<double> _lastPriceTicks = new List<double>();
+    List<long> _lastTimeTicks = new List<long>();
+    long _lastTimeStep;
+    bool _axisLabelsDirty;
+    RectTransform _priceLabelsRoot, _timeLabelsRoot;
+    readonly List<Text> _priceLabels = new List<Text>();
+    readonly List<Text> _timeLabels = new List<Text>();
+
+    // S5 #160 (forward-compat): main_area / volume_area split lives entirely inside this widget so
+    // ChartScale (price ticks) only sees the price plot area. Until S5 ships volume_area, the whole
+    // plot IS the main_area (VolumeFrac=0).
+    const float VolumeFrac = 0.0f;   // S5 will set 0.2f when volume sub-pane lands.
+
     // ---- ThemeProbe / E2E color seams (replaces FirstCandle(bool)→Image) ----
 
     public Color BackgroundColor => ChartPalette.Background();
@@ -123,8 +143,24 @@ public class ChartView : MaskableGraphic,
 
         if (showTitleBar) BuildTitleBar((RectTransform)transform);
 
+        // S3 axis labels: Text roots live as children of this widget so the labels follow rect /
+        // hierarchy moves. The roots themselves are stretched over the FULL rect; per-label Text
+        // children are positioned in local coords by RebuildAxisLabels.
+        _priceLabelsRoot = NewChildRect("PriceAxisLabels");
+        _timeLabelsRoot = NewChildRect("TimeAxisLabels");
+
         ThemeService.Changed += OnThemeChanged;
         OnThemeChanged();   // sets initial title bar colors; SetVerticesDirty schedules a Mesh emit.
+    }
+
+    RectTransform NewChildRect(string n)
+    {
+        var go = new GameObject(n, typeof(RectTransform));
+        var rt = go.GetComponent<RectTransform>();
+        rt.SetParent((RectTransform)transform, false);
+        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+        return rt;
     }
 
     void BuildTitleBar(RectTransform parent)
@@ -286,7 +322,40 @@ public class ChartView : MaskableGraphic,
             ViewState.visible_max_price = hi + pad;
         }
 
-        // 6. emit candle quads for bars inside [winStart, winEnd]. The for-loop's `continue` is the
+        // S5 main_area / volume_area split — for S3 (no volume yet) main_area == plot.
+        float volumeH = plot.height * VolumeFrac;
+        var mainArea = new Rect(plot.x, plot.y + volumeH, plot.width, plot.height - volumeH);
+        float mainY0 = mainArea.yMin;
+        float mainH  = mainArea.height;
+
+        // 6a. grid lines + axis tick caches (findings 0119 D-6) — emitted into the SAME Mesh batch
+        // at alpha=0.06 so GPU drawcall stays 1. Price ticks span main_area only (volume_area in
+        // S5 will not carry price gridlines per AXIS-PRICE-01 / VOLUME-02). Time ticks span full plot.
+        Color gridColor = ChartPalette.Grid();
+        _lastPriceTicks = ChartScale.CalcOptimalPriceTicks(ViewState.visible_min_price, ViewState.visible_max_price, 8);
+        _lastTimeStep = ChartScale.CalcOptimalTimeStep(winStart, winEnd, basis, 6);
+        _lastTimeTicks = ChartScale.CalcOptimalTimeTicks(winStart, winEnd, basis, 6);
+        int gridLines = 0;
+        for (int i = 0; i < _lastPriceTicks.Count; i++)
+        {
+            double price = _lastPriceTicks[i];
+            float y = MainPriceToY(price, mainY0, mainH);
+            if (y < mainArea.yMin - 0.5f || y > mainArea.yMax + 0.5f) continue;
+            EmitQuad(vh, mainArea.xMin, y - 0.5f, mainArea.xMax, y + 0.5f, gridColor);
+            gridLines++;
+        }
+        for (int i = 0; i < _lastTimeTicks.Count; i++)
+        {
+            long t = _lastTimeTicks[i];
+            float x = ViewState.TimeToX(t, plot.xMin, plot.width);
+            if (x < plot.xMin - 0.5f || x > plot.xMax + 0.5f) continue;
+            EmitQuad(vh, x - 0.5f, plot.yMin, x + 0.5f, plot.yMax, gridColor);
+            gridLines++;
+        }
+        LastGridLineCount = gridLines;
+        _axisLabelsDirty = true;   // LateUpdate spawns Text children matching _lastPriceTicks / _lastTimeTicks.
+
+        // 6b. emit candle quads for bars inside [winStart, winEnd]. The for-loop's `continue` is the
         // virtualization (D-2): bars outside the window never produce vertices.
         Color upColor = ChartPalette.Bullish();
         Color downColor = ChartPalette.Bearish();
@@ -300,10 +369,10 @@ public class ChartView : MaskableGraphic,
             if (p.open_time_ms > winEnd) continue;
 
             float x = ViewState.TimeToX(p.open_time_ms, plot.xMin, plot.width);
-            float yOpen  = ViewState.PriceToY(p.open,  plot.yMin, plot.height);
-            float yClose = ViewState.PriceToY(p.close, plot.yMin, plot.height);
-            float yHigh  = ViewState.PriceToY(p.high,  plot.yMin, plot.height);
-            float yLow   = ViewState.PriceToY(p.low,   plot.yMin, plot.height);
+            float yOpen  = MainPriceToY(p.open,  mainY0, mainH);
+            float yClose = MainPriceToY(p.close, mainY0, mainH);
+            float yHigh  = MainPriceToY(p.high,  mainY0, mainH);
+            float yLow   = MainPriceToY(p.low,   mainY0, mainH);
 
             bool bullish = p.close >= p.open;
             Color c = bullish ? upColor : downColor;
@@ -320,6 +389,16 @@ public class ChartView : MaskableGraphic,
             rendered++;
         }
         RenderedBarCount = rendered;
+    }
+
+    // Price → Y mapping for the main_area (S5 split: main_area occupies the top (1-VolumeFrac) of the
+    // plot). S3 grid / candle / axis label all read through this so a future VolumeFrac change moves
+    // everything in lockstep with no scattered y-math.
+    float MainPriceToY(double price, float mainY0, float mainH)
+    {
+        double range = ViewState.visible_max_price - ViewState.visible_min_price;
+        if (range <= 0 || double.IsNaN(range)) return mainY0 + mainH * 0.5f;
+        return mainY0 + (float)((price - ViewState.visible_min_price) / range) * mainH;
     }
 
     // Emit a 2-triangle quad with a single color. UIVertex.simpleVert positions vertices in this widget's
@@ -400,6 +479,92 @@ public class ChartView : MaskableGraphic,
             ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
         }
         SetVerticesDirty();
+    }
+
+    // ====== S3 #158: axis label rebuild (text children, off the Mesh batch path) ======
+    //
+    // Grid lines are inside the Mesh batch (OnPopulateMesh). Text labels are separate Text
+    // children — Canvas batches glyphs in its own sub-mesh, so labels live outside the candle
+    // batch. We mark `_axisLabelsDirty` whenever OnPopulateMesh updates `_lastPriceTicks` /
+    // `_lastTimeTicks` (which happens on every Render / Pan / Zoom / Reset / Resize), and
+    // rebuild Text children in LateUpdate so we never spawn GameObjects during Canvas batch
+    // processing.
+
+    void LateUpdate()
+    {
+        if (_axisLabelsDirty)
+        {
+            _axisLabelsDirty = false;
+            RebuildAxisLabels();
+        }
+    }
+
+    // Public so headless E2E (AXIS-PRICE-01 / AXIS-TIME-01) can force a label rebuild without
+    // needing MonoBehaviour.LateUpdate to tick. Idempotent — safe to call multiple times.
+    public void RebuildAxisLabels()
+    {
+        if (_priceLabelsRoot == null || _timeLabelsRoot == null) return;
+        EnsureLabelPool(_priceLabels, _priceLabelsRoot, _lastPriceTicks.Count, anchorRight: true);
+        EnsureLabelPool(_timeLabels, _timeLabelsRoot, _lastTimeTicks.Count, anchorRight: false);
+
+        var rect = rectTransform.rect;
+        float topInset = GutterTop + (_showTitleBar ? TitleBarHeight + 4f : 0f);
+        var plot = new Rect(
+            rect.xMin + GutterLeft, rect.yMin + GutterBottom,
+            Mathf.Max(0f, rect.width - GutterLeft - GutterRight),
+            Mathf.Max(0f, rect.height - GutterBottom - topInset));
+        float volumeH = plot.height * VolumeFrac;
+        float mainY0 = plot.yMin + volumeH;
+        float mainH = plot.height - volumeH;
+
+        double step = _lastPriceTicks.Count >= 2 ? (_lastPriceTicks[1] - _lastPriceTicks[0])
+                                                 : (ViewState.visible_max_price - ViewState.visible_min_price) / 8.0;
+        int decimals = ChartScale.PriceTickDecimals(step);
+        string fmt = "F" + decimals;
+        var th = ThemeService.Current;
+        for (int i = 0; i < _lastPriceTicks.Count; i++)
+        {
+            float y = MainPriceToY(_lastPriceTicks[i], mainY0, mainH);
+            var rt = (RectTransform)_priceLabels[i].transform;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.zero;
+            rt.pivot = new Vector2(0f, 0.5f);
+            rt.sizeDelta = new Vector2(GutterRight + 4f, 16f);
+            rt.anchoredPosition = new Vector2(plot.xMax - rect.xMin + 2f, y - rect.yMin);
+            _priceLabels[i].text = _lastPriceTicks[i].ToString(fmt);
+            _priceLabels[i].color = th.colors.hakoniwa_text_muted;
+        }
+
+        var style = ChartScale.StyleFor(_lastTimeStep);
+        for (int i = 0; i < _lastTimeTicks.Count; i++)
+        {
+            float x = ViewState.TimeToX(_lastTimeTicks[i], plot.xMin, plot.width);
+            var rt = (RectTransform)_timeLabels[i].transform;
+            rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.zero;
+            rt.pivot = new Vector2(0.5f, 0f);
+            rt.sizeDelta = new Vector2(60f, GutterBottom - 4f);
+            rt.anchoredPosition = new Vector2(x - rect.xMin, plot.yMin - rect.yMin - GutterBottom + 2f);
+            _timeLabels[i].text = ChartScale.FormatTimeLabel(_lastTimeTicks[i], style);
+            _timeLabels[i].color = th.colors.hakoniwa_text_muted;
+        }
+    }
+
+    void EnsureLabelPool(List<Text> pool, RectTransform parent, int needed, bool anchorRight)
+    {
+        // Pool grows monotonically; excess Text children are hidden (cheaper than Destroy in
+        // headless edit mode and survives a future bar count drop without GameObject churn).
+        while (pool.Count < needed)
+        {
+            var go = new GameObject("axisTick", typeof(RectTransform), typeof(Text));
+            var t = go.GetComponent<Text>();
+            t.font = _font; t.fontSize = 11; t.text = "";
+            t.alignment = anchorRight ? TextAnchor.MiddleLeft : TextAnchor.MiddleCenter;
+            t.horizontalOverflow = HorizontalWrapMode.Overflow;
+            t.verticalOverflow = VerticalWrapMode.Overflow;
+            t.raycastTarget = false;
+            go.transform.SetParent(parent, false);
+            pool.Add(t);
+        }
+        for (int i = 0; i < pool.Count; i++) pool[i].gameObject.SetActive(i < needed);
     }
 
     // ====== S2 #157: drag pan / wheel zoom / double-click reset (findings 0119 D-3) ======

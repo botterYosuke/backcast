@@ -38,9 +38,18 @@ def _realised_pnl_fifo(fills: list[Fill]) -> list[float]:
     return realised
 
 
-def compute_summary(fills: list[Fill], equity_points: list[EquityPoint]) -> dict:
-    """Compute aggregate metrics from typed Fill / EquityPoint records."""
-    equity_values = [ep.equity for ep in equity_points]
+def compute_summary(fills: list[Fill] | str | Path, equity_points: list[EquityPoint] | None = None) -> dict:
+    """Compute aggregate metrics from typed Fill / EquityPoint records, or a path to run_dir."""
+    if isinstance(fills, (str, Path)):
+        from engine.strategy_runtime.run_buffer_reader import RunBufferReader
+        reader = RunBufferReader(Path(fills))
+        fills_list = reader.fills
+        equity_list = reader.equity_points
+    else:
+        fills_list = fills
+        equity_list = equity_points if equity_points is not None else []
+
+    equity_values = [ep.equity for ep in equity_list]
 
     if equity_values:
         total_pnl = equity_values[-1] - equity_values[0]
@@ -56,9 +65,9 @@ def compute_summary(fills: list[Fill], equity_points: list[EquityPoint]) -> dict
         total_pnl = 0.0
         max_dd = 0.0
 
-    fee_total = sum(f.commission for f in fills if f.commission is not None)
+    fee_total = sum(f.commission for f in fills_list if f.commission is not None)
 
-    realised = _realised_pnl_fifo(fills)
+    realised = _realised_pnl_fifo(fills_list)
     trade_count = len(realised)
     win_rate: Optional[float] = (
         sum(1 for r in realised if r > 0) / trade_count if trade_count > 0 else None
@@ -71,7 +80,7 @@ def compute_summary(fills: list[Fill], equity_points: list[EquityPoint]) -> dict
         "win_rate": win_rate,
         "fee_total": fee_total,
         "equity_points": len(equity_values),
-        "fills_count": len(fills),
+        "fills_count": len(fills_list),
     }
 
 

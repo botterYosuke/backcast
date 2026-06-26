@@ -55,6 +55,12 @@ dependencies = [
     # #92 (ADR-0023): 認証情報 (認証ID+秘密鍵) を平文保存しないための Fernet 暗号化
     # (secure_config.enc + API_DECRYPT_KEY) を立花サンプル互換でサポートする。
     "cryptography>=42.0",
+    # bellwether intraday time-of-day strategy (_bellwether/strategies/intraday_tod_01.py):
+    # an online walk-forward LightGBM that learns the momentum↔mean-reversion regime switch
+    # by time-of-day. Strategy-only dependency (kernel/engine never import it) — lazy-imported
+    # at first train so neither Replay nor #74 Auto attach blocks on the cold import; the
+    # strategy falls back to a deterministic time-of-day heuristic if the import fails.
+    "lightgbm>=4.5",
 ]
 
 [dependency-groups]

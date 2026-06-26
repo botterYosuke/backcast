@@ -82,6 +82,23 @@ delete-the-production-logic を通る（override を消す＝バグが戻る＝g
 # 期待: [E2E STRATEGY-60 PASS]（＋STRATEGY-59 含む既存 PASS）、exit 0、error CS 0 件
 ```
 
+## ⚠️ HITL 続報（2026-06-26）— OnCancel 消費だけでは不十分（第二の revert 経路）
+
+owner HITL で「入力 → ESC → Settings dialog 表示 → 内容が消える」が**まだ再現**（治ってない）。
+コミット `6ff73ae`（OnCancel 消費）は **2 つある Escape→revert 経路のうち 1 つしか塞いでいなかった**:
+
+1. `ICancelHandler.OnCancel`（`TMP_InputField.cs:4505`）＝ EventSystem の Cancel action 経路。**← 0117 の OnCancel 消費で対応済み。**
+2. `OnUpdateSelected`→`KeyPressed`→`case KeyCode.Escape`（`TMP_InputField.cs:2276-2280`）＝ IMGUI 風 Event key pump 経路。
+   `m_WasCanceled=true`＋`return EditState.Finish` → 呼び出し元が `DeactivateInputField`（`:2380` 付近）→ `text=m_OriginalText`
+   で revert。**← OnCancel 消費では塞がらない残存経路。これが「治ってない」の真因。**
+
+`InputSystemUIInputModule` は Escape を **両経路に**流す（Cancel action＝1／キーボードを IMGUI Event queue に forward＝2）ので、
+multiline editor では**両方**を抑止しないと revert が残る。#148（Enter）が OnSubmit だけで足りたのは、経路 2 の Enter が
+`MultiLineNewline` 枝で**改行挿入**（deactivate しない・`:2263`）だから——Escape は経路 2 が deactivate+revert なので非対称。
+
+→ 完全修正（経路 2 の抑止）は別 issue で追跡（`StrategyInputField` の `OnUpdateSelected` seam で multiline 時に Escape Event を
+握り潰す等）。本 0117 の OnCancel 消費＋Section28 は**経路 1 の回帰ゲートとして有効なので維持**（必要だが不十分）。
+
 ## #148 検証結果（本調査の出発点）
 
 `StrategyEditorNotebookE2ERunner.Run` を実走し `[E2E STRATEGY-59 PASS]`・rollup 7 PASS / 0 FAIL / 0 SKIP・

@@ -93,10 +93,14 @@ public class ChartView : MaskableGraphic,
     readonly List<Text> _priceLabels = new List<Text>();
     readonly List<Text> _timeLabels = new List<Text>();
 
-    // S5 #160 (forward-compat): main_area / volume_area split lives entirely inside this widget so
-    // ChartScale (price ticks) only sees the price plot area. Until S5 ships volume_area, the whole
-    // plot IS the main_area (VolumeFrac=0).
-    const float VolumeFrac = 0.0f;   // S5 will set 0.2f when volume sub-pane lands.
+    // S5 #160: main_area (top 80%) / volume_area (bottom 20%) split lives entirely inside this widget
+    // — ChartScale.PriceTicks only sees the main_area (VOLUME-02), the volume bars live in volume_area.
+    // S4 crosshair derive uses VolumeFrac>0 to decide if hovered_volume is non-null (cursor in volume).
+    const float VolumeFrac = 0.20f;
+
+    // S5 observability — VOLUME-01 / VOLUME-CROSSHAIR-01 gates.
+    public int LastVolumeBarCount { get; private set; }
+    public float LastVolumeAreaHeightPx { get; private set; }
 
     // S4 #159: CrosshairState lives on ChartView in S4; S9 will hoist ownership to ChartLadderRoot
     // (parent Component) so DepthLadderView can read hovered_price. The accessor remains here so
@@ -399,6 +403,35 @@ public class ChartView : MaskableGraphic,
             rendered++;
         }
         RenderedBarCount = rendered;
+
+        // 6c. volume bars (S5 #160 / VOLUME-01) — bottom volume_area (the (1-VolumeFrac)..bottom slice
+        // of the plot). Same Mesh batch as candles; color = candle color at alpha=0.6. Width = candle
+        // body width; height = volume / max_visible_volume * volume_area_height.
+        LastVolumeAreaHeightPx = volumeH;
+        int volumeBars = 0;
+        if (volumeH > 0)
+        {
+            double maxVol = ChartScale.MaxVisibleVolume(_bars, winStart, winEnd);
+            if (maxVol > 0)
+            {
+                float volTop = mainArea.yMin;        // top edge of volume_area = bottom edge of main_area
+                float volBot = plot.yMin;            // bottom of plot
+                Color volUp = upColor; volUp.a = 0.6f;
+                Color volDn = downColor; volDn.a = 0.6f;
+                for (int i = 0; i < _bars.Count; i++)
+                {
+                    var p = _bars[i];
+                    if (p.open_time_ms < winStart) continue;
+                    if (p.open_time_ms > winEnd) continue;
+                    float x = ViewState.TimeToX(p.open_time_ms, plot.xMin, plot.width);
+                    float h = ChartScale.VolumeBarHeight(p.volume, maxVol, volumeH);
+                    bool isBull = p.close >= p.open;
+                    EmitQuad(vh, x - bodyW * 0.5f, volBot, x + bodyW * 0.5f, volBot + h, isBull ? volUp : volDn);
+                    volumeBars++;
+                }
+            }
+        }
+        LastVolumeBarCount = volumeBars;
 
         // 7. last-price dashed line (findings 0119 D-6 / LASTPRICE-01). Horizontal at latest close,
         // alpha=0.7 (LastPriceLine palette), dashed via 6px-on / 4px-off pattern. Lives in the same

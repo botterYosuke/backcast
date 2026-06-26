@@ -153,4 +153,38 @@ public static class ChartScale
             default: return dt.ToString("HH:mm");
         }
     }
+
+    // ====== S5 #160: volume sub-pane pure functions (findings 0119 D-6 / volume_area) ======
+
+    // Max volume across visible window bars. Used to normalize bar heights in the volume_area.
+    public static double MaxVisibleVolume(System.Collections.Generic.IReadOnlyList<OhlcPoint> bars,
+        long winStartMs, long winEndMs)
+    {
+        double max = 0;
+        if (bars == null) return 0;
+        for (int i = 0; i < bars.Count; i++)
+        {
+            var p = bars[i];
+            if (p.open_time_ms < winStartMs || p.open_time_ms > winEndMs) continue;
+            if (p.volume > max) max = p.volume;
+        }
+        return max;
+    }
+
+    // Volume bar height in px given a target volume + max + the volume_area height.
+    public static float VolumeBarHeight(double volume, double maxVolume, float volumeAreaHeightPx)
+    {
+        if (maxVolume <= 0 || volumeAreaHeightPx <= 0) return 0;
+        return Mathf.Max(1f, (float)(volume / maxVolume) * volumeAreaHeightPx);
+    }
+
+    // K/M/B abbreviation for volume labels and the crosshair readout. 1234 -> "1.2K".
+    public static string FormatVolume(double v)
+    {
+        double abs = Math.Abs(v);
+        if (abs >= 1e9) return (v / 1e9).ToString("0.##") + "B";
+        if (abs >= 1e6) return (v / 1e6).ToString("0.##") + "M";
+        if (abs >= 1e3) return (v / 1e3).ToString("0.##") + "K";
+        return v.ToString("0");
+    }
 }

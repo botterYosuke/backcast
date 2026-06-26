@@ -116,9 +116,6 @@ python/.venv/
 __pycache__/
 *.pyc
 python/spike/fixtures/jquants-catalog/
-# raw kabu PUSH captures (14MB+ full-depth) — re-generate via spike/kabu_capture_mock.py.
-# committable codec-replayable mock lives at python/tests/fixtures/kabu_live_mock_4sym.json (findings 0117)
-python/spike/captures/
 .env
 
 # mkdocs build/preview tooling (docs/requirements.txt pins the deps; this venv is local)

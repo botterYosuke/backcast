@@ -126,6 +126,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // ── built widgets ──
     InfiniteCanvasController _canvas;
+    // issues #166-168 / findings 0123: 1 scene-level CameraGlideDriver — the per-frame `controller.ApplyView`
+    // tween that ウィンドウフレーミング（タイトルバー・ダブルクリック / sidebar 行クリック S3）の視点移動を
+    // ~200ms ease-out グライド化する。RectSpringDriver の鏡像配線。S1 fallback (null) と区別するため Bind 後の
+    // BeginGlide が "view をどう apply するか" の正本 callback として全 Initialize に注入される。
+    CameraGlideDriver _glideDriver;
     FloatingWindowController _windows;
     // #103 (ADR-0018 / findings 0075 §10): the BACK-plane controller. Owns ONLY the 6 dock kinds on
     // _dockLayer (1.0×). Separate from _windows so snap/focus母集合 is per-plane — a dock window can
@@ -463,6 +468,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         springDriver.transform.SetParent(transform, false);
         _windows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
         _dockWindows.SetSpringAnimator(springDriver.Animate, springDriver.Stop);
+
+        // issues #166-168 / findings 0123 §3: scene-level camera tween. Mirror of springDriver — one per
+        // workspace. Title-bar double-click (S1/S2) and sidebar 行クリック (S3) hand the target view to
+        // _glideDriver.BeginGlide; manual pan/zoom on _canvas auto-kills any in-flight glide via the
+        // driver's per-frame divergence detector (findings 0123 §3.1, no extra wiring needed).
+        _glideDriver = new GameObject("CameraGlideDriver").AddComponent<CameraGlideDriver>();
+        _glideDriver.transform.SetParent(transform, false);
+        _glideDriver.Bind(_canvas);
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out var chartSpec)) _chartWindowSize = chartSpec.defaultSize;
 
@@ -497,7 +510,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _windows.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, WINDOW_ID, _strategyEditorWindow);
         if (_strategyEditorTitleInput != null)
         {
-            _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID);
+            _strategyEditorTitleInput.Initialize(_windows, _canvas, _viewport, WINDOW_ID, _floatingParallaxFactor, BeginFramingGlide);
             // #95 Phase 6 (ADR-0016 D2/D4 / findings 0075 P6-4): the title-bar ▶ Run is SUNSET. The
             // sole strategy execution entry is per-cell RUN (each cell window's ▶, wired below). The
             // old StrategyEditorRunButton + OnRun (batch-run-of-saved-strategy) are retired.
@@ -567,7 +580,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             _windows.Adopt(FloatingWindowCatalog.KIND_ORDER, ORDER_WINDOW_ID, _orderWindow);
             if (_orderWindowTitleInput != null)
-                _orderWindowTitleInput.Initialize(_windows, _canvas, _viewport, ORDER_WINDOW_ID);
+                _orderWindowTitleInput.Initialize(_windows, _canvas, _viewport, ORDER_WINDOW_ID, _floatingParallaxFactor, BeginFramingGlide);
             _orderTicket = new OrderTicketView();
             _orderTicket.Build(_orderWindowBody, _font);
             _orderTicket.PlaceRequested += OnManualPlace;
@@ -733,6 +746,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _subCoord = new LiveSubscriptionCoordinator(new LaneSubscribeSink(_host), _scenario.Universe);
         _sidebarCtrl.LiveSubscribeHook = _subCoord.OnLiveRowSelected;
         _scenario.Universe.Changed += _subCoord.OnUniverseChanged;   // S4: add→subscribe / S5: remove→unsubscribe
+
+        // issue #168 (findings 0123 §3 / S3): sidebar 行クリック → 対応 `chart:<iid>` 窓フレーミング。
+        // SelectRow の **クリック毎** に発火 (FocusChartHook; SelectedSymbol.Changed への相乗りは不可)。
+        // 窓未生成 / 非表示は no-op (FrameChartWindowForInstrument 内ガード)。
+        _sidebarCtrl.FocusChartHook = FrameChartWindowForInstrument;
     }
 
     // #104 Slice G (findings 0082 §8): create a per-plane ghost overlay container as a child of the
@@ -753,6 +771,42 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // Re-paint the infinite-canvas field (the viewport bg) from the active theme's workspace_background.
     // Subscribed to ThemeService.Changed in BuildWorkspace; null-safe so a probe that never authored the
     // viewport Image is a no-op.
+    // issues #166-168 / findings 0123 §2.1: the single "view をどう apply するか" callback every
+    // FloatingWindowTitleInput.Initialize hands off to. Plane-unaware (the title input has already baked
+    // its plane's parallax factor into `target` via CanvasViewMath.FrameWindow), so the same hook serves
+    // dock and floating windows. _glideDriver is wired in BuildWorkspace BEFORE any caller captures this
+    // delegate (review finding: no S1-fallback path is reachable in production), so a null check would be
+    // dead code; we just early-return on null target (a defensive arg guard, not a lifecycle one).
+    void BeginFramingGlide(CanvasView target)
+    {
+        if (target == null) return;
+        _glideDriver?.BeginGlide(target);
+    }
+
+    // issues #166-168 / findings 0123 §3 / S3 (#168): sidebar 行クリック → 対応 chart 窓フレーミング。
+    // dock plane (1.0×) で `chart:<iid>` を探し、未生成 / inactive のときは **no-op**（spawn しない・既存
+    // の SelectRow 焦点/ラベル/live subscribe は従来どおり、owner 決定）。窓があればフレーミング view を
+    // 合成して BeginFramingGlide に渡す — タイトルバー・ダブルクリックと同じ最終 view へ収束する (AC#1)。
+    // **activeInHierarchy** (not activeSelf) — review finding: ancestor (_dockLayer / future group collapse)
+    // が inactive のとき activeSelf は true のままで「非表示」を見逃す。AC#3 を構造的に満たすには inherited
+    // visibility が正。**FRAME_MARGIN_DEFAULT** と **DOCK_PLANE_PARALLAX** は CanvasViewMath 側で正本化
+    // した共有 const を参照（FloatingWindowTitleInput と数値が割れない構造）。
+    void FrameChartWindowForInstrument(string iid)
+    {
+        if (string.IsNullOrEmpty(iid) || _dockWindows == null || _viewport == null || _canvas == null) return;
+        Vector2 viewportSize = _viewport.rect.size;
+        if (viewportSize.x <= 0f || viewportSize.y <= 0f) return;   // mid-reflow no-op
+        string chartId = DockShape.ChartId(iid);
+        if (string.IsNullOrEmpty(chartId)) return;
+        RectTransform rt = _dockWindows.RectOf(chartId);
+        if (rt == null || !rt.gameObject.activeInHierarchy) return;   // S3 AC#3: no-op when 窓未生成 / 非表示
+        CanvasView target = CanvasViewMath.FrameWindow(
+            rt.anchoredPosition, rt.sizeDelta, viewportSize,
+            CanvasViewMath.DOCK_PLANE_PARALLAX, CanvasViewMath.FRAME_MARGIN_DEFAULT,
+            _canvas.CaptureView());
+        BeginFramingGlide(target);
+    }
+
     void ApplyViewportTheme()
     {
         if (_viewport != null)
@@ -827,12 +881,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (spec.kind == FloatingWindowCatalog.KIND_ORDER)
         {
             var orderRoot = OrderTicketWindowFrame.Build(id, out var orderTitle, out _);
-            orderTitle.Initialize(_windows, _canvas, _viewport, id);
+            orderTitle.Initialize(_windows, _canvas, _viewport, id, _floatingParallaxFactor, BeginFramingGlide);
             return orderRoot;
         }
 
         var root = StrategyEditorWindowFrame.Build(id, out var titleInput, out var body);
-        titleInput.Initialize(_windows, _canvas, _viewport, id);
+        titleInput.Initialize(_windows, _canvas, _viewport, id, _floatingParallaxFactor, BeginFramingGlide);
         if (spec.kind == FloatingWindowCatalog.KIND_STRATEGY_EDITOR)
         {
             // #81: a spawned cell window — a Cell fragment view (the coordinator binds its cell right
@@ -872,7 +926,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // cache) gets the name on the常用パス; layout-restore cold paths fall back to id alone.
         string title = ResolveChartTitleForId(spec.kind, id, spec.title);
         var dockRoot = DockWindowFrame.Build(id, title, spec.accent, _font, out var dockTitle, out var dockBody);
-        dockTitle.Initialize(_dockWindows, _canvas, _viewport, id);
+        // issues #166-168 / findings 0123: dock plane = 1.0× parallax (factor=1), framing routes via the
+        // same glide driver. Explicit 1f here documents the plane invariant (the default would also be 1f,
+        // but stating it keeps intent grep-able next to the floating-plane 1.2 callers).
+        dockTitle.Initialize(_dockWindows, _canvas, _viewport, id, 1f, BeginFramingGlide);
         BuildDockContent(spec.kind, id, dockBody);
         return dockRoot;
     }

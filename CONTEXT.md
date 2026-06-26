@@ -321,6 +321,18 @@ infinite canvas の Content 座標系の座標。**画面ピクセルでも zoom
 フィールド**として載る（capability surface 追加・findings 0004 §10 の予約項目）。
 _Avoid_: pan/zoom 状態を panel `LayoutRect`（正規化 0..1 表示矩形）に混ぜること（別次元・別フィールド）
 
+**ウィンドウフレーミング（タイトルバー・ダブルクリック）** ※[[issues #166-168]]・方針 findings 0123:
+floating window のタイトルバーを**ダブルクリック**したら、その窓を **viewport 中心** に据え、窓全体が入る
+**最大ズーム（contain-fit）** にジャンプする一発操作。S1 は即時 apply、S2 は ~200ms ease-out のカメラ
+グライド、S3 は sidebar の universe 行クリックで対応 `chart:<iid>` 窓を同じ挙動でフレーミング（dock plane）。
+plane 不可知（floating=1.2× / dock=1.0× を `CanvasViewMath.FrameWindow` の引数 `parallaxFactor` で受け、`pan = centre / factor`）。
+**トグル無し**（常に fit・冪等）。窓未生成 / inactive のときは S3 行クリックは **no-op**（spawn しない）。
+_Avoid_: ダブルクリック検出を `OnPointerDown` の手作りタイマーで行うこと（`IPointerClickHandler.OnPointerClick`
+の `clickCount>=2` で十分かつ drag-end click は自動的に除外される）／前面 plane で `pan = centre`（factor 無視）
+を使うこと（`viewport(centre) = (1−factor)·zoom·centre` だけ原点から外れる）／グライドに spring の 8%
+overshoot を残すこと（zoom MAX/MIN を超え clipping 体感になる、ease-out 単調で十分）／`SelectedSymbol.Changed`
+への相乗りで FocusChartHook を発火させること（同じ行の再クリックで発火しない＝冪等な「クリック→フォーカス」にならない）
+
 **Hakoniwa（ドッキング window クラスタ）** ※2026-06-25 **再々々々定義**・方針 [[ADR-0017]]＋[[ADR-0018]]＋[[ADR-0019]]＋[[ADR-0024]]＋**[[ADR-0029]]**（findings 0075／0080／0088／**0106**）:
 infinite canvas の Content 上で、**独立した floating window**（`chart` / `positions` / `orders` / `run_result` /
 `buying_power` / `startup`）が **同一 [[window group / groupId]] を共有してくっついた集合**を指す概念ラベル。

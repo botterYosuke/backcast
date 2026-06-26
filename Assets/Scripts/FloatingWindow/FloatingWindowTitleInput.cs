@@ -24,12 +24,21 @@ using UnityEngine.EventSystems;
 using UnityEngine.InputSystem;       // ADR-0024 §8: ESC poll (project uses the new Input System, activeInputHandler=1)
 
 public class FloatingWindowTitleInput : MonoBehaviour,
-    IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler
+    IPointerDownHandler, IBeginDragHandler, IDragHandler, IEndDragHandler,
+    IPointerClickHandler
 {
     FloatingWindowController _windows;
     InfiniteCanvasController _canvas;   // live zoom source (render-free controller stays clean)
     RectTransform _viewport;            // screen -> viewport-local conversion space (CanvasScaler-safe)
     string _windowId;
+
+    // issues #166-168 / findings 0123: ウィンドウフレーミング — タイトルバー・ダブルクリックで、自窓を viewport
+    // 中心に据え contain-fit ズームへジャンプ。plane-agnostic で動くため Initialize で plane の parallax 係数
+    // （floating=1.2 / dock=1.0）と "view をどう apply するか"（S1 即時=null→canvas.ApplyView 直呼び、S2 グライド
+    // =CameraGlideDriver.BeginGlide）を注入される。検出は IPointerClickHandler の OnPointerClick + clickCount>=2
+    // —— uGUI 仕様で drag-end click は fire しないので drag/単クリック/Alt 単窓ピックアップと自然に非干渉。
+    float _parallaxFactor = 1f;
+    System.Action<CanvasView> _applyView;   // null ⇒ direct canvas.ApplyView (S1 immediate fallback)
 
     // #104 (ADR-0019 / findings 0082 §6): the canvas-LOGICAL drag-start anchor and running cursor.
     // restAtDragStart is the dragged top-left at OnBeginDrag; cursor is restAtDragStart plus the
@@ -46,12 +55,24 @@ public class FloatingWindowTitleInput : MonoBehaviour,
     bool _dragging;
     bool _escCanceled;
 
-    public void Initialize(FloatingWindowController windows, InfiniteCanvasController canvas, RectTransform viewport, string windowId)
+    // `parallaxFactor` / `applyView` are issues #166-168 framing seam parameters (default-shaped for
+    // backwards compat with HITL / Resize E2E callers that do not exercise framing). `applyView` null
+    // means "apply immediately via canvas.ApplyView" (S1 behaviour with no glide driver wired); the
+    // production root (S2) supplies a callback that hands the target view to CameraGlideDriver.BeginGlide.
+    public void Initialize(
+        FloatingWindowController windows,
+        InfiniteCanvasController canvas,
+        RectTransform viewport,
+        string windowId,
+        float parallaxFactor = 1f,
+        System.Action<CanvasView> applyView = null)
     {
         _windows = windows;
         _canvas = canvas;
         _viewport = viewport;
         _windowId = windowId;
+        _parallaxFactor = parallaxFactor;
+        _applyView = applyView;
         AttachResizeGrip();
     }
 
@@ -143,6 +164,43 @@ public class FloatingWindowTitleInput : MonoBehaviour,
             _windows?.CancelDrag(_windowId);
             _escCanceled = true;
         }
+    }
+
+    // issues #166-168 / findings 0123 §2: タイトルバー・ダブルクリックで自窓フレーミング発火。
+    // IPointerClickHandler.OnPointerClick は uGUI 仕様で **drag が起きた pointer-up では呼ばれない** ので、
+    // 「drag 中は発火しない」AC を追加ガード無しで満たす。clickCount は新 Input System の InputSystemUIInputModule
+    // が populate する（本 repo は 6000.x）。単クリック (clickCount==1) は no-op で、既存の OnPointerDown の
+    // raise/NoteUserFocus は変わらない。controller / viewport が null（HITL bare harness など）でも no-op。
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (eventData == null || eventData.clickCount < 2) return;
+        // **Left button only** (review finding): uGUI's IPointerClickHandler fires for any button — a
+        // right-/middle-click double on the title bar would otherwise frame the window. The owner-locked
+        // gesture surface is Left only (drag / focus / resize all key off Left); fail-quiet for anything else.
+        if (eventData.button != PointerEventData.InputButton.Left) return;
+        if (_windows == null || _canvas == null || _viewport == null || string.IsNullOrEmpty(_windowId)) return;
+
+        // Mid-reflow / pre-init guard (review finding): a zero-size viewport produces a degenerate
+        // FrameWindow result that — under the S2 glide seam — animates the user's current view to identity
+        // (visible 'reset to origin' jolt). Short-circuit so the gesture is a true no-op in that window.
+        Vector2 viewportSize = _viewport.rect.size;
+        if (viewportSize.x <= 0f || viewportSize.y <= 0f) return;
+
+        var rt = _windows.RectOf(_windowId);
+        if (rt == null) return;
+
+        // 窓 rect: pivot=(0,1) ⇒ anchoredPosition は top-left in canvas-logical coords (findings 0008 §2).
+        Vector2 topLeft = rt.anchoredPosition;
+        Vector2 size = rt.sizeDelta;
+        CanvasView fallback = _canvas.CaptureView();   // belt-and-braces: hand current view as FrameWindow's
+                                                       // degenerate-input fallback so a glide stays zero-distance.
+
+        CanvasView target = CanvasViewMath.FrameWindow(
+            topLeft, size, viewportSize, _parallaxFactor, CanvasViewMath.FRAME_MARGIN_DEFAULT, fallback);
+
+        // S2 グライドが wired されていればそちらへ。null なら S1 即時 apply（fallback ＆ HITL ヘルパ）。
+        if (_applyView != null) _applyView(target);
+        else _canvas.ApplyView(target);
     }
 
     // Screen-pixel drag delta -> viewport-local delta (same mechanism #13's pan uses, so a

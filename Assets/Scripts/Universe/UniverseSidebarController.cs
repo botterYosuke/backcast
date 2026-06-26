@@ -43,6 +43,14 @@ public sealed class UniverseSidebarController
     // the universe registry (membership 不可侵 — the subscribe is subordinate to the add/select).
     public Action<string> LiveSubscribeHook { get; set; }
 
+    // issue #168 / findings 0123 §2.1 / S3: sidebar 行クリック → 対応 `chart:<id>` 窓フレーミング seam。
+    // SelectRow の **クリック毎** に発火（SelectedSymbol.Changed への相乗りは「同じ行の再クリックで発火しない」
+    // ので冪等なクリック→フォーカスにならない＝issue 本文の決定）。Replay/Live どちらでも発火（フレーミングは
+    // mode 非依存）。発火順は SelectedSymbol.Set → LiveSubscribeHook (Live のみ) → FocusChartHook の最後尾で、
+    // focus がまず動いて (label/購読が来てから) 視点が glide する自然な体感。BackcastWorkspaceRoot が
+    // FrameChartWindowForInstrument を assign する（chart 窓未生成 / 非表示は no-op で root 側が捌く）。
+    public Action<string> FocusChartHook { get; set; }
+
     public UniverseSidebarController(
         InstrumentRegistry registry,
         SelectedSymbol selected,
@@ -123,9 +131,16 @@ public sealed class UniverseSidebarController
 
     // ── row label click → focus (chart/depth target) ──────────────────────────
     // Replay: focus only. Live: focus + (deferred) subscribe. Returns true if focus moved.
+    // #168 (findings 0123 §2.1): every click also fires FocusChartHook (mode-independent — フレーミングは
+    // mode の関数ではない). Same-id 再クリックでも発火するため `_selected.Changed` への相乗りではなく
+    // SelectRow 末尾で直接 invoke する。null-safe で AFK / 旧 HITL は無回帰。
+    // **発火順 (review finding)**: FocusChartHook を LiveSubscribeHook より先に呼ぶ — Live subscribe で
+    // 例外が出ても視覚反応 (フレーミング glide) は失わない、かつ「視点が動いてから購読開始」の方が体感的に
+    // 自然 (subscribe の網羅は SelectedSymbol.Changed 経由でも届く)。
     public bool SelectRow(string id, UniverseSourceMode mode)
     {
         bool moved = _selected.Set(id);
+        FocusChartHook?.Invoke(id);
         if (mode == UniverseSourceMode.Live) LiveSubscribeHook?.Invoke(id);  // null in #31 (seam)
         return moved;
     }

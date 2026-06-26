@@ -72,7 +72,8 @@ public static class DepthLadderE2ERunner
                 ?? Section3_MountAndModeSync()           // DEPTH-01, DEPTH-02
                 ?? Section4_ReplayDecodeSkip()           // DEPTH-09
                 ?? Section5_PerInstrumentRender()        // DEPTH-05, DEPTH-07, DEPTH-08
-                ?? Section6_SignatureEarlyOut();         // DEPTH-10
+                ?? Section6_SignatureEarlyOut()         // DEPTH-10
+                ?? Section7_LadderMesh();               // LADDER-RENDER-01 / LADDER-RENDER-02
         }
         catch (Exception e)
         {
@@ -159,24 +160,27 @@ public static class DepthLadderE2ERunner
             };
             view.Render(snapshot, 105.0);
 
+            // S8 #161 (findings 0120 D-9): the legacy _rowsRoot.childCount==21 seam moves to RowCount
+            // (Mesh widget pre-allocates 21 Text children; placeholder mode reports 1 active).
+            if (view.RowCount != 21)
+                return $"S2: RowCount={view.RowCount}, want 21 on a HasDepth snapshot (fixed-count ladder)";
+
+            // The TOP row (display index 0) is ask index 9 (worst, missing here) -> "ASK   ---" (fixed-
+            // count "---" fill, worst-ask-on-top ordering). Catches a dynamic-count ladder that only
+            // renders present levels. Walk the Rows GameObject children since indexing is stable.
             var rowsRoot = typeof(DepthLadderView).GetField("_rowsRoot", BF).GetValue(view) as RectTransform;
             if (rowsRoot == null) return "S2: _rowsRoot not found (DepthLadderView renamed?)";
-            if (rowsRoot.childCount != 21)
-                return $"S2: ladder must be a fixed 21 rows (10 ask + LAST + 10 bid), got {rowsRoot.childCount}";
-
-            // The TOP row is ask index 9 (worst, missing here) -> "ASK   ---" (fixed-count "---" fill,
-            // worst-ask-on-top ordering). Catches a dynamic-count ladder that only renders present levels.
-            var topText = rowsRoot.GetChild(0).GetComponentInChildren<Text>();
+            var topText = rowsRoot.GetChild(0).GetComponent<Text>();
             if (topText == null || !topText.text.Contains("---"))
                 return $"S2: top (worst, missing) ask level must render '---' (got '{topText?.text}')";
 
             // Wire order: best bid = bids[0] = 98, best ask = asks[0] = 102 (index 0, regardless of value).
             // A defensive re-sort to canonical (bids desc / asks asc) would flip these to 99 / 101.
-            if (view.BestBid() == null || view.BestAsk() == null) return "S2: best bid/ask row missing on a HasDepth snapshot";
-            if (!view.BestBid().text.Contains("98.0"))
-                return $"S2: best bid must track bids[0]=98 (wire order, no re-sort to canonical descending), got '{view.BestBid().text}'";
-            if (!view.BestAsk().text.Contains("102"))
-                return $"S2: best ask must track asks[0]=102 (wire order, no re-sort to canonical ascending), got '{view.BestAsk().text}'";
+            if (view.BestBidRowText == null || view.BestAskRowText == null) return "S2: best bid/ask row missing on a HasDepth snapshot";
+            if (!view.BestBidRowText.Contains("98.0"))
+                return $"S2: best bid must track bids[0]=98 (wire order, no re-sort to canonical descending), got '{view.BestBidRowText}'";
+            if (!view.BestAskRowText.Contains("102"))
+                return $"S2: best ask must track asks[0]=102 (wire order, no re-sort to canonical ascending), got '{view.BestAskRowText}'";
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(parentGo); }
@@ -290,8 +294,12 @@ public static class DepthLadderE2ERunner
             foreach (var id in new[] { "X.TSE", "Y.TSE" })
             {
                 var ladder = _depthLadders[id] as DepthLadderView;
-                if (ladder.BestBid() != null || ladder.BestAsk() != null || ladder.LastRow() != null)
-                    return "S4: Replay decoded + rendered a board for " + id + " (the !isLive skip is broken)";
+                // S8 #161 (findings 0120): the legacy `BestBid()/BestAsk()/LastRow() != null` seam is
+                // replaced by HasDepth check on CurrentSnapshot. Build calls Render(Empty) once → that
+                // bumps RebuildCount to 1 (HasDepth=false). If the Replay drive ALSO called Render on a
+                // real board, RebuildCount would have advanced AND CurrentSnapshot.HasDepth=true.
+                if (ladder.CurrentSnapshot.HasDepth)
+                    return "S4: Replay decoded + rendered a board for " + id + " (CurrentSnapshot HasDepth=true — the !isLive skip is broken)";
             }
             return null;
         }
@@ -313,12 +321,14 @@ public static class DepthLadderE2ERunner
         _render.Invoke(_root, new object[] { PAYLOAD_A });
 
         var lx = _depthLadders["X.TSE"] as DepthLadderView;
-        if (lx.BestAsk() == null || lx.BestBid() == null) return "S5: X board not rendered (best bid/ask null)";
-        if (lx.LastRow() == null) return "S5: X LAST row missing";
-        if (lx.LastRow().text != "LAST 105.00") return "S5: X LAST not from per_instrument price (got '" + lx.LastRow().text + "')";
+        if (lx.BestAskRowText == null || lx.BestBidRowText == null) return "S5: X board not rendered (best bid/ask row text null)";
+        if (lx.LastRowText == null) return "S5: X LAST row missing";
+        if (lx.LastRowText != "LAST 105.00") return "S5: X LAST not from per_instrument price (got '" + lx.LastRowText + "')";
 
         var ly = _depthLadders["Y.TSE"] as DepthLadderView;
-        if (ly.BestAsk() != null || ly.BestBid() != null || ly.LastRow() != null)
+        // Y has no depth → placeholder mode; BestBidRowText / BestAskRowText / LastRowText all null
+        // (CurrentSnapshot.HasDepth=false guard in the getters).
+        if (ly.CurrentSnapshot.HasDepth)
             return "S5: Y (no depth) must be a placeholder — X's board leaked to Y (single-global regression)";
         return null;
     }
@@ -336,20 +346,56 @@ public static class DepthLadderE2ERunner
     static string Section6_SignatureEarlyOut()
     {
         var lx = _depthLadders["X.TSE"] as DepthLadderView;
-        const string sentinel = "SENTINEL-STALE";
-        lx.LastRow().text = sentinel;
+        // S8 #161 migration: the legacy sentinel-on-Text seam is replaced by RebuildCount. The root
+        // computes DepthSignature and either calls ladder.Render (bumps RebuildCount) or skips. We
+        // baseline the count, push PAYLOAD_A again (unchanged sig → skip), then PAYLOAD_C (ts-only
+        // diff → still skip since DepthSignature excludes timestamp), then PAYLOAD_B (price diff → real
+        // rebuild). The B step also verifies LastRowText is the new "LAST 106.00".
+        int baselineRC = lx.RebuildCount;
 
         _render.Invoke(_root, new object[] { PAYLOAD_A });   // unchanged -> signature match -> skip rebuild
-        if (lx.LastRow() == null || lx.LastRow().text != sentinel)
-            return $"S6: unchanged board must skip the 21-row rebuild (sentinel overwritten -> early-out gone), got '{lx.LastRow()?.text}'";
+        if (lx.RebuildCount != baselineRC)
+            return $"S6: unchanged board must skip the 21-row rebuild (RebuildCount went up by {lx.RebuildCount - baselineRC} → root early-out gone)";
 
         _render.Invoke(_root, new object[] { PAYLOAD_C });   // ONLY timestamp drifted -> signature excludes it -> still skip
-        if (lx.LastRow() == null || lx.LastRow().text != sentinel)
-            return $"S6: a timestamp-only drift must STILL skip (DepthSignature excludes TimestampMs) — sentinel overwritten => ts leaked into the signature, got '{lx.LastRow()?.text}'";
+        if (lx.RebuildCount != baselineRC)
+            return $"S6: a timestamp-only drift must STILL skip (DepthSignature excludes TimestampMs) — RebuildCount advanced by {lx.RebuildCount - baselineRC} => ts leaked into the signature";
 
         _render.Invoke(_root, new object[] { PAYLOAD_B });   // price drift -> re-render
-        if (lx.LastRow() == null || lx.LastRow().text != "LAST 106.00")
-            return $"S6: price drift must re-render the board (got '{lx.LastRow()?.text}', expected 'LAST 106.00')";
+        if (lx.RebuildCount == baselineRC)
+            return "S6: price drift must re-render the board (RebuildCount unchanged → signature is over-eager)";
+        if (lx.LastRowText != "LAST 106.00")
+            return $"S6: price drift re-render wrong (got LastRowText='{lx.LastRowText}', expected 'LAST 106.00')";
+        return null;
+    }
+
+    // ── 7. S8 #161 / findings 0120 D-9: Mesh widget invariants (LADDER-RENDER-01 / LADDER-RENDER-02). ──
+    // The new MaskableGraphic ladder reports RowCount=21 when HasDepth, RowCount=1 when placeholder.
+    // The 21 per-side alpha bg quads (10 ask + LAST + 10 bid) and the placeholder bg are emitted into
+    // ONE Mesh batch — RebuildCount advances on each effective Render call, which means OnPopulateMesh
+    // gets dirtied. Drawcall=1 itself is implied by single-batch architecture (no separate Image
+    // GameObjects per row anymore — verified structurally by RowCount being a Mesh-reported count).
+    static string Section7_LadderMesh()
+    {
+        // LADDER-RENDER-01: HasDepth -> RowCount==21.
+        var lx = _depthLadders["X.TSE"] as DepthLadderView;
+        if (!lx.CurrentSnapshot.HasDepth)
+            return "S7 LADDER-RENDER-01: precondition — X must have a HasDepth snapshot after S5's render";
+        if (lx.RowCount != 21)
+            return $"S7 LADDER-RENDER-01: HasDepth ladder RowCount={lx.RowCount}, want 21 (10 ask + LAST + 10 bid)";
+
+        // LADDER-RENDER-02: !HasDepth -> RowCount==1 placeholder.
+        var ly = _depthLadders["Y.TSE"] as DepthLadderView;
+        if (ly.CurrentSnapshot.HasDepth)
+            return "S7 LADDER-RENDER-02: precondition — Y must be placeholder (no depth) after S5";
+        if (ly.RowCount != 1)
+            return $"S7 LADDER-RENDER-02: placeholder ladder RowCount={ly.RowCount}, want 1 (single \"no board\" row)";
+
+        // Single-source Bid/Ask via ChartPalette (LADDER-PALETTE-01 also gated by ThemeProbe Section 4c).
+        if (lx.BestBidColor != ChartPalette.Bullish())
+            return "S7 LADDER-PALETTE-01: BestBidColor != ChartPalette.Bullish() — direct hakoniwa_up read regression";
+        if (lx.BestAskColor != ChartPalette.Bearish())
+            return "S7 LADDER-PALETTE-01: BestAskColor != ChartPalette.Bearish()";
         return null;
     }
 }

@@ -273,19 +273,12 @@ public static class ThemeProbe
         var harness = mGo.AddComponent<ThemeHitlHarness>();
         harness.BuildMontage(mGo.GetComponent<RectTransform>());
         var d = Theme.Dark();
-        // S1 #155 (findings 0119 D-8): ChartView's chart_bg / candle_up / candle_down are Color seams
-        // on the MaskableGraphic widget itself, not Graphic samples — query the new API directly.
-        // DepthLadderView still ships its #54 Text/Image API until S8 #161 (findings 0120) migrates it
-        // to Color seams, so samples["ladder_*"] stays.
-        var ladderBid = harness.Samples["ladder_bid"];   // #54: best-bid row Text (production)
-        var ladderAsk = harness.Samples["ladder_ask"];   // #54: best-ask row Text (production)
-        var ladderLast = harness.Samples["ladder_last"]; // #54 follow-up: TTWR LAST row Text (production)
-        // Guard BEFORE the .color reads: True() only records a fail (non-aborting), so without these
-        // short-circuits a null sample would NRE and crash the whole gate instead of failing cleanly.
+        // S1 #155 + S8 #161 (findings 0119 D-8 + 0120 D-13/D-14): ChartView + DepthLadderView color
+        // seams are Color properties on the MaskableGraphic widgets, queried via harness.ChartView /
+        // harness.LadderView directly (no Graphic samples). ChartPalette guarantees Bid/Ask single-source
+        // so Bid == ChartView.BULLISH == LADDER-PALETTE-01 invariant.
         True(harness.ChartView != null, "harness exposed the production ChartView (Mesh widget, S1 #155)");
-        True(ladderBid != null, "DepthLadderView produced a best-bid row to sample");
-        True(ladderAsk != null, "DepthLadderView produced a best-ask row to sample");
-        True(ladderLast != null, "DepthLadderView produced a LAST row to sample");
+        True(harness.LadderView != null, "harness exposed the production DepthLadderView (Mesh widget, S8 #161)");
         Eq(harness.ChartView.BackgroundColor, d.colors.hakoniwa_chart_background, "ChartView (production) BackgroundColor == dark hakoniwa_chart_background (findings 0054 + 0119 D-8)");
         Eq(harness.ChartView.FirstCandleColor(true), d.colors.hakoniwa_up, "ChartView (production) FirstCandleColor(true) == hakoniwa_up (findings 0054 P1 + 0119 D-8)");
         Eq(harness.ChartView.FirstCandleColor(false), d.colors.hakoniwa_down, "ChartView (production) FirstCandleColor(false) == hakoniwa_down");
@@ -301,9 +294,13 @@ public static class ThemeProbe
             Eq(title.ChangeText.text, "+5.00%", "ChartView title change% == +5.00% (mock +5% gain)");
             Eq(title.ChangeText.color, d.colors.hakoniwa_up, "ChartView title change% colored hakoniwa_up (gain) under dark");
         }
-        if (ladderBid != null) Eq(ladderBid.color, d.colors.hakoniwa_up, "DepthLadderView (production) ladder_bid == hakoniwa_up (findings 0054 P1)");
-        if (ladderAsk != null) Eq(ladderAsk.color, d.colors.hakoniwa_down, "DepthLadderView (production) ladder_ask == hakoniwa_down");
-        if (ladderLast != null) Eq(ladderLast.color, d.colors.hakoniwa_last, "DepthLadderView (production) ladder_last == hakoniwa_last");
+        Eq(harness.LadderView.BestBidColor, d.colors.hakoniwa_up, "DepthLadderView (production) BestBidColor == hakoniwa_up (findings 0054 P1 + 0120 D-13)");
+        Eq(harness.LadderView.BestAskColor, d.colors.hakoniwa_down, "DepthLadderView (production) BestAskColor == hakoniwa_down");
+        Eq(harness.LadderView.LastRowColor, d.colors.hakoniwa_last, "DepthLadderView (production) LastRowColor == hakoniwa_last");
+        Eq(harness.LadderView.BackgroundColor, d.colors.hakoniwa_chart_background, "DepthLadderView (production) BackgroundColor == hakoniwa_chart_background (single-source with ChartView via ChartPalette)");
+        // LADDER-PALETTE-01: ChartView and DepthLadderView share Bid/Ask via ChartPalette.
+        Eq(harness.LadderView.BestBidColor, harness.ChartView.FirstCandleColor(true), "LADDER-PALETTE-01 dark: ladder Bid == chart Bullish (ChartPalette single-source)");
+        Eq(harness.LadderView.BestAskColor, harness.ChartView.FirstCandleColor(false), "LADDER-PALETTE-01 dark: ladder Ask == chart Bearish");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
         // ladder_bg == hakoniwa_chart_background (findings 0054: chart + ladder share one Hakoniwa-isolated bg role).
@@ -316,7 +313,11 @@ public static class ThemeProbe
         ThemeService.SetTheme(Theme.NonDefault());
         harness.ApplyTheme();
         var nd = ThemeService.Current;
-        Eq(harness.Samples["ladder_bg"].color, nd.colors.hakoniwa_chart_background, "DepthLadderView (production) ladder_bg switched");
+        Eq(harness.LadderView.BackgroundColor, nd.colors.hakoniwa_chart_background, "DepthLadderView (production) BackgroundColor switched (S8 #161)");
+        Eq(harness.LadderView.BestBidColor, nd.colors.hakoniwa_up, "DepthLadderView (production) BestBidColor switched");
+        Eq(harness.LadderView.BestAskColor, nd.colors.hakoniwa_down, "DepthLadderView (production) BestAskColor switched");
+        Eq(harness.LadderView.LastRowColor, nd.colors.hakoniwa_last, "DepthLadderView (production) LastRowColor switched");
+        Eq(harness.LadderView.BestBidColor, harness.ChartView.FirstCandleColor(true), "LADDER-PALETTE-01 nondefault: ladder Bid still == chart Bullish after switch");
         Eq(harness.Samples["editor_bg"].color, nd.colors.background, "montage editor_bg switched");
         Eq(harness.Samples["accents_bg"].color, nd.colors.surface_background, "montage accents_bg switched");
         Eq(harness.Samples["code_text"].color, nd.colors.text, "montage code_text switched");
@@ -325,9 +326,7 @@ public static class ThemeProbe
         Eq(harness.ChartView.FirstCandleColor(false), nd.colors.hakoniwa_down, "ChartView (production) FirstCandleColor(false) switched");
         // title change% color must ALSO follow the switch (gain stays long, now NonDefault's long) (#53).
         if (title != null) Eq(title.ChangeText.color, nd.colors.hakoniwa_up, "ChartView title change% recolors on switch");
-        if (ladderBid != null) Eq(ladderBid.color, nd.colors.hakoniwa_up, "DepthLadderView (production) ladder_bid switched");
-        if (ladderAsk != null) Eq(ladderAsk.color, nd.colors.hakoniwa_down, "DepthLadderView (production) ladder_ask switched");
-        if (ladderLast != null) Eq(ladderLast.color, nd.colors.hakoniwa_last, "DepthLadderView (production) ladder_last switched");
+        // (ladder_bid/ask/last switched assertions moved to the LadderView.Color reads above)
         Eq(harness.Samples["accent_editor"].color, nd.players.Get(0), "montage accent_editor switched");
         Eq(harness.Samples["accent_order"].color, nd.players.Get(2), "montage accent_order switched");
         Eq(harness.SyntaxEffect.keyword, nd.syntax.keyword, "montage syntax keyword switched");

@@ -28,6 +28,7 @@ public class ThemeHitlHarness : MonoBehaviour
     ScenarioStartupTile _tile;
     PythonSyntaxMeshEffect _syntax;
     ChartView _chartView;   // #53: the REAL production candlestick part (was a fake swatch pre-#53)
+    DepthLadderView _ladderView;   // #54 → S8 #161: production Mesh ladder; Color seam via LadderView property.
     Image _scenarioPanelImg;   // #137 review HIGH 2: scenario column panel face (was unpainted Unity-white)
     readonly Dictionary<string, Graphic> _samples = new Dictionary<string, Graphic>();
     bool _alt; // false = dark, true = NonDefault
@@ -35,7 +36,8 @@ public class ThemeHitlHarness : MonoBehaviour
     // For ThemeProbe: the montage's own direct graphics keyed by semantic role.
     public IReadOnlyDictionary<string, Graphic> Samples => _samples;
     public PythonSyntaxMeshEffect SyntaxEffect => _syntax;
-    public ChartView ChartView => _chartView;   // #53: lets ThemeProbe value-assert the title bar
+    public ChartView ChartView => _chartView;   // #53→S1 #155: lets ThemeProbe value-assert the title bar + Color API
+    public DepthLadderView LadderView => _ladderView;   // S8 #161: Color seam (BestBidColor / BestAskColor / etc)
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     static void AutoBootstrap()
@@ -122,13 +124,11 @@ public class ThemeHitlHarness : MonoBehaviour
         ladderArea.SetParent(parent, false);
         ladderArea.anchorMin = new Vector2(0.36f, 0.30f); ladderArea.anchorMax = new Vector2(1f, 0.53f);
         ladderArea.offsetMin = new Vector2(4, 4); ladderArea.offsetMax = new Vector2(-4, -4);
-        var ladderView = ladderGo.AddComponent<DepthLadderView>();
-        ladderView.Build(ladderArea);
-        ladderView.Render(MockDepth(), lastPrice: 101.45);   // mid → LAST row shows a value (#54 follow-up)
-        _samples["ladder_bg"] = ladderView.Background;
-        _samples["ladder_ask"] = ladderView.BestAsk();
-        _samples["ladder_bid"] = ladderView.BestBid();
-        _samples["ladder_last"] = ladderView.LastRow();      // TTWR LAST row (status.warning)
+        _ladderView = ladderGo.AddComponent<DepthLadderView>();
+        _ladderView.Build(ladderArea);
+        _ladderView.Render(MockDepth(), lastPrice: 101.45);   // mid → LAST row shows a value (#54 follow-up)
+        // S8 #161 (findings 0120 D-9..D-14): ladder samples migrated from Graphic→Color seam.
+        // ThemeProbe reads `harness.LadderView.BestBidColor / BestAskColor / LastRowColor / BackgroundColor`.
 
         // -- editor snippet (bottom-right) — syntax palette + editor bg/text --
         var editorBg = Panel(parent, "editor", new Vector2(0.36f, 0f), new Vector2(0.78f, 0.28f));

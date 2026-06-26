@@ -1,0 +1,289 @@
+# Copyright 2026 Marimo. All rights reserved.
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+import webbrowser
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from shutil import which
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Generic,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
+
+import msgspec
+
+from marimo._runtime.commands import CommandMessage
+from marimo._server.models.models import SuccessResponse
+from marimo._types.ids import ConsumerId
+from marimo._utils.parse_dataclass import parse_raw
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
+    from starlette.datastructures import UploadFile
+    from starlette.requests import Request
+
+    from marimo._server.api.deps import AppStateBase
+    from marimo._session.session import Session
+
+
+async def parse_request(
+    request: Request, cls: type[T], allow_unknown_keys: bool = False
+) -> T:
+    """Parse the request body as a dataclass of type `cls`"""
+    return parse_raw(
+        await request.body(), cls=cls, allow_unknown_keys=allow_unknown_keys
+    )
+
+
+S = TypeVar("S", bound=msgspec.Struct)
+
+
+@dataclass
+class MultipartRequest(Generic[S]):
+    """Parsed multipart body. `files` holds un-read `UploadFile` handles
+    so callers can stream large parts instead of buffering."""
+
+    body: S
+    files: dict[str, UploadFile]
+
+
+@asynccontextmanager
+async def parse_multipart_request(
+    request: Request, cls: type[S]
+) -> AsyncIterator[MultipartRequest[S]]:
+    """Parse a multipart/form-data body into a msgspec.Struct + uploads.
+
+    Must be used as an async context manager: `UploadFile` parts stay
+    readable for the body of the `async with`, and their spooled temp
+    files are closed on exit.
+
+    Raises msgspec.ValidationError if required string fields are missing
+    or invalid.
+    """
+    # Lazy import so this module stays import-safe under pyodide.
+    from starlette.datastructures import UploadFile
+
+    async with request.form() as form:
+        string_payload: dict[str, Any] = {}
+        files: dict[str, UploadFile] = {}
+        for key, value in form.multi_items():
+            if isinstance(value, UploadFile):
+                files[key] = value
+            elif isinstance(value, str):
+                string_payload[key] = value
+        body = msgspec.convert(string_payload, cls, strict=False)
+        yield MultipartRequest(body=body, files=files)
+
+
+@runtime_checkable
+class RequestAsCommand(Protocol):
+    """Protocol for requests that can be converted to commands."""
+
+    def as_command(self) -> CommandMessage: ...
+
+
+async def dispatch_control_request(
+    request: Request,
+    cls: type[CommandMessage] | CommandMessage,
+) -> SuccessResponse:
+    """
+    Parse a request and dispatch it to the current session.
+    """
+    from marimo._server.api.deps import AppState
+
+    app_state = AppState(request)
+    if isinstance(cls, type):
+        body = await parse_request(request, cls)
+    else:
+        body = cls
+    if isinstance(body, RequestAsCommand):
+        body = body.as_command()
+    app_state.require_current_session().put_control_request(
+        body,
+        from_consumer_id=ConsumerId(app_state.require_current_session_id()),
+    )
+    return SuccessResponse()
+
+
+def pretty_host(host: str, port: int) -> str:
+    """Replace loopback addresses with 'localhost' for display.
+
+    Uses ipaddress for a reliable cross-platform loopback check (covers
+    127.0.0.1, ::1, and the full 127.0.0.0/8 range).  Falls back to
+    socket.getnameinfo only for non-IP hosts.  getnameinfo is skipped
+    for raw IP addresses because it can hang on Windows/CI for
+    link-local IPv6.
+    """
+    import ipaddress
+    import socket
+
+    try:
+        if ipaddress.ip_address(host).is_loopback:
+            return "localhost"
+    except ValueError:
+        # Not a valid IP literal — might be a hostname; try getnameinfo
+        try:
+            if (
+                socket.getnameinfo((host, port), socket.NI_NOFQDN)[0]
+                == "localhost"
+            ):
+                return "localhost"
+        except Exception:
+            pass
+    return host
+
+
+def format_url_host(
+    host: str,
+    port: int,
+    *,
+    route_bind_all_to_loopback: bool = False,
+) -> str:
+    """Normalize `host` for use in a URL authority.
+
+    Transforms (in order):
+
+    1. Strip user-supplied brackets (`[::1]` -> `::1`).
+    2. Drop IPv6 zone IDs (`fe80::1%eth0` -> `fe80::1`); zone IDs
+       are interface-specific and not valid in URLs. (Must happen
+       before :func:`pretty_host` — zone IDs can cause getnameinfo
+       to hang on Windows/CI.)
+    3. Replace loopback addresses with `"localhost"`.
+    4. If `route_bind_all_to_loopback`, replace the bind-all
+       sentinels `0.0.0.0` / `::` with `"localhost"` so internal
+       callback URLs reach a routable target (the bind-all addresses
+       are not valid destinations for an HTTP client / Playwright).
+       Display URLs leave them alone — the user knows what they
+       configured.
+    5. Wrap bare IPv6 literals in brackets per RFC 3986.
+    """
+    host = host.strip("[]").split("%")[0]
+    host = pretty_host(host, port)
+    if route_bind_all_to_loopback and host in {"0.0.0.0", "::"}:
+        host = "localhost"
+    return f"[{host}]" if ":" in host else host
+
+
+def get_code_mode_credentials(
+    app_state: AppStateBase, request: Request
+) -> tuple[str, str]:
+    """Return `(server_url, auth_token)` for code-mode tools that
+    call back into this marimo server (e.g. `ctx.screenshot()`
+    driving Playwright against the running notebook UI).
+
+    The URL is built from the server's configured `host`/`port`
+    rather than the request's `Host` header so a spoofed header
+    can't redirect the auth token to an attacker-controlled URL.
+    `host` is also normalized for URL safety (IPv6 bracketing, zone-ID
+    stripping) and for routability (bind-all addresses mapped to
+    `localhost`) so the callback actually reaches the server.
+    """
+    auth_token = str(app_state.session_manager.auth_token)
+    base_url = app_state.base_url.rstrip("/")
+    scheme = request.url.scheme or "http"
+    url_host = format_url_host(
+        app_state.host, app_state.port, route_bind_all_to_loopback=True
+    )
+    server_url = f"{scheme}://{url_host}:{app_state.port}{base_url}"
+    return server_url, auth_token
+
+
+def parse_title(filepath: str | None) -> str:
+    """
+    Create a title from a filename.
+    """
+    if filepath is None:
+        return "marimo"
+
+    # filename is used as title, except basename and suffix are
+    # stripped and underscores are replaced with spaces
+    return Path(filepath).stem.replace("_", " ")
+
+
+def open_url_in_browser(browser: str, url: str) -> None:
+    """
+    Open a browser to the given URL.
+    """
+    if which("xdg-open") is not None and browser == "default":
+        if (
+            sys.platform == "win32"
+            or sys.platform == "cygwin"
+            or sys.implementation.name == "graalpy"
+        ):
+            preexec_fn = None
+        else:
+            preexec_fn = os.setpgrp
+        subprocess.Popen(
+            ["xdg-open", url],
+            # don't forward signals: ctrl-c shouldn't kill the browser
+            # TODO: test/workaround on windows
+            preexec_fn=preexec_fn,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.STDOUT,
+        )
+    else:
+        if browser == "default":
+            webbrowser.open(url)
+        else:
+            webbrowser.get(browser).open(url)
+
+
+T = TypeVar("T")
+
+
+async def install_packages_on_server(
+    manager: str,
+    versions: dict[str, str],
+) -> None:
+    """Install packages into the server's own Python environment.
+
+    Used when the server itself needs a package (e.g. nbformat for
+    IPYNB auto-export when running with --sandbox).
+    """
+    import sys
+
+    from marimo._runtime.packages.package_managers import (
+        create_package_manager,
+    )
+
+    pkg_manager = create_package_manager(manager, python_exe=sys.executable)
+    if not pkg_manager.is_manager_installed():
+        pkg_manager.alert_not_installed()
+        return
+    for pkg, version in versions.items():
+        await pkg_manager.install(pkg, version=version or None)
+
+
+def notify_server_missing_packages(
+    session: Session | None,
+    session_id: str | None,
+    packages: list[str],
+) -> None:
+    """Send a missing-package alert for a server-side package.
+
+    Uses isolated=True so the install button always appears regardless of
+    whether the server is in a virtual environment.
+    """
+    if session_id is None or session is None:
+        return
+    from marimo._messaging.notification import MissingPackageAlertNotification
+    from marimo._session.utils import send_message_to_consumer
+
+    send_message_to_consumer(
+        session=session,
+        operation=MissingPackageAlertNotification(
+            packages=packages,
+            isolated=True,
+            source="server",
+        ),
+        consumer_id=ConsumerId(session_id),
+    )

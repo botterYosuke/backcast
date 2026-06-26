@@ -1,0 +1,26 @@
+/* Copyright 2026 Marimo. All rights reserved. */
+/* oxlint-disable typescript/no-explicit-any */
+declare module "*.svg" {
+  const content: string | undefined;
+  export default content;
+}
+
+// Stricter lib types
+interface Body {
+  json<T = unknown>(): Promise<T>;
+}
+
+// Stricter lib types
+interface JSON {
+  parse(
+    text: string,
+    reviver?: (this: any, key: string, value: any) => any,
+  ): unknown;
+
+  rawJSON(value: string): unknown;
+}
+
+// Improve type inference for Array.filter with BooleanConstructor
+interface Array<T> {
+  filter(predicate: BooleanConstructor): NonNullable<T>[];
+}

@@ -1,0 +1,252 @@
+---
+description: "Run marimo notebooks entirely in the browser with WebAssembly. No backend required. Share and embed interactive notebooks anywhere."
+---
+
+# WebAssembly Notebooks
+
+marimo lets you execute notebooks _entirely in the browser_,
+without a backend executing Python. marimo notebooks that
+run entirely in the browser are called WebAssembly notebooks, or WASM notebooks
+for short.
+
+!!! tip "Check for WebAssembly compatibility"
+    Not all notebooks are compatible with WebAssembly. If you use coding agents
+    like Claude Code, you can use our [official skills](generate_with_ai/skills.md)
+    to automatically check for WebAssembly compatibility of your notebooks.
+
+!!! tip "Sharing interactive previews of GitHub notebooks"
+    Read the [molab docs](molab.md) to learn how to share WebAssembly previews
+    of notebooks hosted on GitHub, and how to embed WebAssembly notebooks in other
+    webpages such as documentation.
+
+WASM notebooks have three benefits compared to notebooks hosted using a
+traditional client-server model. WASM notebooks:
+
+1. eliminate the need to install Python, making scientific computing accessible;
+2. eliminate the cost and complexity of deploying backend infrastructure, making it easy to share notebooks;
+3. eliminate network requests to a remote Python runner, making development feel snappy.
+
+!!! question "When should I use WASM notebooks?"
+
+    WASM notebooks are excellent for sharing your work, quickly experimenting
+    with code and models, doing lightweight data exploration, authoring blog
+    posts, tutorials, and educational materials, and even building tools. For
+    notebooks that do heavy computation, [use marimo
+    ](../getting_started/index.md) on your own machine/server or on [molab](https://molab.marimo.io/notebooks).
+
+**Try it!** Try editing the below notebook (your browser, not a backend server, is executing it!)
+
+/// marimo-embed
+    size: large
+
+```python
+@app.cell
+async def __():
+    return
+```
+
+///
+
+
+_This feature is powered by [Pyodide](https://pyodide.org), a port
+of Python to WebAssembly that enables browsers to run Python code._
+
+## Creating WASM notebooks
+
+marimo provides three ways to create and share WASM notebooks:
+
+1. [molab](molab.md). Our free cloud-hosted marimo notebook service.
+   Append `/wasm` to [GitHub previews](molab.md#mirror-notebooks-from-github) to create interactive previews
+   of notebooks hosted on GitHub. molab also allows embedding WebAssembly notebooks in
+   other [webpages](publishing/embedding.md) (we do this throughout these docs).
+2. [Export to WASM HTML](exporting/webassembly_html.md),
+   which you can host on GitHub Pages or self-host. You can also use [a
+GitHub action](publishing/github.md#publish-using-github-actions).
+3. Try our ephemeral [WebAssembly playground](https://marimo.app);
+unlike molab, notebooks created at the playground are not saved.
+
+## Packages
+
+!!! tip "Use `--sandbox` for seamless package installation"
+
+    If you're developing notebooks locally that you plan to share as WASM
+    notebooks, create them with `marimo edit --sandbox notebook.py`. This
+    inlines your package dependencies into the notebook file, ensuring they
+    are seamlessly installed in our WebAssembly environment. See
+    [package management](editor_features/package_management.md) for more details.
+
+!!! tip "Rendering performance"
+
+    To make sure markdown and other elements render quickly: make sure to put
+    `import marimo as mo` in its own cell, with no other lines of code.
+
+WASM notebooks come with many packages pre-installed, including
+NumPy, SciPy, scikit-learn, pandas, and matplotlib; see [Pyodide's
+documentation](https://pyodide.org/en/stable/usage/packages-in-pyodide.html)
+for a full list.
+
+If you attempt to import a package that is not installed, marimo will
+attempt to automatically install it for you. To manually install packages, use
+[`micropip`](https://micropip.pyodide.org/en/stable/project/usage.html):
+
+In one cell, import micropip:
+
+```python
+import micropip
+```
+
+In the next cell, install packages:
+
+```python
+await micropip.install("plotly")
+import plotly
+```
+
+### Supported packages
+
+All packages with pure Python wheels on PyPI are supported, as well as
+additional packages like NumPy, SciPy, scikit-learn, duckdb, polars, and more.
+For a full list of supported packages, see [Pyodide's
+documentation on supported packages.](https://pyodide.org/en/stable/usage/packages-in-pyodide.html)
+
+If you want a package to be supported, consider [filing an issue](https://github.com/pyodide/pyodide/issues/new?assignees=&labels=new+package+request&projects=&template=package_request.md&title=).
+
+### Platform-specific dependencies (PEP 508)
+
+Notebooks that run both locally and in the browser can use [PEP
+508](https://peps.python.org/pep-0508/) **environment markers** in PEP 723 script
+metadata to declare different dependencies per platform. On Pyodide,
+`sys.platform` is `"emscripten"` ([PEP 776](https://peps.python.org/pep-0776/)).
+
+**Exclude a package from WebAssembly** (install it locally only):
+
+```python
+# /// script
+# dependencies = [
+#     "pandas>=2.0",
+#     "torch>=2.0; sys_platform != 'emscripten'",
+# ]
+# ///
+```
+
+**Include a package only in WebAssembly:**
+
+```python
+# /// script
+# dependencies = [
+#     "pyodide-http; sys_platform == 'emscripten'",
+# ]
+# ///
+```
+
+marimo respects these markers when pre-installing packages in the browser,
+when exporting to [WebAssembly HTML](exporting/webassembly_html.md), and in
+the MW003 [lint rule](lint_rules/rules/incompatible_package.md) (native-only
+deps marked `sys_platform != 'emscripten'` are not flagged for WASM).
+
+uv and pip evaluate markers when installing with `--sandbox`, so the same
+metadata works for local sandboxes and WASM exports. See also
+[Inlining dependencies](package_management/inlining_dependencies.md#platform-specific-dependencies-pep-508).
+
+## Including data
+
+**For notebooks exported to WASM HTML.**
+To include data files in notebooks [exported to WASM
+HTML](exporting/webassembly_html.md), place them
+in a `public/` folder in the same directory as your notebook. When you
+export to WASM HTML, the public folder will be copied to the export directory.
+
+In order to access data both locally and when an exported notebook runs via
+WebAssembly (e.g., hosted on GitHub Pages), use
+[`mo.notebook_location()`][marimo.notebook_location] to construct the path to
+your data:
+
+```python
+import polars as pl
+
+path_to_csv = mo.notebook_location() / "public" / "data.csv"
+df = pl.read_csv(str(path_to_csv))
+df.head()
+```
+
+**Fetching data files from the web.**
+Instead of bundling data files with your notebook, you can host data files on
+the web and fetch them in your notebook. Depending on where your files are
+hosted, you may need to use a CORS Proxy; see the [Pyodide
+documentation](https://pyodide.org/en/stable/usage/loading-packages.html#installing-wheels-from-arbitrary-urls)
+for more details.
+
+**molab notebooks.** When opening a notebook from GitHub on [molab](molab.md),
+all the files in the GitHub repo are made available to your notebook.
+
+## Detecting WebAssembly
+
+To check if your notebook is running in a WebAssembly environment, use:
+
+```python
+import sys
+
+if sys.platform == "emscripten":
+    # Running in WebAssembly (Pyodide)
+    ...
+else:
+    # Running locally
+    ...
+```
+
+This is useful for branching logic, such as using `micropip` for package
+installation in WASM while using standard imports locally.
+
+## Limitations
+
+While WASM notebooks let you share marimo notebooks seamlessly, they have some
+limitations.
+
+**Packages.** Many but not all packages are supported. All packages with pure
+Python wheels on PyPI are supported, as well as additional packages like NumPy,
+SciPy, scikit-learn, duckdb, polars, and more. For a full list of supported
+packages, see [Pyodide's documentation on supported
+packages.](https://pyodide.org/en/stable/usage/packages-in-pyodide.html)
+
+If you want a package to be supported, consider [filing an
+issue](https://github.com/pyodide/pyodide/issues/new?assignees=&labels=new+package+request&projects=&template=package_request.md&title=).
+
+**PDB.** PDB is not currently supported.
+
+**Concurrency.** WASM notebooks support cooperative adapters for
+`threading.Thread`, `threading.Event`, `threading.local`,
+`concurrent.futures.ThreadPoolExecutor`, `wait`, `as_completed`, and
+process-shaped `multiprocessing.Process`, `Queue`, `SimpleQueue`, `Pool`, and
+`ProcessPoolExecutor`. These adapters run in the browser's Pyodide interpreter.
+They do not create OS threads, shared-memory processes, or true CPU parallelism.
+Blocking waits are bridged through Pyodide's JSPI-backed asyncio loop.
+
+WASM concurrency support has four levels:
+
+- `api-compatible`: the tested Python API shape and result behavior match the
+  local Python contract for that operation.
+- `serialized`: the API shape is available, but work runs one task at a time in
+  the current Pyodide interpreter.
+- `cooperative-only`: waits, cancellation, and termination progress only when
+  Python yields back to the Pyodide event loop. Running Python code is not
+  preempted.
+- `blocked`: marimo rejects the API because the browser cannot provide the
+  native process, synchronization, or shared-memory primitive it requires.
+
+`multiprocessing.Pool.terminate()` cancels queued work, but raises
+`UnsupportedWasmConcurrencyError` when a task is already running.
+Native synchronization and process APIs such as `threading.Lock`, `Condition`,
+`Semaphore`, `Barrier`, `Timer`, `multiprocessing.Pipe`, managers, shared
+memory, and non-`spawn` start methods are unsupported. For CPU-bound parallelism
+or process isolation, use a regular marimo notebook.
+
+**Memory.** WASM notebooks have a memory limit of 2GB; this may be increased
+in the future. If memory consumption is an issue, try offloading memory-intensive
+computations to hosted APIs or precomputing expensive operations.
+
+## Browser support
+
+WASM notebooks are supported in the latest versions of Chrome, Firefox, Edge, and Safari.
+
+Chrome is the recommended browser for WASM notebooks as it seems to have the
+best performance and compatibility.

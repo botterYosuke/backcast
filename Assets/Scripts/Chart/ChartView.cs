@@ -102,11 +102,20 @@ public class ChartView : MaskableGraphic,
     public int LastVolumeBarCount { get; private set; }
     public float LastVolumeAreaHeightPx { get; private set; }
 
-    // S4 #159: CrosshairState lives on ChartView in S4; S9 will hoist ownership to ChartLadderRoot
-    // (parent Component) so DepthLadderView can read hovered_price. The accessor remains here so
-    // the migration is transparent to ChartView callers (PointerMove etc.). S4 observability gates
-    // (CROSSHAIR-01) read these counters.
-    public CrosshairState Crosshair { get; } = new CrosshairState();
+    // S4 #159 + S9 #163 (findings 0120 D-11): CrosshairState was ChartView-owned in S4. S9 hoists
+    // ownership to a sibling-parent `ChartLadderRoot` Component so DepthLadderView can read
+    // hovered_price without a direct ChartView↔Ladder reference. We delegate to the parent root
+    // when one exists; otherwise fall back to a local instance (standalone ChartView e.g. the
+    // ThemeHitlHarness chart_strip keeps working).
+    readonly CrosshairState _localCrosshair = new CrosshairState();
+    public CrosshairState Crosshair
+    {
+        get
+        {
+            var root = GetComponentInParent<ChartLadderRoot>();
+            return root != null ? root.Crosshair : _localCrosshair;
+        }
+    }
     public int LastCrosshairLineCount { get; private set; }
     public int LastLastPriceLineCount { get; private set; }
     Text _crosshairPriceBadge, _crosshairTimeBadge;

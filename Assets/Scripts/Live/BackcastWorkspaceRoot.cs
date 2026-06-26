@@ -914,6 +914,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // claiming the full body width.
     void BuildChartContent(string instrumentId, RectTransform body)
     {
+        // S9 #163 (findings 0120 D-11): hoist CrosshairState out of ChartView so DepthLadderView
+        // can read hovered_price via GetComponentInParent. The Component sits on the WINDOW BODY
+        // (sibling parent of chartArea + ladderArea) so per-window independence is automatic.
+        if (body.GetComponent<ChartLadderRoot>() == null)
+            body.gameObject.AddComponent<ChartLadderRoot>();
         var chartAreaGo = new GameObject("ChartArea", typeof(RectTransform));
         var chartArea = (RectTransform)chartAreaGo.transform;
         chartArea.SetParent(body, false);

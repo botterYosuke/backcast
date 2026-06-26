@@ -66,6 +66,24 @@ public class DepthLadderView : MaskableGraphic
     // gets called at all — when sig matches, Render isn't called and RebuildCount doesn't move.
     public int RebuildCount { get; private set; }
 
+    // ====== S9 #163 (findings 0120 D-12): diff highlight Timers + hover highlight ======
+    //
+    // Per display row (0..20), a `_diffRemainingMs[i]` countdown decays linearly from
+    // DEPTH_DIFF_HIGHLIGHT_MS to 0 and a `_diffTint[i]` Color is the base tint to apply (alpha
+    // scales by remaining/MAX). A non-zero remainingMs → SetVerticesDirty next Update tick.
+    //
+    // Hover (D-11): each Update reads parent ChartLadderRoot.Crosshair.hovered_price and writes a
+    // hover tint to the nearest row's `_rowHighlightTints` slot. The hover layer is REGENERATED
+    // every Update so a hover-exit naturally clears (CrosshairState.hovered_price=null → no row picked).
+
+    public const float MIN_SIZE_DIFF_TO_HIGHLIGHT = 1.0f;
+    public const float DEPTH_DIFF_HIGHLIGHT_MS = 300f;
+    public const double PRICE_KEY_EPSILON = 0.01;
+
+    readonly float[] _diffRemainingMs = new float[TotalRows];
+    readonly Color[] _diffBaseTint = new Color[TotalRows];
+    int _lastHoverRow = -1;
+
     // ---- new public API (findings 0120 D-13) ----
 
     public Color BestBidColor => ChartPalette.Bullish();
@@ -189,6 +207,10 @@ public class DepthLadderView : MaskableGraphic
 
     public void Render(DepthSnapshotView snapshot, double? lastPrice = null)
     {
+        // S9 D-12: compute per-level size diffs against PreviousSnapshot, push fresh diff Timers
+        // BEFORE we overwrite PreviousSnapshot.
+        if (CurrentSnapshot.HasDepth && snapshot.HasDepth)
+            PushDiffTimers(CurrentSnapshot, snapshot);
         PreviousSnapshot = CurrentSnapshot;   // S9 #163 diff base (level-by-level size deltas).
         CurrentSnapshot = snapshot;
         _lastPrice = lastPrice;
@@ -339,6 +361,168 @@ public class DepthLadderView : MaskableGraphic
         v.position = new Vector3(x1, y0); vh.AddVert(v);
         vh.AddTriangle(idx + 0, idx + 1, idx + 2);
         vh.AddTriangle(idx + 0, idx + 2, idx + 3);
+    }
+
+    // ====== S9 #163 chart↔ladder interaction ======
+
+    // Compute size diffs old→new per side, push diff Timers to display rows.
+    void PushDiffTimers(DepthSnapshotView oldSnap, DepthSnapshotView newSnap)
+    {
+        DiffSide(oldSnap.Bids, newSnap.Bids, side: true);    // bid display rows 11..20
+        DiffSide(oldSnap.Asks, newSnap.Asks, side: false);   // ask display rows 0..9
+    }
+
+    void DiffSide(IReadOnlyList<DepthLevelView> oldLevels, IReadOnlyList<DepthLevelView> newLevels, bool side)
+    {
+        if (newLevels == null) return;
+        for (int i = 0; i < newLevels.Count && i < LadderDepth; i++)
+        {
+            var lvl = newLevels[i];
+            double oldSize = FindLevelSize(oldLevels, lvl.Price);
+            double delta = lvl.Size - oldSize;
+            if (System.Math.Abs(delta) < MIN_SIZE_DIFF_TO_HIGHLIGHT) continue;
+            int displayIdx = side ? (LadderDepth + 1 + i) : (LadderDepth - 1 - i);
+            // size up = high-alpha boost in ChartPalette tint; size down = grey.
+            Color baseTint;
+            if (delta > 0)
+            {
+                baseTint = side ? ChartPalette.Bullish() : ChartPalette.Bearish();
+                baseTint.a = 0.5f;
+            }
+            else baseTint = new Color(0.5f, 0.5f, 0.5f, 0.5f);
+            _diffBaseTint[displayIdx] = baseTint;
+            _diffRemainingMs[displayIdx] = DEPTH_DIFF_HIGHLIGHT_MS;
+        }
+        // Removed levels (in oldLevels but absent from new) → tint as size-decrease at the old level's
+        // display position. flowsurface skill caveat #5: keep these visible briefly.
+        if (oldLevels != null)
+        {
+            for (int i = 0; i < oldLevels.Count && i < LadderDepth; i++)
+            {
+                var lvl = oldLevels[i];
+                if (FindLevelSize(newLevels, lvl.Price) > 0) continue;   // still present (size kept or changed)
+                int displayIdx = side ? (LadderDepth + 1 + i) : (LadderDepth - 1 - i);
+                _diffBaseTint[displayIdx] = new Color(0.5f, 0.5f, 0.5f, 0.5f);
+                _diffRemainingMs[displayIdx] = DEPTH_DIFF_HIGHLIGHT_MS;
+            }
+        }
+    }
+
+    // Price-key match — flowsurface skill caveat #5/#7: same level identified by price proximity,
+    // NOT array index (best can tick up/down without breaking diff correctness).
+    static double FindLevelSize(IReadOnlyList<DepthLevelView> levels, double price)
+    {
+        if (levels == null) return 0;
+        for (int i = 0; i < levels.Count; i++)
+            if (System.Math.Abs(levels[i].Price - price) < PRICE_KEY_EPSILON) return levels[i].Size;
+        return 0;
+    }
+
+    void Update()
+    {
+        bool dirty = false;
+        float dtMs = Time.unscaledDeltaTime * 1000f;
+        for (int i = 0; i < TotalRows; i++)
+        {
+            if (_diffRemainingMs[i] > 0)
+            {
+                _diffRemainingMs[i] -= dtMs;
+                if (_diffRemainingMs[i] < 0) _diffRemainingMs[i] = 0;
+                dirty = true;
+            }
+        }
+        // Hover layer is regenerated every Update from parent's CrosshairState.hovered_price.
+        var parentRoot = GetComponentInParent<ChartLadderRoot>();
+        double? hp = parentRoot?.Crosshair.hovered_price;
+        int hoverRow = (hp.HasValue && CurrentSnapshot.HasDepth) ? NearestRow(hp.Value) : -1;
+        if (hoverRow != _lastHoverRow) { _lastHoverRow = hoverRow; dirty = true; }
+        if (dirty)
+        {
+            CompositeRowHighlights(hoverRow);
+            SetVerticesDirty();
+        }
+    }
+
+    void CompositeRowHighlights(int hoverRow)
+    {
+        for (int i = 0; i < TotalRows; i++)
+        {
+            Color sum = Color.clear;
+            if (_diffRemainingMs[i] > 0)
+            {
+                Color t = _diffBaseTint[i];
+                t.a *= _diffRemainingMs[i] / DEPTH_DIFF_HIGHLIGHT_MS;
+                sum = t;
+            }
+            if (i == hoverRow)
+            {
+                // Hover tint sits ON TOP of diff tint — additive a small offset using ChartPalette accent.
+                Color hov = ThemeService.Current.colors.hakoniwa_text;
+                hov.a = 0.18f;
+                sum = sum.a > 0 ? new Color(
+                    Mathf.Lerp(sum.r, hov.r, hov.a),
+                    Mathf.Lerp(sum.g, hov.g, hov.a),
+                    Mathf.Lerp(sum.b, hov.b, hov.a),
+                    Mathf.Min(1f, sum.a + hov.a)) : hov;
+            }
+            _rowHighlightTints[i] = sum;
+        }
+    }
+
+    int NearestRow(double price)
+    {
+        if (!CurrentSnapshot.HasDepth) return -1;
+        // Check ask block (asks[0] = best, at displayIdx LadderDepth-1; asks[9] at 0)
+        int bestRow = -1; double bestDelta = double.MaxValue;
+        if (CurrentSnapshot.Asks != null)
+        {
+            for (int i = 0; i < CurrentSnapshot.Asks.Count && i < LadderDepth; i++)
+            {
+                double d = System.Math.Abs(CurrentSnapshot.Asks[i].Price - price);
+                int displayIdx = LadderDepth - 1 - i;
+                if (d < bestDelta) { bestDelta = d; bestRow = displayIdx; }
+            }
+        }
+        if (_lastPrice.HasValue)
+        {
+            double d = System.Math.Abs(_lastPrice.Value - price);
+            if (d < bestDelta) { bestDelta = d; bestRow = LadderDepth; }
+        }
+        if (CurrentSnapshot.Bids != null)
+        {
+            for (int i = 0; i < CurrentSnapshot.Bids.Count && i < LadderDepth; i++)
+            {
+                double d = System.Math.Abs(CurrentSnapshot.Bids[i].Price - price);
+                int displayIdx = LadderDepth + 1 + i;
+                if (d < bestDelta) { bestDelta = d; bestRow = displayIdx; }
+            }
+        }
+        return bestRow;
+    }
+
+    // Public hook for headless E2E (HOVER-LADDER-01 / LADDER-DIFF-01/02/03) to drive the per-frame
+    // tick without needing MonoBehaviour.Update.
+    public void TickForTest(float dtMs)
+    {
+        bool dirty = false;
+        for (int i = 0; i < TotalRows; i++)
+        {
+            if (_diffRemainingMs[i] > 0)
+            {
+                _diffRemainingMs[i] -= dtMs;
+                if (_diffRemainingMs[i] < 0) _diffRemainingMs[i] = 0;
+                dirty = true;
+            }
+        }
+        var parentRoot = GetComponentInParent<ChartLadderRoot>();
+        double? hp = parentRoot?.Crosshair.hovered_price;
+        int hoverRow = (hp.HasValue && CurrentSnapshot.HasDepth) ? NearestRow(hp.Value) : -1;
+        if (hoverRow != _lastHoverRow) { _lastHoverRow = hoverRow; dirty = true; }
+        if (dirty)
+        {
+            CompositeRowHighlights(hoverRow);
+            SetVerticesDirty();
+        }
     }
 }
 

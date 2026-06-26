@@ -1036,6 +1036,22 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             if (_isOwner && _host.ServerReady) _notebookRun?.RunCell(regionId);
         });
+
+        // #164 (findings 0122): Shift/Ctrl/Cmd+Return (and the numpad Enter of each) in the focused code
+        // cell RUNS it exactly as clicking ▶. The editor's IMGUI key pump (StrategyInputField) fires
+        // RunShortcutRequested → the view relays it → here we click the SAME ▶ button. Routing through
+        // onClick.Invoke() (not RunCell directly) is what makes the shortcut byte-identical to a click: the
+        // listener above carries the owner/ServerReady gate, and SetCellRunButtonState repoints onClick to
+        // StopRunning while the cell runs — so the shortcut stops a running cell too, with no duplicated
+        // run policy (D1/D4). Assigned (not +=), mirroring EditCommitted, so this stays idempotent like the
+        // rest of WireCellRunButton (re-wiring a region replaces the handler rather than stacking).
+        var view = ViewFor(regionId);
+        if (view != null)
+            view.RunShortcutRequested = () =>
+            {
+                if (_cellRunButtons.TryGetValue(regionId, out var cellBtn) && cellBtn != null)
+                    cellBtn.onClick.Invoke();
+            };
     }
 
     // #95 Phase 4: toggle a running cell's button between ▶ (idle → RunCell) and ■ (running →

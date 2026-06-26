@@ -71,6 +71,16 @@ public class StrategyEditorView : MonoBehaviour
     // when no restage consumer is attached (e.g. an unbound shell before the root wires it).
     public Action EditCommitted;
 
+    // #164 (findings 0122): relays the editing surface's run shortcut (Shift/Ctrl/Cmd+Return / KeypadEnter)
+    // up to the root. StrategyInputField raises RunShortcutRequested from its IMGUI key pump; this view
+    // re-exposes it so BackcastWorkspaceRoot.WireCellRunButton can wire it to the cell's ▶ button
+    // onClick.Invoke() — making the shortcut byte-identical to a click (D4). The view is the relay only:
+    // the detect/suppress/fire logic lives in StrategyInputField, never here (D3 — no second seam). A
+    // plain Action (assigned, not subscribed) mirrors EditCommitted so the root's wiring stays idempotent
+    // (WireCellRunButton's contract — re-wiring replaces rather than stacks N handlers).
+    public Action RunShortcutRequested;
+    StrategyInputField _runShortcutSource;   // the field we subscribed to (kept so OnDestroy can detach)
+
     TMP_InputField _input;      // #119: TMP(SDF) editing surface (was UnityEngine.UI.InputField)
     PythonSyntaxMeshEffect _effect;
     EditHistory _history;
@@ -141,6 +151,12 @@ public class StrategyEditorView : MonoBehaviour
 
         _input.onValueChanged.AddListener(OnValueChanged);
         _input.onEndEdit.AddListener(OnEditCommitted);   // #95 P6 S4: blur -> restage (per-cell stale)
+        // #164: relay the editing surface's run shortcut. The real builder makes `input` a
+        // StrategyInputField (the named editing surface); a bare TMP_InputField (no run-shortcut seam)
+        // simply yields no relay source — null-safe.
+        _runShortcutSource = input as StrategyInputField;
+        if (_runShortcutSource != null)
+            _runShortcutSource.RunShortcutRequested += RelayRunShortcut;
         SyncFromCell();   // initial: the bound cell's body, or empty when unbound
 
         ThemeService.Changed += ApplyTheme;
@@ -154,9 +170,14 @@ public class StrategyEditorView : MonoBehaviour
             _input.onValueChanged.RemoveListener(OnValueChanged);
             _input.onEndEdit.RemoveListener(OnEditCommitted);
         }
+        if (_runShortcutSource != null)
+            _runShortcutSource.RunShortcutRequested -= RelayRunShortcut;   // #164: detach the relay
         ThemeService.Changed -= ApplyTheme;
         FreeTexture();   // #95 P6 S5: release the decoded image texture we own
     }
+
+    // #164: the field's key pump fired a run shortcut — re-raise it for the root's WireCellRunButton.
+    void RelayRunShortcut() => RunShortcutRequested?.Invoke();
 
     // (Re)bind this view to a Cell: swap the bound cell, drop history (a different cell's edits are
     // not this cell's undo stack — marimo per-CodeMirror history), and re-sync the surface so nothing

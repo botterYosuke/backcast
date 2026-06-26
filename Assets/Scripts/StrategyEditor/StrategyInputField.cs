@@ -18,6 +18,7 @@
 // characterInfo[i].index IS already the full-source index — the offset mechanism is unneeded
 // (findings 0096 §#119/#120 refinement).
 
+using System;
 using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -169,6 +170,78 @@ public class StrategyInputField : TMP_InputField
         return false;
     }
 
+    // #164 (findings 0122): Shift+Return (and Ctrl/Cmd+Return + each key's numpad Enter) RUNS the focused
+    // code cell — exactly as clicking the cell's ▶ — the Jupyter/marimo cell-execution shortcut. The
+    // newline must NOT be inserted; plain Return (no modifier) stays a newline (findings 0116).
+    //
+    // This rides the SAME IMGUI key-pump seam path 2 owns for Escape (#150 above): the new Input System
+    // forwards the keyboard into the pump base.OnUpdateSelected runs, and for a MultiLineNewline field a
+    // bare/Shift Return is INSERTED as a newline by base.KeyPressed (TMP_InputField.cs:2263). So a run
+    // shortcut would otherwise drop a stray newline. We own the pump (already, for Escape) and SWALLOW the
+    // modified Return before base.KeyPressed sees it (suppressing the newline) while raising
+    // RunShortcutRequested — relayed by StrategyEditorView to BackcastWorkspaceRoot.WireCellRunButton,
+    // which calls the cell's ▶ button onClick.Invoke() (D4). Routing through the button's own onClick — a
+    // self-toggle that WireCellRunButton/SetCellRunButtonState point at RunCell↔StopRunning — makes the
+    // shortcut byte-identical to a click (respects the owner/ServerReady run gate, stops a running cell)
+    // with NO duplicated run policy (D1). Detection + newline-suppression + firing all live HERE, in the
+    // one pump (D3) — not split with StrategyEditorView.Update()'s Undo/Redo poll (Ctrl-held keys are
+    // non-printing in the pump, so Undo/Redo needs no pump ownership; Shift+Return DOES print, so it does).
+    //
+    // RunShortcutConsumedCount is the AFK-observable seam (STRATEGY-63): -batchmode -nographics has no
+    // IMGUI key pump / focus to drive a real OnUpdateSelected, so the gate feeds synthetic Events straight
+    // into TryConsumeKeyPumpRun and asserts the swallow/fire/latch decisions. The real keystroke→backtest
+    // path stays HITL (STRATEGY-18).
+    public event Action RunShortcutRequested;
+    public int RunShortcutConsumedCount { get; private set; }
+
+    // D5 debounce: a held Shift+Enter must not "run then immediately stop" — one PHYSICAL press = one
+    // fire. Armed → a modified Return/KeypadEnter KeyDown fires once and disarms; held repeats keep being
+    // swallowed (no newline) but do NOT re-fire; the matching KeyUp re-arms. Starts armed so the first
+    // press fires.
+    bool _runShortcutArmed = true;
+
+    // True (and, when armed, FIRES) iff this key-pump event is a run shortcut we must swallow for the
+    // multiline code editor: a MODIFIED (Shift/Ctrl/Cmd) Return or KeypadEnter KeyDown. Modifier-gated so
+    // plain Return stays a newline (findings 0116); multiline-gated so single-line keeps default behaviour;
+    // Return/KeypadEnter-gated so ordinary typing flows to base.KeyPressed. The matching KeyUp re-arms the
+    // one-press latch and returns false (the pump skips KeyUp anyway). Side-effecting "TryConsume" mirrors
+    // TryConsumeKeyPumpEscape: invoked by the pump below AND directly by the AFK gate.
+    public bool TryConsumeKeyPumpRun(Event e)
+    {
+        if (lineType != LineType.MultiLineNewline || e == null)
+            return false;
+
+        bool isReturn = e.keyCode == KeyCode.Return || e.keyCode == KeyCode.KeypadEnter;
+        if (!isReturn)
+            return false;
+
+        // D5: a physical RELEASE of Return/KeypadEnter re-arms the latch. KeyUp is not itself a run (the
+        // base pump skips KeyUp), so re-arm and return false to let the pump's KeyUp handling proceed.
+        if (e.rawType == EventType.KeyUp)
+        {
+            _runShortcutArmed = true;
+            return false;
+        }
+        if (e.rawType != EventType.KeyDown)
+            return false;
+
+        // plain Return (no modifier) stays a NEWLINE — NOT a run trigger (findings 0116 / D3). Let it fall
+        // through to base.KeyPressed, which inserts the newline for a MultiLineNewline field.
+        bool modified = (e.modifiers & (EventModifiers.Shift | EventModifiers.Control | EventModifiers.Command)) != 0;
+        if (!modified)
+            return false;
+
+        // A MODIFIED Return/KeypadEnter: ALWAYS swallow (suppress the pumped newline even while held), but
+        // FIRE the ▶ only once per physical press (armed). Held repeats keep swallowing without re-firing.
+        if (_runShortcutArmed)
+        {
+            _runShortcutArmed = false;
+            RunShortcutConsumedCount++;
+            RunShortcutRequested?.Invoke();
+        }
+        return true;
+    }
+
     public override void OnUpdateSelected(BaseEventData eventData)
     {
         // Single-line fields: unchanged — Escape SHOULD cancel/blur a search/name field.
@@ -186,6 +259,17 @@ public class StrategyInputField : TMP_InputField
         while (Event.PopEvent(_keyPumpEvent))
         {
             EventType eventType = _keyPumpEvent.rawType;
+
+            // #164 (findings 0122): a modified Return/KeypadEnter KeyDown RUNS the cell (swallowed here so
+            // no newline is inserted, fired once per press); the matching KeyUp re-arms the latch. Handled
+            // BEFORE the KeyUp/KeyDown split so detect+suppress+fire is this one place (D3). Returns false
+            // for plain Return (→ base inserts the newline) and for KeyUp (→ falls to the skip below).
+            if (TryConsumeKeyPumpRun(_keyPumpEvent))
+            {
+                consumedEvent = true;
+                continue;
+            }
+
             if (eventType == EventType.KeyUp)
                 continue;
 

@@ -79,7 +79,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section28_EscapeKeepsEditing(spawned)
                 ?? Section29_EscapeKeyPumpKeepsEditing(spawned)
                 ?? Section30_CaretVisible(spawned)
-                ?? Section31_RichOutputSample(spawned);
+                ?? Section31_RichOutputSample(spawned)
+                ?? Section32_RunShortcut(spawned);
         }
         catch (Exception e)
         {
@@ -175,6 +176,14 @@ public static class StrategyEditorNotebookE2ERunner
                       "mo.ui.slider -> html rich-text fallback all to the rich-text pane, and a self-contained matplotlib " +
                       "image/png into the image codepath; GPU pixel decode is HITL, the production payloads + fixture " +
                       "freshness are pytest test_rich_output_sample.py) " +
+                      "+ #149 caret-visible precondition (STRATEGY-62 / findings 0121: OnEnable sees a non-null " +
+                      "textComponent so TMP would create the caret renderer; textViewport+RectMask2D, explicit " +
+                      "caretWidth + opaque customCaretColor; real caret HITL) " +
+                      "+ #164 run shortcut (STRATEGY-65 / findings 0122: the multiline editor's key pump " +
+                      "SWALLOWS a modified Return/KeypadEnter — Shift/Ctrl/Cmd — suppressing the newline and " +
+                      "firing the ▶ once per press (latch re-arms on KeyUp); plain Return stays a newline; the " +
+                      "fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke(); single-line " +
+                      "never swallows) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1565,6 +1574,219 @@ public static class StrategyEditorNotebookE2ERunner
         public string data;
         public string projection;
         public bool ok;
+    }
+
+    // ======================================================================
+    // 32. Shift+Return RUNS the focused code cell, exactly as clicking ▶ (#164 / findings 0122)
+    // Covers: STRATEGY-65 — the Jupyter/marimo cell-execution shortcut. In the focused MultiLineNewline
+    //         code editor, Shift+Return (and Ctrl/Cmd+Return + each key's numpad Enter) must RUN the cell
+    //         identically to clicking its ▶ button, WITHOUT inserting a newline; plain Return (no modifier)
+    //         stays a newline (findings 0116). The new Input System forwards the keyboard into the IMGUI
+    //         key pump base.OnUpdateSelected runs, where a Shift Return is INSERTED as a newline
+    //         (TMP_InputField.cs:2263) — so StrategyInputField (which already owns the pump for the Escape
+    //         path-2 swallow, #150) swallows a MODIFIED Return/KeypadEnter before base.KeyPressed sees it
+    //         (no newline) and raises RunShortcutRequested, debounced to one fire per physical press
+    //         (re-armed on the matching KeyUp). StrategyEditorView relays it; BackcastWorkspaceRoot.
+    //         WireCellRunButton subscribes and calls the cell's ▶ onClick.Invoke() — byte-identical to a
+    //         click (respects the run gate / self-toggles to StopRunning, no duplicated run policy).
+    //     DETERMINISTIC half: -batchmode -nographics has no IMGUI key pump / focus to drive a real
+    //     OnUpdateSelected (STRATEGY-18), so the gate feeds synthetic Events straight into the production
+    //     swallow/fire predicate TryConsumeKeyPumpRun and asserts: (b) all four modified Return/KeypadEnter
+    //     combos swallow + fire (counter++), (c) plain Return is NOT swallowed (newline) and never fires,
+    //     (d) a held press fires once and re-arms on KeyUp, (e) the fire relays through the REAL view to a
+    //     subscribed ▶ button's onClick.Invoke(), (f) single-line never swallows, and (g) the REAL
+    //     BackcastWorkspaceRoot's WireCellRunButton wiring (composed from the authored scene, S25's harness)
+    //     routes a real Shift+Return through field → view → production assignment → the real cell ▶ — closing
+    //     the (e) hand-mirror gap (a dropped/guarded-out production assignment that (e) cannot see fails (g)).
+    //     The real keystroke→backtest path — and the IMGUI pump actually CALLING the predicate — stay HITL
+    //     (STRATEGY-18; the pump call-site is also structurally guarded by (a2)).
+    // ======================================================================
+
+    // Brace-matched body of the first method whose declaration contains `signature` — the text between its
+    // opening '{' and the matching '}', or null if not found. Lets a gate prove a predicate is actually
+    // CALLED from a method body (reflection sees only the declaration, not the call-sites). Used by S32a3.
+    // (The pump body has no '{'/'}' inside string/char literals, so naive brace counting is exact here.)
+    static string MethodBodyAfter(string source, string signature)
+    {
+        int decl = source.IndexOf(signature, StringComparison.Ordinal);
+        if (decl < 0) return null;
+        int open = source.IndexOf('{', decl);
+        if (open < 0) return null;
+        int depth = 0;
+        for (int i = open; i < source.Length; i++)
+        {
+            if (source[i] == '{') depth++;
+            else if (source[i] == '}' && --depth == 0) return source.Substring(open + 1, i - open - 1);
+        }
+        return null;
+    }
+
+    static string Section32_RunShortcut(List<GameObject> spawned)
+    {
+        // (a) PRODUCTION config invariant: the real builder editor is MultiLineNewline (the run-shortcut
+        //     swallow is MultiLineNewline-gated, mirroring OnSubmit/OnCancel/Escape — flip → RED).
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s31", out _, out var body);
+        spawned.Add(root.gameObject);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S32: editor build failed";
+        var field = root.GetComponentInChildren<StrategyInputField>(true);
+        if (field == null) return "S32: StrategyInputField not found in the built editor";
+        if (field.lineType != TMP_InputField.LineType.MultiLineNewline)
+            return $"S32a: production editor lineType is {field.lineType}, expected MultiLineNewline";
+
+        // (a2) WIRING invariant. The asserts below drive the TryConsumeKeyPumpRun PREDICATE directly
+        //      (headless has no IMGUI key pump / focus to run a real OnUpdateSelected, STRATEGY-18), so on
+        //      their own they would still pass if the whole OnUpdateSelected override were deleted and the
+        //      predicate left unwired. This structural guard (mirror of S29a2) fails if StrategyInputField
+        //      no longer declares the pump override that calls the predicate.
+        var pumpOverride = typeof(StrategyInputField).GetMethod(
+            "OnUpdateSelected", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(BaseEventData) }, null);
+        if (pumpOverride == null || pumpOverride.DeclaringType != typeof(StrategyInputField))
+            return "S32a: StrategyInputField does not override OnUpdateSelected (the run shortcut is unwired — base.OnUpdateSelected would insert a newline instead of running the cell)";
+
+        // (a3) CALL-SITE guard (closes the (a2) gap). (a2) only proves the override is DECLARED — it stays
+        //      green if someone deletes just the `if (TryConsumeKeyPumpRun(...))` block from the pump (leaving
+        //      the Escape swallow), shipping a regression where a modified Return inserts a newline and never
+        //      runs. headless cannot drive the real pump (no focus / Event queue, STRATEGY-18), so we assert
+        //      the production SOURCE: OnUpdateSelected's body must CALL TryConsumeKeyPumpRun. This is
+        //      #164-local (siblings S27-S30 rely on (a2) alone) and brittle to a move/rename of the file, but
+        //      it is the only AFK-reachable proof that the predicate is wired INTO the pump.
+        var srcPath = Path.Combine(Application.dataPath, "Scripts/StrategyEditor/StrategyInputField.cs");
+        if (!File.Exists(srcPath))
+            return "S32a3: StrategyInputField.cs not found at " + srcPath + " (moved? update this call-site guard's path)";
+        string pumpBody = MethodBodyAfter(File.ReadAllText(srcPath), "public override void OnUpdateSelected");
+        if (pumpBody == null)
+            return "S32a3: could not locate the OnUpdateSelected method body in StrategyInputField.cs (signature changed?)";
+        if (!pumpBody.Contains("TryConsumeKeyPumpRun("))
+            return "S32a3: OnUpdateSelected no longer CALLS TryConsumeKeyPumpRun — the run-shortcut predicate is declared but unwired from the pump (a modified Return would insert a newline instead of running the cell)";
+
+        // (b) THE FIX + key range (D2): each of Shift+Return / Ctrl+Return / Cmd+Return / Shift+KeypadEnter
+        //     is SWALLOWED (no newline) AND fires once (counter++). Re-arm between combos with a matching
+        //     KeyUp so the one-press latch lets each distinct press fire (the held-latch itself is (d)).
+        if (field.RunShortcutConsumedCount != 0) return "S32b: fresh field already counted a run shortcut";
+        var combos = new[]
+        {
+            ("Shift+Return",       KeyCode.Return,      EventModifiers.Shift),
+            ("Ctrl+Return",        KeyCode.Return,      EventModifiers.Control),
+            ("Cmd+Return",         KeyCode.Return,      EventModifiers.Command),
+            ("Shift+KeypadEnter",  KeyCode.KeypadEnter, EventModifiers.Shift),
+        };
+        int expected = 0;
+        foreach (var (label, key, mod) in combos)
+        {
+            var down = new Event { type = EventType.KeyDown, keyCode = key, modifiers = mod };
+            if (!field.TryConsumeKeyPumpRun(down))
+                return $"S32b: {label} was NOT swallowed (base.KeyPressed would insert a newline instead of running the cell)";
+            expected++;
+            if (field.RunShortcutConsumedCount != expected)
+                return $"S32b: {label} did not fire the run shortcut (count={field.RunShortcutConsumedCount}, expected {expected})";
+            // Physical release re-arms the latch so the NEXT combo can fire (D5).
+            field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = key, modifiers = EventModifiers.None });
+        }
+
+        // (c) plain Return (no modifier) is NOT a trigger — it must fall through to base so the
+        //     MultiLineNewline pump inserts a newline (findings 0116). NOT swallowed, counter unchanged.
+        int beforePlain = field.RunShortcutConsumedCount;
+        var plain = new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.None };
+        if (field.TryConsumeKeyPumpRun(plain))
+            return "S32c: plain Return was swallowed (it must stay a NEWLINE, not run the cell)";
+        if (field.RunShortcutConsumedCount != beforePlain)
+            return "S32c: plain Return fired the run shortcut (modifier-less Return must never trigger a run)";
+
+        // (d) DEBOUNCE (D5): a HELD modified Return fires exactly once. Re-arm, press → fires; press again
+        //     while held → still swallowed (no stray newline) but does NOT re-fire; KeyUp re-arms → next
+        //     press fires again. (Removing the latch → held repeats fire every frame → "run then stop".)
+        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        int beforeHeld = field.RunShortcutConsumedCount;
+        var heldDown = new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift };
+        if (!field.TryConsumeKeyPumpRun(heldDown)) return "S32d: held first press was not swallowed";
+        if (field.RunShortcutConsumedCount != beforeHeld + 1) return "S32d: held first press did not fire once";
+        if (!field.TryConsumeKeyPumpRun(heldDown))
+            return "S32d: held REPEAT was not swallowed (a held Shift+Return must keep suppressing the newline)";
+        if (field.RunShortcutConsumedCount != beforeHeld + 1)
+            return "S32d: held repeat RE-FIRED the run shortcut (one physical press must = one fire — else held Shift+Enter runs then immediately stops)";
+        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        if (!field.TryConsumeKeyPumpRun(heldDown) || field.RunShortcutConsumedCount != beforeHeld + 2)
+            return "S32d: a fresh press after KeyUp did not re-fire (the latch must re-arm on release)";
+
+        // (e) RELAY → onClick.Invoke() reaches the ▶ (D4). Wire the REAL builder view exactly as
+        //     BackcastWorkspaceRoot.WireCellRunButton does (view.RunShortcutRequested → btn.onClick.Invoke)
+        //     and prove the chain field → view relay → button click runs end-to-end when the field's pump
+        //     predicate fires. (The view subscribed to THIS field instance in Initialize during Build.)
+        //     NOTE: this mirrors WireCellRunButton by hand — (g) below drives the REAL root's wiring so a
+        //     regression in the production assignment is actually caught (this isolates the field→view relay).
+        bool viewRelayed = false;
+        view.RunShortcutRequested += () => viewRelayed = true;
+        var btnGo = new GameObject("S32RunButton", typeof(RectTransform), typeof(Button));
+        spawned.Add(btnGo);
+        var runBtn = btnGo.GetComponent<Button>();
+        bool clicked = false;
+        runBtn.onClick.AddListener(() => clicked = true);
+        view.RunShortcutRequested += () => runBtn.onClick.Invoke();   // mirror WireCellRunButton's subscription
+        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        if (!field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+            return "S32e: the relay-test press was not swallowed";
+        if (!viewRelayed)
+            return "S32e: StrategyInputField.RunShortcutRequested did not relay through StrategyEditorView (the field event is not re-exposed by the view)";
+        if (!clicked)
+            return "S32e: the relay did not reach the ▶ button onClick.Invoke() (the WireCellRunButton wiring does not click the cell's run button)";
+
+        // (f) NEGATIVE control: a SINGLE-line field never swallows a modified Return (swallow is
+        //     MultiLineNewline-gated, not a blanket Return swallow — else a single-line field could never
+        //     submit/insert). Inactive GO so nothing else runs headlessly.
+        var slGo = new GameObject("S32SingleLine", typeof(RectTransform), typeof(CanvasRenderer), typeof(StrategyInputField));
+        slGo.SetActive(false);
+        spawned.Add(slGo);
+        var single = slGo.GetComponent<StrategyInputField>();
+        single.lineType = TMP_InputField.LineType.SingleLine;
+        if (single.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+            return "S32f: single-line field swallowed a modified Return (swallow must be MultiLineNewline-only)";
+        if (single.RunShortcutConsumedCount != 0)
+            return "S32f: single-line field fired the run shortcut (run shortcut must be MultiLineNewline-only)";
+
+        // (g) PRODUCTION WIRING (closes the hand-mirror gap in (e)): assert the run shortcut travels the
+        //     ACTUAL field → view relay → WireCellRunButton assignment → cell ▶ onClick chain on the REAL
+        //     BackcastWorkspaceRoot — not a rehearsed copy. (e) proves the field→view relay in isolation but
+        //     mirrors WireCellRunButton by hand, so a regression in the real root's assignment
+        //     (BackcastWorkspaceRoot.cs:1043-1049 — ViewFor null-skip / wrong region / wrong button / dropped
+        //     assign) would still pass (e). We REUSE the real root Section25 already composed into the scene
+        //     (its BuildWorkspace ran WireCellRunButton for region_001 and nothing here destroys it — Sections
+        //     26-30 are synthetic). We do NOT OpenScene+BuildWorkspace a SECOND time: a second BuildWorkspace
+        //     re-fires ThemeService.Changed (a static event) into the prior root's still-subscribed
+        //     ApplyViewportTheme → a destroyed Button → MissingReferenceException (Section25 is the single
+        //     designated OpenScene). The ONE seam still beyond headless is the IMGUI pump CALLING the predicate
+        //     (no focus / Event queue in -batchmode) — guarded structurally by (a2), real only at HITL (STRATEGY-18).
+        const BindingFlags RBF = BindingFlags.NonPublic | BindingFlags.Instance;
+        var realRoot = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
+        if (realRoot == null) return "S32g: no real BackcastWorkspaceRoot in scene (Section25 must compose one before this section)";
+        var rty = typeof(BackcastWorkspaceRoot);
+        const string region1 = NotebookCellCoordinator.AdoptedRegionId;   // == WINDOW_ID "strategy_editor:region_001"
+        var realView = rty.GetMethod("ViewFor", RBF)?.Invoke(realRoot, new object[] { region1 }) as StrategyEditorView;
+        if (realView == null) return "S32g: ViewFor(region_001) returned no editor view on the real root";
+        // THE PRODUCTION-WIRING ASSERT: WireCellRunButton (run during BuildWorkspace) must have ASSIGNED the
+        // view's run-shortcut sink. A dropped/guarded-out assignment (the regression (e) cannot see) fails here.
+        if (realView.RunShortcutRequested == null)
+            return "S32g: production WireCellRunButton did NOT assign view.RunShortcutRequested (the real root's run-shortcut sink is unwired)";
+        var realButtons = rty.GetField("_cellRunButtons", RBF)?.GetValue(realRoot) as Dictionary<string, Button>;
+        if (realButtons == null || !realButtons.TryGetValue(region1, out var realRunBtn) || realRunBtn == null)
+            return "S32g: the real cell ▶ button (_cellRunButtons[region_001]) is missing";
+        bool realBtnClicked = false;
+        realRunBtn.onClick.AddListener(() => realBtnClicked = true);
+
+        // The body editor the real view subscribed to (MultiLineNewline; the single-line title input, if any,
+        // is window chrome — not this view's editing surface).
+        StrategyInputField realField = null;
+        foreach (var f in realView.GetComponentsInChildren<StrategyInputField>(true))
+            if (f.lineType == TMP_InputField.LineType.MultiLineNewline) { realField = f; break; }
+        if (realField == null) return "S32g: the real editor has no MultiLineNewline StrategyInputField (the run-shortcut source)";
+        realField.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        if (!realField.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+            return "S32g: the real focused field did not swallow Shift+Return";
+        if (!realBtnClicked)
+            return "S32g: Shift+Return did not reach the real cell ▶ onClick through the production field → view → WireCellRunButton wiring (the real root's run-shortcut relay is broken)";
+
+        Debug.Log("[E2E STRATEGY-65 PASS] code editor run shortcut: Shift/Ctrl/Cmd+Return + numpad Enter swallow the newline and fire the ▶ once per press (held re-fires only after KeyUp); plain Return stays a newline; the fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke() (byte-identical to a click); single-line never swallows; production builder is MultiLineNewline; and the REAL BackcastWorkspaceRoot's WireCellRunButton wiring routes a real Shift+Return to the real cell ▶ (g)");
+        return null;
     }
 
     // ======================================================================

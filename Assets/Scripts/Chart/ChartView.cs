@@ -46,7 +46,8 @@ using UnityEngine.UI;
 
 [RequireComponent(typeof(CanvasRenderer))]
 public class ChartView : MaskableGraphic,
-    IPointerDownHandler, IDragHandler, IPointerUpHandler, IScrollHandler, IPointerClickHandler
+    IPointerDownHandler, IDragHandler, IPointerUpHandler, IScrollHandler, IPointerClickHandler,
+    IPointerEnterHandler, IPointerExitHandler, IPointerMoveHandler
 {
     // ---- gutter (preserved from the legacy widget so axis labels — S3 — land in the same rect) ----
     const float GutterLeft = 60f, GutterBottom = 40f, GutterRight = 20f, GutterTop = 20f;
@@ -96,6 +97,15 @@ public class ChartView : MaskableGraphic,
     // ChartScale (price ticks) only sees the price plot area. Until S5 ships volume_area, the whole
     // plot IS the main_area (VolumeFrac=0).
     const float VolumeFrac = 0.0f;   // S5 will set 0.2f when volume sub-pane lands.
+
+    // S4 #159: CrosshairState lives on ChartView in S4; S9 will hoist ownership to ChartLadderRoot
+    // (parent Component) so DepthLadderView can read hovered_price. The accessor remains here so
+    // the migration is transparent to ChartView callers (PointerMove etc.). S4 observability gates
+    // (CROSSHAIR-01) read these counters.
+    public CrosshairState Crosshair { get; } = new CrosshairState();
+    public int LastCrosshairLineCount { get; private set; }
+    public int LastLastPriceLineCount { get; private set; }
+    Text _crosshairPriceBadge, _crosshairTimeBadge;
 
     // ---- ThemeProbe / E2E color seams (replaces FirstCandle(bool)→Image) ----
 
@@ -389,6 +399,46 @@ public class ChartView : MaskableGraphic,
             rendered++;
         }
         RenderedBarCount = rendered;
+
+        // 7. last-price dashed line (findings 0119 D-6 / LASTPRICE-01). Horizontal at latest close,
+        // alpha=0.7 (LastPriceLine palette), dashed via 6px-on / 4px-off pattern. Lives in the same
+        // Mesh batch so drawcall stays 1.
+        int lastPriceSegments = 0;
+        if (_bars.Count > 0)
+        {
+            double lastClose = _bars[_bars.Count - 1].close;
+            float y = MainPriceToY(lastClose, mainY0, mainH);
+            if (y >= mainArea.yMin && y <= mainArea.yMax)
+            {
+                Color lpc = ChartPalette.LastPriceLine();
+                const float DashOn = 6f, DashOff = 4f, Thickness = 1f;
+                for (float x = mainArea.xMin; x < mainArea.xMax; x += DashOn + DashOff)
+                {
+                    float x1 = Mathf.Min(x + DashOn, mainArea.xMax);
+                    EmitQuad(vh, x, y - Thickness * 0.5f, x1, y + Thickness * 0.5f, lpc);
+                    lastPriceSegments++;
+                }
+            }
+        }
+        LastLastPriceLineCount = lastPriceSegments;
+
+        // 8. crosshair (findings 0119 D-6 / CROSSHAIR-01). Two thin lines + 4 readout badges (Text
+        // in gutters) when Crosshair.cursor_world is non-null. Mesh integration keeps drawcall=1.
+        int crossLines = 0;
+        if (Crosshair.cursor_world.HasValue)
+        {
+            var c = Crosshair.cursor_world.Value;
+            // Only render the crosshair when the cursor is inside the plot rect (gutter-overlap
+            // would draw lines across the axis labels which reads as visual noise).
+            if (c.x >= plot.xMin && c.x <= plot.xMax && c.y >= plot.yMin && c.y <= plot.yMax)
+            {
+                Color cc = ChartPalette.Crosshair();
+                EmitQuad(vh, c.x - 0.5f, plot.yMin, c.x + 0.5f, plot.yMax, cc);   // vertical
+                EmitQuad(vh, plot.xMin, c.y - 0.5f, plot.xMax, c.y + 0.5f, cc);   // horizontal
+                crossLines = 2;
+            }
+        }
+        LastCrosshairLineCount = crossLines;
     }
 
     // Price → Y mapping for the main_area (S5 split: main_area occupies the top (1-VolumeFrac) of the
@@ -662,5 +712,76 @@ public class ChartView : MaskableGraphic,
         if (_draggedThisGesture) return;   // drag-tail click does NOT count as a double-click candidate.
         if (eventData.clickCount != 2) return;
         RequestResetView();
+    }
+
+    // ====== S4 #159: crosshair (hover) handlers + derive ======
+
+    public void OnPointerEnter(PointerEventData eventData) => UpdateCrosshair(eventData);
+    public void OnPointerMove(PointerEventData eventData) => UpdateCrosshair(eventData);
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        Crosshair.Clear();
+        SetVerticesDirty();
+    }
+
+    void UpdateCrosshair(PointerEventData eventData)
+    {
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                rectTransform, eventData.position, eventData.pressEventCamera, out var local))
+            return;
+        Crosshair.cursor_world = local;
+        DeriveCrosshair();
+        SetVerticesDirty();
+    }
+
+    // Public so headless E2E (CROSSHAIR-01) can synthesise a cursor without PointerEventData and
+    // exercise the same derive path the real pointer handlers walk.
+    public void SetCrosshairCursorForTest(Vector2 local)
+    {
+        Crosshair.cursor_world = local;
+        DeriveCrosshair();
+        SetVerticesDirty();
+    }
+
+    void DeriveCrosshair()
+    {
+        if (!Crosshair.cursor_world.HasValue) { Crosshair.Clear(); return; }
+        var rect = rectTransform.rect;
+        float topInset = GutterTop + (_showTitleBar ? TitleBarHeight + 4f : 0f);
+        var plot = new Rect(
+            rect.xMin + GutterLeft, rect.yMin + GutterBottom,
+            Mathf.Max(0f, rect.width - GutterLeft - GutterRight),
+            Mathf.Max(0f, rect.height - GutterBottom - topInset));
+        float volumeH = plot.height * VolumeFrac;
+        float mainY0 = plot.yMin + volumeH;
+        float mainH = plot.height - volumeH;
+
+        var c = Crosshair.cursor_world.Value;
+        Crosshair.hovered_time_ms = ViewState.XToTime(c.x, plot.xMin);
+        // hovered_price is computed only when cursor is in main_area (findings 0119 D-6 / D-2).
+        if (c.y >= mainY0 && c.y <= mainY0 + mainH && mainH > 0)
+            Crosshair.hovered_price = ViewState.visible_min_price
+                + ((c.y - mainY0) / mainH) * (ViewState.visible_max_price - ViewState.visible_min_price);
+        else
+            Crosshair.hovered_price = null;
+        // hovered_volume: only in volume_area (S5). VolumeFrac=0 → never enters this branch.
+        if (VolumeFrac > 0 && c.y >= plot.yMin && c.y < mainY0)
+            Crosshair.hovered_volume = NearestVolumeAt(c.x, plot);
+        else
+            Crosshair.hovered_volume = null;
+    }
+
+    // S5 helper — finds the bar closest in time to cursor x and returns its volume.
+    double? NearestVolumeAt(float cursorX, Rect plot)
+    {
+        if (_bars.Count == 0) return null;
+        long t = ViewState.XToTime(cursorX, plot.xMin);
+        int bestIdx = -1; long bestDt = long.MaxValue;
+        for (int i = 0; i < _bars.Count; i++)
+        {
+            long dt = System.Math.Abs(_bars[i].open_time_ms - t);
+            if (dt < bestDt) { bestDt = dt; bestIdx = i; }
+        }
+        return bestIdx >= 0 ? (double?)_bars[bestIdx].volume : null;
     }
 }

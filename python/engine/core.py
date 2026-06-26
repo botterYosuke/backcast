@@ -244,7 +244,11 @@ class DataEngine:
                 if not ids:
                     return False, "At least one instrument_id is required"
                 return self._load_replay_duckdb_locked(
-                    instrument_ids=ids, granularity=granularity, root=str(root)
+                    instrument_ids=ids,
+                    granularity=granularity,
+                    root=str(root),
+                    start_date=start_date,
+                    end_date=end_date,
                 )
 
             if self._replay_provider is not None:
@@ -257,7 +261,13 @@ class DataEngine:
             return False, "Replay data source is not configured (no DuckDB root)"
 
     def _load_replay_duckdb_locked(
-        self, *, instrument_ids: list[str], granularity: str, root: str
+        self,
+        *,
+        instrument_ids: list[str],
+        granularity: str,
+        root: str,
+        start_date: str = "",
+        end_date: str = "",
     ) -> tuple[bool, str | None]:
         """LOADED transition for the ADR-0006 DuckDB direct-read path (called under _lock).
 
@@ -267,8 +277,17 @@ class DataEngine:
         the chart's ohlc_points count equals the streamed primary-bar count). Bars are streamed
         externally by start_engine's kernel run via apply_replay_event, so no provider object is
         built here (_replay_provider stays None).
+
+        #156 / findings 0119 D-5: in addition, COLD-SEED ``per_id_ohlc_points`` with the FULL
+        scenario ``start..end`` for every instrument so the new Mesh-based ChartView can
+        virtualize the visible window from the full per-instrument series — the streaming
+        reducer's per-id ring buffer (``max_history_len = 1000``, Live-tuned) would otherwise
+        truncate any window > 1000 bars (Daily multi-year / Minute multi-day). The state JSON
+        shape and the InstrumentOhlcDecoder are unchanged — only the seed quantity grows. The
+        reducer state's ``max_history_len`` is bumped to fit the cold-loaded count + headroom
+        so subsequent streamed bars append without trimming the cold-loaded prefix.
         """
-        from engine.kernel.duckdb_bars import db_path
+        from engine.kernel.duckdb_bars import db_path, load_bars
 
         # Early panel feedback: validate each instrument's per-symbol DuckDB file exists for
         # this granularity. The granularity here is the LoadReplayData arg (a hint); the run
@@ -288,6 +307,55 @@ class DataEngine:
         self._mode = "replay"
         self._replay_primary_id = str(instrument_ids[0])
         self._replay_duckdb_root = root
+        # #156 / findings 0119 D-5: cold-load the full scenario window for every instrument so
+        # the new virtualized ChartView has the full per-instrument series to virtualize over.
+        # Skipped for granularities outside the ADR-0006 set (e.g. reducer's "Trade" default
+        # from a non-panel caller) — the run itself drives those via streaming. Missing files
+        # / non-fatal load errors degrade gracefully to an empty per-id slot (the streaming
+        # path will fill it as it does today); the cold seed is an additive optimization for
+        # the chart, never a hard precondition for the run.
+        cold_seed: dict[str, list[OhlcPoint]] = {}
+        if granularity in ("Daily", "Minute"):
+            seed_start = start_date if start_date else None
+            seed_end = end_date if end_date else None
+            for iid in instrument_ids:
+                try:
+                    bars = load_bars(
+                        root,
+                        iid,
+                        start=seed_start,
+                        end=seed_end,
+                        granularity=granularity,
+                    )
+                except FileNotFoundError:
+                    cold_seed[iid] = []
+                    continue
+                except Exception as exc:
+                    logging.warning(
+                        "load_replay_data: cold seed load_bars failed for %s: %s", iid, exc
+                    )
+                    cold_seed[iid] = []
+                    continue
+                cold_seed[iid] = [
+                    OhlcPoint(
+                        timestamp_ms=b.ts_event_ns // 1_000_000,
+                        open_time_ms=b.ts_event_ns // 1_000_000,
+                        open=b.open,
+                        high=b.high,
+                        low=b.low,
+                        close=b.close,
+                    )
+                    for b in bars
+                ]
+        # Bump the reducer cap so a Replay scenario larger than the Live default (1000) is not
+        # trimmed mid-stream. Live keeps ``self._max_history_len = 1000`` untouched on the
+        # static / pre-load reducer state — only this replay-loaded state grows. Headroom past
+        # the cold-loaded count covers the streamed bars start_engine will append (the kernel
+        # streams the same series, so the per-id list is the cold seed + late arrivals; the
+        # reducer's de-dupe is by ts, but we don't rely on it — sizing the cap to the seed
+        # count + the run length suffices).
+        cold_max = max((len(v) for v in cold_seed.values()), default=0)
+        replay_cap = max(self._max_history_len, cold_max * 2 + self._max_history_len)
         # Replay-ready reducer in a "warming-up" state. We do NOT prime bar 0 (so every bar is
         # streamed exactly once — no primary-skip), but the LOADED state is still polled by the
         # UI before streaming starts, and TradingState requires price>0 & timestamp>0. So seed
@@ -300,7 +368,8 @@ class DataEngine:
         self._rs = ReducerState(
             timestamp_ms=1,
             price=_REPLAY_WARMUP_PRICE,
-            max_history_len=self._max_history_len,
+            max_history_len=replay_cap,
+            per_id_ohlc_points=cold_seed,
         )
         self._replay_state = "LOADED"
         return True, None

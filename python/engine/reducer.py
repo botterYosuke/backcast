@@ -101,17 +101,29 @@ def apply_event(state: ReducerState, event: ReplayEvent, primary_id: Optional[st
             # A0: per-id OHLC accumulation (fires on every real-id KlineUpdate; primary double-emits its real id too)
             if iid:
                 pts = state.per_id_ohlc_points.setdefault(iid, [])
-                pts.append(OhlcPoint(
-                    timestamp_ms=ts,
-                    open_time_ms=ohlc_open_time,
-                    open=event.open if event.open > 0 else price,
-                    high=event.high if event.high > 0 else price,
-                    low=event.low if event.low > 0 else price,
-                    close=price,
-                    volume=event.volume,
-                ))
-                if len(pts) > state.max_history_len:
-                    pts.pop(0)
+                # #156 / findings 0119 D-5: Replay now cold-seeds per_id_ohlc_points with the
+                # FULL scenario `start..end` at load_replay_data time so the virtualized
+                # ChartView has the full per-instrument series. The kernel then streams the
+                # same DuckDB bars one-at-a-time during RUN — those would duplicate the cold
+                # seed without a dedupe. Bars are ts-ascending per iid (the reducer's ts
+                # contract), so any streamed bar whose open_time_ms is ≤ the last per-id entry
+                # is already-seen (either the cold seed or a prior streamed bar) and must NOT
+                # double-append. Live mode never cold-seeds → the dedupe is a no-op there
+                # (the first per-id bar always appends; subsequent are strictly increasing).
+                if pts and ohlc_open_time <= pts[-1].open_time_ms:
+                    pass  # already represented; skip the duplicate append
+                else:
+                    pts.append(OhlcPoint(
+                        timestamp_ms=ts,
+                        open_time_ms=ohlc_open_time,
+                        open=event.open if event.open > 0 else price,
+                        high=event.high if event.high > 0 else price,
+                        low=event.low if event.low > 0 else price,
+                        close=price,
+                        volume=event.volume,
+                    ))
+                    if len(pts) > state.max_history_len:
+                        pts.pop(0)
         if is_primary:
             state.history.append(price)
             state.history_points.append(HistoryPoint(timestamp_ms=ts, price=price))

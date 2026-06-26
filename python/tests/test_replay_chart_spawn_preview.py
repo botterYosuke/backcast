@@ -159,15 +159,25 @@ def test_loaded_and_running_states_are_no_op(tmp_path) -> None:
 
     LOADED is part of the run lifecycle (between load_replay_data and start_engine) — a
     stale preview landing here would corrupt the about-to-stream accumulation.
+
+    #156 / findings 0119 D-5: ``load_replay_data`` itself now cold-seeds the full scenario
+    window into ``per_id_ohlc_points`` (so the virtualized ChartView has the full series).
+    The non-IDLE preview RPC must still be a no-op — it returns ``RUNNING`` without
+    overwriting the cold-loaded series.
     """
     _build_daily(tmp_path, n=10)
     eng = DataEngine(duckdb_root=str(tmp_path))
     eng.load_replay_data([_IID], "2024-10-01", "2024-10-10", "Daily")
     assert eng.replay_state == "LOADED"
+    # D-5: load_replay_data cold-seeded the full window. Capture it so we can assert the
+    # rejected preview RPC did not mutate it.
+    seeded_before = list(eng._rs.per_id_ohlc_points.get(_IID, []))
+    assert len(seeded_before) == 10
 
     ok, ec, count = eng.populate_replay_preview(_IID, "2024-10-01", "2024-10-10", "Daily")
     assert not ok and ec == "RUNNING" and count == 0
-    assert _IID not in eng._rs.per_id_ohlc_points
+    # The cold seed is untouched (no-op preview RPC must not overwrite the loaded state).
+    assert eng._rs.per_id_ohlc_points.get(_IID, []) == seeded_before
 
     eng.start()  # LOADED → RUNNING
     ok2, ec2, _ = eng.populate_replay_preview(_IID, "2024-10-01", "2024-10-10", "Daily")
@@ -176,18 +186,31 @@ def test_loaded_and_running_states_are_no_op(tmp_path) -> None:
 
 @pytest.mark.scenario("PREVIEW-07")
 def test_run_start_naturally_clears_preview(tmp_path) -> None:
-    """S3 / D2: load_replay_data re-creates _rs, structurally clearing the preview dict
-    (no manual cleanup needed — the existing reset path owns this contract)."""
+    """S3 / D2: load_replay_data re-creates _rs, structurally replacing the preview dict
+    (no manual cleanup needed — the existing reset path owns this contract).
+
+    #156 / findings 0119 D-5: ``load_replay_data`` now REPLACES the preview with its own
+    full-window cold seed (per scenario `start..end`, every instrument). The protective
+    property the preview-clear was protecting still holds — the prior preview's content does
+    not leak into the run — but the new state has the scenario's cold seed, not an empty
+    dict. The preview seed path is *extended* into a full-scenario cold load, not removed.
+    """
     _build_daily(tmp_path, n=10)
     eng = DataEngine(duckdb_root=str(tmp_path))
 
+    # Pre-load preview into a wider range so we can detect any leak after the narrower load.
     ok, _, count = eng.populate_replay_preview(_IID, "2024-10-01", "2024-10-10", "Daily")
-    assert ok and count > 0
-    assert len(eng._rs.per_id_ohlc_points[_IID]) == count
+    assert ok and count == 10
+    assert len(eng._rs.per_id_ohlc_points[_IID]) == 10
 
-    # The user presses RUN → load_replay_data → _rs reset → preview gone.
-    eng.load_replay_data([_IID], "2024-10-01", "2024-10-10", "Daily")
-    assert eng._rs.per_id_ohlc_points == {}, "load_replay_data must reset per_id_ohlc_points"
+    # The user presses RUN → load_replay_data → _rs reset → preview replaced by the cold seed
+    # for the *new* scenario window (4-day slice here vs the 10-bar preview above).
+    eng.load_replay_data([_IID], "2024-10-01", "2024-10-04", "Daily")
+    pts = eng._rs.per_id_ohlc_points.get(_IID, [])
+    assert len(pts) == 4, (
+        "load_replay_data must replace the prior preview with the new scenario's cold seed "
+        "(findings 0119 D-5)"
+    )
 
 
 @pytest.mark.scenario("PREVIEW-08")

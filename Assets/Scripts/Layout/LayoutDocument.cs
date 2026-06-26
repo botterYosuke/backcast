@@ -163,6 +163,12 @@ public class FloatingWindowLayout
     // the user's drag-release in SnapOnRelease (findings 0082 §10), never on programmatic Spawn / restore.
     public string groupId;
 
+    // S7 #162 (ADR-0034 §7 / findings 0119 D-7): per-chart-window pan/zoom state. Null on non-chart
+    // windows AND on chart windows whose state has never been captured (old sidecar / freshly spawned
+    // → ResetView() default on restore). NOT persisted: cell_height_norm (autoscale-derived; recomputed
+    // every OnPopulateMesh from visible price range).
+    public ChartViewStateLayout chart_view_state;
+
     public FloatingWindowLayout() { }
 
     public FloatingWindowLayout(string id, string kind, float x, float y, float w, float h, int zOrder, bool visible)
@@ -181,7 +187,12 @@ public class FloatingWindowLayout
         this.groupId = groupId;
     }
 
-    public FloatingWindowLayout Clone() => new FloatingWindowLayout(id, kind, x, y, w, h, zOrder, visible, groupId);
+    public FloatingWindowLayout Clone()
+    {
+        var c = new FloatingWindowLayout(id, kind, x, y, w, h, zOrder, visible, groupId);
+        if (chart_view_state != null) c.chart_view_state = chart_view_state.Clone();
+        return c;
+    }
 
     public static bool Approx(FloatingWindowLayout a, FloatingWindowLayout b, float eps)
     {
@@ -190,7 +201,42 @@ public class FloatingWindowLayout
             && Math.Abs(a.x - b.x) <= eps && Math.Abs(a.y - b.y) <= eps
             && Math.Abs(a.w - b.w) <= eps && Math.Abs(a.h - b.h) <= eps
             && a.zOrder == b.zOrder && a.visible == b.visible
-            && a.groupId == b.groupId;
+            && a.groupId == b.groupId
+            && ChartViewStateLayout.Approx(a.chart_view_state, b.chart_view_state, eps);
+    }
+}
+
+// S7 #162 (findings 0119 D-7): persisted ChartViewState. Only the 3 fields that survive a reopen
+// (translation_ms / cell_width_px / auto_scale) — cell_height_norm is recomputed every render from
+// the visible price range. JsonUtility binds by exact field name (snake_case to match the disk
+// schema example in the finding). Null means "no captured state" → ResetView() default on restore
+// (legacy sidecar / freshly spawned chart).
+[Serializable]
+public class ChartViewStateLayout
+{
+    public long translation_ms;
+    public float cell_width_px;
+    public bool auto_scale;
+
+    public ChartViewStateLayout() { }
+
+    public ChartViewStateLayout(long translation_ms, float cell_width_px, bool auto_scale)
+    {
+        this.translation_ms = translation_ms;
+        this.cell_width_px = cell_width_px;
+        this.auto_scale = auto_scale;
+    }
+
+    public ChartViewStateLayout Clone() =>
+        new ChartViewStateLayout(translation_ms, cell_width_px, auto_scale);
+
+    public static bool Approx(ChartViewStateLayout a, ChartViewStateLayout b, float eps)
+    {
+        if (a == null && b == null) return true;
+        if (a == null || b == null) return false;
+        return a.translation_ms == b.translation_ms
+            && Math.Abs(a.cell_width_px - b.cell_width_px) <= eps
+            && a.auto_scale == b.auto_scale;
     }
 }
 
@@ -261,7 +307,10 @@ public class LayoutDocument
 {
     // Bumped when the schema changes incompatibly. Load() treats <=0 / missing /
     // future versions per findings §6 (default-fallback vs best-effort).
-    public const int CURRENT_VERSION = 1;
+    // S7 #162 (findings 0119 D-7): bumped 1 → 2 to carry FloatingWindowLayout.chart_view_state.
+    // Older sidecars (version=1) load fine: chart_view_state stays null on every window → ChartView
+    // ResetView() default applied on restore (legacy charts pop up at right-anchor + DEFAULT cell_width).
+    public const int CURRENT_VERSION = 2;
 
     public int version;
     public List<PanelLayout> panels;

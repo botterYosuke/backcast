@@ -259,6 +259,24 @@ public class ChartView : MaskableGraphic,
         SetVerticesDirty();
     }
 
+    // ====== S7 #162 / findings 0119 D-7: pan/zoom layout sidecar persistence ======
+
+    public ChartViewStateLayout CaptureViewStateLayout() =>
+        new ChartViewStateLayout(ViewState.translation_ms, ViewState.cell_width_px, ViewState.auto_scale);
+
+    // Restore translation_ms / cell_width_px / auto_scale from a sidecar entry. cell_height_norm is
+    // intentionally NOT persisted — recomputed every OnPopulateMesh from the visible price range, so
+    // a restore that triggers an immediate Render gets autoscale recomputed automatically.
+    public void ApplyViewStateLayout(ChartViewStateLayout l)
+    {
+        if (l == null) return;
+        ViewState.translation_ms = l.translation_ms;
+        ViewState.cell_width_px = Mathf.Clamp(l.cell_width_px,
+            ChartViewState.MIN_CELL_WIDTH_PX, ChartViewState.MAX_CELL_WIDTH_PX);
+        ViewState.auto_scale = l.auto_scale;
+        SetVerticesDirty();
+    }
+
     // Allow callers (BackcastWorkspaceRoot) to thread the scenario granularity through so basis_ms
     // is locked from the spawn frame, not inferred from bar diffs. Auto-scale resets translation.
     public void SetGranularity(GranularityChoice g)

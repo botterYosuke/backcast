@@ -2732,11 +2732,45 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         try
         {
             LayoutDocument doc = CaptureLayout();
+            CaptureChartViewStates(doc);   // S7 #162: per-chart-window pan/zoom into chart_view_state.
             PruneOrphanChartWindowsForPersistence(doc, path);
             LayoutSidecarStore.WriteLayout(path, doc);
             return true;
         }
         catch (Exception e) { Debug.LogWarning("[BackcastWorkspaceRoot] layout write failed: " + e.Message); return false; }
+    }
+
+    // S7 #162 (findings 0119 D-7): walk floatingWindows, for each chart kind read the live ChartView's
+    // ViewState into chart_view_state. Skipped if no live ChartView for the iid (e.g. mid-spawn race).
+    void CaptureChartViewStates(LayoutDocument doc)
+    {
+        if (doc?.floatingWindows == null) return;
+        foreach (var w in doc.floatingWindows)
+        {
+            if (w == null || w.kind != FloatingWindowCatalog.KIND_CHART) continue;
+            string iid = DockShape.InstrumentOfChartId(w.id);
+            if (string.IsNullOrEmpty(iid)) continue;
+            if (_chartViews.TryGetValue(iid, out var cv) && cv != null)
+                w.chart_view_state = cv.CaptureViewStateLayout();
+        }
+    }
+
+    // S7 #162 (findings 0119 D-7): after RestoreFloating has spawned chart windows (which built fresh
+    // ChartView at ResetView() defaults), apply each saved chart_view_state. Null entries = legacy
+    // sidecar (version=1) → ResetView() defaults stay. Per-window independence is automatic because
+    // _chartViews is keyed by iid and FloatingWindowLayout.id encodes the iid via DockShape.
+    void ApplyChartViewStates(LayoutDocument doc)
+    {
+        if (doc?.floatingWindows == null) return;
+        foreach (var w in doc.floatingWindows)
+        {
+            if (w == null || w.kind != FloatingWindowCatalog.KIND_CHART) continue;
+            if (w.chart_view_state == null) continue;
+            string iid = DockShape.InstrumentOfChartId(w.id);
+            if (string.IsNullOrEmpty(iid)) continue;
+            if (_chartViews.TryGetValue(iid, out var cv) && cv != null)
+                cv.ApplyViewStateLayout(w.chart_view_state);
+        }
     }
 
     // #124 (findings 0097): write-side defense-in-depth for the chart⟷universe invariant (#123 /
@@ -2816,6 +2850,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (doc == null) return;
         if (doc.canvasView != null) _canvas.ApplyView(doc.canvasView);
         RestoreFloating(doc);
+        ApplyChartViewStates(doc);   // S7 #162: per-chart pan/zoom restore (after charts spawned).
         // #81: cell windows are restored by the coordinator (Open/New/Sync) from the notebook + the
         // cellPositions list — NOT here. Each caller (OnFileOpen / OpenFileNewDefault / Resume) runs
         // the coordinator open + the ReseedFromEditor tail around this geometry restore (restore

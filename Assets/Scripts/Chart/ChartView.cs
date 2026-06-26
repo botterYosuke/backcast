@@ -40,10 +40,13 @@
 
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 [RequireComponent(typeof(CanvasRenderer))]
-public class ChartView : MaskableGraphic
+public class ChartView : MaskableGraphic,
+    IPointerDownHandler, IDragHandler, IPointerUpHandler, IScrollHandler, IPointerClickHandler
 {
     // ---- gutter (preserved from the legacy widget so axis labels — S3 — land in the same rect) ----
     const float GutterLeft = 60f, GutterBottom = 40f, GutterRight = 20f, GutterTop = 20f;
@@ -397,5 +400,102 @@ public class ChartView : MaskableGraphic
             ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
         }
         SetVerticesDirty();
+    }
+
+    // ====== S2 #157: drag pan / wheel zoom / double-click reset (findings 0119 D-3) ======
+    //
+    // ScrollRect は不採用 (ADR-0034 §3) — flowsurface 流 chart-native UX を直訳。
+    // 左ボタンドラッグ → ChartViewState.Pan / 右・中ドラッグ → no-op（floating window drag に流す）/
+    // ホイール → cursor 中心 Zoom / Ctrl+wheel → no-op（PanCam 全体ズームへ譲る） /
+    // ダブルクリック → ResetView。drag-tail click は `_draggedThisGesture` で除外
+    // （Unity EventSystem の pixelDragThreshold + 明示フラグの両方で保護）。
+    //
+    // E2E (ChartInputE2ERunner.cs / PAN-01 / ZOOM-01 / RESET-01) は内部 PanByPixels / ZoomByScroll /
+    // RequestResetView を直接叩く data-driven テスト + button フィルタの handler-level vacuity floor。
+
+    bool _draggedThisGesture;
+
+    // Pixel-based pan helper exposed to handlers + E2E (PAN-01 reads from here).
+    public void PanByPixels(float dx_px)
+    {
+        ViewState.Pan(dx_px);
+        SetVerticesDirty();
+    }
+
+    // Cursor-centered wheel zoom (ZOOM-01).
+    public void ZoomByScroll(float scrollNotches, float cursorXLocal)
+    {
+        var rect = rectTransform.rect;
+        float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
+        ViewState.Zoom(scrollNotches, cursorXLocal - GutterLeft, plotW);
+        SetVerticesDirty();
+    }
+
+    // Double-click ResetView (RESET-01). Returns to right-anchor + DEFAULT cell_width + auto_scale=true.
+    public void RequestResetView()
+    {
+        if (_bars.Count == 0)
+        {
+            ViewState.cell_width_px = ChartViewState.DEFAULT_CELL_WIDTH_PX;
+            ViewState.auto_scale = true;
+            SetVerticesDirty();
+            return;
+        }
+        var rect = rectTransform.rect;
+        float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
+        ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
+        SetVerticesDirty();
+    }
+
+    static bool IsCtrlHeld()
+    {
+        var kb = Keyboard.current;
+        if (kb == null) return false;
+        return kb.leftCtrlKey.isPressed || kb.rightCtrlKey.isPressed;
+    }
+
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        if (eventData.button != PointerEventData.InputButton.Left) return;
+        _draggedThisGesture = false;
+    }
+
+    public void OnDrag(PointerEventData eventData)
+    {
+        if (eventData.button != PointerEventData.InputButton.Left) return;
+        _draggedThisGesture = true;
+        // eventData.delta is in screen pixels; Canvas scale (overlay = 1, scaler-driven canvases may
+        // differ) is folded into the rectTransform's local rect — but the simplest faithful translation
+        // (legacy parity with flowsurface's `cursor_delta`) is to use delta.x directly. Pan(dx_px) flips
+        // sign internally so a right-drag scrolls the visible window to a LATER time (canonical chart UX).
+        PanByPixels(eventData.delta.x);
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        // No-op: drag-tail handling is finalized in OnPointerClick (which Unity only fires when the
+        // pointer hasn't moved past the drag threshold, AND our _draggedThisGesture covers anything
+        // the EventSystem might let slip past the threshold).
+    }
+
+    public void OnScroll(PointerEventData eventData)
+    {
+        // Ctrl + wheel is reserved for the parent PanCam's global zoom — chart wheel must no-op so
+        // both gestures don't fight (findings 0119 D-3 / ADR-0034 §3).
+        if (IsCtrlHeld()) return;
+
+        // Convert cursor screen position → local x in this rect.
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                rectTransform, eventData.position, eventData.pressEventCamera, out var local))
+            return;
+        ZoomByScroll(eventData.scrollDelta.y, local.x - rectTransform.rect.xMin);
+    }
+
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        if (eventData.button != PointerEventData.InputButton.Left) return;
+        if (_draggedThisGesture) return;   // drag-tail click does NOT count as a double-click candidate.
+        if (eventData.clickCount != 2) return;
+        RequestResetView();
     }
 }

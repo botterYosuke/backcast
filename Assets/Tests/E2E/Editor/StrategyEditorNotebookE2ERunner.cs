@@ -76,7 +76,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section25_ModeConditionalVisibility(spawned)
                 ?? Section26_ZeroCellsFloor(spawned)
                 ?? Section27_EnterStaysNewline(spawned)
-                ?? Section28_EscapeKeepsEditing(spawned);
+                ?? Section28_EscapeKeepsEditing(spawned)
+                ?? Section29_EscapeKeyPumpKeepsEditing(spawned);
         }
         catch (Exception e)
         {
@@ -163,6 +164,9 @@ public static class StrategyEditorNotebookE2ERunner
                       "editor CONSUMES the new Input System Cancel action so Escape does nothing instead of " +
                       "reverting the edit and blurring — TMP_InputField.OnCancel deactivates+reverts " +
                       "unconditionally; single-line keeps the default cancel) " +
+                      "+ #150 Escape key-pump (STRATEGY-61 / findings 0117 §HITL: the SECOND Escape revert " +
+                      "path — the multiline editor OWNS the IMGUI key pump (OnUpdateSelected) and SWALLOWS " +
+                      "Escape before base.KeyPressed deactivates+reverts; single-line keeps the default pump) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1176,6 +1180,125 @@ public static class StrategyEditorNotebookE2ERunner
 
         Debug.Log("[E2E STRATEGY-60 PASS] multiline code editor consumes the EventSystem Cancel (Escape does nothing — no revert, no blur; edits kept); single-line keeps default cancel; production builder is MultiLineNewline");
         return null;
+    }
+
+    // ======================================================================
+    // 29. Escape does NOT discard the edit via the IMGUI KEY-PUMP either (#150 / findings 0117 §HITL 続報)
+    // Covers: STRATEGY-61 — the SECOND Escape→revert path. Consuming OnCancel (Section28/STRATEGY-60)
+    //         closed path 1 (the Cancel ACTION), but InputSystemUIInputModule forwards Escape into TWO
+    //         seams; the residual one is the IMGUI key pump that base.OnUpdateSelected runs every frame:
+    //         base.KeyPressed(Escape) (com.unity.ugui 2.0.0:2276) sets m_WasCanceled + returns
+    //         EditState.Finish, then the pump (:2378) DeactivateInputField()s → text=m_OriginalText
+    //         (revert, :4436) + blur. So after 6ff73ae the owner STILL lost edits on Escape. Fix:
+    //         StrategyInputField overrides OnUpdateSelected to OWN the multiline pump and SWALLOW Escape
+    //         (TryConsumeKeyPumpEscape) before base.KeyPressed sees it; every other event is re-pumped
+    //         faithfully. Single-line keeps TMP's default pump (Escape SHOULD cancel a search/name field).
+    //     DETERMINISTIC half: -batchmode -nographics has no IMGUI key pump / focus to drive a real
+    //     OnUpdateSelected, so the gate invokes the production swallow predicate directly AND models the
+    //     EXACT base path (KeyPressed+DeactivateInputField) when NOT swallowed — proving the swallow is
+    //     what prevents the loss (non-vacuous). The real keystroke→no-revert→focus path is HITL
+    //     (STRATEGY-18). Known deviation: the OSX composition micro-branch is omitted (owner is Windows;
+    //     IME stays HITL).
+    // ======================================================================
+    static string Section29_EscapeKeyPumpKeepsEditing(List<GameObject> spawned)
+    {
+        // (a) PRODUCTION config invariant: the real builder editor is MultiLineNewline (the path-2 swallow
+        //     is ALSO MultiLineNewline-gated, mirroring OnSubmit/OnCancel).
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s29", out _, out var body);
+        spawned.Add(root.gameObject);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S29: editor build failed";
+        var field = root.GetComponentInChildren<StrategyInputField>(true);
+        if (field == null) return "S29: StrategyInputField not found in the built editor";
+        if (field.lineType != TMP_InputField.LineType.MultiLineNewline)
+            return $"S29a: production editor lineType is {field.lineType}, expected MultiLineNewline";
+
+        // (a2) WIRING invariant. The behavioral asserts below drive the TryConsumeKeyPumpEscape PREDICATE
+        //      directly (headless has no IMGUI key pump / EventSystem focus to run a real OnUpdateSelected,
+        //      STRATEGY-18), so on their own they would STILL pass if the whole OnUpdateSelected override
+        //      were deleted and base.OnUpdateSelected reverted on Escape — the predicate would survive
+        //      unwired. This structural guard closes that gap: it fails if StrategyInputField no longer
+        //      declares the pump override that calls the predicate. (It cannot catch deleting only the
+        //      `if (TryConsumeKeyPumpEscape(...)) continue;` line — that residue stays HITL/STRATEGY-18.)
+        var pumpOverride = typeof(StrategyInputField).GetMethod(
+            "OnUpdateSelected", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(BaseEventData) }, null);
+        if (pumpOverride == null || pumpOverride.DeclaringType != typeof(StrategyInputField))
+            return "S29a: StrategyInputField does not override OnUpdateSelected (path-2 key-pump Escape swallow is unwired — base.OnUpdateSelected would deactivate+revert the edit)";
+
+        var esc = new Event { type = EventType.KeyDown, keyCode = KeyCode.Escape };
+
+        // (b) THE FIX + non-vacuous base model. Reflect the activated state TMP captures on focus
+        //     (m_AllowInput gates DeactivateInputField; m_OriginalText is the revert target) then "type"
+        //     more. The multiline field SWALLOWS the key-pump Escape so we never run the base path → the
+        //     edit survives. If the swallow branch is removed, !swallowed runs the EXACT base path
+        //     (KeyPressed(Escape) sets m_WasCanceled, DeactivateInputField reverts text→m_OriginalText) →
+        //     the edit is lost → RED (delete-the-production-logic litmus).
+        ActivateForEscapeTest(field, "A_orig");
+        field.text = "A_orig EDITED";
+        if (field.EscapeKeyPumpConsumedCount != 0) return "S29b: fresh field already counted a pump escape";
+        bool swallowed = field.TryConsumeKeyPumpEscape(esc);
+        if (!swallowed) { field.ProcessEvent(esc); field.DeactivateInputField(); }
+        if (!swallowed)
+            return "S29b: multiline did NOT swallow the IMGUI key-pump Escape (base.OnUpdateSelected would deactivate+revert the editor)";
+        if (field.EscapeKeyPumpConsumedCount != 1)
+            return "S29b: EscapeKeyPumpConsumedCount != 1 after a swallowed multiline Escape";
+        if (field.text != "A_orig EDITED")
+            return $"S29b: multiline edit was lost on Escape (text='{field.text}', expected 'A_orig EDITED' — the path-2 key-pump revert leaked)";
+
+        // (c) NEGATIVE control + base-revert proof: a SINGLE-line field is NOT swallowed → the modelled
+        //     base path runs → DeactivateInputField reverts to m_OriginalText. Proves both (i) single-line
+        //     keeps the default cancel/revert (a search/name field SHOULD abandon on Escape) and (ii) the
+        //     base path genuinely reverts when not swallowed (so the multiline assert above is non-vacuous).
+        var rootB = StrategyEditorWindowFrame.Build("strategy_editor:s29b", out _, out var bodyB);
+        spawned.Add(rootB.gameObject);
+        if (StrategyEditorContentBuilder.Build(bodyB) == null) return "S29: single-line control build failed";
+        var single = rootB.GetComponentInChildren<StrategyInputField>(true);
+        if (single == null) return "S29: single-line control field not found";
+        single.lineType = TMP_InputField.LineType.SingleLine;
+        ActivateForEscapeTest(single, "B_orig");
+        single.text = "B_orig EDITED";
+        bool slSwallowed = single.TryConsumeKeyPumpEscape(esc);
+        if (!slSwallowed) { single.ProcessEvent(esc); single.DeactivateInputField(); }
+        if (slSwallowed)
+            return "S29c: single-line swallowed the key-pump Escape (swallow must be MultiLineNewline-only)";
+        if (single.EscapeKeyPumpConsumedCount != 0)
+            return "S29c: single-line counted a pump escape (swallow must be MultiLineNewline-only)";
+        if (single.text != "B_orig")
+            return $"S29c: single-line did NOT revert on Escape (text='{single.text}', expected 'B_orig' — default cancel/revert must be preserved AND the base path must actually revert)";
+
+        // (d) NEGATIVE control: the swallow is ESCAPE-gated, not a blanket swallow of every key (else
+        //     ordinary typing/navigation would never reach base.KeyPressed). A non-Escape key on the
+        //     multiline field is NOT swallowed and does not bump the counter.
+        var aKey = new Event { type = EventType.KeyDown, keyCode = KeyCode.A };
+        int beforeCount = field.EscapeKeyPumpConsumedCount;
+        if (field.TryConsumeKeyPumpEscape(aKey))
+            return "S29d: multiline swallowed a NON-Escape key (swallow must be Escape-only or typing breaks)";
+        if (field.EscapeKeyPumpConsumedCount != beforeCount)
+            return "S29d: a non-Escape key bumped EscapeKeyPumpConsumedCount";
+
+        Debug.Log("[E2E STRATEGY-61 PASS] multiline code editor swallows the IMGUI key-pump Escape (path 2: no deactivate/revert, edit kept); single-line keeps default cancel/revert; swallow is Escape-only; production builder is MultiLineNewline");
+        return null;
+    }
+
+    // Reflect the minimal activated state TMP captures in the private ActivateInputFieldInternal so the
+    // modelled base Escape path (DeactivateInputField) actually reverts headlessly: m_AllowInput gates
+    // DeactivateInputField, m_OriginalText is the revert target, m_WasCanceled starts clean.
+    static void ActivateForEscapeTest(TMP_InputField f, string original)
+    {
+        SetTmpPrivateField(f, "m_OriginalText", original);
+        SetTmpPrivateField(f, "m_AllowInput", true);
+        SetTmpPrivateField(f, "m_WasCanceled", false);
+    }
+
+    static void SetTmpPrivateField(TMP_InputField f, string name, object value)
+    {
+        var fi = typeof(TMP_InputField).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance);
+        // Hard-fail if the field is gone: a silent no-op here would let the modelled base-revert path stop
+        // reverting (the (b)/(c) litmus would quietly go vacuous / false-GREEN) on a TMP package rename.
+        if (fi == null)
+            throw new InvalidOperationException(
+                $"S29: TMP_InputField.{name} not found via reflection — the Escape base-revert model can no longer be set up (TMP package field renamed?)");
+        fi.SetValue(f, value);
     }
 
     // ======================================================================

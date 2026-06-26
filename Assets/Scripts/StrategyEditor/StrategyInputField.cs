@@ -19,6 +19,7 @@
 // (findings 0096 §#119/#120 refinement).
 
 using TMPro;
+using UnityEngine;
 using UnityEngine.EventSystems;
 
 public class StrategyInputField : TMP_InputField
@@ -79,5 +80,122 @@ public class StrategyInputField : TMP_InputField
             return;
         }
         base.OnCancel(eventData);
+    }
+
+    // #150 (findings 0117 §HITL 続報): the SECOND Escape→revert path. Consuming OnCancel above closed
+    // path 1 (the Cancel ACTION), but InputSystemUIInputModule forwards Escape into TWO seams: the Cancel
+    // action AND the IMGUI key-pump queue that base.OnUpdateSelected pumps every frame. In that pump,
+    // base.KeyPressed(Escape) (com.unity.ugui 2.0.0, TMP_InputField.cs:2276) sets m_WasCanceled=true and
+    // returns EditState.Finish; the pump (TMP_InputField.cs:2378) then calls DeactivateInputField(), which
+    // does text = m_OriginalText (revert) + blur. So after 6ff73ae, focusing a cell, typing, and pressing
+    // Escape STILL discarded the edit — the residual path-2 revert. (#148's Enter only needed OnSubmit
+    // because path 2's Enter inserts a newline without deactivating, TMP_InputField.cs:2263 — Escape is
+    // asymmetric: path 2 deactivates+reverts.)
+    //
+    // Fix: for MultiLineNewline we OWN the key pump (override OnUpdateSelected) and SWALLOW Escape key
+    // events before base.KeyPressed can see them — so the editor is never deactivated/reverted. Every
+    // OTHER event is re-processed exactly as the base pump does (TMP_InputField.cs:2356-2413, via the
+    // protected KeyPressed/SendOnSubmit/SelectAll/ForceLabelUpdate primitives) so normal editing,
+    // navigation and Windows IME are unaffected. (There is no narrower seam: base KeyPressed/ProcessEvent/
+    // DeactivateInputField are all NON-virtual, and Event.PopEvent is a destructive pop with no push-back —
+    // so Escape can only be intercepted by re-owning the virtual OnUpdateSelected pump, not by overriding a
+    // smaller method or pop-filtering then delegating to base.) UpdateLabel always re-assigns m_TextComponent.text and
+    // re-shows the caret (TMP_InputField.cs:3500/3503); the private m_IsTextComponentUpdateRequired flag
+    // only gates one extra immediate ForceMeshUpdate that TMP redoes on the next canvas update anyway, so
+    // ForceLabelUpdate() is a faithful stand-in. The Settings dialog still opens because it is driven by
+    // an INDEPENDENT keyboard poll (BackcastWorkspaceRoot.DriveSettings) that never grabs EventSystem
+    // selection — so keeping the field active here does not fight it (AC: ESC still shows Settings).
+    // Single-line fields keep TMP's default pump (Escape there SHOULD cancel — search/name fields).
+    //
+    // EscapeKeyPumpConsumedCount is the AFK-observable seam (STRATEGY-61): -batchmode -nographics has no
+    // IMGUI key pump / focus to drive a real OnUpdateSelected, so the gate invokes TryConsumeKeyPumpEscape
+    // directly and asserts (i) it swallows a multiline Escape and (ii) when NOT swallowed, the modelled
+    // base path (ProcessEvent+DeactivateInputField) reverts — i.e. the swallow is what prevents the loss.
+    // The real keystroke→no-revert→focus path stays HITL (STRATEGY-18). Known IME deviations (private
+    // m_IsCompositionActive/compositionLength are inaccessible, so neither can be replicated; both are in
+    // the HITL/IME domain, STRATEGY-18): (1) the OSX composition-suppression micro-branch
+    // (TMP_InputField.cs:2370-2375) is omitted (owner is Windows); (2) the final block's
+    // `(m_IsCompositionActive && compositionLength > 0)` half (UUM-100552, TMP_InputField.cs:2409) is
+    // dropped — we Use()/refresh only on `consumedEvent`. This is observably benign: that clause only
+    // fires on input-LESS composition frames (no KeyDown popped), and the composition preview only CHANGES
+    // when a key/conversion arrives — which sets consumedEvent and runs our refresh+Use. A paused-
+    // composition frame would only redo an unchanged preview and Use an event carrying no key.
+    public int EscapeKeyPumpConsumedCount { get; private set; }
+
+    readonly Event _keyPumpEvent = new Event();
+
+    // True (and counted) iff this is a key-pump Escape we must swallow for the multiline code editor.
+    // Multiline-gated so single-line keeps default cancel; keyCode-gated so ordinary typing/navigation
+    // still flows to base.KeyPressed (a blanket swallow would break editing). Side-effecting "TryConsume"
+    // mirrors OnCancel/OnSubmit: invoked by the pump below AND directly by the AFK gate.
+    public bool TryConsumeKeyPumpEscape(Event e)
+    {
+        if (lineType == LineType.MultiLineNewline
+            && e != null
+            && e.rawType == EventType.KeyDown
+            && e.keyCode == KeyCode.Escape)
+        {
+            EscapeKeyPumpConsumedCount++;
+            return true;
+        }
+        return false;
+    }
+
+    public override void OnUpdateSelected(BaseEventData eventData)
+    {
+        // Single-line fields: unchanged — Escape SHOULD cancel/blur a search/name field.
+        if (lineType != LineType.MultiLineNewline)
+        {
+            base.OnUpdateSelected(eventData);
+            return;
+        }
+        if (!isFocused)
+            return;
+
+        // Multiline code editor: own the IMGUI key pump so Escape is swallowed before base.KeyPressed
+        // (mirror of base OnUpdateSelected at TMP_InputField.cs:2356-2413, with Escape filtered).
+        bool consumedEvent = false;
+        while (Event.PopEvent(_keyPumpEvent))
+        {
+            EventType eventType = _keyPumpEvent.rawType;
+            if (eventType == EventType.KeyUp)
+                continue;
+
+            if (eventType == EventType.KeyDown)
+            {
+                consumedEvent = true;
+
+                if (TryConsumeKeyPumpEscape(_keyPumpEvent))   // THE FIX: drop Escape; base never deactivates+reverts
+                    continue;
+
+                EditState editState = KeyPressed(_keyPumpEvent);
+                if (editState == EditState.Finish)
+                {
+                    // The only non-Escape Finish in a multiline field is Return at the line limit. Mirror base.
+                    if (!wasCanceled)
+                        SendOnSubmit();
+                    DeactivateInputField();
+                    break;
+                }
+
+                ForceLabelUpdate();
+                continue;
+            }
+
+            if (eventType == EventType.ValidateCommand || eventType == EventType.ExecuteCommand)
+            {
+                if (_keyPumpEvent.commandName == "SelectAll")
+                {
+                    SelectAll();
+                    consumedEvent = true;
+                }
+            }
+        }
+
+        if (consumedEvent)
+        {
+            ForceLabelUpdate();
+            eventData?.Use();
+        }
     }
 }

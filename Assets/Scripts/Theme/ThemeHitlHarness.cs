@@ -185,7 +185,7 @@ public class ThemeHitlHarness : MonoBehaviour
     }
 
     // Deterministic 2-bar mock for the chart strip: bar0 bearish (close<open), bar1 bullish
-    // (close>open) — so ChartView.FirstCandle(true) and (false) both resolve for ThemeProbe (#53).
+    // (close>open) — so ChartView.FirstCandleColor(true) and (false) both resolve for ThemeProbe (#53 / findings 0119 D-8).
     static ReplayBarFrame MockTwoBarFrame()
     {
         var pts = new OhlcPoint[]
@@ -218,7 +218,7 @@ public class ThemeHitlHarness : MonoBehaviour
     }
 
     // Deterministic 1×1 mock depth for the ladder strip: one ask + one bid so DepthLadderView's
-    // BestAsk()/BestBid() both resolve for ThemeProbe (#54, findings 0024).
+    // BestAskColor/BestBidColor both resolve for ThemeProbe (#54, findings 0024 / 0120 D-13).
     static DepthSnapshotView MockDepth() => new DepthSnapshotView
     {
         HasDepth = true,

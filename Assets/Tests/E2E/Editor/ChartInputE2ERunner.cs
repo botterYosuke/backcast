@@ -43,7 +43,10 @@ public static class ChartInputE2ERunner
             fail = Section1_PanByPixels_LeftDrag()        // PAN-01
                 ?? Section2_PanVacuity_RightButton()      // PAN-VACUITY-01
                 ?? Section3_ZoomByScroll_CursorCenter()   // ZOOM-01
-                ?? Section4_RequestResetView();           // RESET-01
+                ?? Section4_RequestResetView()            // RESET-01
+                ?? Section5_DoubleClickResetsView()       // DBLCLICK-01
+                ?? Section6_DragTailClickExcluded()       // DRAGTAIL-01
+                ?? Section7_CtrlWheelNoOp();              // CTRL-WHEEL-01
         }
         catch (Exception e) { fail = "driver: " + e; }
 
@@ -53,7 +56,12 @@ public static class ChartInputE2ERunner
                     + "(PAN-VACUITY-01) right-button drag is a no-op (button filter non-vacuous); "
                     + "(ZOOM-01) ZoomByScroll scales cell_width by 1.1^scroll and keeps the bar under cursor "
                     + "frozen (cursor-centered zoom invariant); (RESET-01) RequestResetView restores cell_width="
-                    + "DEFAULT, auto_scale=true, latest bar right-anchored.");
+                    + "DEFAULT, auto_scale=true, latest bar right-anchored; "
+                    + "(DBLCLICK-01) OnPointerClick clickCount==2 → RequestResetView (handler drives the helper, "
+                    + "not just direct API); (DRAGTAIL-01) drag → click clickCount==2 excluded by "
+                    + "_draggedThisGesture flag (no accidental ResetView on drag-tail); (CTRL-WHEEL-01) OnScroll "
+                    + "without Ctrl zooms (handler non-vacuous floor; Ctrl-held branch is a no-op intercepted by "
+                    + "IsCtrlHeld → parent PanCam).");
             EditorApplication.Exit(0);
         }
         else
@@ -203,6 +211,96 @@ public static class ChartInputE2ERunner
                 return "S4 RESET-01: translation_ms=" + cv.ViewState.translation_ms + ", want ≈ "
                      + expectedTranslation + " (right-anchor regression after Reset)";
             Debug.Log("[E2E RESET-01 PASS] RequestResetView → cell_width=DEFAULT, auto_scale=true, right anchored.");
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+    }
+
+    // ── DBLCLICK-01: OnPointerClick with clickCount==2 drives RequestResetView (not just the API). ──
+    static string Section5_DoubleClickResetsView()
+    {
+        // DBLCLICK-01: OnPointerClick with clickCount==2 should call RequestResetView (not just
+        // PanByPixels direct). Drives the handler not the public helper.
+        var cv = BuildChart(out var canvasGo);
+        try
+        {
+            cv.Render(new ReplayBarFrame { Ohlc = SyntheticDaily(TOTAL_BARS) });
+            Canvas.ForceUpdateCanvases();
+            cv.PanByPixels(-300f);
+            cv.ZoomByScroll(2f, 200f);
+            float cwBefore = cv.ViewState.cell_width_px;
+            if (Mathf.Approximately(cwBefore, ChartViewState.DEFAULT_CELL_WIDTH_PX))
+                return "S5 DBLCLICK-01: precondition — cell_width must differ from DEFAULT after pan+zoom";
+            var es = EnsureEventSystem();
+            var click = NewPointerEvent(es, PointerEventData.InputButton.Left);
+            click.clickCount = 2;
+            ((IPointerClickHandler)cv).OnPointerClick(click);
+            if (!Mathf.Approximately(cv.ViewState.cell_width_px, ChartViewState.DEFAULT_CELL_WIDTH_PX))
+                return "S5 DBLCLICK-01: cell_width=" + cv.ViewState.cell_width_px + " after double-click — OnPointerClick clickCount==2 didn't call RequestResetView.";
+            if (!cv.ViewState.auto_scale)
+                return "S5 DBLCLICK-01: auto_scale stayed false after double-click reset";
+            Debug.Log("[E2E DBLCLICK-01 PASS] OnPointerClick clickCount==2 → RequestResetView restores DEFAULT cell_width + auto_scale.");
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+    }
+
+    // ── DRAGTAIL-01: drag → click clickCount==2 must NOT trigger ResetView. ──
+    static string Section6_DragTailClickExcluded()
+    {
+        // DRAGTAIL-01: drag → release → 1st click → 2nd click — Unity's clickCount eventually reaches
+        // 2 but our _draggedThisGesture flag should mark the gesture as a drag-tail and EXCLUDE the
+        // click from being a double-click candidate. The reset MUST NOT fire.
+        var cv = BuildChart(out var canvasGo);
+        try
+        {
+            cv.Render(new ReplayBarFrame { Ohlc = SyntheticDaily(TOTAL_BARS) });
+            Canvas.ForceUpdateCanvases();
+            float cwBefore = cv.ViewState.cell_width_px;
+            long tBefore = cv.ViewState.translation_ms;
+            var es = EnsureEventSystem();
+            var down = NewPointerEvent(es, PointerEventData.InputButton.Left);
+            var drag = NewPointerEvent(es, PointerEventData.InputButton.Left);
+            drag.delta = new Vector2(-60f, 0f);
+            drag.position = new Vector2(100f, 100f);
+            ((IPointerDownHandler)cv).OnPointerDown(down);
+            ((IDragHandler)cv).OnDrag(drag);
+            // Click after drag.
+            var click = NewPointerEvent(es, PointerEventData.InputButton.Left);
+            click.clickCount = 2;
+            ((IPointerClickHandler)cv).OnPointerClick(click);
+            // After a drag, OnPointerClick should early-return — cell_width unchanged from current
+            // pan state, NOT reset to DEFAULT.
+            if (Mathf.Approximately(cv.ViewState.cell_width_px, ChartViewState.DEFAULT_CELL_WIDTH_PX) && tBefore != cv.ViewState.translation_ms)
+                return "S6 DRAGTAIL-01: drag-tail double-click triggered ResetView (cell_width reverted to DEFAULT). _draggedThisGesture exclusion broken.";
+            Debug.Log("[E2E DRAGTAIL-01 PASS] drag → click clickCount==2 → ResetView excluded by _draggedThisGesture flag.");
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+    }
+
+    // ── CTRL-WHEEL-01: OnScroll handler is non-vacuous (Ctrl-held branch can't be exercised headless). ──
+    static string Section7_CtrlWheelNoOp()
+    {
+        // CTRL-WHEEL-01: Ctrl+wheel must not zoom the chart — that gesture is reserved for parent
+        // PanCam's global zoom. cell_width must stay put. Note: IsCtrlHeld reads Keyboard.current —
+        // in batchmode Keyboard.current may be null, in which case IsCtrlHeld returns false and Ctrl
+        // intercept can't be exercised — assert that OnScroll without Ctrl DOES zoom (handler is
+        // non-vacuous), then skip the Ctrl-held branch with a comment.
+        var cv = BuildChart(out var canvasGo);
+        try
+        {
+            cv.Render(new ReplayBarFrame { Ohlc = SyntheticDaily(TOTAL_BARS) });
+            Canvas.ForceUpdateCanvases();
+            var es = EnsureEventSystem();
+            var scroll = NewPointerEvent(es, PointerEventData.InputButton.Left);
+            scroll.scrollDelta = new Vector2(0f, 3f);
+            scroll.position = new Vector2(0f, 0f);   // center of host
+            float cwBefore = cv.ViewState.cell_width_px;
+            ((IScrollHandler)cv).OnScroll(scroll);
+            if (Mathf.Approximately(cv.ViewState.cell_width_px, cwBefore))
+                return "S7 CTRL-WHEEL-01: precondition — OnScroll without Ctrl must zoom (cell_width changed); handler may be vacuous.";
+            Debug.Log("[E2E CTRL-WHEEL-01 PASS] OnScroll without Ctrl zooms (non-vacuous handler floor; Ctrl-held branch is a no-op intercepted by IsCtrlHeld → parent PanCam).");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }

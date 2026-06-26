@@ -15,18 +15,13 @@
 // handles glyph batching in its own sub-mesh, so labels don't share the same UIVertex buffer as the bg
 // quads. findings 0120 D-9 says this is fine; TMP/SDF migration is a separate slice.
 //
-// PUBLIC API (findings 0120 D-13 — replaces `Image Background` / `Text BestBid()` / `Text BestAsk()` /
-// `Text LastRow()`):
-//   * Color BestBidColor / BestAskColor / LastRowColor       — ThemeProbe seam (single-source via
-//                                                              ChartPalette → in lockstep with ChartView).
-//   * Color BackgroundColor                                  — chart_bg / ladder_bg shared role.
-//   * int RowCount                                            — 21 when HasDepth, 1 when placeholder.
-//   * Color GetRowHighlightTint(int rowIndex)                 — current hover/diff tint Color or Color.clear.
-//   * DepthSnapshotView CurrentSnapshot                       — last Render() input (test introspection).
-//   * string BestBidRowText / BestAskRowText / LastRowText   — current text of those rows (NOT a UI
-//                                                              widget; just the string, for E2E asserts).
-//   * int RebuildCount                                        — increments on each effective Render call
-//                                                              (early-out skips don't bump this).
+// PUBLIC API (findings 0120 D-13):
+//   * Color BestBidColor / BestAskColor / LastRowColor / BackgroundColor   — ThemeProbe seam.
+//   * int RowCount                                                          — 21 / 1.
+//   * Color GetRowHighlightTint(int)                                        — current hover/diff tint.
+//   * DepthSnapshotView CurrentSnapshot / PreviousSnapshot                  — test introspection.
+//   * string BestBidRowText / BestAskRowText / LastRowText                  — current row text.
+//   * int RebuildCount                                                       — bumps per Render().
 
 using System;
 using System.Collections.Generic;
@@ -105,20 +100,6 @@ public class DepthLadderView : MaskableGraphic
     {
         if (rowIndex < 0 || rowIndex >= _rowHighlightTints.Length) return Color.clear;
         return _rowHighlightTints[rowIndex];
-    }
-
-    // S9 seam — for diff highlight Timer / hover write. Returns Color.clear when row out of range.
-    public void SetRowHighlightTint(int rowIndex, Color tint)
-    {
-        if (rowIndex < 0 || rowIndex >= _rowHighlightTints.Length) return;
-        _rowHighlightTints[rowIndex] = tint;
-        SetVerticesDirty();
-    }
-
-    public void ClearAllHighlights()
-    {
-        for (int i = 0; i < _rowHighlightTints.Length; i++) _rowHighlightTints[i] = Color.clear;
-        SetVerticesDirty();
     }
 
     public string BestBidRowText

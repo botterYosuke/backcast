@@ -36,6 +36,7 @@
   - `price_to_y(price) → px` / `y_to_price(y) → price`
   - `time_to_x(ms) → px` / `x_to_time(x) → ms`
 - per-window で独立: 同じ instrument を別 window で開けば独立 ChartViewState。
+- **v1 制約 (#155-163)**: production は `BackcastWorkspaceRoot._chartViews` Dictionary keyed by `chart:<iid>` で **1 chart-window per iid**。同 iid を別 window で開く v2 拡張は `chart:<iid>#<n>` 命名で別 slice。本 finding の sidecar schema は v2 拡張に対応済（FW entry ごとに独立 chart_view_state）。
 
 ### D-3 UX: drag pan / wheel zoom / double-click reset
 
@@ -70,7 +71,7 @@
 |---|---|---|
 | price 軸ラベル（右 gutter） | `F:src/chart/scale/linear.rs::calc_optimal_price_ticks` | 純関数を C# 移植・`Text` 子を despawn+respawn・`main_area` のみ |
 | time 軸ラベル（下 gutter） | `F:src/chart/scale/timeseries.rs::calc_optimal_time_step` | 同上・basis_ms に応じて min/h/D 単位 |
-| グリッドライン | （ShapePainter line） | candle と同じ Mesh バッチへ alpha=0.06 で統合（追加 drawcall 0） |
+| グリッドライン | （ShapePainter line） | candle と同じ Mesh バッチへ alpha=0.06 で統合（追加 drawcall 0）。**scope**: price grid は `main_area` 限定（volume_area に価格目盛りは無い）／time grid は `plot` 全体（main_area + volume_area 貫通、flowsurface "MultiSplit で各 pane 独立" 設計に倣い同じ時間軸を candle と volume bar の双方に視覚連結） |
 | クロスヘア + readout | `F:src/chart/kline.rs` の crosshair | hover 中の `cursor_world` を持つ・`hovered_price` / `hovered_time_ms` を派生・gutter に badge（Text + 背景 quad） |
 | 出来高サブペイン | `F:src/ui/chart.rs::chart_volume` (backcast TTWR oracle) | plot 領域を 80%/20% に分割・volume bar を同 Mesh バッチに統合・candle 色を alpha=0.6 で再利用 |
 | last-price dashed line | （TTWR title_bar 関連） | 最新 close 価格に水平点線（gutter まで延びる）・Mesh バッチ統合 |
@@ -94,12 +95,13 @@
         }
       }
     ],
-    "schema_version": 4
+    "version": 2
   }
   ```
-- `schema_version` を 1 上げる（旧 sidecar に `chart_view_state` 無し → `ResetView()` 相当を default で migrate・破棄しない）。
+- `version` を 1 上げる（LayoutDocument.CURRENT_VERSION=2 — Assets/Scripts/Layout/LayoutDocument.cs:147-207 の実 schema 参照）。旧 sidecar に `chart_view_state` 無し → `ResetView()` 相当を default で migrate・破棄しない。
 - 同 instrument を別 window で開けば各 window が独立した sidecar slot を持つ。
 - `cell_height_norm` は autoscale で再計算されるため **永続化しない**（cell_width + auto_scale + translation だけで復元できる）。
+- **v1 制約**: 上記 schema は per-FW-entry に独立 chart_view_state を持てるが、production は v1 で 1 chart-window/iid のため per-iid 1 entry のみ書く。v2 で同 iid 二窓を許可するときは production 側で chart:<iid>#<n> spawn ロジックを足し、本 schema は無改変で受け入れる。
 
 ### D-8 E2E migration（破壊的変更を gate で守る）
 
@@ -130,7 +132,7 @@ public ChartViewState ViewState { get; }    // test 介入点（translation / ce
 - **PAN-01**: 初期 ViewState.translation_ms=T0 → drag(-100px) → translation_ms == T0 - 100/cell_width*basis_ms・auto_scale=false。
 - **ZOOM-01**: 初期 cell_width=6 → wheel(+3 notch) → cell_width == 6 * 1.1^3（≈ 7.99）・cursor 中心保持。
 - **RESET-01**: pan/zoom 後 double-click → ChartViewState が `ResetView()` の値（right-anchor / DEFAULT_CELL_WIDTH_PX / auto_scale=true）。
-- **PERSIST-01**: chart window の sidecar 保存 → reopen → ChartViewState が往復で復元（schema_version 上げ + migrate も合わせて検証）。
+- **PERSIST-01**: chart window の sidecar 保存 → reopen → ChartViewState が往復で復元（version 上げ + migrate も合わせて検証 — LayoutDocument 実 schema との対応は LayoutDocument.cs:147 参照）。
 
 ## 実装スコープ（順序）
 

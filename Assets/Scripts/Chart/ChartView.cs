@@ -33,10 +33,6 @@
 // THEME: this widget self-subscribes to ThemeService.Changed and calls SetVerticesDirty() so the
 // Mesh re-emits with the new ChartPalette colors on the next layout pass — equivalent to the legacy
 // ApplyTheme that walked each Image in-place. The title bar Text colors are repainted directly.
-//
-// RETIRED (findings 0119 D-8): `Image Background` getter / `Image FirstCandle(bool)` / `Candles`
-// RectTransform child / `_candleRoot`. KabuLiveChartRenderE2ERunner's `CountCandles` (looked up the
-// "Candles" name and counted childCount) migrates to TotalBarCount / RenderedBarCount.
 
 using System.Collections.Generic;
 using UnityEngine;
@@ -46,7 +42,7 @@ using UnityEngine.UI;
 
 [RequireComponent(typeof(CanvasRenderer))]
 public class ChartView : MaskableGraphic,
-    IPointerDownHandler, IDragHandler, IPointerUpHandler, IScrollHandler, IPointerClickHandler,
+    IPointerDownHandler, IDragHandler, IScrollHandler, IPointerClickHandler,
     IPointerEnterHandler, IPointerExitHandler, IPointerMoveHandler
 {
     // ---- gutter (preserved from the legacy widget so axis labels — S3 — land in the same rect) ----
@@ -118,7 +114,6 @@ public class ChartView : MaskableGraphic,
     }
     public int LastCrosshairLineCount { get; private set; }
     public int LastLastPriceLineCount { get; private set; }
-    Text _crosshairPriceBadge, _crosshairTimeBadge;
 
     // ---- ThemeProbe / E2E color seams (replaces FirstCandle(bool)→Image) ----
 
@@ -272,7 +267,7 @@ public class ChartView : MaskableGraphic,
     // ChartViewStateLayout with all-zero fields (translation_ms=0 / cell_width_px=0 / auto_scale=false).
     // Real captures clamp cell_width_px to ≥ MIN_CELL_WIDTH_PX (1.0), so cell_width_px=0 is a clean
     // sentinel for "not actually captured" — treat as no-op so freshly-spawned chart keeps the
-    // ResetView() defaults that BuildChartContent left it at (PERSIST-02).
+    // ResetView() defaults that BuildChartContent left it at (CHART-PERSIST-02).
     public void ApplyViewStateLayout(ChartViewStateLayout l)
     {
         if (l == null) return;
@@ -354,20 +349,25 @@ public class ChartView : MaskableGraphic,
             for (int i = 0; i < _bars.Count; i++)
             {
                 var p = _bars[i];
-                if (p.open_time_ms < winStart || p.open_time_ms > winEnd) continue;
+                if (p.open_time_ms < winStart || p.open_time_ms >= winEnd) continue;
                 if (p.low  < lo) lo = p.low;
                 if (p.high > hi) hi = p.high;
             }
             if (lo == double.MaxValue || hi == double.MinValue)
             {
-                // No bars in view yet (e.g. translation_ms past the data) — fall back to full-range so
-                // an autoscale chart never blanks out.
-                lo = double.MaxValue; hi = double.MinValue;
-                for (int i = 0; i < _bars.Count; i++)
+                // No bars in view yet (e.g. translation_ms past the data) — keep the previous visible
+                // range so an autoscale chart doesn't yank the axis to full-data extents (which would
+                // cause a price-axis "snap" when the user pans the window past the data edge).
+                // Fall back to a sane minimal range only when no prior range exists.
+                if (double.IsNaN(ViewState.visible_min_price) || double.IsNaN(ViewState.visible_max_price)
+                    || ViewState.visible_max_price <= ViewState.visible_min_price)
                 {
-                    var p = _bars[i];
-                    if (p.low  < lo) lo = p.low;
-                    if (p.high > hi) hi = p.high;
+                    lo = 0; hi = 1;   // first-ever Render with no bars-in-window — flat-1 placeholder.
+                }
+                else
+                {
+                    lo = ViewState.visible_min_price;
+                    hi = ViewState.visible_max_price;
                 }
             }
             if (hi <= lo) { hi = lo + 1.0; }   // flat-series guard (legacy parity).
@@ -394,7 +394,7 @@ public class ChartView : MaskableGraphic,
         for (int i = 0; i < _lastPriceTicks.Count; i++)
         {
             double price = _lastPriceTicks[i];
-            float y = MainPriceToY(price, mainY0, mainH);
+            float y = ViewState.PriceToY(price, mainY0, mainH);
             if (y < mainArea.yMin - 0.5f || y > mainArea.yMax + 0.5f) continue;
             EmitQuad(vh, mainArea.xMin, y - 0.5f, mainArea.xMax, y + 0.5f, gridColor);
             gridLines++;
@@ -421,13 +421,13 @@ public class ChartView : MaskableGraphic,
         {
             var p = _bars[i];
             if (p.open_time_ms < winStart) continue;
-            if (p.open_time_ms > winEnd) continue;
+            if (p.open_time_ms >= winEnd) continue;
 
             float x = ViewState.TimeToX(p.open_time_ms, plot.xMin, plot.width);
-            float yOpen  = MainPriceToY(p.open,  mainY0, mainH);
-            float yClose = MainPriceToY(p.close, mainY0, mainH);
-            float yHigh  = MainPriceToY(p.high,  mainY0, mainH);
-            float yLow   = MainPriceToY(p.low,   mainY0, mainH);
+            float yOpen  = ViewState.PriceToY(p.open,  mainY0, mainH);
+            float yClose = ViewState.PriceToY(p.close, mainY0, mainH);
+            float yHigh  = ViewState.PriceToY(p.high,  mainY0, mainH);
+            float yLow   = ViewState.PriceToY(p.low,   mainY0, mainH);
 
             bool bullish = p.close >= p.open;
             Color c = bullish ? upColor : downColor;
@@ -463,7 +463,7 @@ public class ChartView : MaskableGraphic,
                 {
                     var p = _bars[i];
                     if (p.open_time_ms < winStart) continue;
-                    if (p.open_time_ms > winEnd) continue;
+                    if (p.open_time_ms >= winEnd) continue;
                     float x = ViewState.TimeToX(p.open_time_ms, plot.xMin, plot.width);
                     float h = ChartScale.VolumeBarHeight(p.volume, maxVol, volumeH);
                     bool isBull = p.close >= p.open;
@@ -481,7 +481,7 @@ public class ChartView : MaskableGraphic,
         if (_bars.Count > 0)
         {
             double lastClose = _bars[_bars.Count - 1].close;
-            float y = MainPriceToY(lastClose, mainY0, mainH);
+            float y = ViewState.PriceToY(lastClose, mainY0, mainH);
             if (y >= mainArea.yMin && y <= mainArea.yMax)
             {
                 Color lpc = ChartPalette.LastPriceLine();
@@ -513,16 +513,6 @@ public class ChartView : MaskableGraphic,
             }
         }
         LastCrosshairLineCount = crossLines;
-    }
-
-    // Price → Y mapping for the main_area (S5 split: main_area occupies the top (1-VolumeFrac) of the
-    // plot). S3 grid / candle / axis label all read through this so a future VolumeFrac change moves
-    // everything in lockstep with no scattered y-math.
-    float MainPriceToY(double price, float mainY0, float mainH)
-    {
-        double range = ViewState.visible_max_price - ViewState.visible_min_price;
-        if (range <= 0 || double.IsNaN(range)) return mainY0 + mainH * 0.5f;
-        return mainY0 + (float)((price - ViewState.visible_min_price) / range) * mainH;
     }
 
     // Emit a 2-triangle quad with a single color. UIVertex.simpleVert positions vertices in this widget's
@@ -580,7 +570,7 @@ public class ChartView : MaskableGraphic,
                 double pct = System.Math.Round((_lastClose - _firstOpen) / _firstOpen * 100.0, 2);
                 bool gain = pct >= 0.0;
                 _changeText.text = (gain ? "+" : "-") + System.Math.Abs(pct).ToString("0.00") + "%";
-                _changeText.color = gain ? th.colors.hakoniwa_up : th.colors.hakoniwa_down;
+                _changeText.color = gain ? ChartPalette.Bullish() : ChartPalette.Bearish();
             }
         }
     }
@@ -643,12 +633,13 @@ public class ChartView : MaskableGraphic,
 
         double step = _lastPriceTicks.Count >= 2 ? (_lastPriceTicks[1] - _lastPriceTicks[0])
                                                  : (ViewState.visible_max_price - ViewState.visible_min_price) / 8.0;
+        if (double.IsNaN(step) || double.IsInfinity(step) || step <= 0) step = 1.0;
         int decimals = ChartScale.PriceTickDecimals(step);
         string fmt = "F" + decimals;
         var th = ThemeService.Current;
         for (int i = 0; i < _lastPriceTicks.Count; i++)
         {
-            float y = MainPriceToY(_lastPriceTicks[i], mainY0, mainH);
+            float y = ViewState.PriceToY(_lastPriceTicks[i], mainY0, mainH);
             var rt = (RectTransform)_priceLabels[i].transform;
             rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.zero;
             rt.pivot = new Vector2(0f, 0.5f);
@@ -753,18 +744,15 @@ public class ChartView : MaskableGraphic,
     {
         if (eventData.button != PointerEventData.InputButton.Left) return;
         _draggedThisGesture = true;
-        // eventData.delta is in screen pixels; Canvas scale (overlay = 1, scaler-driven canvases may
-        // differ) is folded into the rectTransform's local rect — but the simplest faithful translation
-        // (legacy parity with flowsurface's `cursor_delta`) is to use delta.x directly. Pan(dx_px) flips
-        // sign internally so a right-drag scrolls the visible window to a LATER time (canonical chart UX).
-        PanByPixels(eventData.delta.x);
-    }
-
-    public void OnPointerUp(PointerEventData eventData)
-    {
-        // No-op: drag-tail handling is finalized in OnPointerClick (which Unity only fires when the
-        // pointer hasn't moved past the drag threshold, AND our _draggedThisGesture covers anything
-        // the EventSystem might let slip past the threshold).
+        // Convert screen-pixel delta to local-rect delta so Canvas scale (Scaler-driven canvases)
+        // is honored — eventData.delta is in screen pixels which assumes Canvas overlay scale=1.
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                rectTransform, eventData.position, eventData.pressEventCamera, out var localNow))
+            return;
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                rectTransform, eventData.position - eventData.delta, eventData.pressEventCamera, out var localPrev))
+            return;
+        PanByPixels(localNow.x - localPrev.x);
     }
 
     public void OnScroll(PointerEventData eventData)

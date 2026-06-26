@@ -64,6 +64,7 @@ public class ChartViewState
         float oldCw = cell_width_px;
         float newCw = Mathf.Clamp(cell_width_px * Mathf.Pow(1.1f, scroll_notches),
                                   MIN_CELL_WIDTH_PX, MAX_CELL_WIDTH_PX);
+        auto_scale = false;
         if (Mathf.Approximately(newCw, oldCw)) return;
 
         // Time under cursor BEFORE zoom = translation_ms + (cursor_x / oldCw) * basis.
@@ -88,13 +89,6 @@ public class ChartViewState
 
     // ---- derived geometry ----
 
-    // Returns the EXCLUSIVE right-edge timestamp for the visible window.
-    public long VisibleEndMs(float plot_width_px)
-    {
-        long basis = basis_ms ?? BASIS_MINUTE_MS;
-        return translation_ms + (long)((plot_width_px / Mathf.Max(1e-3f, cell_width_px)) * basis);
-    }
-
     public float TimeToX(long t_ms, float plot_x0, float plot_width_px)
     {
         long basis = basis_ms ?? BASIS_MINUTE_MS;
@@ -108,18 +102,13 @@ public class ChartViewState
         return translation_ms + (long)(((x_px - plot_x0) / Mathf.Max(1e-3f, cell_width_px)) * basis);
     }
 
-    public float PriceToY(double price, float plot_y0, float plot_height_px)
+    // Map price → main_area y. mainY0 = main_area.yMin in widget-local space, mainH = main_area
+    // height (volume_area is excluded — findings 0119 D-2: price-axis lives in main_area only).
+    public float PriceToY(double price, float mainY0, float mainH)
     {
         double range = visible_max_price - visible_min_price;
-        if (range <= 0 || double.IsNaN(range)) return plot_y0 + plot_height_px * 0.5f;
-        return plot_y0 + (float)((price - visible_min_price) / range) * plot_height_px;
-    }
-
-    public double YToPrice(float y_px, float plot_y0, float plot_height_px)
-    {
-        double range = visible_max_price - visible_min_price;
-        if (range <= 0 || double.IsNaN(range) || plot_height_px <= 0) return double.NaN;
-        return visible_min_price + ((y_px - plot_y0) / plot_height_px) * range;
+        if (range <= 0 || double.IsNaN(range)) return mainY0 + mainH * 0.5f;
+        return mainY0 + (float)((price - visible_min_price) / range) * mainH;
     }
 
     // ---- basis_ms inference (used when SetGranularity wasn't called) ----

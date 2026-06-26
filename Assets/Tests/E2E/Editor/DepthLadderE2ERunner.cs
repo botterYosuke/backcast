@@ -396,6 +396,9 @@ public static class DepthLadderE2ERunner
             return "S7 LADDER-PALETTE-01: BestBidColor != ChartPalette.Bullish() — direct hakoniwa_up read regression";
         if (lx.BestAskColor != ChartPalette.Bearish())
             return "S7 LADDER-PALETTE-01: BestAskColor != ChartPalette.Bearish()";
+        Debug.Log("[E2E LADDER-RENDER-01 PASS] HasDepth → RowCount=21 (10 ask + LAST + 10 bid).");
+        Debug.Log("[E2E LADDER-RENDER-02 PASS] !HasDepth → RowCount=1 placeholder.");
+        Debug.Log("[E2E LADDER-PALETTE-01 PASS] BestBidColor==ChartPalette.Bullish() / BestAskColor==ChartPalette.Bearish() (single-source).");
         return null;
     }
 }

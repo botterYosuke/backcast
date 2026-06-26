@@ -69,6 +69,7 @@ public static class ChartVolumePaneE2ERunner
         if (ChartScale.FormatVolume(1234) != "1.23K") return "S1 VOLUME-PURE-01: FormatVolume(1234) wrong: " + ChartScale.FormatVolume(1234);
         if (ChartScale.FormatVolume(1_500_000) != "1.5M") return "S1 VOLUME-PURE-01: FormatVolume(1.5M) wrong: " + ChartScale.FormatVolume(1_500_000);
         if (ChartScale.FormatVolume(2_500_000_000) != "2.5B") return "S1 VOLUME-PURE-01: FormatVolume(2.5B) wrong";
+        Debug.Log("[E2E VOLUME-PURE-01 PASS] MaxVisibleVolume / VolumeBarHeight / FormatVolume pure functions.");
         return null;
     }
 
@@ -93,6 +94,7 @@ public static class ChartVolumePaneE2ERunner
             if (cv.LastVolumeBarCount != 0)
                 return "S2 VOLUME-01: empty Render produced " + cv.LastVolumeBarCount
                      + " volume bars — must be 0 when no data.";
+            Debug.Log("[E2E VOLUME-01 PASS] LastVolumeBarCount>0 matches RenderedBarCount; 0 on empty Render.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -125,6 +127,7 @@ public static class ChartVolumePaneE2ERunner
                     return "S3 VOLUME-02: price label '" + t.GetComponent<UnityEngine.UI.Text>()?.text
                          + "' at y=" + labelY + " sits in volume_area (mainYMin=" + mainYMin + ")";
             }
+            Debug.Log("[E2E VOLUME-02 PASS] all price labels above mainYMin (no leak into volume_area).");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -147,6 +150,7 @@ public static class ChartVolumePaneE2ERunner
             if (cv.Crosshair.hovered_price.HasValue)
                 return "S4 VOLUME-CROSSHAIR-01: hovered_price=" + cv.Crosshair.hovered_price
                      + " with cursor in volume_area — main-only derive (D-2) regression";
+            Debug.Log("[E2E VOLUME-CROSSHAIR-01 PASS] cursor in volume_area → hovered_volume non-null + hovered_price null.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }

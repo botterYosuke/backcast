@@ -84,9 +84,10 @@ def test_replay_load_cold_seeds_full_period(tmp_path) -> None:
     assert len(pts_a) == n_a, f"expected {n_a} bars for {_IID_A}, got {len(pts_a)}"
     assert len(pts_b) == n_b, f"expected {n_b} bars for {_IID_B}, got {len(pts_b)}"
     # Bars are well-formed and ts-ascending (chart x-axis invariant).
-    for pts in (pts_a, pts_b):
+    for iid, pts in ((_IID_A, pts_a), (_IID_B, pts_b)):
         assert all(p.open > 0 and p.close > 0 for p in pts)
         assert all(pts[i].open_time_ms < pts[i + 1].open_time_ms for i in range(len(pts) - 1))
+        assert all(p.volume > 0 for p in pts), f"cold seed dropped volume for {iid}"
 
     # The state JSON projection (what the C# decoder polls) MUST surface the full series.
     state = eng.get_current_state()

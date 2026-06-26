@@ -344,6 +344,7 @@ class DataEngine:
                         high=b.high,
                         low=b.low,
                         close=b.close,
+                        volume=b.volume,
                     )
                     for b in bars
                 ]
@@ -355,7 +356,7 @@ class DataEngine:
         # reducer's de-dupe is by ts, but we don't rely on it — sizing the cap to the seed
         # count + the run length suffices).
         cold_max = max((len(v) for v in cold_seed.values()), default=0)
-        replay_cap = max(self._max_history_len, cold_max * 2 + self._max_history_len)
+        replay_cap = max(self._max_history_len, cold_max + self._max_history_len)
         # Replay-ready reducer in a "warming-up" state. We do NOT prime bar 0 (so every bar is
         # streamed exactly once — no primary-skip), but the LOADED state is still polled by the
         # UI before streaming starts, and TradingState requires price>0 & timestamp>0. So seed

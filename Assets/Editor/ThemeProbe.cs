@@ -281,7 +281,9 @@ public static class ThemeProbe
         True(harness.LadderView != null, "harness exposed the production DepthLadderView (Mesh widget, S8 #161)");
         Eq(harness.ChartView.BackgroundColor, d.colors.hakoniwa_chart_background, "ChartView (production) BackgroundColor == dark hakoniwa_chart_background (findings 0054 + 0119 D-8)");
         Eq(harness.ChartView.FirstCandleColor(true), d.colors.hakoniwa_up, "ChartView (production) FirstCandleColor(true) == hakoniwa_up (findings 0054 P1 + 0119 D-8)");
+        Debug.Log("[E2E THEME-CANDLE-UP PASS] ChartView.FirstCandleColor(true) == dark hakoniwa_up.");
         Eq(harness.ChartView.FirstCandleColor(false), d.colors.hakoniwa_down, "ChartView (production) FirstCandleColor(false) == hakoniwa_down");
+        Debug.Log("[E2E THEME-CANDLE-DOWN PASS] ChartView.FirstCandleColor(false) == dark hakoniwa_down.");
 
         // -- 4c-ii title bar (#53): the 2-bar mock is firstOpen=100 / lastClose=105 → +5.00% gain.
         // Value-asserts the NEW title port (price/change% formatting incl. sign) AND that the change%
@@ -295,16 +297,17 @@ public static class ThemeProbe
             Eq(title.ChangeText.color, d.colors.hakoniwa_up, "ChartView title change% colored hakoniwa_up (gain) under dark");
         }
         Eq(harness.LadderView.BestBidColor, d.colors.hakoniwa_up, "DepthLadderView (production) BestBidColor == hakoniwa_up (findings 0054 P1 + 0120 D-13)");
+        Debug.Log("[E2E THEME-LADDER-BID PASS] DepthLadderView.BestBidColor == hakoniwa_up.");
         Eq(harness.LadderView.BestAskColor, d.colors.hakoniwa_down, "DepthLadderView (production) BestAskColor == hakoniwa_down");
+        Debug.Log("[E2E THEME-LADDER-ASK PASS] DepthLadderView.BestAskColor == hakoniwa_down.");
         Eq(harness.LadderView.LastRowColor, d.colors.hakoniwa_last, "DepthLadderView (production) LastRowColor == hakoniwa_last");
         Eq(harness.LadderView.BackgroundColor, d.colors.hakoniwa_chart_background, "DepthLadderView (production) BackgroundColor == hakoniwa_chart_background (single-source with ChartView via ChartPalette)");
+        Debug.Log("[E2E THEME-LADDER-BG PASS] DepthLadderView.BackgroundColor == hakoniwa_chart_background (chart+ladder single-source).");
         // LADDER-PALETTE-01: ChartView and DepthLadderView share Bid/Ask via ChartPalette.
         Eq(harness.LadderView.BestBidColor, harness.ChartView.FirstCandleColor(true), "LADDER-PALETTE-01 dark: ladder Bid == chart Bullish (ChartPalette single-source)");
         Eq(harness.LadderView.BestAskColor, harness.ChartView.FirstCandleColor(false), "LADDER-PALETTE-01 dark: ladder Ask == chart Bearish");
         Eq(harness.Samples["accent_editor"].color, d.players.Get(0), "montage accent_editor == dark players[0]");
         Eq(harness.Samples["accent_order"].color, d.players.Get(2), "montage accent_order == dark players[2]");
-        // ladder_bg == hakoniwa_chart_background (findings 0054: chart + ladder share one Hakoniwa-isolated bg role).
-        // (ladder_bg / chart_bg assertions moved to LadderView.BackgroundColor / ChartView.BackgroundColor above — S8 #161)
         Eq(harness.Samples["editor_bg"].color, d.colors.background, "montage editor_bg == dark background");
         Eq(harness.Samples["accents_bg"].color, d.colors.surface_background, "montage accents_bg == dark surface");
         Eq(harness.Samples["code_text"].color, d.colors.text, "montage code_text == dark text");

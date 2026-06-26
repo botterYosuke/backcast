@@ -87,6 +87,7 @@ public static class ChartCrosshairLastPriceE2ERunner
             if (cv.LastCrosshairLineCount != 0)
                 return "S1 CROSSHAIR-01: LastCrosshairLineCount=" + cv.LastCrosshairLineCount
                      + " after exit, want 0";
+            Debug.Log("[E2E CROSSHAIR-01 PASS] hover sets/clears CrosshairState + Mesh cross-lines.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -110,6 +111,7 @@ public static class ChartCrosshairLastPriceE2ERunner
             if (cv.LastCrosshairLineCount != 0)
                 return "S2 CROSSHAIR-MAIN-ONLY-01: cursor outside plot rect produced "
                      + cv.LastCrosshairLineCount + " cross lines (gutter cursor should not render).";
+            Debug.Log("[E2E CROSSHAIR-MAIN-ONLY-01 PASS] cursor outside main_area → hovered_price null.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -131,6 +133,7 @@ public static class ChartCrosshairLastPriceE2ERunner
             if (cv.LastLastPriceLineCount != 0)
                 return "S3 LASTPRICE-01: empty Render still produced " + cv.LastLastPriceLineCount
                      + " segments — last-price line should be 0 when _bars is empty.";
+            Debug.Log("[E2E LASTPRICE-01 PASS] dashed segments emitted at latest close; 0 on empty Render.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }

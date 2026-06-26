@@ -116,6 +116,7 @@ python/.venv/
 __pycache__/
 *.pyc
 python/spike/fixtures/jquants-catalog/
+python/spike/captures/
 .env
 
 # mkdocs build/preview tooling (docs/requirements.txt pins the deps; this venv is local)

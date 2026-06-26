@@ -7,14 +7,14 @@
 //   # expect: [E2E CHART VIEWSTATE PERSIST PASS] / exit=0
 //
 // WHAT THIS GATES:
-//   PERSIST-01: capture a ChartView ViewState into FloatingWindowLayout.chart_view_state, write +
+//   CHART-PERSIST-01: capture a ChartView ViewState into FloatingWindowLayout.chart_view_state, write +
 //               read the sidecar, ApplyViewStateLayout restores translation_ms / cell_width_px /
 //               auto_scale verbatim (within float eps for cell_width). Round-trip pin.
-//   PERSIST-02: a sidecar with version=1 (no chart_view_state field on any FW) loads fine — the
+//   CHART-PERSIST-02: a sidecar with version=1 (no chart_view_state field on any FW) loads fine — the
 //               LayoutDocument's CURRENT_VERSION=2 forward-tolerance leaves chart_view_state=null
 //               on each FW; ApplyViewStateLayout(null) is a no-op so freshly-spawned chart keeps
 //               ResetView() defaults (auto_scale=true, cell_width=DEFAULT). Old sidecar non-destructive.
-//   PERSIST-03: 2 chart windows of the SAME instrument with DIFFERENT pan/zoom states → 2 separate
+//   CHART-PERSIST-03: 2 chart windows of the SAME instrument with DIFFERENT pan/zoom states → 2 separate
 //               FloatingWindowLayout entries, each with its own chart_view_state, both round-trip
 //               independently. Per-window independence pin.
 
@@ -36,16 +36,16 @@ public static class ChartViewStatePersistenceE2ERunner
             ResetTempDir();
             fail = Section1_RoundTrip()
                 ?? Section2_LegacySidecarV1Migrate()
-                ?? Section3_PerWindowIndependence();
+                ?? Section3_PerWindowSidecarSchemaHealth();
         }
         catch (Exception e) { fail = "driver: " + e; }
         finally { TryDeleteDir(TempRoot); }
 
         if (fail == null)
         {
-            Debug.Log("[E2E CHART VIEWSTATE PERSIST PASS] (PERSIST-01) ViewState round-trips through "
-                    + "LayoutSidecarStore; (PERSIST-02) version=1 sidecar loads cleanly with chart_view_state=null "
-                    + "→ ChartView keeps ResetView() defaults; (PERSIST-03) 2 chart windows on the same iid each "
+            Debug.Log("[E2E CHART VIEWSTATE PERSIST PASS] (CHART-PERSIST-01) ViewState round-trips through "
+                    + "LayoutSidecarStore; (CHART-PERSIST-02) version=1 sidecar loads cleanly with chart_view_state=null "
+                    + "→ ChartView keeps ResetView() defaults; (CHART-PERSIST-03) 2 chart windows on the same iid each "
                     + "round-trip an independent chart_view_state.");
             EditorApplication.Exit(0);
         }
@@ -75,17 +75,17 @@ public static class ChartViewStatePersistenceE2ERunner
 
             // Read back, find the chart FW, apply to a fresh chart.
             if (!LayoutSidecarStore.TryReadLayout(py, out var roundTrip) || roundTrip == null)
-                return "S1 PERSIST-01: TryReadLayout returned false on a sidecar we just wrote";
+                return "S1 CHART-PERSIST-01: TryReadLayout returned false on a sidecar we just wrote";
             var fw = roundTrip.FindWindow("chart:7203.TSE");
-            if (fw == null) return "S1 PERSIST-01: FW chart:7203.TSE missing in round-trip doc";
+            if (fw == null) return "S1 CHART-PERSIST-01: FW chart:7203.TSE missing in round-trip doc";
             if (fw.chart_view_state == null)
-                return "S1 PERSIST-01: chart_view_state lost in JsonUtility round-trip (null on read)";
+                return "S1 CHART-PERSIST-01: chart_view_state lost in JsonUtility round-trip (null on read)";
             if (fw.chart_view_state.translation_ms != t0)
-                return "S1 PERSIST-01: translation_ms drift " + fw.chart_view_state.translation_ms + " != " + t0;
+                return "S1 CHART-PERSIST-01: translation_ms drift " + fw.chart_view_state.translation_ms + " != " + t0;
             if (Mathf.Abs(fw.chart_view_state.cell_width_px - cw0) > 1e-3f)
-                return "S1 PERSIST-01: cell_width_px drift " + fw.chart_view_state.cell_width_px + " != " + cw0;
+                return "S1 CHART-PERSIST-01: cell_width_px drift " + fw.chart_view_state.cell_width_px + " != " + cw0;
             if (fw.chart_view_state.auto_scale != as0)
-                return "S1 PERSIST-01: auto_scale drift " + fw.chart_view_state.auto_scale + " != " + as0;
+                return "S1 CHART-PERSIST-01: auto_scale drift " + fw.chart_view_state.auto_scale + " != " + as0;
 
             // Apply to a fresh chart and confirm restore.
             var cv2 = BuildStandaloneChart(out var canvasGo2);
@@ -93,13 +93,14 @@ public static class ChartViewStatePersistenceE2ERunner
             {
                 cv2.ApplyViewStateLayout(fw.chart_view_state);
                 if (cv2.ViewState.translation_ms != t0)
-                    return "S1 PERSIST-01: restored translation_ms wrong";
+                    return "S1 CHART-PERSIST-01: restored translation_ms wrong";
                 if (Mathf.Abs(cv2.ViewState.cell_width_px - cw0) > 1e-3f)
-                    return "S1 PERSIST-01: restored cell_width_px wrong";
+                    return "S1 CHART-PERSIST-01: restored cell_width_px wrong";
                 if (cv2.ViewState.auto_scale != as0)
-                    return "S1 PERSIST-01: restored auto_scale wrong";
+                    return "S1 CHART-PERSIST-01: restored auto_scale wrong";
             }
             finally { UnityEngine.Object.DestroyImmediate(canvasGo2); }
+            Debug.Log("[E2E CHART-PERSIST-01 PASS] ViewState round-trips through LayoutSidecarStore with translation_ms/cell_width_px/auto_scale verbatim.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -126,9 +127,9 @@ public static class ChartViewStatePersistenceE2ERunner
             + "}";
         File.WriteAllText(LayoutSidecarStore.SidecarPathFor(py), legacyJson);
         if (!LayoutSidecarStore.TryReadLayout(py, out var doc) || doc == null)
-            return "S2 PERSIST-02: legacy v1 sidecar failed to load — version-tolerance regression";
+            return "S2 CHART-PERSIST-02: legacy v1 sidecar failed to load — version-tolerance regression";
         var fw = doc.FindWindow("chart:7203.TSE");
-        if (fw == null) return "S2 PERSIST-02: legacy FW chart:7203.TSE missing after load";
+        if (fw == null) return "S2 CHART-PERSIST-02: legacy FW chart:7203.TSE missing after load";
         // JsonUtility quirk: a missing reference-type field hydrates to a new instance with all-zero
         // fields (NOT null). cell_width_px=0 is our "not actually captured" sentinel (real captures
         // clamp cell_width to ≥ MIN=1.0). ApplyViewStateLayout must treat this as a no-op so the
@@ -136,11 +137,11 @@ public static class ChartViewStatePersistenceE2ERunner
         if (fw.chart_view_state == null)
         {
             // The day JsonUtility changes its behavior and surfaces null instead, that's also fine
-            // (still PERSIST-02 conformant) — the null guard in ApplyViewStateLayout will no-op.
+            // (still CHART-PERSIST-02 conformant) — the null guard in ApplyViewStateLayout will no-op.
         }
         else if (fw.chart_view_state.cell_width_px >= 1f)
         {
-            return "S2 PERSIST-02: legacy v1 sidecar somehow surfaced a REAL cell_width_px="
+            return "S2 CHART-PERSIST-02: legacy v1 sidecar somehow surfaced a REAL cell_width_px="
                  + fw.chart_view_state.cell_width_px
                  + " — should be the JsonUtility-zero sentinel (or null) on missing field";
         }
@@ -154,15 +155,20 @@ public static class ChartViewStatePersistenceE2ERunner
             long tBefore = cv.ViewState.translation_ms;
             cv.ApplyViewStateLayout(fw.chart_view_state);   // zero-sentinel / null → no-op
             if (cv.ViewState.cell_width_px != cwBefore || cv.ViewState.auto_scale != asBefore || cv.ViewState.translation_ms != tBefore)
-                return "S2 PERSIST-02: ApplyViewStateLayout(sentinel) mutated state from cw="
+                return "S2 CHART-PERSIST-02: ApplyViewStateLayout(sentinel) mutated state from cw="
                      + cwBefore + " ts=" + tBefore + " auto=" + asBefore + " — sentinel guard missing";
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+        Debug.Log("[E2E CHART-PERSIST-02 PASS] legacy v1 sidecar loads cleanly; JsonUtility-zero sentinel ApplyViewStateLayout is a no-op.");
         return null;
     }
 
-    static string Section3_PerWindowIndependence()
+    static string Section3_PerWindowSidecarSchemaHealth()
     {
+        // v1 では production は 1 chart-window/iid（BackcastWorkspaceRoot._chartViews Dictionary keyed by
+        // chart:<iid>）。本 section は **sidecar schema** が複数 FW entry に独立 chart_view_state を持てる
+        // shape healthy かを確認する。owner 承認: v2 で chart:<iid>#<n> 拡張するときは production と本
+        // section を同期して更新する。
         var cvA = BuildStandaloneChart(out var canvasA);
         var cvB = BuildStandaloneChart(out var canvasB);
         try
@@ -173,7 +179,7 @@ public static class ChartViewStatePersistenceE2ERunner
             long tB = cvB.ViewState.translation_ms;
             float cwA = cvA.ViewState.cell_width_px;
             float cwB = cvB.ViewState.cell_width_px;
-            if (tA == tB) return "S3 PERSIST-03: precondition — translations should differ";
+            if (tA == tB) return "S3 CHART-PERSIST-03: precondition — translations should differ";
 
             // Build a doc with TWO chart FW entries on the same iid (different window ids).
             string py = WriteStubStrategy("perwindow");
@@ -185,21 +191,22 @@ public static class ChartViewStatePersistenceE2ERunner
             LayoutSidecarStore.WriteLayout(py, doc);
 
             if (!LayoutSidecarStore.TryReadLayout(py, out var rt) || rt == null)
-                return "S3 PERSIST-03: TryReadLayout returned false";
+                return "S3 CHART-PERSIST-03: TryReadLayout returned false";
             var fwA = rt.FindWindow("chart:7203.TSE");
             var fwB = rt.FindWindow("chart:7203.TSE#2");
-            if (fwA == null || fwB == null) return "S3 PERSIST-03: a FW lost on round-trip";
+            if (fwA == null || fwB == null) return "S3 CHART-PERSIST-03: a FW lost on round-trip";
             if (fwA.chart_view_state == null || fwB.chart_view_state == null)
-                return "S3 PERSIST-03: chart_view_state missing on one window after round-trip";
+                return "S3 CHART-PERSIST-03: chart_view_state missing on one window after round-trip";
             if (fwA.chart_view_state.translation_ms != tA)
-                return "S3 PERSIST-03: A translation drift";
+                return "S3 CHART-PERSIST-03: A translation drift";
             if (fwB.chart_view_state.translation_ms != tB)
-                return "S3 PERSIST-03: B translation drift";
+                return "S3 CHART-PERSIST-03: B translation drift";
             if (Mathf.Abs(fwA.chart_view_state.cell_width_px - cwA) > 1e-3f
                 || Mathf.Abs(fwB.chart_view_state.cell_width_px - cwB) > 1e-3f)
-                return "S3 PERSIST-03: cell_width per-window drift";
+                return "S3 CHART-PERSIST-03: cell_width per-window drift";
             if (fwA.chart_view_state.translation_ms == fwB.chart_view_state.translation_ms)
-                return "S3 PERSIST-03: per-window states collapsed into one — independence broken";
+                return "S3 CHART-PERSIST-03: per-window states collapsed into one — independence broken";
+            Debug.Log("[E2E CHART-PERSIST-03 PASS] sidecar schema supports independent chart_view_state per FW entry (v1 contract: 1 chart-window per iid; v2 will extend chart:<iid>#<n>).");
             return null;
         }
         finally

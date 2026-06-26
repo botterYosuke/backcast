@@ -62,6 +62,7 @@ public static class ChartAxisGridE2ERunner
         double step = t[1] - t[0];
         if (Math.Abs(step - 10.0) > 1e-9)
             return "S1 TICK-PRICE-01: step=" + step + ", want 10 (nice (1,2,5)*10^N pick on a span/8 ≈ 11)";
+        Debug.Log("[E2E TICK-PRICE-01 PASS] CalcOptimalPriceTicks(10,100,8) → step-10 nice-tick ascending.");
         return null;
     }
 
@@ -76,6 +77,7 @@ public static class ChartAxisGridE2ERunner
         long stepM = ChartScale.CalcOptimalTimeStep(startMs, startMs + 4L * 60_000L, 60_000L, 4);
         if (stepM != 60_000L)
             return "S2 TICK-TIME-01: 4 min range / 4 target on Minute ladder → step=" + stepM + ", want 60000";
+        Debug.Log("[E2E TICK-TIME-01 PASS] Daily ladder 5d/6 → 1d step; Minute 4min/4 → 60s step.");
         return null;
     }
 
@@ -104,6 +106,7 @@ public static class ChartAxisGridE2ERunner
                 { sawNumber = true; break; }
             }
             if (!sawNumber) return "S3 AXIS-PRICE-01: no numeric Text under PriceAxisLabels (RebuildAxisLabels regression)";
+            Debug.Log("[E2E AXIS-PRICE-01 PASS] Render + RebuildAxisLabels lights LastPriceLabelCount>0 with parseable numeric Text.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -155,6 +158,7 @@ public static class ChartAxisGridE2ERunner
             if (!sawTime) return "S4 AXIS-TIME-01: Minute basis must emit HH:mm labels — found none";
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo2); }
+        Debug.Log("[E2E AXIS-TIME-01 PASS] Daily→yyyy-MM-dd, Minute→HH:mm time labels.");
         return null;
     }
 
@@ -169,6 +173,7 @@ public static class ChartAxisGridE2ERunner
             if (cv.LastGridLineCount <= 0)
                 return "S5 GRID-01: LastGridLineCount=" + cv.LastGridLineCount + " — grid quad emit loop "
                      + "missing from OnPopulateMesh (drawcall stays 1 only when grid is INSIDE the same batch).";
+            Debug.Log("[E2E GRID-01 PASS] LastGridLineCount>0 — grid quads inside Mesh batch.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }

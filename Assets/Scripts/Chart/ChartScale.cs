@@ -28,6 +28,7 @@ public static class ChartScale
     public static List<double> CalcOptimalPriceTicks(double min, double max, int targetCount)
     {
         var ticks = new List<double>();
+        if (double.IsNaN(min) || double.IsNaN(max) || double.IsInfinity(min) || double.IsInfinity(max)) return ticks;
         if (max <= min || targetCount < 1) return ticks;
         double range = max - min;
         double rough = range / targetCount;
@@ -51,19 +52,6 @@ public static class ChartScale
         if (step <= 0) return 2;
         if (step >= 1) return 0;
         return Math.Min(6, (int)Math.Ceiling(-Math.Log10(step)));
-    }
-
-    public static double PriceTickStep(double min, double max, int targetCount)
-    {
-        if (max <= min) return 1.0;
-        double range = max - min;
-        double rough = range / Math.Max(1, targetCount);
-        double mag = Math.Pow(10, Math.Floor(Math.Log10(rough)));
-        double norm = rough / mag;
-        if (norm < 1.5) return 1 * mag;
-        if (norm < 3) return 2 * mag;
-        if (norm < 7) return 5 * mag;
-        return 10 * mag;
     }
 
     // ---- time ticks ----
@@ -132,7 +120,7 @@ public static class ChartScale
         return ladder[ladder.Length - 1];
     }
 
-    public enum TimeLabelStyle { Time, Date, DateTime }
+    public enum TimeLabelStyle { Time, Date }
 
     // Decide label style: Daily/Date for ≥1d step, Time (HH:mm) for sub-day, DateTime for the
     // 1-day-in-minute-basis boundary so a chart that spans days shows the date at midnight.
@@ -150,7 +138,6 @@ public static class ChartScale
         {
             case TimeLabelStyle.Date: return dt.ToString("yyyy-MM-dd");
             case TimeLabelStyle.Time: return dt.ToString("HH:mm");
-            case TimeLabelStyle.DateTime: return dt.ToString("MM-dd HH:mm");
             default: return dt.ToString("HH:mm");
         }
     }
@@ -166,7 +153,7 @@ public static class ChartScale
         for (int i = 0; i < bars.Count; i++)
         {
             var p = bars[i];
-            if (p.open_time_ms < winStartMs || p.open_time_ms > winEndMs) continue;
+            if (p.open_time_ms < winStartMs || p.open_time_ms >= winEndMs) continue;
             if (p.volume > max) max = p.volume;
         }
         return max;
@@ -175,7 +162,7 @@ public static class ChartScale
     // Volume bar height in px given a target volume + max + the volume_area height.
     public static float VolumeBarHeight(double volume, double maxVolume, float volumeAreaHeightPx)
     {
-        if (maxVolume <= 0 || volumeAreaHeightPx <= 0) return 0;
+        if (volume <= 0 || maxVolume <= 0 || volumeAreaHeightPx <= 0) return 0;
         return Mathf.Max(1f, (float)(volume / maxVolume) * volumeAreaHeightPx);
     }
 

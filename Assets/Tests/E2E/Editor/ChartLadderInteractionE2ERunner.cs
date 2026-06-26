@@ -35,7 +35,8 @@ public static class ChartLadderInteractionE2ERunner
         string fail;
         try
         {
-            fail = Section1_HoverLadder()         // HOVER-LADDER-01
+            fail = Section1a_HoverLadder_DeriveBypass()         // HOVER-LADDER-01a
+                ?? Section1b_HoverLadder_ChartDerive()  // HOVER-LADDER-01b
                 ?? Section2_DiffImmediate()       // LADDER-DIFF-01
                 ?? Section3_DiffDecay()           // LADDER-DIFF-02
                 ?? Section4_DiffPriceKey();       // LADDER-DIFF-03
@@ -44,10 +45,12 @@ public static class ChartLadderInteractionE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E CHART LADDER INTERACTION PASS] (HOVER-LADDER-01) parent ChartLadderRoot wires "
-                    + "ChartView.Crosshair.hovered_price → ladder Update → nearest row tint; (LADDER-DIFF-01) "
-                    + "size 100→200 → row tint immediate; (LADDER-DIFF-02) 300ms TickForTest fades to clear; "
-                    + "(LADDER-DIFF-03) price ticked best still diffed via price_key (not array index).");
+            Debug.Log("[E2E CHART LADDER INTERACTION PASS] (HOVER-LADDER-01a) parent ChartLadderRoot wires "
+                    + "direct Crosshair.hovered_price → ladder Update → nearest row tint; (HOVER-LADDER-01b) "
+                    + "ChartView.SetCrosshairCursorForTest → DeriveCrosshair → shared CrosshairState (via "
+                    + "GetComponentInParent<ChartLadderRoot>) → ladder Update reads same hovered_price; "
+                    + "(LADDER-DIFF-01) size 100→200 → row tint immediate; (LADDER-DIFF-02) 300ms TickForTest "
+                    + "fades to clear; (LADDER-DIFF-03) price ticked best still diffed via price_key (not array index).");
             EditorApplication.Exit(0);
         }
         else
@@ -57,7 +60,7 @@ public static class ChartLadderInteractionE2ERunner
         }
     }
 
-    static string Section1_HoverLadder()
+    static string Section1a_HoverLadder_DeriveBypass()
     {
         var (canvasGo, body, cv, lv) = BuildRig();
         try
@@ -91,9 +94,102 @@ public static class ChartLadderInteractionE2ERunner
             tint = lv.GetRowHighlightTint(11);
             if (tint.a != 0)
                 return "S1 HOVER-LADDER-01: tint persists after hovered_price=null (hover exit not honored)";
+            Debug.Log("[E2E HOVER-LADDER-01a PASS] direct Crosshair.hovered_price write → ladder nearest-row tint; null clears tint.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+    }
+
+    // HOVER-LADDER-01b: ChartView の derive 経路まで含めて wiring をゲートする。Section1a が直接
+    // root.Crosshair.hovered_price を書いて parent→ladder の Update 経路を検証するのに対し、ここでは
+    // ChartView.SetCrosshairCursorForTest → DeriveCrosshair → ChartView.Crosshair (getter が
+    // GetComponentInParent<ChartLadderRoot>() で同じ shared state を返す) → ladder Update が同じ
+    // hovered_price を読む、という UI 入力側→ladder 表示側の end-to-end を保証する。
+    // LITMUS: ChartView の Crosshair getter を `_localCrosshair` 固定に戻すと、derive 後 ladder 側が
+    //         shared state を見ない → tint が立たず S1b RED。
+    static string Section1b_HoverLadder_ChartDerive()
+    {
+        var (canvasGo, body, cv, lv) = BuildRig();
+        try
+        {
+            // Bars を最小限 render しないと visible_min_price が NaN で hovered_price も無価値。
+            cv.SetGranularity(GranularityChoice.Daily);
+            cv.Render(new ReplayBarFrame { Ohlc = SyntheticDaily(32) });
+            // Ladder snapshot: bid[0] が cursor 中心 y にマップされる price 近傍に来るよう、
+            // visible price range の中央値を狙って Render する。SyntheticDaily(32) の close は
+            // 100.0±0.5 程度なので bid[0]=100.0 で hovered_price と一致するはず。
+            lv.Render(new DepthSnapshotView
+            {
+                HasDepth = true,
+                Bids = new[] { new DepthLevelView { Price = 100.0, Size = 100 } },
+                Asks = new[] { new DepthLevelView { Price = 100.5, Size = 50 } },
+                TimestampMs = 1,
+            }, lastPrice: 100.2);
+            Canvas.ForceUpdateCanvases();
+
+            // Cursor を main_area 内に置く（plot center 付近）。ChartView は ChartLadderRoot.Crosshair
+            // を返す getter を持つので、ここで書いた hovered_price はそのまま ladder 側からも見える。
+            cv.SetCrosshairCursorForTest(new Vector2(10f, 0f));
+            Canvas.ForceUpdateCanvases();
+            if (!cv.Crosshair.hovered_price.HasValue)
+                return "S1b HOVER-LADDER-01b: hovered_price unset after SetCrosshairCursorForTest "
+                     + "(ChartView derive 経路が壊れている)";
+
+            // Ladder の hover layer は parent.Crosshair を毎 Update 読む。headless では Update が
+            // 走らないので TickForTest(0) で hover layer を sync させる。
+            lv.TickForTest(0f);
+
+            // hovered_price が ladder のどの row にマップされたかは NearestRow 次第。bid[0] (idx 11) /
+            // LAST (idx 10) / ask[0] (idx 9) のいずれかには必ず lit row が立つ（cursor 中心 y で
+            // visible_min..max の中央 ≈ 100 近傍に来る）。range で OR チェック。
+            bool anyLit = false;
+            for (int i = 9; i <= 11; i++)
+                if (lv.GetRowHighlightTint(i).a > 0.01f) { anyLit = true; break; }
+            if (!anyLit)
+                return "S1b HOVER-LADDER-01b: ChartView.DeriveCrosshair → ladder 経路で row 9..11 の "
+                     + "どれにも hover tint が立たない (Crosshair getter が shared root を返していない疑い)";
+
+            // Cursor 外に出して exit clear を検証。
+            ((UnityEngine.EventSystems.IPointerExitHandler)cv).OnPointerExit(
+                new UnityEngine.EventSystems.PointerEventData(EnsureES()));
+            Canvas.ForceUpdateCanvases();
+            lv.TickForTest(0f);
+            for (int i = 9; i <= 11; i++)
+                if (lv.GetRowHighlightTint(i).a > 0.01f)
+                    return "S1b HOVER-LADDER-01b: pointer exit 後も row " + i + " に tint が残る "
+                         + "(Crosshair.Clear が ladder 側まで伝播していない)";
+            Debug.Log("[E2E HOVER-LADDER-01b PASS] ChartView.SetCrosshairCursorForTest → DeriveCrosshair "
+                    + "→ shared root.Crosshair → ladder NearestRow tint; pointer exit が ladder 側も clear。");
+            return null;
+        }
+        finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
+    }
+
+    // SyntheticDaily helper (ChartCrosshairLastPriceE2ERunner と同形).
+    static OhlcPoint[] SyntheticDaily(int n)
+    {
+        var arr = new OhlcPoint[n];
+        long startMs = 1_700_000_000_000L;
+        for (int i = 0; i < n; i++)
+        {
+            double o = 100.0 + (i % 7) * 0.05;
+            double c = o + (i % 2 == 0 ? +0.03 : -0.03);
+            arr[i] = new OhlcPoint
+            {
+                open_time_ms = startMs + (long)i * ChartViewState.BASIS_DAILY_MS,
+                open = o, close = c,
+                high = Math.Max(o, c) + 0.04, low = Math.Min(o, c) - 0.04, volume = 1000.0 + i,
+            };
+        }
+        return arr;
+    }
+
+    static UnityEngine.EventSystems.EventSystem EnsureES()
+    {
+        var es = UnityEngine.Object.FindFirstObjectByType<UnityEngine.EventSystems.EventSystem>();
+        if (es != null) return es;
+        return new GameObject("EventSystem", typeof(UnityEngine.EventSystems.EventSystem))
+            .GetComponent<UnityEngine.EventSystems.EventSystem>();
     }
 
     static string Section2_DiffImmediate()
@@ -120,6 +216,7 @@ public static class ChartLadderInteractionE2ERunner
             var tint = lv.GetRowHighlightTint(11);   // bid[0]
             if (tint.a <= 0.1f)
                 return "S2 LADDER-DIFF-01: bid[0] size 100→200 did not light a diff tint (got alpha=" + tint.a + ")";
+            Debug.Log("[E2E LADDER-DIFF-01 PASS] bid[0] size 100→200 immediate diff tint.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -153,6 +250,7 @@ public static class ChartLadderInteractionE2ERunner
             if (tint.a > 0.01f)
                 return "S3 LADDER-DIFF-02: tint still alpha=" + tint.a + " after "
                      + DepthLadderView.DEPTH_DIFF_HIGHLIGHT_MS + "ms — Timer decay missing";
+            Debug.Log("[E2E LADDER-DIFF-02 PASS] tint decays to ~0 after DEPTH_DIFF_HIGHLIGHT_MS.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }
@@ -188,6 +286,7 @@ public static class ChartLadderInteractionE2ERunner
             if (tint.a <= 0)
                 return "S4 LADDER-DIFF-03: a ticked-up best (price 480.4 → 480.5) yielded no diff tint — "
                      + "price_key match logic missing or array-index matching swallowed the change.";
+            Debug.Log("[E2E LADDER-DIFF-03 PASS] price-keyed diff match still fires when best ticks up.");
             return null;
         }
         finally { UnityEngine.Object.DestroyImmediate(canvasGo); }

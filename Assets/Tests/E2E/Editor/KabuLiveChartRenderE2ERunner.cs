@@ -205,9 +205,12 @@ public static class KabuLiveChartRenderE2ERunner
 
             var cv = BuildChart(out var host);
             cv.Render(new ReplayBarFrame { Ohlc = f.Ohlc });
-            int candles = CountCandles(host);
-            if (candles != 2 * n)
-                return "S4 CHARTRENDER-04: " + id + " painted " + candles + " candle rects, want " + (2 * n);
+            Canvas.ForceUpdateCanvases();   // force OnPopulateMesh so RenderedBarCount is post-emit.
+            if (cv.TotalBarCount != n)
+                return "S4 CHARTRENDER-04: " + id + " TotalBarCount=" + cv.TotalBarCount + ", want " + n;
+            if (cv.RenderedBarCount <= 0)
+                return "S4 CHARTRENDER-04: " + id + " RenderedBarCount=" + cv.RenderedBarCount
+                     + " — Mesh emitted 0 vertices for visible window";
             UnityEngine.Object.DestroyImmediate(host.parent.gameObject);
         }
 
@@ -239,20 +242,27 @@ public static class KabuLiveChartRenderE2ERunner
                  + "per_instrument — the locator fell through to a sibling's series";
         var cvR = BuildChart(out var hostR);
         cvR.Render(new ReplayBarFrame { Ohlc = removed.Ohlc });
-        int removedCandles = CountCandles(hostR);
+        Canvas.ForceUpdateCanvases();
+        int removedTotal = cvR.TotalBarCount;
+        int removedRendered = cvR.RenderedBarCount;
         UnityEngine.Object.DestroyImmediate(hostR.parent.gameObject);
-        if (removedCandles != 0)
-            return "S5 CHARTRENDER-05: removed id painted " + removedCandles + " candles (want 0)";
+        if (removedTotal != 0 || removedRendered != 0)
+            return "S5 CHARTRENDER-05: removed id TotalBarCount=" + removedTotal
+                 + " RenderedBarCount=" + removedRendered + " (want 0/0)";
 
         InstrumentOhlcFrame sibling = InstrumentOhlcDecoder.Decode(state, "285A.TSE");
         var cvS = BuildChart(out var hostS);
         cvS.Render(new ReplayBarFrame { Ohlc = sibling.Ohlc });
-        int siblingCandles = CountCandles(hostS);
+        Canvas.ForceUpdateCanvases();
+        int siblingTotal = cvS.TotalBarCount;
+        int siblingRendered = cvS.RenderedBarCount;
         UnityEngine.Object.DestroyImmediate(hostS.parent.gameObject);
-        if (siblingCandles <= 0)
-            return "S5 CHARTRENDER-05: surviving sibling 285A painted 0 candles — removal blanked a survivor";
-        Debug.Log("[E2E CHARTRENDER-05 PASS] removed/absent id (" + REMOVED + ") -> 0 candles while sibling "
-                + "285A still painted " + siblingCandles + " = remove blanks ONLY its chart (no fall-through).");
+        if (siblingTotal <= 0 || siblingRendered <= 0)
+            return "S5 CHARTRENDER-05: surviving sibling 285A TotalBarCount=" + siblingTotal
+                 + " RenderedBarCount=" + siblingRendered + " — removal blanked a survivor";
+        Debug.Log("[E2E CHARTRENDER-05 PASS] removed/absent id (" + REMOVED + ") -> 0/0 while sibling "
+                + "285A TotalBarCount=" + siblingTotal + " RenderedBarCount=" + siblingRendered
+                + " = remove blanks ONLY its chart (no fall-through).");
         return null;
     }
 

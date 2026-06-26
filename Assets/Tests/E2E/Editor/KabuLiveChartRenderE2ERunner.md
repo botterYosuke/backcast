@@ -31,6 +31,9 @@
 | CHARTRENDER-01 | 実 prod live-state JSON（9501・per_instrument 14本＋板＋top-level ohlc 1本）を decode→render | `InstrumentOhlcDecoder.Decode(state,"9501.TSE")` → `ChartView.Render` | `HasSeries=true`・count=**14**（top-level の 1本ではない）・`Candles` 配下に **2*14** rect | fixture 読込→decode→render→childCount assert | 自動(E2E済) | — |
 | CHARTRENDER-02 | 不在 id を decode→render（非空虚 floor） | `Decode(state,"0000.TSE")` → `Render(empty)` | `HasSeries=false`・ローソク **0** | absent id assert | 自動(E2E済) | — |
 | CHARTRENDER-03 | depth あり・`ohlc_points=[]` を decode→render（報告症状の再現） | `Decode(EMPTY_OHLC_STATE,"9501.TSE")` → `Render` | `HasSeries=true`・count=0・ローソク **0**＝「板満杯・チャート空」 | empty series assert | 自動(E2E済) | — |
+| CHARTRENDER-04 | **4 銘柄** kabu live-state（7203/8306/9984/285A・実密度 73/62/150/151）を各 id ごとに decode→render | `Decode(state,<id>)` ×4 → `ChartView.Render` ×4 | 各 id `HasSeries=true`・count>0・**2*count** rect・4 count に **≥2 distinct**（locator 銘柄別曖昧性解消＝共有 series 退役） | per-id decode+render+distinct assert | 自動(E2E済) | spike `gen_kabu_4sym_chart_state.py` |
+| CHARTRENDER-05 | 同 4 銘柄 state で **削除済み(不在) id** を decode→render／生存 sibling は描く | `Decode(state,"6758.TSE")` → 0 ／ `Decode(state,"285A.TSE")` → 描画 | 不在 id `HasSeries=false`・ローソク **0**・sibling 285A は >0＝removal は当該 chart だけ blank（sibling へ fall-through しない） | absent-among-siblings assert | 自動(E2E済) | — |
+| LIVEUNIV-01..05 | live 運用中 add/remove の DATA 半分（実 kabu mock 再生＋`bt.universe.*`） | pytest `test_kabu_live_universe_churn.py` | add→live data／remove→feed 停止／membership 一致／no crash／reducer 一貫 | **自動(E2E済・pytest)**（[findings 0118](../../../../docs/findings/0118-live-universe-churn-kabu-mock.md)） | 自動(E2E済・pytest) | — |
 | KABU-LIVE-02 | 実 kabu 本番購読→実板＋実ローソク | （実 venue） | 実 prod の per_instrument ohlc 充填 | **HITL専用**（場中・本番本体・`spike/kabu_pipeline_probe.py` で実証済） | HITL専用 | spike |
 
 ## litmus（delete-the-production-logic）
@@ -39,11 +42,14 @@
 - `ChartView.Render` の `AddCandleRect` を抜く → **CHARTRENDER-01 RED**。
 - `Render` が空 series でも描く → **CHARTRENDER-03 RED**。
 - 01 と 03 で「ローソクが出る ⇔ per_instrument ohlc_points が非空」を両側から pin（02 が decoder の id 無視を floor）。
+- 4 銘柄 state で locator が銘柄別 series を曖昧性解消できず共有/定数 series を返す → **CHARTRENDER-04 RED**（4 count が全同一）。
+- 不在 id が sibling の series へ fall-through する → **CHARTRENDER-05 RED**（削除 id がローソクを描く）。
 
 ## 再走
 
 ```
 & "$env:UNITY_EDITOR_PATH" -batchmode -nographics -quit -projectPath . \
   -executeMethod KabuLiveChartRenderE2ERunner.Run -logFile (Resolve-Path Temp/Unity_E2E.log)
-# PASS: grep -a "CHARTRENDER" で [E2E CHARTRENDER-01/02/03 PASS] と [E2E KABU LIVE CHART RENDER PASS]、exit 0
+# PASS: grep -a "CHARTRENDER" で [E2E CHARTRENDER-01..05 PASS] と [E2E KABU LIVE CHART RENDER PASS]、exit 0
+# 4 銘柄 fixture 再生成: cd python && ./.venv/Scripts/python.exe spike/gen_kabu_4sym_chart_state.py
 ```

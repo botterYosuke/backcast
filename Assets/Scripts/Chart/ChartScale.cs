@@ -17,6 +17,7 @@
 
 using System;
 using System.Collections.Generic;
+using UnityEngine;   // S5 VolumeBarHeight uses Mathf.Max.
 
 public static class ChartScale
 {

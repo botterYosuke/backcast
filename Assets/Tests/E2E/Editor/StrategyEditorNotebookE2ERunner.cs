@@ -1235,12 +1235,27 @@ public static class StrategyEditorNotebookE2ERunner
         //      STRATEGY-18), so on their own they would STILL pass if the whole OnUpdateSelected override
         //      were deleted and base.OnUpdateSelected reverted on Escape — the predicate would survive
         //      unwired. This structural guard closes that gap: it fails if StrategyInputField no longer
-        //      declares the pump override that calls the predicate. (It cannot catch deleting only the
-        //      `if (TryConsumeKeyPumpEscape(...)) continue;` line — that residue stays HITL/STRATEGY-18.)
+        //      declares the pump override that calls the predicate. (Deleting only the
+        //      `if (TryConsumeKeyPumpEscape(...)) continue;` line is caught by (a3) below.)
         var pumpOverride = typeof(StrategyInputField).GetMethod(
             "OnUpdateSelected", BindingFlags.Public | BindingFlags.Instance, null, new[] { typeof(BaseEventData) }, null);
         if (pumpOverride == null || pumpOverride.DeclaringType != typeof(StrategyInputField))
             return "S29a: StrategyInputField does not override OnUpdateSelected (path-2 key-pump Escape swallow is unwired — base.OnUpdateSelected would deactivate+revert the edit)";
+
+        // (a3) CALL-SITE guard (closes the (a2) gap, same as S31a3). (a2) only proves the override is
+        //      DECLARED — it stays green if someone deletes just the `if (TryConsumeKeyPumpEscape(...))` call
+        //      from the pump body (leaving the Run swallow), reviving the silent Escape revert. headless can't
+        //      drive the real pump (no focus / Event queue, STRATEGY-18), so assert the production SOURCE:
+        //      OnUpdateSelected's body must CALL TryConsumeKeyPumpEscape. Brittle to a move/rename of the file,
+        //      but the only AFK-reachable proof that the predicate is wired INTO the pump.
+        var s29Src = Path.Combine(Application.dataPath, "Scripts/StrategyEditor/StrategyInputField.cs");
+        if (!File.Exists(s29Src))
+            return "S29a3: StrategyInputField.cs not found at " + s29Src + " (moved? update this call-site guard's path)";
+        string s29PumpBody = MethodBodyAfter(File.ReadAllText(s29Src), "public override void OnUpdateSelected");
+        if (s29PumpBody == null)
+            return "S29a3: could not locate the OnUpdateSelected method body in StrategyInputField.cs (signature changed?)";
+        if (!s29PumpBody.Contains("TryConsumeKeyPumpEscape("))
+            return "S29a3: OnUpdateSelected no longer CALLS TryConsumeKeyPumpEscape — the path-2 Escape swallow is declared but unwired from the pump (base.OnUpdateSelected would deactivate+revert the edit on Escape)";
 
         var esc = new Event { type = EventType.KeyDown, keyCode = KeyCode.Escape };
 
@@ -1648,9 +1663,9 @@ public static class StrategyEditorNotebookE2ERunner
         //      green if someone deletes just the `if (TryConsumeKeyPumpRun(...))` block from the pump (leaving
         //      the Escape swallow), shipping a regression where a modified Return inserts a newline and never
         //      runs. headless cannot drive the real pump (no focus / Event queue, STRATEGY-18), so we assert
-        //      the production SOURCE: OnUpdateSelected's body must CALL TryConsumeKeyPumpRun. This is
-        //      #164-local (siblings S27-S30 rely on (a2) alone) and brittle to a move/rename of the file, but
-        //      it is the only AFK-reachable proof that the predicate is wired INTO the pump.
+        //      the production SOURCE: OnUpdateSelected's body must CALL TryConsumeKeyPumpRun. (S29 carries the
+        //      twin guard for TryConsumeKeyPumpEscape.) Brittle to a move/rename of the file, but the only
+        //      AFK-reachable proof that the predicate is wired INTO the pump.
         var srcPath = Path.Combine(Application.dataPath, "Scripts/StrategyEditor/StrategyInputField.cs");
         if (!File.Exists(srcPath))
             return "S32a3: StrategyInputField.cs not found at " + srcPath + " (moved? update this call-site guard's path)";
@@ -1659,6 +1674,14 @@ public static class StrategyEditorNotebookE2ERunner
             return "S32a3: could not locate the OnUpdateSelected method body in StrategyInputField.cs (signature changed?)";
         if (!pumpBody.Contains("TryConsumeKeyPumpRun("))
             return "S32a3: OnUpdateSelected no longer CALLS TryConsumeKeyPumpRun — the run-shortcut predicate is declared but unwired from the pump (a modified Return would insert a newline instead of running the cell)";
+
+        // Synthetic key-pump events (headless has no real IMGUI pump to feed): a Return/KeypadEnter KeyUp
+        // re-arms the one-press latch; a Shift+Return KeyDown is the canonical run shortcut. Factored so the
+        // repeated initializers below can't drift — a wrong modifier in a hand-copied one would silently
+        // weaken its assert.
+        Event Up(KeyCode k = KeyCode.Return) => new Event { type = EventType.KeyUp, keyCode = k, modifiers = EventModifiers.None };
+        Event Down(KeyCode k, EventModifiers mod) => new Event { type = EventType.KeyDown, keyCode = k, modifiers = mod };
+        Event ShiftReturnDown() => Down(KeyCode.Return, EventModifiers.Shift);
 
         // (b) THE FIX + key range (D2): each of Shift+Return / Ctrl+Return / Cmd+Return / Shift+KeypadEnter
         //     is SWALLOWED (no newline) AND fires once (counter++). Re-arm between combos with a matching
@@ -1674,20 +1697,19 @@ public static class StrategyEditorNotebookE2ERunner
         int expected = 0;
         foreach (var (label, key, mod) in combos)
         {
-            var down = new Event { type = EventType.KeyDown, keyCode = key, modifiers = mod };
-            if (!field.TryConsumeKeyPumpRun(down))
+            if (!field.TryConsumeKeyPumpRun(Down(key, mod)))
                 return $"S32b: {label} was NOT swallowed (base.KeyPressed would insert a newline instead of running the cell)";
             expected++;
             if (field.RunShortcutConsumedCount != expected)
                 return $"S32b: {label} did not fire the run shortcut (count={field.RunShortcutConsumedCount}, expected {expected})";
             // Physical release re-arms the latch so the NEXT combo can fire (D5).
-            field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = key, modifiers = EventModifiers.None });
+            field.TryConsumeKeyPumpRun(Up(key));
         }
 
         // (c) plain Return (no modifier) is NOT a trigger — it must fall through to base so the
         //     MultiLineNewline pump inserts a newline (findings 0116). NOT swallowed, counter unchanged.
         int beforePlain = field.RunShortcutConsumedCount;
-        var plain = new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.None };
+        var plain = Down(KeyCode.Return, EventModifiers.None);
         if (field.TryConsumeKeyPumpRun(plain))
             return "S32c: plain Return was swallowed (it must stay a NEWLINE, not run the cell)";
         if (field.RunShortcutConsumedCount != beforePlain)
@@ -1696,16 +1718,16 @@ public static class StrategyEditorNotebookE2ERunner
         // (d) DEBOUNCE (D5): a HELD modified Return fires exactly once. Re-arm, press → fires; press again
         //     while held → still swallowed (no stray newline) but does NOT re-fire; KeyUp re-arms → next
         //     press fires again. (Removing the latch → held repeats fire every frame → "run then stop".)
-        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        field.TryConsumeKeyPumpRun(Up());
         int beforeHeld = field.RunShortcutConsumedCount;
-        var heldDown = new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift };
+        var heldDown = ShiftReturnDown();
         if (!field.TryConsumeKeyPumpRun(heldDown)) return "S32d: held first press was not swallowed";
         if (field.RunShortcutConsumedCount != beforeHeld + 1) return "S32d: held first press did not fire once";
         if (!field.TryConsumeKeyPumpRun(heldDown))
             return "S32d: held REPEAT was not swallowed (a held Shift+Return must keep suppressing the newline)";
         if (field.RunShortcutConsumedCount != beforeHeld + 1)
             return "S32d: held repeat RE-FIRED the run shortcut (one physical press must = one fire — else held Shift+Enter runs then immediately stops)";
-        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
+        field.TryConsumeKeyPumpRun(Up());
         if (!field.TryConsumeKeyPumpRun(heldDown) || field.RunShortcutConsumedCount != beforeHeld + 2)
             return "S32d: a fresh press after KeyUp did not re-fire (the latch must re-arm on release)";
 
@@ -1723,8 +1745,8 @@ public static class StrategyEditorNotebookE2ERunner
         bool clicked = false;
         runBtn.onClick.AddListener(() => clicked = true);
         view.RunShortcutRequested += () => runBtn.onClick.Invoke();   // mirror WireCellRunButton's subscription
-        field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
-        if (!field.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+        field.TryConsumeKeyPumpRun(Up());
+        if (!field.TryConsumeKeyPumpRun(ShiftReturnDown()))
             return "S32e: the relay-test press was not swallowed";
         if (!viewRelayed)
             return "S32e: StrategyInputField.RunShortcutRequested did not relay through StrategyEditorView (the field event is not re-exposed by the view)";
@@ -1739,7 +1761,7 @@ public static class StrategyEditorNotebookE2ERunner
         spawned.Add(slGo);
         var single = slGo.GetComponent<StrategyInputField>();
         single.lineType = TMP_InputField.LineType.SingleLine;
-        if (single.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+        if (single.TryConsumeKeyPumpRun(ShiftReturnDown()))
             return "S32f: single-line field swallowed a modified Return (swallow must be MultiLineNewline-only)";
         if (single.RunShortcutConsumedCount != 0)
             return "S32f: single-line field fired the run shortcut (run shortcut must be MultiLineNewline-only)";
@@ -1779,8 +1801,8 @@ public static class StrategyEditorNotebookE2ERunner
         foreach (var f in realView.GetComponentsInChildren<StrategyInputField>(true))
             if (f.lineType == TMP_InputField.LineType.MultiLineNewline) { realField = f; break; }
         if (realField == null) return "S32g: the real editor has no MultiLineNewline StrategyInputField (the run-shortcut source)";
-        realField.TryConsumeKeyPumpRun(new Event { type = EventType.KeyUp, keyCode = KeyCode.Return, modifiers = EventModifiers.None });
-        if (!realField.TryConsumeKeyPumpRun(new Event { type = EventType.KeyDown, keyCode = KeyCode.Return, modifiers = EventModifiers.Shift }))
+        realField.TryConsumeKeyPumpRun(Up());
+        if (!realField.TryConsumeKeyPumpRun(ShiftReturnDown()))
             return "S32g: the real focused field did not swallow Shift+Return";
         if (!realBtnClicked)
             return "S32g: Shift+Return did not reach the real cell ▶ onClick through the production field → view → WireCellRunButton wiring (the real root's run-shortcut relay is broken)";

@@ -187,7 +187,7 @@ public class StrategyInputField : TMP_InputField
     // one pump (D3) — not split with StrategyEditorView.Update()'s Undo/Redo poll (Ctrl-held keys are
     // non-printing in the pump, so Undo/Redo needs no pump ownership; Shift+Return DOES print, so it does).
     //
-    // RunShortcutConsumedCount is the AFK-observable seam (STRATEGY-63): -batchmode -nographics has no
+    // RunShortcutConsumedCount is the AFK-observable seam (STRATEGY-65): -batchmode -nographics has no
     // IMGUI key pump / focus to drive a real OnUpdateSelected, so the gate feeds synthetic Events straight
     // into TryConsumeKeyPumpRun and asserts the swallow/fire/latch decisions. The real keystroke→backtest
     // path stays HITL (STRATEGY-18).
@@ -242,6 +242,17 @@ public class StrategyInputField : TMP_InputField
         return true;
     }
 
+    // D5 re-arm (selection side): (re)gaining selection re-arms the one-press latch. If a modal / other
+    // widget stole selection mid-hold (EventSystem.SetSelectedGameObject) the field's matching Return KeyUp
+    // never reached this pump, so without this a latch DISARMED at deselect time would persist into the next
+    // selection — the first Shift+Return after re-focus would be swallowed but never fire. Twin of the
+    // focus-loss re-arm in OnUpdateSelected. Safe: selection-gain never coincides with a held run chord.
+    public override void OnSelect(BaseEventData eventData)
+    {
+        _runShortcutArmed = true;
+        base.OnSelect(eventData);
+    }
+
     public override void OnUpdateSelected(BaseEventData eventData)
     {
         // Single-line fields: unchanged — Escape SHOULD cancel/blur a search/name field.
@@ -251,7 +262,15 @@ public class StrategyInputField : TMP_InputField
             return;
         }
         if (!isFocused)
+        {
+            // D5 re-arm (focus side): a modified-Return KeyDown DISARMS the latch and re-arming waits for the
+            // matching Return KeyUp. If focus is lost in between (Alt-Tab, a modal stealing selection) that
+            // KeyUp never reaches this pump, so a re-arm gated strictly narrower than the disarm would strand
+            // the latch disarmed (next Shift+Return swallowed but never fired). Re-arm on focus loss to keep
+            // the gate symmetric with the disarm — memory: state-machine-cleanup-gated-too-narrow.
+            _runShortcutArmed = true;
             return;
+        }
 
         // Multiline code editor: own the IMGUI key pump so Escape is swallowed before base.KeyPressed
         // (mirror of base OnUpdateSelected at TMP_InputField.cs:2356-2413, with Escape filtered).

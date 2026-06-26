@@ -113,9 +113,10 @@
 ## 8. リッチ output（per-cell RUN デモ） { #rich-output }
 
 ここまでの 1–7 は **Replay エンジンで毎バー走らせる戦略**でしたが、これは毛色が違います。
-marimo の **per-cell RUN**（セル右上の ▶ ボタン）は、バックテスト（`get_bar` / Replay）とは別に
-**各セルを単独実行**して、Markdown・テーブル・チャート・UI ウィジェットといった**リッチな表示**を
-確認するための経路です。このサンプルは `bt` 非依存で、4 種類の出力を 1 セルずつ示します。
+marimo の **per-cell RUN**（セル右上の ▶ ボタン、または**フォーカス中のセルで Shift+Return** ―― Jupyter/marimo
+流のショートカット。Ctrl+Return / Cmd+Return / テンキー Enter も同一。plain Return は改行のまま）は、バックテスト
+（`get_bar` / Replay）とは別に **各セルを単独実行**して、Markdown・テーブル・チャート・UI ウィジェットといった
+**リッチな表示**を確認するための経路です。このサンプルは `bt` 非依存で、4 種類の出力を 1 セルずつ示します。
 
 ```python title="07_rich_output.py"
 --8<-- "samples/code/07_rich_output.py"

@@ -29,6 +29,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -1640,7 +1641,7 @@ public static class StrategyEditorNotebookE2ERunner
     {
         // (a) PRODUCTION config invariant: the real builder editor is MultiLineNewline (the run-shortcut
         //     swallow is MultiLineNewline-gated, mirroring OnSubmit/OnCancel/Escape — flip → RED).
-        var root = StrategyEditorWindowFrame.Build("strategy_editor:s31", out _, out var body);
+        var root = StrategyEditorWindowFrame.Build("strategy_editor:s32", out _, out var body);
         spawned.Add(root.gameObject);
         var view = StrategyEditorContentBuilder.Build(body);
         if (view == null) return "S32: editor build failed";
@@ -1674,6 +1675,15 @@ public static class StrategyEditorNotebookE2ERunner
             return "S32a3: could not locate the OnUpdateSelected method body in StrategyInputField.cs (signature changed?)";
         if (!pumpBody.Contains("TryConsumeKeyPumpRun("))
             return "S32a3: OnUpdateSelected no longer CALLS TryConsumeKeyPumpRun — the run-shortcut predicate is declared but unwired from the pump (a modified Return would insert a newline instead of running the cell)";
+        // (a3') Contains alone leaves #164's HEADLINE AC unpinned: a regression that keeps the CALL but drops
+        //       the `continue` (or ignores the bool) would swallow-AND-newline — the modified Return both runs
+        //       the cell AND inserts a stray newline. Honoring the swallow is what makes the run REPLACE the
+        //       newline (D3). headless can't run the focus-gated pump (STRATEGY-18), so assert the SOURCE form:
+        //       the call must be the condition of an `if (...) { … continue; }` (continue → skips
+        //       base.KeyPressed → no newline). [^{}]* keeps the continue inside that same block. (S29's Escape
+        //       twin could be tightened the same way; left as-is to keep this change #164-scoped.)
+        if (!Regex.IsMatch(pumpBody, @"if\s*\(\s*TryConsumeKeyPumpRun\([^)]*\)\s*\)\s*\{[^{}]*continue\s*;"))
+            return "S32a3': OnUpdateSelected CALLS TryConsumeKeyPumpRun but not as an `if (...) { … continue; }` guard — without the continue, a swallowed modified Return still falls through to base.KeyPressed and inserts a newline (D3: the run must REPLACE the newline, not add one)";
 
         // Synthetic key-pump events (headless has no real IMGUI pump to feed): a Return/KeypadEnter KeyUp
         // re-arms the one-press latch; a Shift+Return KeyDown is the canonical run shortcut. Factored so the
@@ -1807,7 +1817,24 @@ public static class StrategyEditorNotebookE2ERunner
         if (!realBtnClicked)
             return "S32g: Shift+Return did not reach the real cell ▶ onClick through the production field → view → WireCellRunButton wiring (the real root's run-shortcut relay is broken)";
 
-        Debug.Log("[E2E STRATEGY-65 PASS] code editor run shortcut: Shift/Ctrl/Cmd+Return + numpad Enter swallow the newline and fire the ▶ once per press (held re-fires only after KeyUp); plain Return stays a newline; the fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke() (byte-identical to a click); single-line never swallows; production builder is MultiLineNewline; and the REAL BackcastWorkspaceRoot's WireCellRunButton wiring routes a real Shift+Return to the real cell ▶ (g)");
+        // (h) FOCUS-INTERRUPT re-arm (M1, review 2026-06-26): a modified-Return KeyDown DISARMS the one-press
+        //     latch; re-arming waits for the matching Return KeyUp. If focus is lost in between (Alt-Tab, or a
+        //     modal stealing selection mid-hold) that KeyUp never reaches the pump, so the pump's !isFocused
+        //     branch MUST re-arm — else the latch is stranded disarmed and the NEXT Shift+Return is swallowed
+        //     but never fires (a dead keystroke). headless the built field is unfocused, so calling
+        //     OnUpdateSelected drives exactly that branch (it returns before touching eventData). Without the
+        //     fix the final press below would not fire → RED.
+        field.TryConsumeKeyPumpRun(Up());                                 // arm
+        if (!field.TryConsumeKeyPumpRun(ShiftReturnDown()))               // fire + DISARM (no matching KeyUp)
+            return "S32h: setup — armed Shift+Return did not fire";
+        int afterDisarm = field.RunShortcutConsumedCount;
+        if (field.TryConsumeKeyPumpRun(ShiftReturnDown()) && field.RunShortcutConsumedCount != afterDisarm)
+            return "S32h: setup — disarmed latch re-fired without a re-arm (held repeat must swallow, not re-run)";
+        field.OnUpdateSelected(new BaseEventData(EventSystem.current));   // focus lost → !isFocused branch re-arms
+        if (!field.TryConsumeKeyPumpRun(ShiftReturnDown()) || field.RunShortcutConsumedCount != afterDisarm + 1)
+            return "S32h: latch stranded disarmed after focus loss — the next Shift+Return was swallowed but never fired (M1: re-arm gate narrower than the disarm)";
+
+        Debug.Log("[E2E STRATEGY-65 PASS] code editor run shortcut: Shift/Ctrl/Cmd+Return + numpad Enter swallow the newline and fire the ▶ once per press (held re-fires only after KeyUp); plain Return stays a newline; the fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke() (byte-identical to a click); single-line never swallows; production builder is MultiLineNewline; the REAL BackcastWorkspaceRoot's WireCellRunButton wiring routes a real Shift+Return to the real cell ▶ (g); and an interrupted hold (focus lost before KeyUp) re-arms so the latch never strands disarmed (h)");
         return null;
     }
 
@@ -3465,7 +3492,11 @@ public static class StrategyEditorNotebookE2ERunner
     //    the REAL DriveStrategyEditor / DriveOrderTicket / FooterModeViewModel.ApplyPoll / coordinator are
     //    driven (the SAME seam OrderTicketE2ERunner SectionC uses for ORDER-14). Vacuity guard: every
     //    seam/widget is asserted to EXIST first, so a rename FAILS (not vacuously passes).
-    //    RUNS LAST: OpenScene(Single) fake-nulls earlier synthetic GameObjects (Run's finally guards != null).
+    //    SOLE / LAST OpenScene(Single): fake-nulls earlier synthetic GameObjects (Run's finally guards != null).
+    //    Sections 26-32 run AFTER this but must NOT OpenScene again — a second BuildWorkspace re-fires the
+    //    static ThemeService.Changed into this root's now-destroyed widgets (MissingReferenceException). They
+    //    are otherwise self-contained (synthetic GameObjects), and Section32(g) deliberately REUSES the root
+    //    this section composes — so this must run before, and stay alive through, Section32.
     //    Covers: STRATEGY-53 (mode→visibility for ALL windows + exclusivity), STRATEGY-54 (non-destructive:
     //    same instance + geometry + Save-while-hidden / AC5), STRATEGY-55 (a dormant region_001 shell is NOT
     //    resurrected by the toggle — the remembered-set re-shows only what it hid).

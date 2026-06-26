@@ -74,21 +74,38 @@ Return/KeypadEnter の KeyDown は**常に true（swallow）**＝改行抑止。
 `RunShortcutRequested?.Invoke()`）は **armed のときだけ**。KeyUp（Return/KeypadEnter）は re-arm の副作用だけ起こして
 false を返す（base pump の `if (KeyUp) continue;` がそのまま処理）。plain Return の KeyDown は false＝改行へ。
 
+### D7 — re-arm の対称性（フォーカス喪失で latch を固着させない）
+
+> review 2026-06-26（M1・memory `state-machine-cleanup-gated-too-narrow`）で追加。
+
+D5 の disarm は修飾 Return KeyDown で**無条件**に起きるが、re-arm は「**フォーカス中**に届いた Return/KeypadEnter
+KeyUp」でしか起きない——re-arm 条件が disarm より**狭い**。hold 中にフォーカスを失う（Alt-Tab、モーダルが
+selection を奪う）と、その KeyUp が pump に届かず latch が disarmed のまま固着し、**次の Shift+Return が swallow
+されるのに発火しない**（死んだキーストローク）。対称化のため re-arm 点を 2 つ足す:
+
+- `OnUpdateSelected` の `!isFocused` 枝で `_runShortcutArmed = true`（フォーカス喪失で再武装＝Alt-Tab 系）。
+- `OnSelect` override で `_runShortcutArmed = true`（selection 再取得で再武装＝モーダルが selection を奪った系）。
+
+どちらも held 中（フォーカス継続）には発火しないので D5 debounce を壊さない。AFK は (h) で `!isFocused` 枝を
+直接駆動して回帰ガードする（headless の built field は非フォーカス＝この枝に入る）。
+
 ### D6 — 検証（AFK seam）
 
 findings 0116/0117 の STRATEGY-59/60/61 と同型。production の swallow/発火述語 `TryConsumeKeyPumpRun(Event)` と
-counter `RunShortcutConsumedCount` を公開し、合成 `Event` を直接食わせる **新 Section31 ≒ STRATEGY-63**:
+counter `RunShortcutConsumedCount` を公開し、合成 `Event` を直接食わせる **新 Section32 ≒ STRATEGY-65**:
 
 | # | assert | 役割 |
 |---|---|---|
 | a | 実 builder 産 field の `lineType==MultiLineNewline` | config 不変条件（flip→RED） |
 | a2 | `StrategyInputField` が `OnUpdateSelected` を override（wiring 構造ガード） | 述語が pump から呼ばれている保証（findings 0117 S29a と同型） |
+| a3 | `OnUpdateSelected` 本体が `if (TryConsumeKeyPumpRun(...)) { … continue; }` 形で呼ぶ（source 正規表現ガード） | call-site＋`continue` を pin＝swallow が**改行を置換**する保証（D3・headline AC）。`continue` 欠落＝swallow+改行二重 を RED に |
 | b | Shift+Return / Ctrl+Return / Cmd+Return / Shift+KeypadEnter 各 KeyDown → `TryConsumeKeyPumpRun`=true（swallow）・各 1 発火で counter が累積 | THE FIX＋キー範囲 D2 |
 | c | plain Return（修飾なし）KeyDown → false（**非 swallow＝改行**）・counter 不変 | plain Enter は改行（D3）・非 vacuity |
 | d | held: 同じ Shift+Return KeyDown 連打 → swallow は続くが発火は 1 回（latch）／Return KeyUp で re-arm → 次の KeyDown で再発火 | debounce D5 |
 | e | relay 到達: field.`RunShortcutRequested` 購読 → 合成 Event 投入で購読側が呼ばれる（StrategyEditorView relay → onClick.Invoke 等価・**手で WireCellRunButton を鏡映**） | 配線 D4（field→view relay の単体） |
 | g | **実 `BackcastWorkspaceRoot` を合成（S25 harness）して production の `WireCellRunButton` を実走**: `BuildWorkspace` 後 `ViewFor(region_001).RunShortcutRequested != null`（配線済み）＋実 field の Shift+Return が `_cellRunButtons[region_001].onClick` に到達 | 配線 D4（root→button assignment の回帰ガード・(e) の hand-mirror 穴を塞ぐ） |
 | f | 負: single-line は swallow されず（修飾付き Return でも false）・counter 不変 | swallow は multiline 限定（blanket でない） |
+| h | 修飾 Return KeyDown で disarm → KeyUp 無しで `OnUpdateSelected`（headless は非フォーカス＝`!isFocused` 枝）→ 次の Shift+Return が再発火 | **M1 re-arm 対称性**（D7）：hold 中にフォーカス喪失（Alt-Tab／モーダル）しても latch が disarmed のまま固着しない |
 
 > (e) は field→view relay を単体で固定するが `WireCellRunButton` を手で鏡映するので production の assignment（`BackcastWorkspaceRoot.cs:1043-1049`）が壊れても緑のまま——この穴を **(g)** が実 root 実走で塞ぐ（review 2026-06-26）。実 IMGUI pump が `TryConsumeKeyPumpRun` を**呼ぶ**こと自体は headless にフォーカス/Event queue が無く実走不可で、(a2) 構造ガード＋ STRATEGY-18 HITL に委ねる残（sibling S27–S30 と同じ境界）。
 
@@ -97,20 +114,23 @@ counter `RunShortcutConsumedCount` を公開し、合成 `Event` を直接食わ
 #### RED→GREEN litmus
 
 - **RED**: `TryConsumeKeyPumpRun` の run 判定本体（`MultiLineNewline ∧ Return/KeypadEnter ∧ 修飾`）を撤去（常に false）
-  → (b) が `!swallowed`／counter 0 → `S31b: modified Return was NOT consumed/fired` で FAIL・rollup から STRATEGY-63 が消える。
-- **GREEN**: 実装適用後 (a)(a2)(b)(c)(d)(e)(f) すべて PASS・`[E2E STRATEGY-63 PASS]`。
+  → (b) が `!swallowed`／counter 0 → `S32b: … did not fire the run shortcut` で FAIL・rollup から STRATEGY-65 が消える。
+- **GREEN**: 実装適用後 (a)(a2)(a3)(b)(c)(d)(e)(f)(g)(h) すべて PASS・`[E2E STRATEGY-65 PASS]`。
 - blanket 化（修飾チェック撤去で plain Return も swallow）は (c) が「plain Return が改行にならず swallow された」で RED。
 - multiline ゲート撤去（single-line も swallow）は (f) が RED。
 - latch 撤去（held で毎フレーム発火）は (d) が「連打で counter > 1」で RED。
+- `continue` 撤去（swallow するが base.KeyPressed に落として改行も挿入）は (a3) source ガードが RED（D3 headline AC）。
+- re-arm 非対称（`!isFocused` 枝の再武装を撤去＝D7 退行）は (h) が「フォーカス喪失後の Shift+Return が swallow されるのに非発火」で RED。
 
 ## 実装ファイル
 
 - `Assets/Scripts/StrategyEditor/StrategyInputField.cs`
-  （`RunShortcutRequested` / `RunShortcutConsumedCount` / `TryConsumeKeyPumpRun` ＋ key-pump 配線・1-press latch）
+  （`RunShortcutRequested` / `RunShortcutConsumedCount` / `TryConsumeKeyPumpRun` ＋ key-pump 配線・1-press latch・
+  D7 re-arm（`OnUpdateSelected` の `!isFocused` 枝＋`OnSelect` override））
 - `Assets/Scripts/StrategyEditor/StrategyEditorView.cs`（relay）
 - `Assets/Scripts/Live/BackcastWorkspaceRoot.cs`（`WireCellRunButton` で購読→`onClick.Invoke()`）
-- `Assets/Tests/E2E/Editor/StrategyEditorNotebookE2ERunner.{cs,md}`（Section31 / STRATEGY-63）
-- `Assets/Tests/E2E/Editor/E2E-INDEX.md`（STRATEGY-01..63 / 行数 63）
+- `Assets/Tests/E2E/Editor/StrategyEditorNotebookE2ERunner.{cs,md}`（Section32 / STRATEGY-65）
+- `Assets/Tests/E2E/Editor/E2E-INDEX.md`（STRATEGY-01..65 / 行数 65）
 - `CONTEXT.md`（per-cell RUN グロッサリーに Shift+Return alias 追記）
 
 ## 再走
@@ -118,7 +138,7 @@ counter `RunShortcutConsumedCount` を公開し、合成 `Event` を直接食わ
 ```
 & .\scripts\run-live-e2e.ps1 -CompileOnly                              # error CS 0 件
 & .\scripts\run-live-e2e.ps1 -Method StrategyEditorNotebookE2ERunner.Run
-# 期待: [E2E STRATEGY-63 PASS]（＋STRATEGY-59/60/61/62 含む既存 PASS）、exit 0、error CS 0 件
+# 期待: [E2E STRATEGY-65 PASS]（＋STRATEGY-59..64 含む既存 PASS）、exit 0、error CS 0 件
 ```
 
 ## 関連

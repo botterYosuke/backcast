@@ -37,7 +37,7 @@
 //      true + BringToFront)                                                                       [WINDOW-08]
 //  10. #99 magnet snap pure arithmetic (flush/edge-align, x/y independent, threshold guards)       [SNAP-01]
 //  11. #99 snap controller wiring (excludes self/hidden, dragged-only, no group propagation)       [SNAP-02]
-//  12. #99 dock catalog kinds (chart multi-instance + 3 base singletons, unknown tolerance)        [DOCK-01]
+//  12. #99 dock catalog kinds (chart only, retired base kinds skip (ADR-0038))        [DOCK-01]
 //  13. #99 DockDefaultPlacement grid arithmetic (pure ceil(√n) placement, n arbitrary)            [DOCK-02]
 //  14. #101 DockSnapPlacement flush adjacency (right→down→left→up, overflow cascade, size verbatim) [DOCK-03]
 //  15. #101 focus-adjacent dock spawn (spec-fixed count-independent size, focus/nearest target)    [DOCK-04]
@@ -162,7 +162,7 @@ public static class FloatingWindowE2ERunner
                       "Hide/reveal Show (SetActive + BringToFront) + #99 magnet snap (pure flush/edge-align x-y INDEPENDENT, " +
                       "beyond-threshold->0, threshold<=0 guard) + controller SnapOnRelease (excludes self, ignores hidden, " +
                       "applies via anchoredPosition, dragged-only — no group propagation) + #99 dock catalog kinds (chart " +
-                      "multi-instance + 3 base singletons, accents from PlayerColors, unknown-kind tolerance preserved) + " +
+                      "only dock kind, retired startup/run_result/buying_power/orders/positions skipped, unknown-kind tolerance preserved) + " +
                       "DockDefaultPlacement (ceil(√n) grid in absolute canvas-logical coords, row-major slot 0=top-left, " +
                       "y up-positive rows, no overlap, n=0 empty) + #101 DockSnapPlacement (flush adjacency right→down→" +
                       "left→up, perpendicular-edge align, strict no-overlap selection, gap=0 flush, size verbatim, " +
@@ -700,21 +700,18 @@ public static class FloatingWindowE2ERunner
     }
 
     // ---- 12. dock catalog kinds ----
-    // Covers: DOCK-01 — #99 Slice 2 / findings 0075 §2 (chart multi-instance + 4 base singleton kinds
+    // Covers: DOCK-01 — #99 Slice 2 / findings 0075 §2 (chart-only dock kind (all base singletons retired)
     // present in Default() after ADR-0026 retired KIND_STARTUP, each with a distinct accent and a usable
     // spec; unknown-kind tolerance unchanged so a forward-evolved doc still survives).
     static string Section12_DockCatalogKinds()
     {
         var catalog = FloatingWindowCatalog.Default();
 
-        // (a) every #99 kind resolves.
+        // (a) the only dock kind resolves: `chart`. ALL base singletons retired — startup (ADR-0026),
+        // run_result (ADR-0037 → RunResultPopup), buying_power/orders/positions (ADR-0038 → account summary
+        // bar) — so the dock plane is `chart` only (forward-compat: TryGet=false on a retired-kind restore).
         string[] kinds = {
             FloatingWindowCatalog.KIND_CHART,
-            FloatingWindowCatalog.KIND_BUYING_POWER,
-            FloatingWindowCatalog.KIND_ORDERS,
-            FloatingWindowCatalog.KIND_POSITIONS,
-            // KIND_STARTUP retired (ADR-0026), KIND_RUN_RESULT retired (ADR-0037 → RunResultPopup):
-            // neither is a dock kind / catalog spec any more (forward-compat: TryGet=false on restore).
         };
         foreach (var k in kinds)
         {
@@ -733,6 +730,14 @@ public static class FloatingWindowE2ERunner
         // (c) unknown-kind tolerance is unchanged (forward-evolution discipline, findings 0008 §3).
         if (catalog.TryGet("future_unknown", out _)) return "S12c: unknown-kind tolerance broke";
         if (catalog.Contains("future_unknown")) return "S12c: unknown-kind tolerance broke (Contains)";
+
+        // (d) the RETIRED base singleton kinds NO LONGER resolve — a saved layout naming them gets
+        // TryGet=false → spawn skipped (forward-compat). RED→GREEN: re-add any spec to Default() ⇒ resolves.
+        foreach (var retired in new[] { "startup", "run_result", "buying_power", "orders", "positions" })
+        {
+            if (catalog.TryGet(retired, out _)) return $"S12d: retired kind '{retired}' still resolves (forward-compat skip broken)";
+            if (catalog.Contains(retired)) return $"S12d: retired kind '{retired}' still in catalog (Contains)";
+        }
         return null;
     }
 
@@ -1062,9 +1067,12 @@ public static class FloatingWindowE2ERunner
     {
         // routing-predicate parity (mirrors RestoreFloating: IsDockKind ? _dockWindows : _windows).
         if (!DockShape.IsDockKind(FloatingWindowCatalog.KIND_CHART)) return "S17: chart must route to the dock plane";
-        if (!DockShape.IsDockKind(FloatingWindowCatalog.KIND_BUYING_POWER)) return "S17: buying_power must route to the dock plane";
         if (DockShape.IsDockKind(FloatingWindowCatalog.KIND_ORDER)) return "S17: order must route to the front plane";
         if (DockShape.IsDockKind(FloatingWindowCatalog.KIND_STRATEGY_EDITOR)) return "S17: strategy_editor must route to the front plane";
+        // ADR-0038/0037/0026: the retired base singleton kinds are NOT dock kinds (a saved layout naming them
+        // skips on restore — chart is the only dock kind now).
+        foreach (var retired in new[] { "buying_power", "orders", "positions", "run_result", "startup" })
+            if (DockShape.IsDockKind(retired)) return $"S17: retired kind '{retired}' must NOT route to the dock plane";
 
         BuildTwoPlaneStack(spawned, 1.2f, out _, out _, out RectTransform dockLayer, out RectTransform floatLayer, out _);
         var dockCtrl = MakeController(spawned, dockLayer);
@@ -1081,7 +1089,7 @@ public static class FloatingWindowE2ERunner
         if (!Approx2(dockWin.anchoredPosition, new Vector2(100f, 0f))) return "S17a: dock window moved despite the neighbour being on another plane";
 
         // (b) SAME-PLANE SNAP still works: add a SECOND dock window within threshold on the SAME controller.
-        RectTransform dockNbr = dockCtrl.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", 385, 0, 280, 180, true);
+        RectTransform dockNbr = dockCtrl.Spawn(FloatingWindowCatalog.KIND_ORDER, "buying_power", 385, 0, 280, 180, true);
         if (dockNbr == null) return "S17b: precondition spawn returned null";
         Vector2 sameApplied = dockCtrl.SnapOnRelease("chart:1");
         if (!Approx(sameApplied.x, 5f) || !Approx(sameApplied.y, 0f)) return $"S17b: same-plane snap offset {sameApplied} expected (5,0)";
@@ -1110,9 +1118,12 @@ public static class FloatingWindowE2ERunner
         BuildTwoPlaneStack(spawned, 1.2f, out _, out _, out RectTransform dockLayer, out RectTransform floatLayer, out _);
         var dockCtrl = MakeController(spawned, dockLayer);
         var floatCtrl = MakeController(spawned, floatLayer);
+        // chart is the only dock kind now (ADR-0038/0037/0026); use 3 chart windows for the back-plane round-trip
+        // (ids are opaque labels — the synthetic controller's bare factory builds no chart content). Sizes ≥ chart
+        // minSize (280×200) where geometry is asserted; the hidden one only checks plane + visible=false.
         dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:7203", 10.5f, -20.5f, 520.5f, 360.5f, true);
-        dockCtrl.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", -100.5f, 50.5f, 340.5f, 140.5f, true);
-        dockCtrl.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", -300.5f, 200.5f, 380.5f, 260.5f, false);   // hidden window round-trips (run_result retired by ADR-0037 → popup)
+        dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:bp", -100.5f, 50.5f, 340.5f, 240.5f, true);
+        dockCtrl.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:hidden", -300.5f, 200.5f, 380.5f, 260.5f, false);   // hidden dock window round-trips
         floatCtrl.Spawn(FloatingWindowCatalog.KIND_ORDER, "order", 40.5f, -40.5f, 360.5f, 300.5f, true);
 
         // --- capture: UNION both controllers into one list (mirrors CaptureLayout) ---
@@ -1149,8 +1160,8 @@ public static class FloatingWindowE2ERunner
         RectTransform chart = dockCtrl2.RectOf("chart:7203");
         if (chart == null || chart.parent != dockLayer2) return "S18: chart did not restore onto the BACK plane";
         if (!Approx2(chart.anchoredPosition, new Vector2(10.5f, -20.5f))) return $"S18: chart geometry lost ({chart.anchoredPosition})";
-        if (dockCtrl2.RectOf("buying_power")?.parent != dockLayer2) return "S18: buying_power did not restore onto the BACK plane";
-        RectTransform hidden = dockCtrl2.RectOf("positions");   // the hidden (visible=false) dock window (run_result retired by ADR-0037)
+        if (dockCtrl2.RectOf("chart:bp")?.parent != dockLayer2) return "S18: dock window chart:bp did not restore onto the BACK plane";
+        RectTransform hidden = dockCtrl2.RectOf("chart:hidden");   // the hidden (visible=false) dock window
         if (hidden == null || hidden.parent != dockLayer2) return "S18: hidden dock window did not restore onto the BACK plane";
         if (hidden.gameObject.activeSelf) return "S18: hidden dock window (visible=false) restored as active";
 
@@ -1415,20 +1426,21 @@ public static class FloatingWindowE2ERunner
             return "S23c: same-edge alignment with gap minted a group (must not attach)";
 
         // (d) NO Hakoniwa-priority (ADR-0024 §1): two equal-size groups merge by DICT-MIN, NOT by which one
-        // contains a "core". The Hakoniwa core concept is fully retired (ADR-0024 §1; ADR-0026 dropped
-        // startup; ADR-0037 dropped run_result → there is NO core kind any more — DockShape.IsCoreKind ≡ false),
-        // so both groups here are plain. Group (S, O) at grp_zzz… and group (M, N) at grp_aaa… both size 2;
+        // contains a "core". The Hakoniwa core concept is fully retired (ADR-0024 §1; ADR-0026 dropped startup;
+        // ADR-0037 dropped run_result; ADR-0038 dropped buying_power/orders/positions → there is NO core kind
+        // any more — the IsCoreKind predicate was deleted), so both groups here are plain. Group (S, O) at
+        // grp_zzz… and group (M, N) at grp_aaa… both size 2;
         // the dragged S flush-attaches onto M. The winner is the lexicographically-smallest id (grp_aaa…).
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
         var c4 = MakeController(spawned, layer4);
         const string GRP_A = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";   // group, lex-EARLY
         const string GRP_Z = "grp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";   // group, lex-LATE
-        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "M", 280, 0, 280, 180, true);     // dragged's flush-right partner
-        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "N", 280, -180, 280, 180, true);   // M's group sibling
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,    "M", 280, 0, 280, 180, true);     // dragged's flush-right partner
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "N", 280, -180, 280, 180, true);   // M's group sibling
         c4.SetGroupId("M", GRP_A);
         c4.SetGroupId("N", GRP_A);
-        c4.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER,"S", 0, 0, 280, 180, true);      // dragged
-        c4.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER,"O", -280, 0, 280, 180, true);   // S's group sibling
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,"S", 0, 0, 280, 180, true);      // dragged
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,"O", -280, 0, 280, 180, true);   // S's group sibling
         c4.SetGroupId("S", GRP_Z);
         c4.SetGroupId("O", GRP_Z);
         // S.right=280 == M.left=280 ⇒ flush. SnapOnRelease(S) merges both size-2 groups; the dict-min id
@@ -1445,10 +1457,10 @@ public static class FloatingWindowE2ERunner
         var c5 = MakeController(spawned, layer5);
         const string GBIG = "grp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";   // size 2 (32 b's, lex-EARLIER than c's)
         const string GSMALL = "grp_cccccccccccccccccccccccccccccccc"; // size 1 (32 c's)
-        c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "X", 280, 0,    280, 180, true);   // flush-right partner (GBIG)
-        c5.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y", 280, -180, 280, 180, true);   // GBIG sibling
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER,    "X", 280, 0,    280, 180, true);   // flush-right partner (GBIG)
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 280, -180, 280, 180, true);   // GBIG sibling
         c5.SetGroupId("X", GBIG); c5.SetGroupId("Y", GBIG);
-        c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "D", 0, 0, 280, 180, true);        // dragged (in GSMALL alone)
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER,    "D", 0, 0, 280, 180, true);        // dragged (in GSMALL alone)
         c5.SetGroupId("D", GSMALL);
         c5.SnapOnRelease("D");
         if (c5.GroupIdOf("D") != GBIG) return $"S23e: size-max did not promote bigger group id (got {c5.GroupIdOf("D")})";
@@ -1459,7 +1471,7 @@ public static class FloatingWindowE2ERunner
         // trigger (findings 0082 §10). SnapOnRelease is NEVER called on the spawn path.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer6, out _);
         var c6 = MakeController(spawned, layer6);
-        c6.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "anchor", 0, 0, 280, 180, true);
+        c6.Spawn(FloatingWindowCatalog.KIND_ORDER, "anchor", 0, 0, 280, 180, true);
         c6.NoteUserFocus("anchor");
         c6.SpawnDockedToFocus(FloatingWindowCatalog.KIND_CHART, "chart:abc", new Vector2(0, 0), true);
         // Even though the chart is dropped flush-adjacent to "anchor" (DockSnapPlacement), no group forms.
@@ -1557,8 +1569,8 @@ public static class FloatingWindowE2ERunner
 
         // 2-member island stacked VERTICALLY (so a horizontal drag never enters the sibling's rect).
         // A=(0,0,280,180), B=(0,-200,280,180). Bootstrap the group via SetGroupId. No external windows.
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 0, -200, 280, 180, true);
         const string G = "grp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         c.SetGroupId("A", G); c.SetGroupId("B", G);
         Vector2 a0 = c.RectOf("A").anchoredPosition;
@@ -1626,8 +1638,8 @@ public static class FloatingWindowE2ERunner
         // (a) 3-member group: pickup-detach 1 → remainder still ≥2 → group keeps its id.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0,   0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 280, 0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0,   0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 280, 0, 280, 180, true);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,     "C", 560, 0, 280, 180, true);
         c.SnapOnRelease("B");
         c.SnapOnRelease("C");
@@ -1645,8 +1657,8 @@ public static class FloatingWindowE2ERunner
         // (b) 2-member group: pickup-detach 1 → remainder = 1 → chain dissolve clears both.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0,   0, 280, 180, true);
-        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Q", 280, 0, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,    "P", 0,   0, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "Q", 280, 0, 280, 180, true);
         c2.SnapOnRelease("Q");
         string g2 = c2.GroupIdOf("P");
         if (string.IsNullOrEmpty(g2)) return "S26b: precondition 2-member attach failed";
@@ -1660,8 +1672,8 @@ public static class FloatingWindowE2ERunner
         // (c) Close cascade: 2-member group → Close one → chain dissolve via the shared helper.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
         var c3 = MakeController(spawned, layer3);
-        c3.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "X", 0,   0, 280, 180, true);
-        c3.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y", 280, 0, 280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER,    "X", 0,   0, 280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 280, 0, 280, 180, true);
         c3.SnapOnRelease("Y");
         string g3 = c3.GroupIdOf("X");
         if (string.IsNullOrEmpty(g3)) return "S26c: precondition attach failed";
@@ -1671,8 +1683,8 @@ public static class FloatingWindowE2ERunner
         // (d) Hide preserves groupId (mode-switch / Replay↔Live invariant — findings 0082 §10).
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
         var c4 = MakeController(spawned, layer4);
-        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "L", 0,   0, 280, 180, true);
-        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "M", 280, 0, 280, 180, true);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,    "L", 0,   0, 280, 180, true);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "M", 280, 0, 280, 180, true);
         c4.SnapOnRelease("M");
         string g4 = c4.GroupIdOf("L");
         if (string.IsNullOrEmpty(g4)) return "S26d: precondition attach failed";
@@ -1685,8 +1697,8 @@ public static class FloatingWindowE2ERunner
         //     now (positions) alone → chain dissolve → groupId cleared. Every window drags identically.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer5, out _);
         var c5 = MakeController(spawned, layer5);
-        c5.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 0,   0, 280, 180, true);
-        c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,  "orders",  280, 0, 280, 180, true);
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER, "positions", 0,   0, 280, 180, true);
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER,  "orders",  280, 0, 280, 180, true);
         c5.SnapOnRelease("orders");
         string g5 = c5.GroupIdOf("positions");
         if (string.IsNullOrEmpty(g5)) return "S26e: precondition attach failed";
@@ -1708,8 +1720,8 @@ public static class FloatingWindowE2ERunner
         //     null on EVERY member (live or hidden). Pins the helper independent of Hide.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer7, out _);
         var c7 = MakeController(spawned, layer7);
-        c7.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "U", 0,   0, 280, 180, true);
-        c7.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "V", 280, 0, 280, 180, true);
+        c7.Spawn(FloatingWindowCatalog.KIND_ORDER,    "U", 0,   0, 280, 180, true);
+        c7.Spawn(FloatingWindowCatalog.KIND_ORDER, "V", 280, 0, 280, 180, true);
         c7.SnapOnRelease("V");
         string g7 = c7.GroupIdOf("U");
         if (string.IsNullOrEmpty(g7)) return "S26g: precondition attach failed";
@@ -1727,12 +1739,13 @@ public static class FloatingWindowE2ERunner
     static string Section27_HakoniwaRetired(List<GameObject> spawned)
     {
         // Island of two windows (plain dock kinds — the Hakoniwa "core" concept is fully retired: ADR-0024 §1
-        // dropped the special, ADR-0026 dropped startup, ADR-0037 dropped run_result → DockShape.IsCoreKind ≡
-        // false). Stacked vertically (so a horizontal drag never enters the sibling rect). Bootstrap via SetGroupId.
+        // dropped the special, ADR-0026/0037/0038 dropped startup/run_result/buying_power/orders/positions →
+        // there is no core kind (the IsCoreKind predicate was deleted). Stacked vertically (so a horizontal
+        // drag never enters the sibling rect). Bootstrap via SetGroupId.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", 0, 0,    280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS,    "positions",    0, -200, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "buying_power", 0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "positions",    0, -200, 280, 180, true);
         const string G = "grp_cccccccccccccccccccccccccccccccc";
         c.SetGroupId("buying_power", G); c.SetGroupId("positions", G);
         Vector2 s0 = c.RectOf("buying_power").anchoredPosition;
@@ -1851,8 +1864,8 @@ public static class FloatingWindowE2ERunner
         //     anchor (30,0) but KEEPS 280×180; B takes A's anchor (0,0) but KEEPS 300×200.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "orders",    0,  0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "positions", 30, 0, 300, 200, true);
         const string G = "grp_hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
         c.SetGroupId("orders", G); c.SetGroupId("positions", G);
         Vector2 oRest = c.RectOf("orders").anchoredPosition;     // (0, 0)
@@ -1884,8 +1897,8 @@ public static class FloatingWindowE2ERunner
         const string G_DOCK = "grp_dddddddddddddddddddddddddddddddd";
         var single = new List<FloatingWindowLayout>
         {
-            WG("buying_power", FloatingWindowCatalog.KIND_BUYING_POWER, 0, 0, 280, 180, 0, true, G_DOCK),
-            WG("orders",       FloatingWindowCatalog.KIND_ORDERS,    0, 0, 280, 180, 1, true, G_DOCK),
+            WG("buying_power", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 0, true, G_DOCK),
+            WG("orders",       FloatingWindowCatalog.KIND_CHART,    0, 0, 280, 180, 1, true, G_DOCK),
             WG("order:singlet", FloatingWindowCatalog.KIND_ORDER,    0, 0, 280, 180, 2, true, null),
         };
         BackcastWorkspaceRoot.SplitCrossPlaneGroups(single);
@@ -1898,9 +1911,9 @@ public static class FloatingWindowE2ERunner
         const string G_MAJ = "grp_mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm";
         var majorityDock = new List<FloatingWindowLayout>
         {
-            WG("buying_power", FloatingWindowCatalog.KIND_BUYING_POWER, 0, 0, 280, 180, 0, true, G_MAJ),
-            WG("orders",    FloatingWindowCatalog.KIND_ORDERS,    0, 0, 280, 180, 1, true, G_MAJ),
-            WG("positions", FloatingWindowCatalog.KIND_POSITIONS, 0, 0, 280, 180, 2, true, G_MAJ),
+            WG("buying_power", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 0, true, G_MAJ),
+            WG("orders",    FloatingWindowCatalog.KIND_CHART,    0, 0, 280, 180, 1, true, G_MAJ),
+            WG("positions", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 2, true, G_MAJ),
             WG("order",     FloatingWindowCatalog.KIND_ORDER,     0, 0, 280, 180, 3, true, G_MAJ),
         };
         BackcastWorkspaceRoot.SplitCrossPlaneGroups(majorityDock);
@@ -1915,7 +1928,7 @@ public static class FloatingWindowE2ERunner
         {
             WG("order",                       FloatingWindowCatalog.KIND_ORDER,           0, 0, 280, 180, 0, true, G_FMAJ),
             WG("strategy_editor:region_001",  FloatingWindowCatalog.KIND_STRATEGY_EDITOR, 0, 0, 280, 180, 1, true, G_FMAJ),
-            WG("orders",                      FloatingWindowCatalog.KIND_ORDERS,          0, 0, 280, 180, 2, true, G_FMAJ),
+            WG("orders",                      FloatingWindowCatalog.KIND_CHART,          0, 0, 280, 180, 2, true, G_FMAJ),
         };
         BackcastWorkspaceRoot.SplitCrossPlaneGroups(majorityFront);
         if (majorityFront[0].groupId != G_FMAJ) return "S30c: front majority winner #1 lost id";
@@ -1926,7 +1939,7 @@ public static class FloatingWindowE2ERunner
         const string G_TIE = "grp_tttttttttttttttttttttttttttttttt";
         var tie = new List<FloatingWindowLayout>
         {
-            WG("orders", FloatingWindowCatalog.KIND_ORDERS, 0, 0, 280, 180, 0, true, G_TIE),
+            WG("orders", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 0, true, G_TIE),
             WG("order",  FloatingWindowCatalog.KIND_ORDER,  0, 0, 280, 180, 1, true, G_TIE),
         };
         BackcastWorkspaceRoot.SplitCrossPlaneGroups(tie);
@@ -1938,9 +1951,9 @@ public static class FloatingWindowE2ERunner
         const string G_SPLIT = "grp_splitsplitsplitsplitsplitsplits";
         var mixed = new List<FloatingWindowLayout>
         {
-            WG("buying_power", FloatingWindowCatalog.KIND_BUYING_POWER, 0, 0, 280, 180, 0, true, G_CLEAN),
-            WG("orders",    FloatingWindowCatalog.KIND_ORDERS,    0, 0, 280, 180, 1, true, G_CLEAN),
-            WG("positions", FloatingWindowCatalog.KIND_POSITIONS, 0, 0, 280, 180, 2, true, G_SPLIT),
+            WG("buying_power", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 0, true, G_CLEAN),
+            WG("orders",    FloatingWindowCatalog.KIND_CHART,    0, 0, 280, 180, 1, true, G_CLEAN),
+            WG("positions", FloatingWindowCatalog.KIND_CHART, 0, 0, 280, 180, 2, true, G_SPLIT),
             WG("order",     FloatingWindowCatalog.KIND_ORDER,     0, 0, 280, 180, 3, true, G_SPLIT),
         };
         BackcastWorkspaceRoot.SplitCrossPlaneGroups(mixed);
@@ -1954,7 +1967,7 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         const string GR = "grp_rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr";
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "U", 0, 0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "U", 0, 0, 280, 180, true);
         c.SetGroupId("U", GR);   // singleton remnant on this controller after a hypothetical split
         c.DissolveIfShrunkTo(GR, 2);
         if (c.GroupIdOf("U") != null) return "S30f: shared dissolve helper did not clear singleton remnant";
@@ -1981,8 +1994,8 @@ public static class FloatingWindowE2ERunner
             () => { var go = new GameObject("GhostWindow_unset", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; },
             go => UnityEngine.Object.DestroyImmediate(go));
         c.AttachGhostLayer(ghostLayer);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "orders",    0,  0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "positions", 30, 0, 300, 200, true);
         const string G = "grp_gggggggggggggggggggggggggggggggg";
         c.SetGroupId("orders", G); c.SetGroupId("positions", G);
 
@@ -2028,8 +2041,8 @@ public static class FloatingWindowE2ERunner
         var gt = new DragGhostLayer(contT, FloatingWindowCatalog.Default(),
             () => { var go = new GameObject("g", typeof(RectTransform)); spawned.Add(go); return (RectTransform)go.transform; }, null);
         ct.AttachGhostLayer(gt);
-        ct.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
-        ct.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        ct.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0, 0,    280, 180, true);
+        ct.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 0, -200, 280, 180, true);
         const string GT = "grp_tttttttttttttttttttttttttttttttt";
         ct.SetGroupId("A", GT); ct.SetGroupId("B", GT);
         Vector2 aRest = ct.RectOf("A").anchoredPosition;
@@ -2056,24 +2069,25 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 32. #105 / ADR-0020 / ADR-0024 §1: factory first-launch grouping — FormFactoryBaseGroup bundles
-    //      the base dock cluster into ONE PLAIN island (ADR-0024 retires the Hakoniwa special). Covers
-    //      DRAG-14: FormGroup mints ONE shared non-null groupId across every named member; a programmatic
-    //      Spawn still mints nothing (S20 invariant); the cluster is a NORMAL island (cores drag freely —
-    //      no core-lock); <2 live members ⇒ no group; first-launch placement is FLUSH (docked), not gapped.
+    // ---- 32. #105 / ADR-0020 / ADR-0024 §1: window-group mechanics — FloatingWindowController.FormGroup
+    //      bundles N already-live windows into ONE PLAIN island (ADR-0024 retires the Hakoniwa special). The
+    //      first-launch *factory* caller (FormFactoryBaseGroup) was retired with ADR-0038 (the base set is
+    //      empty), but FormGroup itself is STILL production — saved-layout restore re-stamps a doc's groupId
+    //      through it. Covers DRAG-14: FormGroup mints ONE shared non-null groupId across every named member;
+    //      a programmatic Spawn still mints nothing (S20 invariant); the island is NORMAL (cores drag freely —
+    //      no core-lock); <2 live members ⇒ no group; flush (docked) placement, not gapped.
     //      RED→GREEN litmus: no-op FormGroup's body ⇒ (b)/(c) FAIL; restore a non-zero placement gap ⇒ (e) FAIL.
     static string Section32_FactoryBaseGroup(List<GameObject> spawned)
     {
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
 
-        // ADR-0026 retired startup, ADR-0037 retired run_result (→ popup) → the factory base cluster is now
-        // 3 windows. Spawn them ungrouped — mirrors BuildWorkspace.SpawnBaseDockWindows (the factory grouping
-        // runs AFTER spawn, stamping the shared groupId onto already-live windows). FormGroup's ≥2 threshold
-        // is still met by 3, so the base group still forms (findings 0125 D4/F5).
-        c.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "buying_power", 0,    0,    280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,       "orders",       280,  0,    280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS,    "positions",    0,   -180,  280, 180, true);
+        // Spawn 3 representative ungrouped windows, then FormGroup them — the same shape a saved-layout
+        // restore drives (spawn windows, then stamp the persisted shared groupId onto the already-live set).
+        // FormGroup's ≥2 threshold is met by 3, so the group forms.
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "buying_power", 0,    0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,       "orders",       280,  0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "positions",    0,   -180,  280, 180, true);
 
         var ids = new[] { "buying_power", "orders", "positions" };
 
@@ -2110,7 +2124,7 @@ public static class FloatingWindowE2ERunner
         //     are ignored, not errors.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "only", 0, 0, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "only", 0, 0, 280, 180, true);
         if (!c2.Has("only")) return "S32d: precondition — lone member did not spawn (the <2 path would be vacuous)";
         if (c2.FormGroup(new[] { "only", "missing" }) != null)
             return "S32d: FormGroup grouped fewer than 2 live members (1 live + 1 unknown id)";
@@ -2118,9 +2132,9 @@ public static class FloatingWindowE2ERunner
             return $"S32d: lone member got a groupId ({c2.GroupIdOf("only")})";
         if (c2.FormGroup(null) != null) return "S32d: FormGroup(null) did not return null";
 
-        // (e) The factory cluster must be DOCKED (flush, touching) — not just grouped. SpawnBaseDockWindows
-        //     uses DockDefaultPlacement.ComputeFlushRects (the SAME call). ADR-0037: the base cluster is n=3
-        //     now (run_result → popup), so the grid is cols=ceil(√3)=2 / rows=2 with slot 3 absent. Row-major,
+        // (e) A docked cluster must be FLUSH (touching) — not just grouped. DockDefaultPlacement.ComputeFlushRects
+        //     is the placement helper (still used by the AFK gate and any flush-docking caller). For n=3 the
+        //     grid is cols=ceil(√3)=2 / rows=2 with slot 3 absent. Row-major,
         //     y up-positive: [0][1] / [2]. Flush pairs: 0-1 (horizontal top row), 0-2 (vertical left col).
         //     RED→GREEN: if the placement gap is restored to non-zero (DefaultGap), these go NOT-flush.
         var flush = DockDefaultPlacement.ComputeFlushRects(3);
@@ -2260,7 +2274,7 @@ public static class FloatingWindowE2ERunner
         // (a) DRAG-05 IslandMove snap: singleton A dragged so its right edge comes within R_SNAP of E.left.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);   // dragged singleton
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "A", 0,   0, 280, 180, true);   // dragged singleton
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 400, 0, 280, 180, true);   // external, ungrouped
         Vector2 aStart = c.RectOf("A").anchoredPosition;   // (0,0); A.right=280, E.left=400
         c.BeginDrag("A", aStart, FloatingWindowMath.DragChannel.IslandMove);
@@ -2281,7 +2295,7 @@ public static class FloatingWindowE2ERunner
         //     E.left ⇒ the picked window snaps flush.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "A", 0,   0, 280, 180, true);
         c2.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 600, 0, 280, 180, true);   // E.left=600
         Vector2 a2 = c2.RectOf("A").anchoredPosition;
         c2.BeginDrag("A", a2, FloatingWindowMath.DragChannel.SingleWindowPickup);
@@ -2302,8 +2316,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",  0,   0,   280, 180, true);   // dragged singleton
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Y1", 150, 0,   280, 180, true);   // Y island
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y2", 150, 180, 280, 180, true);   // Y2 above Y1, flush
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "Y1", 150, 0,   280, 180, true);   // Y island
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y2", 150, 180, 280, 180, true);   // Y2 above Y1, flush
         const string GY = "grp_yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy";
         c.SetGroupId("Y1", GY); c.SetGroupId("Y2", GY);
         Vector2 aStart = c.RectOf("A").anchoredPosition;   // (0,0)
@@ -2320,11 +2334,11 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
         c2.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",   0,   0,    280, 180, true);   // dragged
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Asib",0,   -200, 280, 180, true);   // A's island sibling
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,    "Asib",0,   -200, 280, 180, true);   // A's island sibling
         const string GI = "grp_iiiiiiiiiiiiiiiiiiiiiiiiiiiiiiii";
         c2.SetGroupId("A", GI); c2.SetGroupId("Asib", GI);
-        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y1", 400, 0,   280, 180, true);     // external Y island
-        c2.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "Y2", 400, 180, 280, 180, true);  // Y2 above Y1, flush
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y1", 400, 0,   280, 180, true);     // external Y island
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y2", 400, 180, 280, 180, true);  // Y2 above Y1, flush
         const string GY2 = "grp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz";
         c2.SetGroupId("Y1", GY2); c2.SetGroupId("Y2", GY2);
         Vector2 a2 = c2.RectOf("A").anchoredPosition;     // (0,0)
@@ -2342,7 +2356,7 @@ public static class FloatingWindowE2ERunner
         //     magnetic snap) attaches. Singleton A dragged flush-right to E ⇒ mint a group.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
         var c3 = MakeController(spawned, layer3);
-        c3.Spawn(FloatingWindowCatalog.KIND_ORDERS, "A", 0,   0, 280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER, "A", 0,   0, 280, 180, true);
         c3.Spawn(FloatingWindowCatalog.KIND_ORDER,  "E", 290, 0, 280, 180, true);   // E.left=290; A.right=280 (gap 10)
         Vector2 a3 = c3.RectOf("A").anchoredPosition;
         // offset (5,0) ⇒ A.right=285, gap 5 ≤ 96 ⇒ snap +5 ⇒ A flush at (10,0); empty (cursor not over E).
@@ -2358,8 +2372,8 @@ public static class FloatingWindowE2ERunner
         //     edge kisses Y — but A does NOT y-overlap Y. The merge must still fire. IslandMove empty branch.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
         var c4 = MakeController(spawned, layer4);
-        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);   // dragged (top)
-        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);   // island sibling (bottom)
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0, 0,    280, 180, true);   // dragged (top)
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 0, -200, 280, 180, true);   // island sibling (bottom)
         const string GD = "grp_dddddddddddddddddddddddddddddddd";
         c4.SetGroupId("A", GD); c4.SetGroupId("B", GD);
         c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 300, -200, 280, 180, true);     // external, aligned with B only
@@ -2377,8 +2391,8 @@ public static class FloatingWindowE2ERunner
         //     flush after the bbox snap. 2-member island, cursor over external singleton Y. IslandMove overlap.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer5, out _);
         var c5 = MakeController(spawned, layer5);
-        c5.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);   // dragged
-        c5.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);   // island sibling
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0, 0,    280, 180, true);   // dragged
+        c5.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 0, -200, 280, 180, true);   // island sibling
         const string GE = "grp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         c5.SetGroupId("A", GE); c5.SetGroupId("B", GE);
         c5.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y", 200, -50, 280, 180, true);      // external singleton
@@ -2397,8 +2411,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer6, out _);
         var c6 = MakeController(spawned, layer6);
         c6.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",  0,   0,    280, 180, true);   // dragged singleton, rest (0,0)
-        c6.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Y1", 200, 0,    280, 180, true);   // island TOP    y[-180,0]
-        c6.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y2", 200, -180, 280, 180, true);   // island BOTTOM y[-360,-180]
+        c6.Spawn(FloatingWindowCatalog.KIND_ORDER,    "Y1", 200, 0,    280, 180, true);   // island TOP    y[-180,0]
+        c6.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y2", 200, -180, 280, 180, true);   // island BOTTOM y[-360,-180]
         const string GF = "grp_ffffffffffffffffffffffffffffffff";
         c6.SetGroupId("Y1", GF); c6.SetGroupId("Y2", GF);   // island bbox = x[200,480] y[-360,0]
         // dragStart (100,-110), cursor (300,-200) over Y2; offset (200,-90). Nearest flush to the island bbox
@@ -2419,8 +2433,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer7, out _);
         var c7 = MakeController(spawned, layer7);
         c7.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A",  0,   0,    280, 180, true);   // dragged singleton (0,0)
-        c7.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "Y1", 400, 0,    280, 180, true);   // island TOP    y[-180,0]
-        c7.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Y2", 400, -180, 280, 180, true);   // island BOTTOM y[-360,-180]
+        c7.Spawn(FloatingWindowCatalog.KIND_ORDER,    "Y1", 400, 0,    280, 180, true);   // island TOP    y[-180,0]
+        c7.Spawn(FloatingWindowCatalog.KIND_ORDER, "Y2", 400, -180, 280, 180, true);   // island BOTTOM y[-360,-180]
         const string GG = "grp_gggggggggggggggggggggggggggggg77";
         c7.SetGroupId("Y1", GG); c7.SetGroupId("Y2", GG);   // bbox = x[400,680] y[-360,0]
         // Drop A at (400,-190): A.top=-190 is within R_SNAP of Y1.bottom(-180) ⇒ classified MergeToIsland(Y1).
@@ -2442,8 +2456,8 @@ public static class FloatingWindowE2ERunner
         // (a) IslandMove then ESC: island reverts to rest; groupId unchanged; ReleaseDrag commits nothing.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "A", 0, 0,    280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "B", 0, -200, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "A", 0, 0,    280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "B", 0, -200, 280, 180, true);
         const string G = "grp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         c.SetGroupId("A", G); c.SetGroupId("B", G);
         Vector2 a0 = c.RectOf("A").anchoredPosition, b0 = c.RectOf("B").anchoredPosition;
@@ -2463,8 +2477,8 @@ public static class FloatingWindowE2ERunner
         // (b) Pickup drag then ESC: picked window reverts to rest; groupId never went null (commit skipped).
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0, 0,    280, 180, true);
-        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Q", 0, -200, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,    "P", 0, 0,    280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "Q", 0, -200, 280, 180, true);
         const string G2 = "grp_ffffffffffffffffffffffffffffffff";
         c2.SetGroupId("P", G2); c2.SetGroupId("Q", G2);
         Vector2 p0 = c2.RectOf("P").anchoredPosition;
@@ -2491,8 +2505,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         c.SetSpringAnimator(recorder);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "orders",    0,  0, 280, 180, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "positions", 30, 0, 300, 200, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "orders",    0,  0, 280, 180, true);
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "positions", 30, 0, 300, 200, true);
         const string G = "grp_ssssssssssssssssssssssssssssssss";
         c.SetGroupId("orders", G); c.SetGroupId("positions", G);
         fires = 0;
@@ -2504,8 +2518,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer2, out _);
         var c2 = MakeController(spawned, layer2);
         c2.SetSpringAnimator(recorder);
-        c2.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "P", 0, 0,    280, 180, true);
-        c2.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Q", 0, -200, 280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER,    "P", 0, 0,    280, 180, true);
+        c2.Spawn(FloatingWindowCatalog.KIND_ORDER, "Q", 0, -200, 280, 180, true);
         const string G2 = "grp_ssssssssssssssssssssssssssssss22";
         c2.SetGroupId("P", G2); c2.SetGroupId("Q", G2);
         fires = 0;
@@ -2517,8 +2531,8 @@ public static class FloatingWindowE2ERunner
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer3, out _);
         var c3 = MakeController(spawned, layer3);
         c3.SetSpringAnimator(recorder);
-        c3.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "X", 0, 0,    280, 180, true);
-        c3.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "Z", 0, -200, 280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER,    "X", 0, 0,    280, 180, true);
+        c3.Spawn(FloatingWindowCatalog.KIND_ORDER, "Z", 0, -200, 280, 180, true);
         const string G3 = "grp_ssssssssssssssssssssssssssssss33";
         c3.SetGroupId("X", G3); c3.SetGroupId("Z", G3);
         c3.BeginDrag("X", Vector2.zero);
@@ -2533,8 +2547,8 @@ public static class FloatingWindowE2ERunner
         var c4 = MakeController(spawned, layer4);
         var stopped = new List<string>();
         c4.SetSpringAnimator(recorder, rt => { if (rt != null) stopped.Add(rt.name); });
-        c4.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "M", 0, 0,    280, 180, true);
-        c4.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "N", 0, -200, 280, 180, true);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER,    "M", 0, 0,    280, 180, true);
+        c4.Spawn(FloatingWindowCatalog.KIND_ORDER, "N", 0, -200, 280, 180, true);
         const string G4 = "grp_ssssssssssssssssssssssssssssss44";
         c4.SetGroupId("M", G4); c4.SetGroupId("N", G4);
         c4.BeginDrag("M", Vector2.zero);
@@ -2552,7 +2566,7 @@ public static class FloatingWindowE2ERunner
     {
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
-        c.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "startup",   0,   0, 280, 180, true);   // base window ("startup" id = label only; ADR-0026 retired the startup kind)
+        c.Spawn(FloatingWindowCatalog.KIND_ORDER, "startup",   0,   0, 280, 180, true);   // base window ("startup" id = label only; ADR-0026 retired the startup kind)
         c.Spawn(FloatingWindowCatalog.KIND_CHART,   "chart:abc", 280, 0, 280, 180, true);   // flush-right of the base window
         // (a) programmatic chart spawn is ungrouped (attach is drag-release exclusive).
         if (c.GroupIdOf("chart:abc") != null) return "S40a: chart spawned with a groupId (must be null)";

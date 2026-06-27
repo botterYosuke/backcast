@@ -47,21 +47,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
 
-    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids. ADR-0026 retired the
-    // `startup` base window (→ Settings modal) and ADR-0037 retired `run_result` (→ screen-anchored
-    // popup, findings 0125 D4), so the base dock is now 3 windows. Singletons (one window each);
-    // ids = the catalog kind verbatim (no instance suffix).
-    const string WINDOW_ID_BUYING_POWER = "buying_power";
-    const string WINDOW_ID_ORDERS = "orders";
-    const string WINDOW_ID_POSITIONS = "positions";
-
-    // #105: the base dock cluster's id list — the single source for BOTH the first-launch spawn
-    // (SpawnBaseDockWindows) and the factory grouping (FormFactoryBaseGroup). startup removed (ADR-0026),
-    // run_result removed (ADR-0037) → 3 base windows. FormGroup's ≥2 threshold is still met, so the
-    // factory base group still forms (findings 0125 D4/F5); there is no longer a promoting "core" kind.
-    static readonly string[] BaseDockWindowIds = {
-        WINDOW_ID_BUYING_POWER, WINDOW_ID_ORDERS, WINDOW_ID_POSITIONS,
-    };
+    // #99 (ADR-0017): the dock cluster once spawned base singleton windows (startup / run_result /
+    // buying_power / orders / positions). ALL are now retired — startup (ADR-0026 → Settings), run_result
+    // (ADR-0037 → RunResultPopup), buying_power/orders/positions (ADR-0038 #174-178 → account summary bar).
+    // The base set is therefore EMPTY, so the base-spawn + factory-grouping machinery (BaseDockWindowIds /
+    // SpawnBaseDockWindows / FormFactoryBaseGroup) was DELETED (ADR-0038 §6 — the factory grouping concept
+    // is retired). First-launch dock = `chart` only (multi-instance, universe-driven via SyncChartWindowsToUniverse).
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -197,10 +188,14 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // Production leaves this null and BuildWorkspace defaults to the pythonnet synthesizer.
     public void SetSynthesizer(IMarimoSynthesizer synthesizer) { if (synthesizer != null) _synth = synthesizer; }
 
-    // ── #23 re-home: live surfaces (3 data tiles / Order ticket / secret modal) ──
-    // #61 adds _buyingPowerView (the 4th base panel, dynamically spawned — no scene tile) using the same
-    // LivePanelTileView wiring as the 3 #23 tiles.
-    LivePanelTileView _ordersView, _positionsView, _runResultView, _buyingPowerView;
+    // ── #23 re-home: live surfaces (run_result tile / Order ticket / secret modal) ──
+    // ADR-0038 (#174-178): the buying_power / orders / positions dock tiles are RETIRED — their data
+    // now lives on the account summary bar (primary) + hover cards (detail). _runResultView remains
+    // (sister #172 retires it). The Format*/FormatReplay* functions stay (the bar's hover cards reuse
+    // them byte-for-byte — findings 0126 D5).
+    LivePanelTileView _runResultView;
+    AccountSummaryBarView _accountBar;       // #174 S1: screen-anchored bar chrome
+    AccountSummaryIconStage _accountIconStage; // #177 S5: 3D-primitive placeholder icons (RenderTexture)
     OrderTicketView _orderTicket;
 
     // #172/#173 (ADR-0037 / findings 0125): the Run Result popup — a screen-anchored top-right card
@@ -497,11 +492,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out var chartSpec)) _chartWindowSize = chartSpec.defaultSize;
 
-        // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
-        // floating windows on the same layer as the strategy editor + order ticket; the magnet-snap
-        // seam (Slice 1) is the only "Hakoniwa-ness" they have. Default placement is a grid-style
-        // initial cascade (DockDefaultPlacement); a saved layout will reposition them in RestoreFloating.
-        SpawnBaseDockWindows();
+        // ADR-0038 (#174-178): no base dock windows are spawned any more — every base singleton was retired
+        // to the Settings modal / RunResultPopup / account summary bar. The dock plane is populated solely by
+        // the chart family below.
 
         // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating chart window per universe
         // instrument (id "chart:<iid>"). Membership is owned by _scenario.Universe (the shared SoT);
@@ -677,6 +670,27 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 () => _footerMode.DisplayMode,                        // bar mode badge
                 DocumentBadgeText,                                    // #95 P6 S6 (#90): document-identity badge
                 _font);                                               // uGUI font (#77)
+
+        // ADR-0038 (#174-178): the account summary bar — screen-anchored chrome DIRECTLY UNDER the menu
+        // bar on its OWN ScreenSpaceOverlay canvas (NOT a Content child → pan-immune, no parallax, no
+        // gutter; it overlaps the canvas). Always visible in every mode; persists nothing (fixed anchor,
+        // derived visibility). The 4 slots are driven each frame by PushLive/ReplayAccountBar; until data
+        // arrives they read the "—" placeholder. topOffset = the authored menu height (derived, not baked).
+        var accountBarGo = new GameObject("AccountSummaryBar");
+        accountBarGo.transform.SetParent(transform, false);
+        _accountBar = accountBarGo.AddComponent<AccountSummaryBarView>();
+        float menuH = _menuBarView != null ? ((RectTransform)_menuBarView.transform).sizeDelta.y : 24f;
+        _accountBar.Build(_font, menuH);
+
+        // #177 S5: placeholder 3D-primitive icons (cube/sphere/capsule/cylinder) rendered to per-slot
+        // RenderTextures and fed to each slot's RawImage. The RawImage.texture is the swap seam for future
+        // real art (owner HITL). Real lit pixels are HITL; headless just wires the (non-null) RT objects.
+        var iconStageGo = new GameObject("AccountSummaryIconStage");
+        iconStageGo.transform.SetParent(transform, false);
+        _accountIconStage = iconStageGo.AddComponent<AccountSummaryIconStage>();
+        _accountIconStage.Build();
+        for (int i = 0; i < AccountSummaryBarView.SLOT_COUNT && i < _accountIconStage.Count; i++)
+            _accountBar.SetIconTexture(i, _accountIconStage.Texture(i));
 
         // #125-#128 (ADR-0026): the Settings modal集約口. Screen-fixed chrome (own canvas, SETTINGS_SORT
         // below secret/save-guard, above the menu). The three sections rebuild the VIEW against the SAME
@@ -857,14 +871,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // grid lives on CONTENT (pans/zooms with the canvas), not the viewport — ensure/re-tint here
         // so it tracks theme swaps; null-safe so a probe without a content transform is a no-op.
         HudGridBackground.Ensure(_content);
-        // ADR-0028: the 4 base dock panels (LivePanelTileView) are plain classes, not MonoBehaviours, so they
-        // can't self-subscribe like ChartView/DepthLadderView — re-apply their body text color here on every
+        // ADR-0028: the run_result dock tile (LivePanelTileView) is a plain class, not a MonoBehaviour, so it
+        // can't self-subscribe like ChartView/DepthLadderView — re-apply its body text color here on every
         // theme switch (else the baked starlight #e0e7f5 stays on the white Light card and goes invisible).
-        _buyingPowerView?.ApplyTheme();
-        _ordersView?.ApplyTheme();
-        _positionsView?.ApplyTheme();
+        // ADR-0038 (#174-178): buying_power/orders/positions tiles retired; the account summary bar's
+        // primary text + colour are re-pushed every frame, but its static chrome (strip / icon frame /
+        // hover card backgrounds + card text) is baked at Build, so re-theme it here alongside the tile.
         _runResultView?.ApplyTheme();
-        _runResultPopup?.ApplyTheme();   // #172: repaint the popup card chrome on a live Dark↔Light switch
+        _runResultPopup?.ApplyTheme();   // #172 (ADR-0037): repaint the popup card chrome on a live Dark↔Light switch
+        _accountBar?.ApplyTheme();       // ADR-0038 (#174-178): re-theme the bar's baked chrome + re-resolve primaries
         // #137 (findings 0107 F2): the Settings switch lives in THIS modal's Appearance tab, so re-theme the
         // modal chrome (panel/cards/headers/tabs) + the redesigned input面 (Scenario tile fields, Data field)
         // LIVE on a Dark/Light flip — none of these self-subscribe (plain classes / baked-at-build chrome).
@@ -950,10 +965,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return root;
     }
 
-    // The BACK-plane (_dockWindows) factory: the dock kinds (ADR-0017 / findings 0075 §7) —
-    // chart / buying_power / orders / positions (startup retired by ADR-0026, run_result by ADR-0037).
+    // The BACK-plane (_dockWindows) factory: the dock kind (ADR-0017 / findings 0075 §7) is now `chart`
+    // ONLY — startup retired by ADR-0026, run_result by ADR-0037, buying_power/orders/positions by ADR-0038.
     // Frame chrome comes from DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView
-    // for chart, LivePanelTileView for the 3 base panels) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
+    // for the chart) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
     // snap/focus stays WITHIN the back plane (a dock window never snaps to the front-plane editor).
     RectTransform BuildDockWindowFrame(FloatingWindowSpec spec, string id)
     {
@@ -989,17 +1004,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (body == null) return;
 
-        // #126 (ADR-0026): KIND_STARTUP is no longer a dock kind — the scenario tile is built into the
-        // Settings modal's Scenario section (BuildWorkspace), not a dock window body.
-
-        if (kind == FloatingWindowCatalog.KIND_BUYING_POWER)
-        { _buyingPowerView = new LivePanelTileView(FormatBuyingPower); _buyingPowerView.Build(body, _font); return; }
-        if (kind == FloatingWindowCatalog.KIND_ORDERS)
-        { _ordersView = new LivePanelTileView(FormatOrders); _ordersView.Build(body, _font); return; }
-        if (kind == FloatingWindowCatalog.KIND_POSITIONS)
-        { _positionsView = new LivePanelTileView(FormatPositions); _positionsView.Build(body, _font); return; }
-        // ADR-0037: run_result is no longer a dock kind — _runResultView is Built into the screen-anchored
-        // RunResultPopup (BuildRunResultPopup), not a dock window body (findings 0125 D1/D5).
+        // ALL base singleton kinds are retired, so BuildDockContent only builds `chart` now:
+        //   * KIND_STARTUP → Settings modal (ADR-0026).
+        //   * KIND_RUN_RESULT → _runResultView is Built into the screen-anchored RunResultPopup
+        //     (BuildRunResultPopup), NOT a dock window body (ADR-0037 / findings 0125 D1/D5).
+        //   * KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS → the account summary bar + hover cards
+        //     (BuildWorkspace), NOT dock window bodies (ADR-0038 / findings 0126).
 
         if (kind == FloatingWindowCatalog.KIND_CHART)
         {
@@ -1050,35 +1060,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll
     }
 
-    // Spawn the 3 base dock windows (singletons) at the DockDefaultPlacement positions. Order
-    // (findings 0075 §4 minus the ADR-0026-retired startup and the ADR-0037-retired run_result):
-    // buying_power / orders / positions.
-    // First-launch positions can be overridden by a saved layout via RestoreFloating's
-    // ApplyGeometry on the matching id (the window is already registered by the time the
-    // restore runs, so it gets repositioned in place — never destroyed+respawned).
-    void SpawnBaseDockWindows()
-    {
-        // #105: FLUSH placement (gap = 0) so the factory Hakoniwa group looks docked (touching), not
-        // scattered. Shared with the AFK gate via DockDefaultPlacement.ComputeFlushRects (one source).
-        var rects = DockDefaultPlacement.ComputeFlushRects(BaseDockWindowIds.Length);
-        for (int i = 0; i < BaseDockWindowIds.Length; i++)
-        {
-            var r = rects[i];
-            string id = BaseDockWindowIds[i];
-            // #103 (ADR-0018): base dock windows spawn on the BACK plane (_dockWindows / _dockLayer, 1.0×).
-            _dockWindows.Spawn(id, id, r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
-        }
-    }
-
-    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083 / ADR-0020): factory-default
-    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 3 base
-    // dock windows into ONE island (a plain group — ADR-0024 §1 retires the "Hakoniwa group" special
-    // case, so every base dock window drags identically; ADR-0037 dropped run_result from this set).
-    // This is the ONLY first-launch grouping
-    // path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the doc's persisted
-    // groupId instead (工場出荷値のみ＝owner decision). The base windows are already spawned ungrouped
-    // (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
-    void FormFactoryBaseGroup() => _dockWindows?.FormGroup(BaseDockWindowIds);
+    // (SpawnBaseDockWindows + FormFactoryBaseGroup deleted with ADR-0038 #174-178: the base set is empty —
+    // see the BaseDockWindowIds note near the top. First-launch dock is the chart family only, spawned by
+    // SyncChartWindowsToUniverse; FloatingWindowController.FormGroup is still used for saved-layout group
+    // restore. DockDefaultPlacement.ComputeFlushRects remains the flush-placement source for the AFK gate.)
 
     // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----
 
@@ -1396,15 +1381,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _host.RequestReplayChartPreview(iid, start, end, granularity);
     }
 
-    // Collect the avoid rects for chart grid placement: every back-plane dock window that isn't itself
-    // a chart-to-be-placed — the 5 base dock kinds + every already-live chart (saved-restored or
-    // previously-grid-placed). We filter by `DockShape.IsDockKind(w.kind) && w.kind != KIND_CHART`
-    // rather than the base-id set, so a hand-edited sidecar that renames a base id (or any future
-    // multi-instance base kind) still contributes its rect — the kind-based filter does not depend on
-    // the `Spawn(id, id, ...)` id-equals-kind invariant. findings 0091 F4 sub-decision 3 (avoid 中身):
-    // order ticket (front plane / _windows) is NOT included — z-stacking lets it sit over a chart
-    // harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas top-left (y up-
-    // positive) maps to Rect's yMin = bottom edge.
+    // Collect the avoid rects for chart grid placement: every already-live chart window (saved-restored or
+    // previously-grid-placed) on the back plane. ADR-0038 retired the last base singletons, so `chart` is
+    // the ONLY dock kind — the avoid set is exactly the back-plane chart windows. findings 0091 F4
+    // sub-decision 3 (avoid 中身): the order ticket (front plane / _windows) is NOT included — z-stacking
+    // lets it sit over a chart harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas
+    // top-left (y up-positive) maps to Rect's yMin = bottom edge.
     List<Rect> CollectChartGridAvoidRects()
     {
         var avoid = new List<Rect>();
@@ -1412,10 +1394,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (cap?.floatingWindows == null) return avoid;
         foreach (var w in cap.floatingWindows)
         {
-            if (w == null) continue;
-            bool isChart = w.kind == FloatingWindowCatalog.KIND_CHART;
-            bool isOtherDockKind = DockShape.IsDockKind(w.kind) && !isChart;
-            if (!isChart && !isOtherDockKind) continue;
+            if (w == null || w.kind != FloatingWindowCatalog.KIND_CHART) continue;
             avoid.Add(new Rect(w.x, w.y - w.h, w.w, w.h));
         }
         return avoid;
@@ -1671,9 +1650,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         PushLiveTiles();
     }
 
-    // Repaint all base panel tiles unconditionally (bypass the AppliedCount gate). #61 base retile uses
-    // this on a Replay⇄Live shape flip so the panels redraw immediately (the gate would otherwise skip
-    // an unchanged AppliedCount). _buyingPowerView is the #61 4th panel; the other three are #23 tiles.
+    // Repaint the run_result tile + the account summary bar unconditionally (bypass the AppliedCount gate).
+    // A Replay⇄Live shape flip uses this so they redraw immediately (the gate would otherwise skip an
+    // unchanged AppliedCount). ADR-0038 (#174-178): the 3 retired base tiles' figures now ride the bar.
     void ForceRefreshLiveTiles()
     {
         // #65: a flip must repaint NOW even if the Replay poll payload is unchanged (Live→Replay must
@@ -1695,10 +1674,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             return;
         }
         LivePanelViewModel p = _host.Panel;
-        _buyingPowerView?.Refresh(p);
-        _ordersView?.Refresh(p);
-        _positionsView?.Refresh(p);
         _runResultView?.Refresh(p);
+        PushLiveAccountBar(p);   // ADR-0038 (#174-178): bar primary + hover from the live VM
     }
 
     // #65: Replay base-panel drive. Decodes the get_portfolio_json poll snapshot into the 4 tiles.
@@ -1721,23 +1698,95 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(portfolioJson))
         {
-            _buyingPowerView?.ShowReplayEmpty();
-            _ordersView?.ShowReplayEmpty();
-            _positionsView?.ShowReplayEmpty();
             // #172 (ADR-0037): run_result is the popup now — honest-empty HIDES the card (DriveRunResultPopup),
-            // it does NOT paint "(no data — Replay)" text. The base-3 dock tiles keep their honest-empty text.
+            // it does NOT paint "(no data)" text. ADR-0038 (#174-178): the buying_power/orders/positions dock
+            // tiles are retired → the account summary bar shows "—" placeholders (PushAccountBarEmpty).
+            PushAccountBarEmpty();
             return;
         }
 
         PortfolioSnapshot snap = ReplayPanelDecoder.DecodePortfolio(portfolioJson);
-        _buyingPowerView?.ShowText(FormatReplayBuyingPower(snap));
-        _ordersView?.ShowText(FormatReplayOrders(snap));
-        _positionsView?.ShowText(FormatReplayPositions(snap));
+        PushReplayAccountBar(snap);   // ADR-0038 (#174-178): bar primary + hover from the snapshot
 
         _runResultView?.ShowText(
             string.IsNullOrWhiteSpace(summaryJson)
                 ? FormatReplayRunResultRunning(snap)
                 : FormatReplayRunResultComplete(ReplayPanelDecoder.DecodeRunResult(summaryJson)));
+    }
+
+    // ── ADR-0038 (#174-178): account summary bar drive ──────────────────────────────────────────────
+    // The bar replaces the retired buying_power/orders/positions dock tiles. Its 4 slots are driven from
+    // the SAME data those tiles used — Live = LivePanelViewModel (account + telemetry), Replay =
+    // PortfolioSnapshot — so the bar + hover cards carry the full data面 of the 3 退役 panels (no regression).
+    // Primary = ONE number per slot (① recoloured green/red by the unrealized-pnl sign — §Decision 2);
+    // hover detail = "今のパネルと同じ詳細情報": ②③④ reuse the existing Format*/FormatReplay* BYTE-FOR-BYTE
+    // (findings 0126 D5), ① is a NEW account summary (AccountSummaryFormat). Pre-data → "—" placeholder.
+
+    // No account / pre-run portfolio: every slot "—" (neutral). Detail cards stay empty (no snapshot).
+    void PushAccountBarEmpty()
+    {
+        if (_accountBar == null) return;
+        for (int i = 0; i < AccountSummaryBarView.SLOT_COUNT; i++)
+        {
+            _accountBar.SetPrimary(i, AccountSummaryFormat.PLACEHOLDER, AccountSummaryBarView.PrimaryTint.Neutral);
+            _accountBar.SetDetail(i, AccountSummaryFormat.PLACEHOLDER);
+        }
+    }
+
+    // Live drive (LiveManual / LiveAuto): equity derived (Cash + Σ(qty×avg+uPnL) — §Decision 4 / D8),
+    // colour intent from Σ unrealized sign; bp/positions from the account; order count from telemetry.
+    void PushLiveAccountBar(LivePanelViewModel p)
+    {
+        if (_accountBar == null) return;
+        const AccountSummaryBarView.PrimaryTint NEU = AccountSummaryBarView.PrimaryTint.Neutral;
+        if (p.HasAccount)
+        {
+            LiveAccountEvent a = p.LatestAccount;
+            double upnl = AccountSummaryFormat.SumUnrealized(a);
+            _accountBar.SetPrimary(0, AccountSummaryFormat.Money(AccountSummaryFormat.DeriveLiveEquity(a)),
+                                   upnl < 0 ? AccountSummaryBarView.PrimaryTint.Loss : AccountSummaryBarView.PrimaryTint.Gain);
+            _accountBar.SetPrimary(1, AccountSummaryFormat.Money(a.BuyingPower), NEU);
+            int posCount = a.Positions != null ? a.Positions.Count : 0;
+            _accountBar.SetPrimary(2, posCount.ToString(CultureInfo.InvariantCulture), NEU);
+        }
+        else
+        {
+            _accountBar.SetPrimary(0, AccountSummaryFormat.PLACEHOLDER, NEU);
+            _accountBar.SetPrimary(1, AccountSummaryFormat.PLACEHOLDER, NEU);
+            _accountBar.SetPrimary(2, AccountSummaryFormat.PLACEHOLDER, NEU);
+        }
+        // ④ order count: FilledOrderCount (incremented on each FILLED OrderEvent — LivePanelViewModel).
+        // It is populated in BOTH LiveManual and LiveAuto (telemetry.OrderCount only exists in a LiveAuto
+        // strategy run, so it would leave ④ "—" for manual trading), and it MATCHES the ④ hover card,
+        // which shows "filled-order count" via FormatOrders. M1 / owner 2026-06-27.
+        _accountBar.SetPrimary(3, p.HasOrder || p.HasAccount
+            ? p.FilledOrderCount.ToString(CultureInfo.InvariantCulture)
+            : AccountSummaryFormat.PLACEHOLDER, NEU);
+
+        // hover detail: ② ③ ④ reuse the dock-panel formatters byte-for-byte; ① is the new summary.
+        _accountBar.SetDetail(0, AccountSummaryFormat.LiveAccountSummary(p));
+        _accountBar.SetDetail(1, FormatBuyingPower(p));
+        _accountBar.SetDetail(2, FormatPositions(p));
+        _accountBar.SetDetail(3, FormatOrders(p));
+    }
+
+    // Replay drive: equity read directly from the snapshot (§Decision 4), colour intent from snapshot uPnL sign.
+    void PushReplayAccountBar(PortfolioSnapshot s)
+    {
+        if (_accountBar == null) return;
+        const AccountSummaryBarView.PrimaryTint NEU = AccountSummaryBarView.PrimaryTint.Neutral;
+        _accountBar.SetPrimary(0, AccountSummaryFormat.Money(s.Equity),
+                               s.UnrealizedPnl < 0 ? AccountSummaryBarView.PrimaryTint.Loss : AccountSummaryBarView.PrimaryTint.Gain);
+        _accountBar.SetPrimary(1, AccountSummaryFormat.Money(s.BuyingPower), NEU);
+        int posCount = s.Positions != null ? s.Positions.Count : 0;
+        int ordCount = s.Orders != null ? s.Orders.Count : 0;
+        _accountBar.SetPrimary(2, posCount.ToString(CultureInfo.InvariantCulture), NEU);
+        _accountBar.SetPrimary(3, ordCount.ToString(CultureInfo.InvariantCulture), NEU);
+
+        _accountBar.SetDetail(0, AccountSummaryFormat.ReplayAccountSummary(s));
+        _accountBar.SetDetail(1, FormatReplayBuyingPower(s));
+        _accountBar.SetDetail(2, FormatReplayPositions(s));
+        _accountBar.SetDetail(3, FormatReplayOrders(s));
     }
 
     // ── #57: per-frame depth ladder drive (TTWR overlays_ladder.rs mode_sync + render, findings 0028
@@ -2839,14 +2888,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void ResumeLastDocumentOrDefault()
     {
         string py = PlayerPrefs.GetString(ResumeKey, "");
-        bool restoredSavedLayout = false;   // #105: a saved layout's persisted groupId was applied — DON'T factory-group
         if (!string.IsNullOrEmpty(py) && File.Exists(py) && LayoutSidecarStore.TryReadLayout(py, out var doc))
         {
             // #81: restore geometry, then decompose the document `.py` into N cell windows at the saved
             // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
             // the File→New blank state rather than leaving a half-restored state.
             ApplyLayout(doc);
-            restoredSavedLayout = true;   // #105: ApplyLayout(doc) honored the doc's groupId (RestoreFloating) — first-launch grouping must NOT clobber it
             _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
             if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
             {
@@ -2856,10 +2903,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
         ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace
-        // #105: factory-group ONLY when no saved layout was applied. A resume whose layout READ but whose
-        // _coordinator.Open FAILED already restored the doc's persisted groupId via ApplyLayout(doc) above;
-        // re-minting here would clobber it (工場出荷値のみ＝saved layout を尊重・ADR-0020 D2).
-        if (!restoredSavedLayout) FormFactoryBaseGroup();
+        // ADR-0038 (#174-178): the no-resume factory-grouping step is gone — the base set is empty, so there
+        // was nothing left to group. A resumed/opened saved layout still restores its own groupId via ApplyLayout.
         _currentLayoutPath = "";                 // untitled document
         OpenFileNewDefault();                    // #76: boot to the File→New blank state (no canonical auto-open)
     }

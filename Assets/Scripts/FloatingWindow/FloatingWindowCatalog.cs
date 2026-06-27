@@ -29,14 +29,12 @@ public class FloatingWindowCatalog
     // `Hakoniwa` (the dock cluster). Names preserve the existing tile ids so an old persisted
     // doc that mentions e.g. "orders" is forward-compatible when read as a floating-window kind.
     public const string KIND_CHART = "chart";
-    public const string KIND_BUYING_POWER = "buying_power";
-    public const string KIND_ORDERS = "orders";
-    public const string KIND_POSITIONS = "positions";
-    // KIND_STARTUP ("startup") RETIRED — ADR-0026: Scenario Startup moved to the Settings modal's
-    // Scenario section; the dock no longer hosts a startup window.
-    // KIND_RUN_RESULT ("run_result") RETIRED — ADR-0037 (findings 0125 D4): run_result is cut over from
-    // a dock base singleton to a screen-anchored popup (RunResultPopup), so it is no longer a catalog
-    // kind. Both are forward-compat: a pre-retirement saved layout naming "startup"/"run_result" gets
+    // ALL former base singleton kinds are RETIRED, leaving `chart` as the only dock kind:
+    //   * KIND_STARTUP ("startup") — ADR-0026: Scenario Startup → Settings modal.
+    //   * KIND_RUN_RESULT ("run_result") — ADR-0037 (findings 0125 D4): → screen-anchored RunResultPopup.
+    //   * KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS — ADR-0038 (#174-178, findings 0126): → the
+    //     account summary bar + hover cards.
+    // All are forward-compat: a pre-retirement saved layout naming any of these window ids gets
     // TryGet=false → spawn skipped, layout entry kept (forward-evolution discipline, findings 0008 §3).
 
     readonly Dictionary<string, FloatingWindowSpec> _specs;
@@ -86,22 +84,10 @@ public class FloatingWindowCatalog
                 KIND_CHART, "Chart",
                 defaultSize: new Vector2(520f, 360f), minSize: new Vector2(280f, 200f),
                 accent: players.Get(1), closeable: false),
-            new FloatingWindowSpec(
-                KIND_BUYING_POWER, "Buying Power",
-                defaultSize: new Vector2(340f, 140f), minSize: new Vector2(220f, 100f),
-                accent: players.Get(3), closeable: false),
-            new FloatingWindowSpec(
-                KIND_ORDERS, "Orders",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(4), closeable: false),
-            new FloatingWindowSpec(
-                KIND_POSITIONS, "Positions",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(5), closeable: false),
-            // KIND_STARTUP spec RETIRED — ADR-0026 (Scenario Startup → Settings modal).
-            // KIND_RUN_RESULT spec RETIRED — ADR-0037 (run_result → RunResultPopup, findings 0125 D4).
-            // Dropping a kind from Default() is what makes a saved window of that kind skip on restore
-            // (catalog TryGet=false) while LayoutStore keeps the entry — forward-compat without migration.
+            // ALL base singleton specs RETIRED — startup (ADR-0026), run_result (ADR-0037 → RunResultPopup),
+            // buying_power/orders/positions (ADR-0038 → account summary bar). Dropping a kind from Default()
+            // is what makes a saved window of that kind skip on restore (catalog TryGet=false) while
+            // LayoutStore keeps the entry — forward-compat without migration. `chart` is the only dock kind.
         });
     }
 }

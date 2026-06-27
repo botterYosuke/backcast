@@ -77,12 +77,12 @@ public static class DockDefaultPlacement
     public static List<FloatingWindowMath.DockRect> ComputeRects(int n)
         => ComputeRects(n, CentredAnchorTopLeft(DefaultBoxSize), DefaultBoxSize, DefaultGap);
 
-    // #105: FLUSH (gap = 0) first-launch placement for the base dock cluster. The cluster is bundled
-    // into one Hakoniwa group (BackcastWorkspaceRoot.FormFactoryBaseGroup), and a group's members are
-    // flush-adjacent by construction (ADR-0019: groups are born from a flush-snap). A non-zero gap would
-    // leave the windows visibly "ungrouped" (隙間あり) — a grouped-but-not-flush state user drag never
-    // creates. SpawnBaseDockWindows AND the AFK gate (S32) both call this, so the flush contract has ONE
-    // source: if this gap ever becomes non-zero, the gate's IsFlushAdjacent assertion goes RED.
+    // #105: FLUSH (gap = 0) placement for a docked cluster: a group's members are flush-adjacent by
+    // construction (ADR-0019: groups are born from a flush-snap), so a non-zero gap would leave the windows
+    // visibly "ungrouped" (隙間あり) — a grouped-but-not-flush state user drag never creates. The original
+    // first-launch base-cluster caller (SpawnBaseDockWindows) was retired with ADR-0038; this remains the
+    // single flush-placement source for the AFK gate (S32): if the gap ever becomes non-zero, the gate's
+    // IsFlushAdjacent assertion goes RED.
     public static List<FloatingWindowMath.DockRect> ComputeFlushRects(int n)
         => ComputeRects(n, CentredAnchorTopLeft(DefaultBoxSize), DefaultBoxSize, Vector2.zero);
 }

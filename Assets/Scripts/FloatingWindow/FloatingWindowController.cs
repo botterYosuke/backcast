@@ -1328,11 +1328,11 @@ public class FloatingWindowController
     // flush partner ⇒ all-singleton attach (the SINGLE GUID-mint trigger).
     static string MintGroupId() => "grp_" + Guid.NewGuid().ToString("N");
 
-    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083): the FACTORY-GROUP birth path.
-    // The owner-requested first-launch default bundles the base dock cluster into ONE group
-    // (BackcastWorkspaceRoot.FormFactoryBaseGroup — no-resume boot only). This is the THIRD and only
-    // other way a groupId becomes non-null besides (a) user drag-release and (b) restore of a persisted
-    // groupId; like restore it is NOT coordinate-derived — the caller names the member ids explicitly.
+    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083): the named-id group birth path.
+    // (The first-launch FACTORY-GROUP caller, BackcastWorkspaceRoot.FormFactoryBaseGroup, was retired with
+    // ADR-0038 — the base set is empty.) This remains a way a groupId becomes non-null besides (a) user
+    // drag-release and (b) restore of a persisted groupId; like restore it is NOT coordinate-derived — the
+    // caller names the member ids explicitly.
     // Mints ONE fresh groupId and stamps it on every named id that is CURRENTLY registered (hidden ones
     // INCLUDED — a hidden base window should still join the factory cluster, mirroring the Hide-preserves-
     // groupId rule §5), then returns it. Returns null (and stamps nothing) when fewer than 2 of the ids

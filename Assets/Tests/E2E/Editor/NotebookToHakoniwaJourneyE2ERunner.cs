@@ -158,36 +158,40 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         if (GlyphText(runBtn) != "■")
             return "NBHAKO-04: the REAL cell button ▶ did not toggle to ■ while running";
 
-        // ── NBHAKO-05: running snapshot bar1 → the 3 base tiles + the run_result popup view show the real
-        //    figures (D6/D8). run_result is the screen-anchored popup now (ADR-0037); its body Text is still
-        //    the reused LivePanelTileView (_runResultView), driven by the unchanged PushReplayTiles content branch. ──
+        // ── NBHAKO-05: running snapshot bar1 → the account summary bar's hover cards (②③④) + the run_result
+        //    popup view show the real figures (D6/D8). ADR-0038: positions/orders/buying_power hover cards reuse
+        //    the SAME FormatReplay* the retired dock tiles used (byte-identical). ADR-0037: run_result is the
+        //    screen-anchored popup; its body Text is the reused LivePanelTileView (_runResultView). ──
         SetReplayShape(root, ty);
         SetPortfolioOverride(seams.Host, SNAP1);
         PumpTiles(root, ty);
-        string pos1 = TileText(root, ty, "_positionsView");
-        string ord1 = TileText(root, ty, "_ordersView");
-        string bp1 = TileText(root, ty, "_buyingPowerView");
+        string pos1 = seams.Bar.CardText(2);   // ③ positions hover = FormatReplayPositions
+        string ord1 = seams.Bar.CardText(3);   // ④ orders hover    = FormatReplayOrders
+        string bp1 = seams.Bar.CardText(1);    // ② buying power hover = FormatReplayBuyingPower
         string rr1 = TileText(root, ty, "_runResultView");
         if (pos1 == null || !pos1.Contains("qty=100") || !pos1.Contains(FIRST))
-            return "NBHAKO-05: positions tile did not reflect the running snapshot (got [" + pos1 + "])";
+            return "NBHAKO-05: positions hover card did not reflect the running snapshot (got [" + pos1 + "])";
         if (ord1 == null || !ord1.Contains("filled-order count: 1"))
-            return "NBHAKO-05: orders tile did not reflect the filled order (got [" + ord1 + "])";
+            return "NBHAKO-05: orders hover card did not reflect the filled order (got [" + ord1 + "])";
         if (bp1 == null || !bp1.Contains("bp=887600"))
-            return "NBHAKO-05: buying_power tile did not reflect the snapshot (got [" + bp1 + "])";
+            return "NBHAKO-05: buying_power hover card did not reflect the snapshot (got [" + bp1 + "])";
         if (rr1 == null || !rr1.Contains("running") || !rr1.Contains("o:1"))
             return "NBHAKO-05: run_result tile did not show the running view (got [" + rr1 + "])";
+        // also pin the bar PRIMARY for ② (buying power) — the bar's headline figure, not just the hover detail.
+        if (seams.Bar.PrimaryText(1) != AccountSummaryFormat.Money(887600.0))
+            return "NBHAKO-05: bar ② buying-power PRIMARY did not reflect the snapshot (got [" + seams.Bar.PrimaryText(1) + "])";
 
-        // ── NBHAKO-06: bar2 snapshot → the SAME tiles follow incrementally (not a one-shot paint). ──
+        // ── NBHAKO-06: bar2 snapshot → the SAME cards follow incrementally (not a one-shot paint). ──
         SetPortfolioOverride(seams.Host, SNAP2);
         PumpTiles(root, ty);
-        string pos2 = TileText(root, ty, "_positionsView");
-        string bp2 = TileText(root, ty, "_buyingPowerView");
+        string pos2 = seams.Bar.CardText(2);
+        string bp2 = seams.Bar.CardText(1);
         if (pos2 == null || !pos2.Contains("qty=200"))
-            return "NBHAKO-06: positions tile did not advance to the bar2 snapshot (got [" + pos2 + "])";
+            return "NBHAKO-06: positions hover card did not advance to the bar2 snapshot (got [" + pos2 + "])";
         if (pos2 == pos1)
-            return "NBHAKO-06: positions tile text did not change between bar1 and bar2 (no incremental update)";
+            return "NBHAKO-06: positions hover card text did not change between bar1 and bar2 (no incremental update)";
         if (bp2 == null || !bp2.Contains("bp=775200") || bp2 == bp1)
-            return "NBHAKO-06: buying_power tile did not advance to the bar2 snapshot (got [" + bp2 + "])";
+            return "NBHAKO-06: buying_power hover card did not advance to the bar2 snapshot (got [" + bp2 + "])";
 
         // ── NBHAKO-07: terminal summary → run_result switches from running view to full-stats. ──
         SetSummaryOverride(seams.Host, SUMMARY);
@@ -256,13 +260,13 @@ public static class NotebookToHakoniwaJourneyE2ERunner
             return "NBHAKO-10: the committed scenario did not ride along with the bt.step press (got [" + exec.LastScenario + "])";
         controller.DrainAndRoute();   // route the step's output
 
-        // ── NBHAKO-11: the step's 1-bar snapshot reaches the Hakoniwa positions tile. ──
+        // ── NBHAKO-11: the step's 1-bar snapshot reaches the account summary bar's ③ positions hover card. ──
         SetReplayShape(root, ty);
         SetPortfolioOverride(seams.Host, STEPSNAP);
         PumpTiles(root, ty);
-        string pos = TileText(root, ty, "_positionsView");
+        string pos = seams.Bar.CardText(2);   // ③ positions hover = FormatReplayPositions (byte-identical to the retired tile)
         if (pos == null || !pos.Contains("qty=50") || !pos.Contains(FIRST))
-            return "NBHAKO-11: the bt.step snapshot did not reach the positions tile (got [" + pos + "])";
+            return "NBHAKO-11: the bt.step snapshot did not reach the positions hover card (got [" + pos + "])";
 
         ((IDisposable)seams.Lane).Dispose();
         return null;
@@ -332,6 +336,7 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         public Action<string, bool> OnRunningChanged;      // root.SetCellRunButtonState (real)
         public Action<IReadOnlyList<string>> OnStale;      // root.SetCellStaleRegions (real)
         public NotebookRunLane Lane;               // the rebuilt synchronous Python-FREE lane
+        public AccountSummaryBarView Bar;          // ADR-0038 (#174-178): bp/orders/positions now ride the bar's hover cards
     }
 
     static bool ReadSeams(BackcastWorkspaceRoot root, Type ty, out Seams seams, out string err)
@@ -352,10 +357,12 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         // BuildWorkspace) is reused, so _cellRunButtons[region_001] stays valid.
         seams.Coordinator.New();
 
-        // the 3 base tile views (SpawnBaseDockWindows) + the run_result popup view (BuildRunResultPopup,
-        // ADR-0037) must all have been built during BuildWorkspace.
-        foreach (var f in new[] { "_buyingPowerView", "_ordersView", "_positionsView", "_runResultView" })
-            if (ty.GetField(f, BF)?.GetValue(root) == null) { err = f + " not built (SpawnBaseDockWindows / BuildRunResultPopup renamed?)"; return false; }
+        // ADR-0038 (#174-178): buying_power/orders/positions dock tiles RETIRED → their figures now ride the
+        // account summary bar's hover cards (byte-identical FormatReplay*). ADR-0037: run_result is the popup,
+        // its body Text is the reused _runResultView (BuildRunResultPopup). Both must be built by BuildWorkspace.
+        if (ty.GetField("_runResultView", BF)?.GetValue(root) == null) { err = "_runResultView not built (BuildRunResultPopup renamed?)"; return false; }
+        seams.Bar = ty.GetField("_accountBar", BF)?.GetValue(root) as AccountSummaryBarView;
+        if (seams.Bar == null) { err = "_accountBar not built (BuildWorkspace renamed?)"; return false; }
 
         // bind the controller's callbacks to the root's REAL private methods (wiring identity = production).
         var mScenario = ty.GetMethod("BuildNotebookScenarioJson", BF);

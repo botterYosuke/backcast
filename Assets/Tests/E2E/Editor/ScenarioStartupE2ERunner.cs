@@ -59,9 +59,9 @@ public static class ScenarioStartupE2ERunner
                 ?? Section11_FileNewClearsInMemory()
                 ?? Section12_StartupTileHasNoRunButton();
 
-            // Section13/14 are independent pure checks (reflection over BaseDockWindowIds / catalog lookup),
-            // so run them unconditionally for accurate per-section verdicts even if an earlier section failed.
-            s16 = Section13_DockClusterIsThree();
+            // Section13/14 are independent pure checks (DockShape predicate / catalog lookup), so run them
+            // unconditionally for accurate per-section verdicts even if an earlier section failed.
+            s16 = Section13_DockBaseIsEmptyDockIsChartOnly();
             s17 = Section14_ForwardCompatSkipsStartup();
             fail = fail ?? s16 ?? s17;
         }
@@ -79,7 +79,8 @@ public static class ScenarioStartupE2ERunner
         if (fail == null)
         {
             Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear + " +
-                      "dock cluster → 3 (SCENARIO-16: startup+run_result retired) + forward-compat startup skip (SCENARIO-17) verified");
+                      "dock base → 0 / dock = chart only (SCENARIO-16: startup ADR-0026 + run_result ADR-0037 + " +
+                      "buying_power/orders/positions ADR-0038 all retired) + forward-compat startup skip (SCENARIO-17) verified");
             EditorApplication.Exit(0);
         }
         else
@@ -688,23 +689,20 @@ public static class ScenarioStartupE2ERunner
         finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 
-    // ---- 13. dock cluster reduced to 3 (startup → Settings modal; run_result → screen-anchored popup) ----
-    // Covers: SCENARIO-16 (ADR-0026 + ADR-0037): BackcastWorkspaceRoot.BaseDockWindowIds has 3 ids and no
-    // "startup" / "run_result". This is the single source SpawnBaseDockWindows + FormFactoryBaseGroup both
-    // read, so a 3-length array IS the reduction. RED litmus: re-add WINDOW_ID_STARTUP / a run_result id → RED.
-    static string Section13_DockClusterIsThree()
+    // ---- 13. dock base cluster fully retired → dock = chart ONLY ----
+    // Covers: SCENARIO-16. ALL base singletons are retired — startup (ADR-0026 → Settings), run_result
+    // (ADR-0037 → screen-anchored popup), buying_power/orders/positions (ADR-0038 #174-178 → account summary
+    // bar). The base-spawn + factory-grouping machinery (BaseDockWindowIds / SpawnBaseDockWindows /
+    // FormFactoryBaseGroup) was DELETED, so this asserts the END STATE behaviourally via DockShape rather
+    // than an internal field: `chart` is the one dock kind and none of the retired ids are.
+    // RED litmus: re-route any retired kind back through IsDockKind → RED.
+    static string Section13_DockBaseIsEmptyDockIsChartOnly()
     {
-        var f = typeof(BackcastWorkspaceRoot).GetField("BaseDockWindowIds",
-            BindingFlags.NonPublic | BindingFlags.Static);
-        if (f == null) return "S13: BaseDockWindowIds field not found (renamed?)";
-        var ids = (string[])f.GetValue(null);
-        if (ids == null) return "S13: BaseDockWindowIds is null";
-        if (ids.Length != 3) return $"S13: base dock has {ids.Length} windows, expected 3 (startup retired by ADR-0026, run_result by ADR-0037)";
-        var set = new System.Collections.Generic.HashSet<string>(ids);
-        if (set.Contains("startup")) return "S13: base dock still contains 'startup'";
-        if (set.Contains("run_result")) return "S13: base dock still contains 'run_result' (retired to the popup by ADR-0037)";
-        if (!set.Contains("buying_power") || !set.Contains("orders") || !set.Contains("positions"))
-            return "S13: base dock missing one of buying_power/orders/positions (non-vacuity)";
+        // positive end state: chart IS a dock kind (non-vacuous — a blanket-false predicate would fail here).
+        if (!DockShape.IsDockKind("chart")) return "S13: chart is not a dock kind (dock plane lost its only member)";
+        // negative end state: every retired base singleton is NO LONGER a dock kind (dock = chart only).
+        foreach (var retired in new[] { "startup", "run_result", "buying_power", "orders", "positions" })
+            if (DockShape.IsDockKind(retired)) return $"S13: retired kind '{retired}' is still a dock kind (IsDockKind)";
         return null;
     }
 
@@ -718,10 +716,11 @@ public static class ScenarioStartupE2ERunner
         var catalog = FloatingWindowCatalog.Default();
         if (catalog.TryGet("startup", out _))
             return "S14: catalog still resolves 'startup' — a saved layout would re-spawn the retired window (must skip)";
-        // non-vacuity: a SURVIVING dock kind still resolves (so the negative isn't an empty-catalog artifact).
-        // (run_result was a surviving kind here pre-ADR-0037; it is now retired too → use buying_power.)
-        if (!catalog.TryGet(FloatingWindowCatalog.KIND_BUYING_POWER, out _))
-            return "S14: catalog missing buying_power (vacuous negative — catalog appears empty)";
+        // non-vacuity: the SURVIVING dock kind still resolves (so the negative isn't an empty-catalog artifact).
+        // run_result was the witness pre-ADR-0037, buying_power pre-ADR-0038; both retired now → use chart
+        // (the ONLY dock kind left).
+        if (!catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out _))
+            return "S14: catalog missing chart (vacuous negative — catalog appears empty)";
         return null;
     }
 }

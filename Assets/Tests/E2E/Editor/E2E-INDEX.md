@@ -7,7 +7,7 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（19 本）
+## Surface E2E（20 本）
 
 > #125–#128（ADR-0026・findings 0102）: **SettingsDialogE2ERunner** 新設（SETTINGS-01..09＝modal shell / ESC-guard /
 > z-order / chrome+3 section / venue 表面）。**MenuBar** の Venue dropdown 退役（MENU-10 対象外・MENU-11/14 を SETTINGS-08 へ移設・
@@ -50,6 +50,7 @@
 | [SecretModalE2ERunner](./SecretModalE2ERunner.md) ✅ | `SECRET-01..13` | 13 | 8 | 0 | 3 | 2 | 0 |
 | [ReplayRunResultTileE2ERunner](./ReplayRunResultTileE2ERunner.md) ✅ | `RRT-01..10` (06=D3 anti-stale, 06T=telemetry-only, 07=no-persist, 08=× latch, 09A/09B=対称再 arm, 10=screen-anchored) | 14 | 12 | 0 | 0 | 2 | 0 |
 | [KabuLiveChartRenderE2ERunner](./KabuLiveChartRenderE2ERunner.md) ✅ | `CHARTRENDER-01..05` | 5 | 5 | 0 | 0 | 0 | 0 |
+| [AccountSummaryBarE2ERunner](./AccountSummaryBarE2ERunner.md) ✅ | `ASB-01..10` | 10 | 10 | 0 | 0 | 0 | 0 |
 
 ## Journey E2E（6 本・85 行）
 

@@ -20,12 +20,15 @@ public sealed class AccountSummaryIconStage : MonoBehaviour
     const int RT_SIZE = 64;
     const float STAGE_GAP = 50f;       // lateral spacing between stages (> ortho view, so no cross-bleed)
     const float STAGE_X = 10000f;      // far from origin (beyond a default camera's 1000 far plane)
+    // Dedicated layer for the off-world icon rig so the directional light + icon cameras are SCOPED to the
+    // primitives only: a directional light ignores position and would otherwise illuminate the WHOLE scene,
+    // and an un-masked icon camera could capture unrelated geometry. Both masks + the prims sit on this layer.
+    const int ICON_LAYER = 31;
 
     static readonly PrimitiveType[] Prims =
         { PrimitiveType.Cube, PrimitiveType.Sphere, PrimitiveType.Capsule, PrimitiveType.Cylinder };
 
     readonly RenderTexture[] _rts = new RenderTexture[ICON_COUNT];
-    readonly Camera[] _cams = new Camera[ICON_COUNT];
     bool _built;
 
     public int Count => ICON_COUNT;
@@ -37,7 +40,8 @@ public sealed class AccountSummaryIconStage : MonoBehaviour
         _built = true;
 
         // one shared directional light over the stage region so the primitives are shaded (real-pixel
-        // appearance is HITL; in -nographics this is inert).
+        // appearance is HITL; in -nographics this is inert). cullingMask scopes it to ICON_LAYER so it does
+        // NOT light the rest of the scene (a directional light is global regardless of its position).
         var lightGo = new GameObject("IconLight");
         lightGo.transform.SetParent(transform, false);
         lightGo.transform.position = new Vector3(STAGE_X, 5f, -5f);
@@ -45,6 +49,7 @@ public sealed class AccountSummaryIconStage : MonoBehaviour
         var light = lightGo.AddComponent<Light>();
         light.type = LightType.Directional;
         light.intensity = 1.1f;
+        light.cullingMask = 1 << ICON_LAYER;
 
         var accent = ThemeService.Current.colors;
         for (int i = 0; i < ICON_COUNT; i++) BuildStage(i, accent);
@@ -60,6 +65,7 @@ public sealed class AccountSummaryIconStage : MonoBehaviour
         // primitive (placeholder icon). Drop the auto-added collider (not needed for a render-only prop).
         var prim = GameObject.CreatePrimitive(Prims[index]);
         prim.name = "prim";
+        prim.layer = ICON_LAYER;       // only the ICON_LAYER light/cameras see it (scene isolation)
         prim.transform.SetParent(stage.transform, false);
         prim.transform.localPosition = Vector3.zero;
         prim.transform.localRotation = Quaternion.Euler(20f, 30f, 0f);
@@ -86,9 +92,9 @@ public sealed class AccountSummaryIconStage : MonoBehaviour
         cam.farClipPlane = 6f;
         cam.clearFlags = CameraClearFlags.SolidColor;
         cam.backgroundColor = new Color(colors.element_background.r, colors.element_background.g, colors.element_background.b, 0f);
+        cam.cullingMask = 1 << ICON_LAYER;   // render ONLY this rig's primitives, never other scene geometry
         cam.targetTexture = rt;
         cam.enabled = false;        // static prop: render once below, not every frame
-        _cams[index] = cam;
 
         cam.Render();               // one-shot bake (inert under -nographics; the RT object still exists)
     }

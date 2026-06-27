@@ -47,13 +47,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
 
-    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids. ALL base singletons are now
-    // retired — startup (ADR-0026 → Settings), run_result (ADR-0037 → RunResultPopup), buying_power/orders/
-    // positions (ADR-0038 #174-178 → account summary bar). The base set is therefore EMPTY: first-launch dock
-    // = `chart` only (universe-driven). SpawnBaseDockWindows spawns nothing and FormFactoryBaseGroup is a
-    // no-op (FloatingWindowController.FormGroup: live<2 → null), so the factory base group never forms
-    // (ADR-0038 §6 — the factory grouping concept is retired by the empty enumeration).
-    static readonly string[] BaseDockWindowIds = System.Array.Empty<string>();
+    // #99 (ADR-0017): the dock cluster once spawned base singleton windows (startup / run_result /
+    // buying_power / orders / positions). ALL are now retired — startup (ADR-0026 → Settings), run_result
+    // (ADR-0037 → RunResultPopup), buying_power/orders/positions (ADR-0038 #174-178 → account summary bar).
+    // The base set is therefore EMPTY, so the base-spawn + factory-grouping machinery (BaseDockWindowIds /
+    // SpawnBaseDockWindows / FormFactoryBaseGroup) was DELETED (ADR-0038 §6 — the factory grouping concept
+    // is retired). First-launch dock = `chart` only (multi-instance, universe-driven via SyncChartWindowsToUniverse).
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -493,11 +492,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, out var cellSpec)) _cellWindowSize = cellSpec.defaultSize;
         if (_catalog.TryGet(FloatingWindowCatalog.KIND_CHART, out var chartSpec)) _chartWindowSize = chartSpec.defaultSize;
 
-        // #99 (ADR-0017 / findings 0075 §3/§4): the dock cluster's 5 base windows. All are independent
-        // floating windows on the same layer as the strategy editor + order ticket; the magnet-snap
-        // seam (Slice 1) is the only "Hakoniwa-ness" they have. Default placement is a grid-style
-        // initial cascade (DockDefaultPlacement); a saved layout will reposition them in RestoreFloating.
-        SpawnBaseDockWindows();
+        // ADR-0038 (#174-178): no base dock windows are spawned any more — every base singleton was retired
+        // to the Settings modal / RunResultPopup / account summary bar. The dock plane is populated solely by
+        // the chart family below.
 
         // #99 chart family (ADR-0017 §5 / findings 0075 §3): one floating chart window per universe
         // instrument (id "chart:<iid>"). Membership is owned by _scenario.Universe (the shared SoT);
@@ -968,10 +965,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return root;
     }
 
-    // The BACK-plane (_dockWindows) factory: the dock kinds (ADR-0017 / findings 0075 §7) —
-    // chart / buying_power / orders / positions (startup retired by ADR-0026, run_result by ADR-0037).
+    // The BACK-plane (_dockWindows) factory: the dock kind (ADR-0017 / findings 0075 §7) is now `chart`
+    // ONLY — startup retired by ADR-0026, run_result by ADR-0037, buying_power/orders/positions by ADR-0038.
     // Frame chrome comes from DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView
-    // for chart, LivePanelTileView for the 3 base panels) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
+    // for the chart) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
     // snap/focus stays WITHIN the back plane (a dock window never snaps to the front-plane editor).
     RectTransform BuildDockWindowFrame(FloatingWindowSpec spec, string id)
     {
@@ -1063,35 +1060,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll
     }
 
-    // Spawn the 3 base dock windows (singletons) at the DockDefaultPlacement positions. Order
-    // (findings 0075 §4 minus the ADR-0026-retired startup and the ADR-0037-retired run_result):
-    // buying_power / orders / positions.
-    // First-launch positions can be overridden by a saved layout via RestoreFloating's
-    // ApplyGeometry on the matching id (the window is already registered by the time the
-    // restore runs, so it gets repositioned in place — never destroyed+respawned).
-    void SpawnBaseDockWindows()
-    {
-        // #105: FLUSH placement (gap = 0) so the factory Hakoniwa group looks docked (touching), not
-        // scattered. Shared with the AFK gate via DockDefaultPlacement.ComputeFlushRects (one source).
-        var rects = DockDefaultPlacement.ComputeFlushRects(BaseDockWindowIds.Length);
-        for (int i = 0; i < BaseDockWindowIds.Length; i++)
-        {
-            var r = rects[i];
-            string id = BaseDockWindowIds[i];
-            // #103 (ADR-0018): base dock windows spawn on the BACK plane (_dockWindows / _dockLayer, 1.0×).
-            _dockWindows.Spawn(id, id, r.topLeft.x, r.topLeft.y, r.size.x, r.size.y, true);
-        }
-    }
-
-    // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083 / ADR-0020): factory-default
-    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 3 base
-    // dock windows into ONE island (a plain group — ADR-0024 §1 retires the "Hakoniwa group" special
-    // case, so every base dock window drags identically; ADR-0037 dropped run_result from this set).
-    // This is the ONLY first-launch grouping
-    // path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the doc's persisted
-    // groupId instead (工場出荷値のみ＝owner decision). The base windows are already spawned ungrouped
-    // (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
-    void FormFactoryBaseGroup() => _dockWindows?.FormGroup(BaseDockWindowIds);
+    // (SpawnBaseDockWindows + FormFactoryBaseGroup deleted with ADR-0038 #174-178: the base set is empty —
+    // see the BaseDockWindowIds note near the top. First-launch dock is the chart family only, spawned by
+    // SyncChartWindowsToUniverse; FloatingWindowController.FormGroup is still used for saved-layout group
+    // restore. DockDefaultPlacement.ComputeFlushRects remains the flush-placement source for the AFK gate.)
 
     // ---- #81 cell-as-floating-window: coordinator wiring (delegates the root injects) ----
 
@@ -1409,15 +1381,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _host.RequestReplayChartPreview(iid, start, end, granularity);
     }
 
-    // Collect the avoid rects for chart grid placement: every back-plane dock window that isn't itself
-    // a chart-to-be-placed — the 5 base dock kinds + every already-live chart (saved-restored or
-    // previously-grid-placed). We filter by `DockShape.IsDockKind(w.kind) && w.kind != KIND_CHART`
-    // rather than the base-id set, so a hand-edited sidecar that renames a base id (or any future
-    // multi-instance base kind) still contributes its rect — the kind-based filter does not depend on
-    // the `Spawn(id, id, ...)` id-equals-kind invariant. findings 0091 F4 sub-decision 3 (avoid 中身):
-    // order ticket (front plane / _windows) is NOT included — z-stacking lets it sit over a chart
-    // harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas top-left (y up-
-    // positive) maps to Rect's yMin = bottom edge.
+    // Collect the avoid rects for chart grid placement: every already-live chart window (saved-restored or
+    // previously-grid-placed) on the back plane. ADR-0038 retired the last base singletons, so `chart` is
+    // the ONLY dock kind — the avoid set is exactly the back-plane chart windows. findings 0091 F4
+    // sub-decision 3 (avoid 中身): the order ticket (front plane / _windows) is NOT included — z-stacking
+    // lets it sit over a chart harmlessly. Rect convention matches the helper's: (x, y-h, w, h) so canvas
+    // top-left (y up-positive) maps to Rect's yMin = bottom edge.
     List<Rect> CollectChartGridAvoidRects()
     {
         var avoid = new List<Rect>();
@@ -1425,10 +1394,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (cap?.floatingWindows == null) return avoid;
         foreach (var w in cap.floatingWindows)
         {
-            if (w == null) continue;
-            bool isChart = w.kind == FloatingWindowCatalog.KIND_CHART;
-            bool isOtherDockKind = DockShape.IsDockKind(w.kind) && !isChart;
-            if (!isChart && !isOtherDockKind) continue;
+            if (w == null || w.kind != FloatingWindowCatalog.KIND_CHART) continue;
             avoid.Add(new Rect(w.x, w.y - w.h, w.w, w.h));
         }
         return avoid;
@@ -1789,8 +1755,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             _accountBar.SetPrimary(1, AccountSummaryFormat.PLACEHOLDER, NEU);
             _accountBar.SetPrimary(2, AccountSummaryFormat.PLACEHOLDER, NEU);
         }
-        _accountBar.SetPrimary(3, p.HasTelemetry
-            ? p.LatestTelemetry.OrderCount.ToString(CultureInfo.InvariantCulture)
+        // ④ order count: FilledOrderCount (incremented on each FILLED OrderEvent — LivePanelViewModel).
+        // It is populated in BOTH LiveManual and LiveAuto (telemetry.OrderCount only exists in a LiveAuto
+        // strategy run, so it would leave ④ "—" for manual trading), and it MATCHES the ④ hover card,
+        // which shows "filled-order count" via FormatOrders. M1 / owner 2026-06-27.
+        _accountBar.SetPrimary(3, p.HasOrder || p.HasAccount
+            ? p.FilledOrderCount.ToString(CultureInfo.InvariantCulture)
             : AccountSummaryFormat.PLACEHOLDER, NEU);
 
         // hover detail: ② ③ ④ reuse the dock-panel formatters byte-for-byte; ① is the new summary.
@@ -2918,14 +2888,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void ResumeLastDocumentOrDefault()
     {
         string py = PlayerPrefs.GetString(ResumeKey, "");
-        bool restoredSavedLayout = false;   // #105: a saved layout's persisted groupId was applied — DON'T factory-group
         if (!string.IsNullOrEmpty(py) && File.Exists(py) && LayoutSidecarStore.TryReadLayout(py, out var doc))
         {
             // #81: restore geometry, then decompose the document `.py` into N cell windows at the saved
             // cellPositions. If the open fails (e.g. Python not yet ready / non-marimo), fall through to
             // the File→New blank state rather than leaving a half-restored state.
             ApplyLayout(doc);
-            restoredSavedLayout = true;   // #105: ApplyLayout(doc) honored the doc's groupId (RestoreFloating) — first-launch grouping must NOT clobber it
             _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
             if (_coordinator.Open(py, ToVectors(doc.cellPositions)))
             {
@@ -2935,10 +2903,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             }
         }
         ApplyLayout(LayoutDocument.Default());   // fresh / unresumable → default workspace
-        // #105: factory-group ONLY when no saved layout was applied. A resume whose layout READ but whose
-        // _coordinator.Open FAILED already restored the doc's persisted groupId via ApplyLayout(doc) above;
-        // re-minting here would clobber it (工場出荷値のみ＝saved layout を尊重・ADR-0020 D2).
-        if (!restoredSavedLayout) FormFactoryBaseGroup();
+        // ADR-0038 (#174-178): the no-resume factory-grouping step is gone — the base set is empty, so there
+        // was nothing left to group. A resumed/opened saved layout still restores its own groupId via ApplyLayout.
         _currentLayoutPath = "";                 // untitled document
         OpenFileNewDefault();                    // #76: boot to the File→New blank state (no canonical auto-open)
     }

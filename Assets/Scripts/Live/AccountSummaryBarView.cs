@@ -57,7 +57,6 @@ public sealed class AccountSummaryBarView : MonoBehaviour
         public PrimaryTint tint;       // remembered so ApplyTheme can re-resolve the colour on a theme flip
         public RectTransform card;
         public Text cardText;
-        public bool hovered;
     }
 
     static Color ResolveTint(PrimaryTint tint)
@@ -75,7 +74,6 @@ public sealed class AccountSummaryBarView : MonoBehaviour
 
     // ── probe observability ──
     public int SlotCount => SLOT_COUNT;
-    public bool Built => _built;
     public Canvas Canvas => _canvas;
     public RectTransform Strip => _strip;
     public string PrimaryText(int i) => Valid(i) ? _slots[i].primary.text : null;
@@ -235,7 +233,6 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     public void SetHovered(int i, bool hovered)
     {
         if (!Valid(i)) return;
-        _slots[i].hovered = hovered;
         if (_slots[i].card.gameObject.activeSelf != hovered)
             _slots[i].card.gameObject.SetActive(hovered);
     }

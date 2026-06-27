@@ -9,9 +9,12 @@
 // GPU or real pointer events.
 //
 //   ASB-01 = bar built: own ScreenSpaceOverlay canvas (NOT under Content), 4 slots, "—" placeholder pre-data.
-//   ASB-02 = Replay primaries match the snapshot (equity / bp / position count / order count).
-//   ASB-03 = slot ① recolours green (uPnL≥0) / red (uPnL<0) by the unrealized-pnl sign.
-//   ASB-04 = Live equity = Cash + Σ(qty×avg+uPnL) derived (account has no equity field) + colour sign.
+//   ASB-02 = Replay primaries match the snapshot (equity / bp / position count / order count); a CLEARED
+//            portfolio resets every slot back to "—" (anti-stale #61 honest-empty — PushAccountBarEmpty).
+//   ASB-03 = slot ① recolours green (uPnL≥0) / red (uPnL<0) by the unrealized-pnl sign; a theme flip WHILE
+//            IDLE (no data re-push) re-resolves ①'s colour from its tint (ADR-0028 trap — PrimaryTint/ApplyTheme).
+//   ASB-04 = Live equity = Cash + Σ(qty×avg+uPnL) derived (account has no equity field) + colour sign;
+//            ④ = FilledOrderCount (M1: works under manual trading, NOT LiveAuto-only telemetry.OrderCount).
 //   ASB-05 = hover detail: ②③④ BYTE-IDENTICAL to the dock-panel Format*/FormatReplay*; ① the new summary;
 //            pointer enter shows the card / exit hides it.
 //   ASB-06 = pan-immune: a canvas pan/zoom moves Content but NOT the bar (screen-anchored).
@@ -25,6 +28,8 @@
 //   <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
 //   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-10 + per-id tags / exit 0.
 // RED litmus: wire slot ② hover to FormatReplayOrders → ASB-05 RED; drop the equity uPnL term → ASB-04 RED;
+//             source ④ from telemetry.OrderCount → ASB-04 RED (expects FilledOrderCount=2, not 3); skip the
+//             cleared-portfolio reset → ASB-02 RED; drop ApplyTheme's tint re-resolve → ASB-03 RED;
 //             parent the bar under _content → ASB-06 RED; leave a retired spec in Default() → ASB-08 RED.
 
 using System;
@@ -117,7 +122,15 @@ public static class AccountSummaryBarE2ERunner
         if (bar.PrimaryText(1) != AccountSummaryFormat.Money(54321.0)) return $"ASB-02: ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.Money(54321.0)}'";
         if (bar.PrimaryText(2) != "1") return $"ASB-02: ③ position count = '{bar.PrimaryText(2)}', expected '1'";
         if (bar.PrimaryText(3) != "1") return $"ASB-02: ④ order count = '{bar.PrimaryText(3)}', expected '1'";
-        Debug.Log("[E2E ASB-02 PASS] Replay primaries match snapshot (equity/bp/positions/orders).");
+        // anti-stale (#61 honest-empty): after REAL data, a cleared portfolio must RESET every slot back to
+        // "—" (PushReplayTiles → PushAccountBarEmpty), never leave stale figures on the bar. This is the
+        // production reset path ASB-01 cannot reach (ASB-01's "—" is BuildSlot's constructor default, pre-data).
+        setPortfolio(null); driveReplay();
+        for (int i = 0; i < 4; i++)
+            if (bar.PrimaryText(i) != AccountSummaryFormat.PLACEHOLDER)
+                return $"ASB-02: slot {i} kept stale '{bar.PrimaryText(i)}' after the portfolio cleared (anti-stale reset broken)";
+        setPortfolio(pf1); driveReplay();   // restore the real snapshot for ASB-03/05
+        Debug.Log("[E2E ASB-02 PASS] Replay primaries match snapshot; cleared portfolio resets every slot to '—'.");
 
         // ── ASB-03: ① colour by unrealized-pnl sign (Replay) ──
         if (bar.PrimaryColor(0) != colors.hakoniwa_up)
@@ -129,7 +142,15 @@ public static class AccountSummaryBarE2ERunner
         setPortfolio(pfLoss); driveReplay();
         if (bar.PrimaryColor(0) != colors.hakoniwa_down)
             return "ASB-03: ① colour for uPnL<0 is not the loss (down) colour — sign recolour broken";
-        Debug.Log("[E2E ASB-03 PASS] ① recolours green (uPnL≥0) / red (uPnL<0).");
+        // theme-flip-while-idle (ADR-0028 trap): with NO data re-push, a theme flip must re-resolve slot ①'s
+        // colour from its remembered tint (SetPrimary stores PrimaryTint; ApplyTheme re-resolves it via
+        // ThemeService.Changed). Flip to the NonDefault verification palette — shipped Dark==Light (Theme.cs
+        // "Light is the dark stub"), so a Dark→Light flip would be vacuous (down colour unchanged).
+        ThemeService.SetTheme(Theme.NonDefault());
+        if (bar.PrimaryColor(0) != ThemeService.Current.colors.hakoniwa_down)
+            return "ASB-03: ① colour did NOT re-resolve on a theme flip while idle (PrimaryTint/ApplyTheme broken — ADR-0028 trap)";
+        ThemeService.SetTheme(Theme.Dark());   // restore: later sections compare against the dark `colors` captured above
+        Debug.Log("[E2E ASB-03 PASS] ① recolours green (uPnL≥0) / red (uPnL<0); colour re-resolves on a theme flip while idle.");
 
         // ── ASB-04: Live equity derivation (Cash + Σ(qty×avg+uPnL)) + colour ──
         // account: cash 54321, one position qty 50 @ 2000 with uPnL -100 → equity = 54321 + (50*2000-100) = 154221.
@@ -139,7 +160,14 @@ public static class AccountSummaryBarE2ERunner
         const string teleWire =
             "{\"LiveStrategyTelemetry\":{\"run_id\":\"r1\",\"strategy_id\":\"s\",\"realized_pnl\":1234.0," +
             "\"unrealized_pnl\":-100.0,\"order_count\":3,\"fill_count\":2,\"ts_ms\":1}}";
+        // M1 (owner 2026-06-27): ④ = FilledOrderCount (works in LiveManual, matches the ④ hover card),
+        // NOT telemetry.OrderCount (LiveAuto-only → "—" under manual trading). Apply 2 FILLED orders so
+        // FilledOrderCount=2; telemetry.order_count=3 differs, so ④=="2" PROVES the source is FilledOrderCount.
+        const string fillWire1 = "{\"OrderEvent\":{\"order_id\":\"o1\",\"client_order_id\":\"c1\",\"status\":\"FILLED\",\"filled_qty\":50.0,\"avg_price\":2000.0,\"ts_ms\":1}}";
+        const string fillWire2 = "{\"OrderEvent\":{\"order_id\":\"o2\",\"client_order_id\":\"c2\",\"status\":\"FILLED\",\"filled_qty\":50.0,\"avg_price\":2010.0,\"ts_ms\":2}}";
         panel.Apply(acctWire);
+        panel.Apply(fillWire1);
+        panel.Apply(fillWire2);
         panel.Apply(teleWire);
         setShape(true); drive();
         string expEquity = AccountSummaryFormat.Money(154221.0);
@@ -147,8 +175,8 @@ public static class AccountSummaryBarE2ERunner
         if (bar.PrimaryColor(0) != colors.hakoniwa_down) return "ASB-04: Live ① colour not red for negative Σ unrealized";
         if (bar.PrimaryText(1) != AccountSummaryFormat.Money(80000.0)) return $"ASB-04: Live ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.Money(80000.0)}'";
         if (bar.PrimaryText(2) != "1") return $"ASB-04: Live ③ position count = '{bar.PrimaryText(2)}', expected '1'";
-        if (bar.PrimaryText(3) != "3") return $"ASB-04: Live ④ order count = '{bar.PrimaryText(3)}', expected '3' (telemetry.OrderCount)";
-        Debug.Log("[E2E ASB-04 PASS] Live equity derived = Cash + Σ(qty×avg+uPnL); colour by sign; bp/positions/orders.");
+        if (bar.PrimaryText(3) != "2") return $"ASB-04: Live ④ order count = '{bar.PrimaryText(3)}', expected '2' (FilledOrderCount, NOT telemetry.OrderCount=3)";
+        Debug.Log("[E2E ASB-04 PASS] Live equity derived = Cash + Σ(qty×avg+uPnL); colour by sign; bp/positions; ④=FilledOrderCount.");
 
         // ── ASB-05: hover detail byte-identity (②③④ = Format*/FormatReplay*) + ① summary; show/hide ──
         // Re-drive Replay so the hover cards are populated from pf1 (a known snapshot).

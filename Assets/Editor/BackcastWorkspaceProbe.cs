@@ -338,17 +338,18 @@ public static class BackcastWorkspaceProbe
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
 
         var scenario = ty.GetField("_scenario", BF).GetValue(root) as ScenarioStartupController;
-        var windows = ty.GetField("_windows", BF).GetValue(root) as FloatingWindowController;
+        // #103 (ADR-0018): the chart family + base dock windows live on the BACK plane (_dockWindows), NOT
+        // the front-plane _windows (which hosts the strategy editor / order ticket). Query _dockWindows.
+        var windows = ty.GetField("_dockWindows", BF).GetValue(root) as FloatingWindowController;
         var chartViews = ty.GetField("_chartViews", BF).GetValue(root) as System.Collections.IDictionary;
         if (scenario == null || windows == null || chartViews == null)
             return "chartwin: root internals not found (renamed?)";
 
-        // base dock cluster spawned by SpawnBaseDockWindows at BuildWorkspace. ADR-0026 retired "startup";
-        // ADR-0038 (#174-178) retired buying_power/orders/positions to the account summary bar, so the base
-        // is now just run_result (sister #172 retires it next). NOTE: base dock windows live on _dockWindows.
-        string[] baseIds = { "run_result" };
-        foreach (var id in baseIds)
-            if (!windows.Has(id)) return "chartwin: base dock window missing: " + id;
+        // ALL base dock singletons are retired — startup (ADR-0026 → Settings), run_result (ADR-0037 →
+        // RunResultPopup), buying_power/orders/positions (ADR-0038 #174-178 → account summary bar). The dock
+        // plane (_dockWindows) is now the chart family ONLY; no base dock window should be present.
+        foreach (var retired in new[] { "startup", "run_result", "buying_power", "orders", "positions" })
+            if (windows.Has(retired)) return "chartwin: retired base dock window still spawned: " + retired;
 
         // membership tracks the universe SoT: a known 2-instrument universe spawns 2 chart windows.
         scenario.Universe.ReplaceAll(new[] { "AAA.TSE", "BBB.TSE" });
@@ -507,6 +508,15 @@ public static class BackcastWorkspaceProbe
         string CurrentPath(BackcastWorkspaceRoot r) => ty.GetField("_currentLayoutPath", BF).GetValue(r) as string;
         ScenarioStartupController Scenario(BackcastWorkspaceRoot r) => ty.GetField("_scenario", BF).GetValue(r) as ScenarioStartupController;
         void FileOpen(BackcastWorkspaceRoot r) => ty.GetMethod("OnFileOpen", BF).Invoke(r, null);
+        // "opened this file" = currentPath resolves to the same file, regardless of separator representation.
+        // Path.Combine(TempDir, …) yields MIXED separators on Windows ("C:/…/probe\open_bare.py"); a raw string
+        // compare against Path.GetFullPath() would spuriously read as ABORTED even though OnFileOpen succeeded.
+        bool Opened(BackcastWorkspaceRoot r, string py)
+        {
+            string cur = CurrentPath(r);
+            return !string.IsNullOrEmpty(cur) &&
+                   string.Equals(Path.GetFullPath(cur), Path.GetFullPath(py), StringComparison.OrdinalIgnoreCase);
+        }
 
         // (a) scenario-only sidecar = the v19 shape (<strategy>.json has "scenario", NO "layout").
         string barePy = Path.Combine(TempDir, "open_bare.py");
@@ -522,7 +532,7 @@ public static class BackcastWorkspaceProbe
         rootA.SetFileDialog(new StubFileDialog { NextResult = barePy });
         FileOpen(rootA);
 
-        if (CurrentPath(rootA) != Path.GetFullPath(barePy))
+        if (!Opened(rootA, barePy))
             return "S14a: File→Open ABORTED a scenario-only .py (currentPath=[" + CurrentPath(rootA) +
                    "]) — #80/0051: a bare v19 (no layout key) must OPEN, not abort";
         var idsA = Scenario(rootA).Universe.Ids;
@@ -540,7 +550,7 @@ public static class BackcastWorkspaceProbe
         rootB.SetFileDialog(new StubFileDialog { NextResult = corruptPy });
         FileOpen(rootB);
 
-        if (CurrentPath(rootB) != Path.GetFullPath(corruptPy))
+        if (!Opened(rootB, corruptPy))
             return "S14b: File→Open ABORTED a corrupt-sidecar .py (currentPath=[" + CurrentPath(rootB) +
                    "]) — owner D3: a corrupt sidecar must STILL open bare (no abort); the Run gate blocks";
         if (Scenario(rootB).Universe.Count != 0)
@@ -559,7 +569,7 @@ public static class BackcastWorkspaceProbe
         rootC.SetFileDialog(new StubFileDialog { NextResult = structPy });
         FileOpen(rootC);   // must NOT throw out of OnFileOpen
 
-        if (CurrentPath(rootC) != Path.GetFullPath(structPy))
+        if (!Opened(rootC, structPy))
             return "S14c: File→Open ABORTED/crashed on a structurally-corrupt sidecar (currentPath=[" +
                    CurrentPath(rootC) + "]) — TryReadScenario must catch the non-JSON ArgumentException too";
         if (Scenario(rootC).Universe.Count != 0)

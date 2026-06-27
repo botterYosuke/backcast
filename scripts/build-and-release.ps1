@@ -99,6 +99,14 @@ function Invoke-Quiet([scriptblock]$Block) {
     try { & $Block } finally { $ErrorActionPreference = $prev }
 }
 
+# Force-kill a process AND its child tree. Stop-Process kills only the named pid;
+# Unity spawns helper children and the Player spawns the embedded-engine python
+# subprocess, which would otherwise orphan and keep file handles / ports open.
+function Stop-Tree([int]$procId) {
+    Invoke-Quiet { & taskkill /F /T /PID $procId 2>$null 1>$null }
+    $global:LASTEXITCODE = 0
+}
+
 # Resolve a key from process env, then <repo>/.env, then <repo>/python/.env.
 function Resolve-EnvValue([string]$key) {
     $fromProc = [Environment]::GetEnvironmentVariable($key)
@@ -230,8 +238,8 @@ while (-not $proc.HasExited -and (Get-Date) -lt $deadline) {
     Start-Sleep -Seconds 3
 }
 if (-not $proc.HasExited) {
-    Step 'Unity still alive after build; terminating (known shutdown hang)'
-    try { Stop-Process -Id $proc.Id -Force -ErrorAction Stop } catch {}
+    Step 'Unity still alive after build; terminating tree (known shutdown hang)'
+    Stop-Tree $proc.Id
     try { Wait-Process -Id $proc.Id -Timeout 15 -ErrorAction SilentlyContinue } catch {}
 }
 $exitNote = if ($proc.HasExited) { "exit=$($proc.ExitCode)" } else { 'killed' }
@@ -288,7 +296,7 @@ $zip = Join-Path $RepoRoot "dist/$stageName.zip"
 & $Tar -a -c -f $zip -C (Join-Path $RepoRoot 'build') $stageName
 if ($LASTEXITCODE -ne 0) { Fail "tar create failed (exit=$LASTEXITCODE)" }
 $zipMB = [math]::Round((Get-Item -LiteralPath $zip).Length / 1MB, 1)
-Write-Host "Assembled: $zip ($zipMB MB)"
+Step "Assembled: $zip ($zipMB MB)"
 
 # ---- Python SBOM (CycloneDX) -----------------------------------------------
 Step 'Python SBOM'
@@ -307,7 +315,7 @@ if (-not $SkipSmoke) {
     if ($LASTEXITCODE -ne 0) { Fail "tar extract failed (exit=$LASTEXITCODE)" }
     $tree = Join-Path $out "backcast-windows64-$Version"
     if (-not (Test-Path -LiteralPath (Join-Path $tree 'backcast.exe'))) { Fail 'Stage 1 fail: backcast.exe missing from extracted zip' }
-    Write-Host 'Stage 1 PASS'
+    Step 'Stage 1 PASS'
 
     Step 'Smoke Stage 2: manifest schema'
     $manifestPath = Join-Path $tree 'backcast_Data/StreamingAssets/PythonRuntime/runtime-manifest.json'
@@ -319,7 +327,7 @@ if (-not $SkipSmoke) {
     foreach ($p in @($m.paths.cpython, $m.paths.project_root, $m.paths.venv_site_relative)) {
         if (-not (Test-Path -LiteralPath (Join-Path $runtimeRoot $p))) { Fail "Stage 2 fail: manifest path missing: $p" }
     }
-    Write-Host "Stage 2 PASS (cpython=$($m.cpython_version), built_at=$($m.built_at))"
+    Step "Stage 2 PASS (cpython=$($m.cpython_version), built_at=$($m.built_at))"
 
     Step 'Smoke Stage 3: bundled venv import'
     $runtimeRoot = Join-Path $tree 'backcast_Data/StreamingAssets/PythonRuntime'
@@ -334,7 +342,7 @@ if (-not $SkipSmoke) {
     $importCode = $LASTEXITCODE
     Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue
     if ($importCode -ne 0) { Fail "Stage 3 fail: import smoke (exit=$importCode)" }
-    Write-Host 'Stage 3 PASS'
+    Step 'Stage 3 PASS'
 
     Step 'Smoke Stage 4: Player GUI smoke (retry once)'
     $playerExe = Join-Path $tree 'backcast.exe'
@@ -352,8 +360,8 @@ if (-not $SkipSmoke) {
             }
             Start-Sleep -Milliseconds 500
         }
-        try { Stop-Process -Id $p.Id -Force -ErrorAction Stop } catch {}
-        try { Wait-Process -Id $p.Id -Timeout 10 -ErrorAction Stop } catch {}
+        Stop-Tree $p.Id
+        try { Wait-Process -Id $p.Id -Timeout 10 -ErrorAction SilentlyContinue } catch {}
         if ($hit) { Write-Host "smoke OK ($Tag)" }
         else {
             Write-Warning "smoke fail ($Tag) -- log dump:"
@@ -365,7 +373,7 @@ if (-not $SkipSmoke) {
         Write-Warning 'Player GUI smoke try1 failed; retrying once'
         if (-not (Invoke-Smoke 'try2')) { Fail 'Player GUI smoke failed twice' }
     }
-    Write-Host 'Stage 4 PASS'
+    Step 'Stage 4 PASS'
 } else {
     Step 'Smoke stages skipped (-SkipSmoke)'
     # Still need an extracted tree for the manifest copy below if releasing.

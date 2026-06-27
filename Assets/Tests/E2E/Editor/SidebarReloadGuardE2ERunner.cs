@@ -15,7 +15,7 @@
 //     * `_host` / `_scenario`（readonly = new …() field initializer）→ 再構築され NON-null。
 //   旧 DriveSidebarContext は `_sidebarView == null` だけをガードし、実際に deref する `_footerMode` を
 //   ガードしないので、上の状態（sidebarView 非 null・footerMode null）で `_footerMode.DisplayMode` が NRE。
-//   兄弟ドライバ（DriveFooter / RefreshLiveTiles / DriveStrategyEditor / DriveOrderTicket / DriveRunResult /
+//   兄弟ドライバ（DriveFooter / RefreshLiveTiles / DriveStrategyEditor / DriveOrderTicket / DriveRunResultPopup /
 //   DriveDepthLadders）は全て runtime フィールド（_footerMode / _windows / _dockWindows / …）でガード済みで、
 //   reload フレームでは安全に no-op する —— このゲートは「DriveSidebarContext も兄弟と同じく no-op する」を pin。
 //

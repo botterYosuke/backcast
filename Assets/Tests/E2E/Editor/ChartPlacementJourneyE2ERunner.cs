@@ -481,13 +481,14 @@ public static class ChartPlacementJourneyE2ERunner
             root.SetFileDialog(new StubFileDialog { NextResult = py });
             InvokeOnFileOpen(ty, root);
 
-            // No sidecar + no inline scenario → universe stays empty → no chart spawns; base cluster intact.
-            // ADR-0026 retired KIND_STARTUP; ADR-0038 (#174-178) retired buying_power/orders/positions to the
-            // account summary bar, so the base dock cluster is now just run_result (sister #172 retires it next).
-            string[] baseIds = { "run_result" };
-            for (int i = 0; i < baseIds.Length; i++)
-                if (!dockWindows.Has(baseIds[i]))
-                    return "CP-S4-01: base dock window " + baseIds[i] + " missing after bare open";
+            // No sidecar + no inline scenario → universe stays empty → no chart spawns. ALL base singletons are
+            // retired (startup ADR-0026, run_result ADR-0037 → popup, buying_power/orders/positions ADR-0038 →
+            // account summary bar), so the dock plane has NO base windows — assert none of the retired ids spawn
+            // (forward-compat: a bare open never resurrects them).
+            string[] retiredIds = { "startup", "run_result", "buying_power", "orders", "positions" };
+            for (int i = 0; i < retiredIds.Length; i++)
+                if (dockWindows.Has(retiredIds[i]))
+                    return "CP-S4-01: retired base dock window " + retiredIds[i] + " spawned after bare open (should be gone)";
         }
 
         // ── CP-S4-02 (P5): post-Open universe growth — add a chart after the doc is open; the new

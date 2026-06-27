@@ -47,20 +47,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // a physical window id (adopt / _editors / reveal); the run path resolves the notebook under THIS key.
     const string NOTEBOOK_ID = "strategy_editor:notebook";
 
-    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids. ADR-0026 retired the
-    // `startup` base window; ADR-0038 (#174-178) retires buying_power / orders / positions to the
-    // account summary bar + hover cards, so the base dock is now just run_result (which sister #172
-    // retires next → base 0 → dock = chart only). Singleton; id = the catalog kind verbatim.
-    const string WINDOW_ID_RUN_RESULT = "run_result";
-
-    // #105: the base dock cluster's id list — the single source for BOTH the first-launch spawn
-    // (SpawnBaseDockWindows) and the factory grouping (FormFactoryBaseGroup). ADR-0038: down to 1 member
-    // (run_result). FormGroup is a no-op below 2 members (FloatingWindowController.FormGroup: live<2 →
-    // null), so the factory base group naturally STOPS forming once base shrinks here — no FormFactoryBaseGroup
-    // edit needed (sister #172 deletes the last member + the dead method).
-    static readonly string[] BaseDockWindowIds = {
-        WINDOW_ID_RUN_RESULT,
-    };
+    // #99 (ADR-0017 / findings 0075 §0/§3): the dock cluster's base window ids. ALL base singletons are now
+    // retired — startup (ADR-0026 → Settings), run_result (ADR-0037 → RunResultPopup), buying_power/orders/
+    // positions (ADR-0038 #174-178 → account summary bar). The base set is therefore EMPTY: first-launch dock
+    // = `chart` only (universe-driven). SpawnBaseDockWindows spawns nothing and FormFactoryBaseGroup is a
+    // no-op (FloatingWindowController.FormGroup: live<2 → null), so the factory base group never forms
+    // (ADR-0038 §6 — the factory grouping concept is retired by the empty enumeration).
+    static readonly string[] BaseDockWindowIds = System.Array.Empty<string>();
 
     // ── owner toggle: gates Python auto-start ONLY (UI build always runs) ──
     [SerializeField] bool _ownPlay = true;
@@ -79,8 +72,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     [SerializeField] RectTransform _floatingLayer;
     // #103 (ADR-0018 / findings 0075 §10): the BACK depth plane — a Content child that rides Content
     // at 1.0× (NO parallax offset) and is the EARLIER sibling of _floatingLayer, so it always draws
-    // BEHIND it. The 6 former Hakoniwa kinds (chart / orders / positions / run_result / buying_power /
-    // startup) live here; strategy_editor + order stay on _floatingLayer (1.2×, front). The pan
+    // BEHIND it. The dock kinds (chart / buying_power / orders / positions) live here; strategy_editor +
+    // order stay on _floatingLayer (1.2×, front). (startup retired by ADR-0026, run_result by ADR-0037 —
+    // run_result is now the screen-anchored RunResultPopup, NOT a dock kind.) The pan
     // SPEED difference between the two planes (1.0 vs 1.2) is the restored depth cue (#99 regression).
     [SerializeField] RectTransform _dockLayer;
     // Parallax depth cue: _floatingLayer rides Content PLUS this extra factor, so it travels 1.2× per
@@ -204,6 +198,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     AccountSummaryBarView _accountBar;       // #174 S1: screen-anchored bar chrome
     AccountSummaryIconStage _accountIconStage; // #177 S5: 3D-primitive placeholder icons (RenderTexture)
     OrderTicketView _orderTicket;
+
+    // #172/#173 (ADR-0037 / findings 0125): the Run Result popup — a screen-anchored top-right card
+    // (NOT a dock window). _runResultView (above) is Built into its body so the format functions /
+    // ShowText / Refresh reuse is unchanged (D5/F9); this owns the chrome + visibility + × close.
+    RunResultPopup _runResultPopup;
+    // Dismiss latch (#173 D7): the user × closed the popup; it stays hidden until the NEXT run re-arms
+    // it. Session-only (NOT persisted — findings 0125 D6). Re-arm is kept SYMMETRIC across modes (D8):
+    // Replay keys off the honest-empty→content RISING edge; LiveAuto off a run_id CHANGE (its sticky
+    // flags give no boolean falling edge between runs — findings 0125 F4/F8).
+    bool _runResultDismissed;
+    bool _runResultPrevReplayHasContent;   // Replay rising-edge tracker (updated ONLY on Replay frames)
+    string _runResultLastRunId;            // LiveAuto run_id tracker (updated ONLY when a real run_id exists)
     // #125-#128 (ADR-0026): the Settings modal — screen-fixed集約口 for Venue / Mode / Scenario. The
     // controller owns open/close + ESC-guard; the overlay is the chrome; the three section views reuse
     // the unchanged brains (VenueMenuViewModel / FooterModeViewModel / ScenarioStartupController).
@@ -573,6 +579,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         WireCellCloseButton(_strategyEditorWindow, WINDOW_ID);
         WireCellRunButton(_strategyEditorWindow, WINDOW_ID);
         BuildAddCellButton();
+        BuildRunResultPopup();   // #172/#173 (ADR-0037): the screen-anchored Run Result popup (replaces the dock tile)
         WindowChrome.Attach(_strategyEditorWindow, StrategyEditorWindowFrame.BodyColor, elevated: true);   // adopted editor: HUD ⇔ Card + front-plane float shadow, preserve authored dark body (ADR-0028)
 
         // #23 re-home: adopt the scene-authored Order ticket window (KIND_ORDER) — parity with the
@@ -868,7 +875,8 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // primary text + colour are re-pushed every frame, but its static chrome (strip / icon frame /
         // hover card backgrounds + card text) is baked at Build, so re-theme it here alongside the tile.
         _runResultView?.ApplyTheme();
-        _accountBar?.ApplyTheme();
+        _runResultPopup?.ApplyTheme();   // #172 (ADR-0037): repaint the popup card chrome on a live Dark↔Light switch
+        _accountBar?.ApplyTheme();       // ADR-0038 (#174-178): re-theme the bar's baked chrome + re-resolve primaries
         // #137 (findings 0107 F2): the Settings switch lives in THIS modal's Appearance tab, so re-theme the
         // modal chrome (panel/cards/headers/tabs) + the redesigned input面 (Scenario tile fields, Data field)
         // LIVE on a Dark/Light flip — none of these self-subscribe (plain classes / baked-at-build chrome).
@@ -949,9 +957,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // The BACK-plane (_dockWindows) factory: the dock kinds (ADR-0017 / findings 0075 §7) —
-    // chart / buying_power / orders / positions / run_result (startup retired by ADR-0026). Frame chrome
-    // comes from DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView for chart,
-    // LivePanelTileView for the 4 base panels) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
+    // chart / buying_power / orders / positions (startup retired by ADR-0026, run_result by ADR-0037).
+    // Frame chrome comes from DockWindowFrame (spec accent → title bar); content (ChartView+DepthLadderView
+    // for chart, LivePanelTileView for the 3 base panels) is injected here so the spawn flow is ONE call. #103 (ADR-0018): the title input binds to _dockWindows so dock
     // snap/focus stays WITHIN the back plane (a dock window never snaps to the front-plane editor).
     RectTransform BuildDockWindowFrame(FloatingWindowSpec spec, string id)
     {
@@ -965,7 +973,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         // #140 / findings 0112: chart windows show `<id> <name>` instead of the spec's fixed "Chart"
         // caption so two chart windows side-by-side are visually distinguishable. Non-chart dock kinds
-        // (buying_power / orders / positions / run_result) keep their spec.title verbatim. The resolver
+        // (buying_power / orders / positions) keep their spec.title verbatim. The resolver
         // reads the SHARED IAvailableInstrumentsProvider cache the picker uses, so a [+ Add] sequence
         // (picker Query warms the cache → SyncChartWindowsToUniverse spawns the chart with that warm
         // cache) gets the name on the常用パス; layout-restore cold paths fall back to id alone.
@@ -987,13 +995,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (body == null) return;
 
-        // #126 (ADR-0026): KIND_STARTUP is no longer a dock kind — the scenario tile is built into the
-        // Settings modal's Scenario section (BuildWorkspace), not a dock window body.
-        // ADR-0038 (#174-178): KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS are no longer dock kinds —
-        // their data now lives on the account summary bar (BuildWorkspace) + hover cards, not dock bodies.
-
-        if (kind == FloatingWindowCatalog.KIND_RUN_RESULT)
-        { _runResultView = new LivePanelTileView(FormatRunResult); _runResultView.Build(body, _font); return; }
+        // ALL base singleton kinds are retired, so BuildDockContent only builds `chart` now:
+        //   * KIND_STARTUP → Settings modal (ADR-0026).
+        //   * KIND_RUN_RESULT → _runResultView is Built into the screen-anchored RunResultPopup
+        //     (BuildRunResultPopup), NOT a dock window body (ADR-0037 / findings 0125 D1/D5).
+        //   * KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS → the account summary bar + hover cards
+        //     (BuildWorkspace), NOT dock window bodies (ADR-0038 / findings 0126).
 
         if (kind == FloatingWindowCatalog.KIND_CHART)
         {
@@ -1044,8 +1051,9 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _lastDepthPayload = null;   // a tile added mid-Live renders its board on the NEXT poll
     }
 
-    // Spawn the 4 base dock windows (singletons) at the DockDefaultPlacement positions. Order
-    // (findings 0075 §4 minus the ADR-0026-retired startup): buying_power / orders / positions / run_result.
+    // Spawn the 3 base dock windows (singletons) at the DockDefaultPlacement positions. Order
+    // (findings 0075 §4 minus the ADR-0026-retired startup and the ADR-0037-retired run_result):
+    // buying_power / orders / positions.
     // First-launch positions can be overridden by a saved layout via RestoreFloating's
     // ApplyGeometry on the matching id (the window is already registered by the time the
     // restore runs, so it gets repositioned in place — never destroyed+respawned).
@@ -1064,9 +1072,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     // #105 (ADR-0019 D8 amendment / findings 0082 §12, findings 0083 / ADR-0020): factory-default
-    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 4 base
+    // grouping. On a no-resume / unresumable boot (saved layout 無し＝first launch), bundle the 3 base
     // dock windows into ONE island (a plain group — ADR-0024 §1 retires the "Hakoniwa group" special
-    // case, so run_result drags exactly like the others). This is the ONLY first-launch grouping
+    // case, so every base dock window drags identically; ADR-0037 dropped run_result from this set).
+    // This is the ONLY first-launch grouping
     // path — a resumed/opened SAVED layout NEVER calls this; RestoreFloating honors the doc's persisted
     // groupId instead (工場出荷値のみ＝owner decision). The base windows are already spawned ungrouped
     // (BuildWorkspace → SpawnBaseDockWindows), so this only stamps the shared groupId.
@@ -1270,6 +1279,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     void OnAddCell() => _coordinator?.AddCell();
+
+    // #172/#173 (ADR-0037 / findings 0125 D1/D5/D7): build the screen-anchored Run Result popup and
+    // Build the reused LivePanelTileView (FormatRunResult) into its body. The popup lives directly under
+    // a ScreenSpaceOverlay Canvas (NOT Content), so it does not pan with the infinite canvas. The × close
+    // latches dismissal (DriveRunResultPopup honors it). Content/visibility is content-derived per frame
+    // by DriveRunResultPopup; the body text is driven by the existing PushReplayTiles / PushLiveTiles poll.
+    void BuildRunResultPopup()
+    {
+        _runResultPopup = new RunResultPopup();
+        _runResultPopup.OnClose = () => _runResultDismissed = true;   // #173 D7: × latches until the next run
+        _runResultPopup.Build(transform, _font);
+        _runResultView = new LivePanelTileView(FormatRunResult);
+        _runResultView.Build(_runResultPopup.Body, _font);
+    }
 
     // cellPositions <-> Vector2 list converters (the layout sidecar POCO <-> the coordinator's runtime form).
     static List<Vector2> ToVectors(List<CellPosition> positions)
@@ -1476,7 +1499,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveStrategyEditor();
-        DriveRunResult();      // #138 second slice (findings 0110 §7): back-plane mirror — hide run_result in LiveManual
+        DriveRunResultPopup(); // #172/#173 (ADR-0037 / findings 0125): content-derived popup visibility + dismiss latch (replaces #138 DriveRunResult)
         DriveFooter();
         DriveSettings();   // #125-#128: ESC toggle (guarded) + reflect open state + live-gated section refresh
         DriveSidebarContext(); // findings 0084: after DriveFooter (fresh DisplayMode) so [+ Add] picks the live mode + scenario.end
@@ -1678,8 +1701,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         if (string.IsNullOrWhiteSpace(portfolioJson))
         {
-            _runResultView?.ShowReplayEmpty();
-            PushAccountBarEmpty();   // ADR-0038: pre-run / cleared portfolio → "—" + empty hover
+            // #172 (ADR-0037): run_result is the popup now — honest-empty HIDES the card (DriveRunResultPopup),
+            // it does NOT paint "(no data)" text. ADR-0038 (#174-178): the buying_power/orders/positions dock
+            // tiles are retired → the account summary bar shows "—" placeholders (PushAccountBarEmpty).
+            PushAccountBarEmpty();
             return;
         }
 
@@ -1874,34 +1899,62 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_addCellOverlay != null && _addCellOverlay.activeSelf != showAdd) _addCellOverlay.SetActive(showAdd);
     }
 
-    // ── #138 second slice (findings 0110 §7): the Run Result tile — hidden ONLY in LiveManual, the
-    // BACK-plane mirror of DriveOrderTicket (order ticket = a FRONT-plane window visible only in LiveManual;
-    // run_result = the back-plane base tile hidden only in LiveManual). run_result is a strategy-run surface:
-    // its content comes from PushLiveTiles (HasLifecycle/HasTelemetry, set only by a registered LiveAuto run)
-    // or PushReplayTiles — neither path exists in LiveManual, so the tile is "(no run)" there and would
-    // otherwise show STALE LiveAuto telemetry (LivePanelViewModel.Apply never resets the flags). Replay
-    // (backtest needs Python) and LiveAuto (the cell drives the strategy) keep it visible. ONLY run_result is
-    // hidden — Orders/Positions/Buying Power/chart stay live in LiveManual via the adapter EC (OrderEvent/
-    // AccountEvent). ABSOLUTE toggle, NOT a remembered-set (the strategy editor uses one because its cell
-    // windows can be hidden for an independent reason — a deleted cell's dormant region_001 shell; run_result
-    // is a NON-closable base-dock SINGLETON with no such independent hide state). Crucially, run_result RIDES
-    // CaptureLayout (the dock plane is captured verbatim; strategy_editor is the only kind excluded — :2553),
-    // so a layout saved while hidden in LiveManual persists visible=false and ApplyGeometry restores it
-    // hidden. Driving the absolute mode state every frame SELF-HEALS that on the next boot (Replay →
-    // SetActive(true)); an in-memory remembered-set would leave it PERMANENTLY hidden (it only records ids it
-    // itself hid, never an already-hidden one). This is exactly why DriveOrderTicket (also captured, also
-    // mode-conditional) drives absolute state. Pure SetActive — geometry/content/persistence/groupId
-    // unchanged. Same poll cycle as DriveOrderTicket (≤1-frame DisplayMode latency, symmetric). One way it
-    // is NOT symmetric with the order ticket: run_result is a base-group member (order ticket is a free
-    // singleton), so a base-group drag while it is hidden leaves it at a stale spot until the next drag —
-    // an accepted cosmetic edge, see findings 0110 §7.3①. ──
-    void DriveRunResult()
+    // ── #172/#173 (ADR-0037 / findings 0125 D2/D3/D7/D8): drive the screen-anchored Run Result popup.
+    // Replaces #138's DriveRunResult (which SetActive-hid the dock tile in LiveManual). Visibility is
+    // CONTENT-DERIVED ∧ !dismissed. The body TEXT is driven by PushReplayTiles / PushLiveTiles (format
+    // functions unchanged — D5); this method owns only visibility + the dismiss latch + symmetric re-arm.
+    //
+    // hasContent:
+    //   • Replay — a non-empty portfolio json (mirrors PushReplayTiles' honest-empty branch).
+    //   • LiveAuto — HasLifecycle ∨ HasTelemetry. CRUCIALLY scoped to DisplayMode==LiveAuto (D3): the
+    //     LivePanelViewModel flags are STICKY (never reset — findings 0125 F4), so a LiveAuto→LiveManual
+    //     flip would otherwise leak STALE telemetry into the popup. This mode scope folds #138's
+    //     hide-in-LiveManual contract into the content gate (the popup is simply never content in LiveManual).
+    //
+    // Dismiss latch re-arm (D8) — kept SYMMETRIC so neither mode has a "closed once, gone forever" blind
+    // spot (the #164 trap): a NEW RUN clears the latch. New-run detection differs per mode because the
+    // live VM is sticky:
+    //   • Replay — the honest-empty→content RISING edge (tracked on Replay frames only, so an intervening
+    //     LiveManual/LiveAuto stretch never forges a false edge for a previously-dismissed replay run).
+    //   • LiveAuto — a run_id CHANGE (a boolean falling edge never appears between two LiveAuto runs;
+    //     tracked only when a real run_id exists, so a flip THROUGH LiveManual does not forge a change).
+    void DriveRunResultPopup()
     {
-        var rt = _dockWindows?.RectOf(WINDOW_ID_RUN_RESULT);
-        if (rt == null) return;
-        bool liveManual = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveManual;
-        bool show = !liveManual;
-        if (rt.gameObject.activeSelf != show) rt.gameObject.SetActive(show);
+        if (_runResultPopup == null) return;
+
+        bool hasContent;
+        bool newRun = false;
+
+        if (!_lastLiveShape)
+        {
+            // Replay shape: content ⇔ a non-empty portfolio json (same predicate PushReplayTiles uses).
+            hasContent = !string.IsNullOrWhiteSpace(_host.LatestPortfolioJson);
+            if (hasContent && !_runResultPrevReplayHasContent) newRun = true;   // honest-empty → content rising edge
+            _runResultPrevReplayHasContent = hasContent;
+        }
+        else
+        {
+            // Live shape: content is meaningful ONLY in LiveAuto (D3 sticky-flag guard) → LiveManual hides.
+            bool liveAuto = _footerMode != null && _footerMode.DisplayMode == FooterModeViewModel.LiveAuto;
+            LivePanelViewModel p = _host.Panel;
+            hasContent = liveAuto && (p.HasLifecycle || p.HasTelemetry);
+            // run_id source: lifecycle preferred, telemetry as fallback. hasContent can be satisfied by
+            // telemetry alone (a new run can stream telemetry before its lifecycle event lands — the flags
+            // are sticky/independent, F4/F8), so without the telemetry fallback a telemetry-first run would
+            // record no run_id and the re-arm could miss it. Both carry the same run_id (F8).
+            string runId = !liveAuto ? null
+                         : p.HasLifecycle ? p.LatestLifecycle.RunId
+                         : p.HasTelemetry ? p.LatestTelemetry.RunId
+                         : null;
+            if (!string.IsNullOrEmpty(runId))
+            {
+                if (hasContent && runId != _runResultLastRunId) newRun = true;   // a genuinely new LiveAuto run
+                _runResultLastRunId = runId;
+            }
+        }
+
+        if (newRun) _runResultDismissed = false;   // re-arm the latch (session-only — never persisted)
+        _runResultPopup.SetVisible(hasContent && !_runResultDismissed);
     }
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and

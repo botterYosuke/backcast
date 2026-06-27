@@ -158,9 +158,10 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         if (GlyphText(runBtn) != "■")
             return "NBHAKO-04: the REAL cell button ▶ did not toggle to ■ while running";
 
-        // ── NBHAKO-05: running snapshot bar1 → the account summary bar's hover cards + run_result tile show
-        //    the real figures (D6/D8). ADR-0038 (#174-178): positions/orders/buying_power hover cards reuse
-        //    the SAME FormatReplay* the retired dock tiles used, so the figures are byte-identical. ──
+        // ── NBHAKO-05: running snapshot bar1 → the account summary bar's hover cards (②③④) + the run_result
+        //    popup view show the real figures (D6/D8). ADR-0038: positions/orders/buying_power hover cards reuse
+        //    the SAME FormatReplay* the retired dock tiles used (byte-identical). ADR-0037: run_result is the
+        //    screen-anchored popup; its body Text is the reused LivePanelTileView (_runResultView). ──
         SetReplayShape(root, ty);
         SetPortfolioOverride(seams.Host, SNAP1);
         PumpTiles(root, ty);
@@ -357,8 +358,9 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         seams.Coordinator.New();
 
         // ADR-0038 (#174-178): buying_power/orders/positions dock tiles RETIRED → their figures now ride the
-        // account summary bar's hover cards (byte-identical FormatReplay*). Only run_result survives as a tile.
-        if (ty.GetField("_runResultView", BF)?.GetValue(root) == null) { err = "_runResultView not built (SpawnBaseDockWindows renamed?)"; return false; }
+        // account summary bar's hover cards (byte-identical FormatReplay*). ADR-0037: run_result is the popup,
+        // its body Text is the reused _runResultView (BuildRunResultPopup). Both must be built by BuildWorkspace.
+        if (ty.GetField("_runResultView", BF)?.GetValue(root) == null) { err = "_runResultView not built (BuildRunResultPopup renamed?)"; return false; }
         seams.Bar = ty.GetField("_accountBar", BF)?.GetValue(root) as AccountSummaryBarView;
         if (seams.Bar == null) { err = "_accountBar not built (BuildWorkspace renamed?)"; return false; }
 

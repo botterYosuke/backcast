@@ -22,8 +22,8 @@ spawn するため **第二の spawn 経路**になっている。ブート/Open
    `InstrumentRegistry.cs:85`/`:98`）。
 3. 結果、`Universe.Changed` 購読の `SyncChartWindowsToUniverse` が走らず、universe に居ない孤児 `chart:<iid>` 窓が残る。
 
-base dock は5枚（startup/buying_power/orders/positions/run_result）で `chart` を含まないため、画面に出る Chart は必ず
-per-instrument 窓＝孤児。
+base dock は3枚（buying_power/orders/positions）で `chart` を含まないため（startup は ADR-0026・run_result は
+ADR-0037 で退役）、画面に出る Chart は必ず per-instrument 窓＝孤児。
 
 ## 直し方（採用）と不採用案
 

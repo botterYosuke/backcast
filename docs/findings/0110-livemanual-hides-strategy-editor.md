@@ -105,6 +105,8 @@ footer/Settings で Replay⇄LiveManual⇄LiveAuto を切替 → LiveManual で 
 
 ## 7. 第2スライス — LiveManual で Run Result タイルも非表示（#138 REOPEN・2026-06-25・AFK RED→GREEN）
 
+> **⚠ SUPERSEDED（2026-06-27・ADR-0037 / findings 0125）**: 本 §7 の `DriveRunResult`（run_result dock tile を LiveManual で `SetActive(false)` する絶対トグル）は **退役**した。#172 で run_result は dock plane から screen-anchored ポップアップへ cutover され、tile 自体が無くなったため `DriveRunResult` method ＋ call-site は削除された。**anti-stale-LiveManual の *契約* は失われず**、popup の live hasContent 述語 `(HasLifecycle || HasTelemetry) && DisplayMode == LiveAuto` に移送されて保持される（sticky フラグ §7.3②/findings 0125 F4 の罠を content gate で扱う）。RRT-06/07/08（dock tile 可視を pin する gate）は #172 で popup-content-derive 用の新 probe へ置換。本 §7 は履歴として残す。正本: ADR-0037 / findings 0125。
+
 第1スライス（§6）は front-plane の Strategy Editor authoring 表面を隠した。REOPEN で owner が `/grill-with-docs`（2026-06-25・HITL）により「**Run Result（back-plane base/dock タイル）も同じ理由で LiveManual では空**」を確定し、その対称拡張を実装した。
 
 ### 7.0 要件（owner 確定・#138 REOPEN コメント正本）

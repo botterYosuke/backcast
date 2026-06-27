@@ -183,3 +183,29 @@ plane routing 保持・`IsCoreKind` は ADR-0024 で inert）。`chart`（minSiz
 - 受容（非 Medium）: ホバー詳細 4 本を data-change 毎に eager 構築（card は通常非表示）＝退役 dock tile と同じ
   per-change コスト・gated（per-frame ではない）・bar を純 chrome に保つため domain 結合を増やさず eager 維持。
   アイコン RT リグ（4 cam/RT/primitive）は D7 owner-locked 設計（実 art 待ち）＝OnDestroy で RT release・once-per-Build。
+
+## 姉妹 #172 マージ調停（2026-06-27・origin/main pull）
+
+#172/#173（run_result→screen-anchored popup・ADR-0037/findings 0125）が origin/main に着地。**両スライスは厳密に相補**＝
+#172 が run_result を、#178 が buying_power/orders/positions を退役 → 合算で **全 base singleton 退役・dock=chart のみ**。
+merge は 11 conflict（共有 seam）。調停（end state = dock=chart のみ・`IsCoreKind=false`・`BaseDockWindowIds` 空・base group 不形成）:
+- **`FloatingWindowCatalog`**: 両者の退役を合流＝KIND_RUN_RESULT(#172)＋KIND_BUYING_POWER/ORDERS/POSITIONS(#178) const＋spec を**全削除**。dock kind は `chart` のみ。
+- **`DockShape`**: `IsDockKind = (kind==KIND_CHART)` のみ。`IsCoreKind=>false`（#172 の空集合化を採用）。
+- **`BackcastWorkspaceRoot`**: `BaseDockWindowIds = Array.Empty<string>()`（全退役）→ `SpawnBaseDockWindows`/`FormFactoryBaseGroup`
+  は **no-op**（loop 0 回・`FormGroup([])`→null）＝ADR-0038 §6「factory base group 退役」を**空列挙で達成**（メソッド本体は残置・
+  vestigial）。`BuildDockContent` は chart のみ。`_runResultPopup`(#172)＋`_accountBar`(#178) の両 chrome wiring・両 `ApplyTheme`・
+  PushReplayTiles の empty 分岐（popup hide ＋ bar `PushAccountBarEmpty`）を合流。
+- **テストフィクスチャの二重退役**: #178 は退役 3 kind を `run_result` へ寄せたが #172 が run_result も退役 → merge 後は
+  **kind-agnostic fixture（merge/swap/drag/group・~60 箇所）を front-plane `KIND_ORDER`（280×180・両退役を生存・geometry-neutral）**へ、
+  **dock-plane 限定 fixture（S17/S18/S30）を唯一の生存 dock kind `KIND_CHART`（サイズ bump・S18 は 3 chart 窓 round-trip・S30 は
+  cross-plane split の dock 側を chart）**へ再寄せ。S12 は `{chart}` のみ＋S12d（退役 5 kind 非解決）。
+- **数値 base-count assertion**（kind 名を含まず grep に出ない）も掃いた: ScenarioStartup S13→`BaseDockWindowIds.Length==0`＋
+  `IsDockKind` で dock=chart 証明、S14 非空虚 witness を `chart` へ、ChartPlacement CP-S4-01 を「退役 id が spawn されない」へ反転、
+  FloatingWindowResize の `run_result` fixture→`order`、各 PASS 要約文字列を「dock=chart のみ」へ。
+- **ReplayRunResultTileE2ERunner** は #172 が dock-tile→popup モデルに全面書換（RRT-06 が LiveManual hide→LiveAuto-scoped＋× latch）。
+  #178 の RRT-06 sibling 変更は旧モデル用ゆえ superseded → #172 版を全採用。
+- compile-only `error CS` 0。全 affected runner（AccountSummaryBar / FloatingWindow / ScenarioStartup / ChartPlacement / NBHAKO /
+  ReplayRunResultTile / FloatingWindowResize）を merge 後に再走し GREEN を確認。CONTEXT は #172 の run-result-popup 項と #178 の
+  アカウントサマリーバー項・chrome z-order（bar=550）が additive 共存。
+- **教訓（skill 反映済）**: sibling 並行退役で「移行先 kind 自体が消える」二重退役・`KIND_*` を含まぬ数値 base-count assertion の
+  grep 漏れ。`grep -nE "expected [0-9]|Length [!=]= [0-9]|[0-9] base"` を全 runner＋PASS 要約に走らせて N→N-1 を先に掃く。

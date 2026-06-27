@@ -9,10 +9,10 @@
 // Default() ships:
 //   * `strategy_editor` and `order` — the GENUINE TTWR floating windows (findings 0008 §0/§1).
 //   * #99 Slice 2 / ADR-0017 / findings 0075 §2 — `chart` / `buying_power` / `orders` /
-//     `positions` / `run_result` / `startup`. The Hakoniwa surface is being ported FROM
-//     split-grid tiles TO the floating-window seam (ADR-0017 Decision 1), so the former tile
-//     KINDS land here. `chart` is MULTI-INSTANCE (ids "chart:<instrument-id>" share this one
-//     kind, same shape as `strategy_editor:<region>`); the other 5 are conceptually singletons
+//     `positions` (`run_result` retired by ADR-0037, `startup` by ADR-0026). The Hakoniwa surface
+//     was ported FROM split-grid tiles TO the floating-window seam (ADR-0017 Decision 1), so the
+//     former tile KINDS land here. `chart` is MULTI-INSTANCE (ids "chart:<instrument-id>" share this
+//     one kind, same shape as `strategy_editor:<region>`); the other 3 are conceptually singletons
 //     (one BuyingPower etc.). The catalog only maps kind -> spec; instance identity is the
 //     document's job. Per-kind accents come from PlayerColors so the dock cluster stays
 //     visually distinguishable without inline literals (findings 0020).
@@ -29,15 +29,13 @@ public class FloatingWindowCatalog
     // `Hakoniwa` (the dock cluster). Names preserve the existing tile ids so an old persisted
     // doc that mentions e.g. "orders" is forward-compatible when read as a floating-window kind.
     public const string KIND_CHART = "chart";
-    public const string KIND_RUN_RESULT = "run_result";
-    // KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS ("buying_power"/"orders"/"positions") RETIRED —
-    // ADR-0038 (#174-178): the 3 base singletons are replaced by the screen-anchored account summary bar
-    // + hover cards. Dropping them from Default() is what makes a saved "buying_power"/"orders"/"positions"
-    // window skip on restore (catalog TryGet=false → spawn skipped, layout entry kept — forward-compat,
-    // same discipline as the retired "startup"). KIND_RUN_RESULT is retired separately by sister #172.
-    // KIND_STARTUP ("startup") RETIRED — ADR-0026: Scenario Startup moved to the Settings modal's
-    // Scenario section; the dock no longer hosts a startup window. A pre-ADR-0026 saved layout that
-    // names "startup" is forward-compat: TryGet("startup")=false → spawn skipped, layout entry kept.
+    // ALL former base singleton kinds are RETIRED, leaving `chart` as the only dock kind:
+    //   * KIND_STARTUP ("startup") — ADR-0026: Scenario Startup → Settings modal.
+    //   * KIND_RUN_RESULT ("run_result") — ADR-0037 (findings 0125 D4): → screen-anchored RunResultPopup.
+    //   * KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS — ADR-0038 (#174-178, findings 0126): → the
+    //     account summary bar + hover cards.
+    // All are forward-compat: a pre-retirement saved layout naming any of these window ids gets
+    // TryGet=false → spawn skipped, layout entry kept (forward-evolution discipline, findings 0008 §3).
 
     readonly Dictionary<string, FloatingWindowSpec> _specs;
 
@@ -59,10 +57,10 @@ public class FloatingWindowCatalog
     public bool Contains(string kind) => !string.IsNullOrEmpty(kind) && _specs.ContainsKey(kind);
 
     // The default catalog: the 2 floating-window seam kinds (strategy_editor / order) + the
-    // 6 #99 dock kinds (chart / buying_power / orders / positions / run_result / startup) that
-    // replace the retired Hakoniwa split-grid tile system (ADR-0017). Per-kind accents come from
-    // the theme PlayerColors palette (findings 0020) so the cluster stays distinguishable
-    // without inline literals; PlayerColors cycles modulo 8, so all 8 slots are used distinctly.
+    // #99 dock kinds (chart / buying_power / orders / positions; startup retired by ADR-0026,
+    // run_result by ADR-0037) that replaced the Hakoniwa split-grid tile system (ADR-0017). Per-kind
+    // accents come from the theme PlayerColors palette (findings 0020) so the cluster stays
+    // distinguishable without inline literals; PlayerColors cycles modulo 8.
     // closeable=false on the dock kinds: they are WORKSPACE-OWNED (the View menu / mode poll
     // governs visibility), so an in-title-bar X is suppressed — the user does not close them
     // accidentally and lose them (the strategy_editor / order frames keep their X as before).
@@ -86,15 +84,10 @@ public class FloatingWindowCatalog
                 KIND_CHART, "Chart",
                 defaultSize: new Vector2(520f, 360f), minSize: new Vector2(280f, 200f),
                 accent: players.Get(1), closeable: false),
-            // KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS specs RETIRED — ADR-0038 (#174-178):
-            // replaced by the account summary bar + hover cards. Absence from Default() is the forward-
-            // compat skip for old saved layouts that still name those window ids.
-            new FloatingWindowSpec(
-                KIND_RUN_RESULT, "Run Result",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(6), closeable: false),
-            // KIND_STARTUP spec RETIRED — ADR-0026 (Scenario Startup → Settings modal). Dropping it from
-            // Default() is what makes a saved "startup" window skip on restore (catalog TryGet=false).
+            // ALL base singleton specs RETIRED — startup (ADR-0026), run_result (ADR-0037 → RunResultPopup),
+            // buying_power/orders/positions (ADR-0038 → account summary bar). Dropping a kind from Default()
+            // is what makes a saved window of that kind skip on restore (catalog TryGet=false) while
+            // LayoutStore keeps the entry — forward-compat without migration. `chart` is the only dock kind.
         });
     }
 }

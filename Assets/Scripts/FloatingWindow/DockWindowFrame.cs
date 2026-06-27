@@ -2,8 +2,9 @@
 //
 // The SINGLE source of the dock-kind floating-window FRAME (background + title bar + title text +
 // body), shared by every dock window the BackcastWorkspaceRoot spawns: chart / buying_power /
-// orders / positions / run_result / startup. ONE frame builder so an accent tweak or title-bar
-// height change can't make the 6 dock kinds diverge — exactly the discipline
+// orders / positions (startup retired by ADR-0026, run_result by ADR-0037 → screen-anchored popup).
+// ONE frame builder so an accent tweak or title-bar height change can't make the dock kinds diverge —
+// exactly the discipline
 // StrategyEditorWindowFrame established for the editor (findings 0025 §8) and
 // OrderTicketWindowFrame for the Order ticket. Title color is the SPEC ACCENT (PlayerColors,
 // findings 0020); body color follows the Hakoniwa panel surface so the dock cluster reads as

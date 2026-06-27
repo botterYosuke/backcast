@@ -38,19 +38,17 @@ public static class DockShape
     // predicate that routes a kind to its depth plane: BackcastWorkspaceRoot uses it on layout
     // restore, and the AFK gate uses it to prove the round-trip plane routing — so the two cannot
     // drift. Pure (the catalog consts are compile-time strings) so probes drive it headlessly.
-    // ADR-0026: startup is no longer a dock kind (moved to the Settings modal). ADR-0038 (#174-178):
-    // buying_power / orders / positions retired to the account summary bar. The dock plane is now
-    // chart + run_result (run_result retired separately by sister #172 → eventually chart only).
+    // ADR-0026: startup → Settings modal. ADR-0037: run_result → screen-anchored RunResultPopup (findings
+    // 0125). ADR-0038 (#174-178): buying_power / orders / positions → account summary bar (findings 0126).
+    // With all 4 base singletons retired, the dock plane is now `chart` ONLY (multi-instance, universe-driven).
     public static bool IsDockKind(string kind) =>
-        kind == FloatingWindowCatalog.KIND_CHART ||
-        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
+        kind == FloatingWindowCatalog.KIND_CHART;
 
     // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kind(s). A group containing AT LEAST
-    // ONE visible/live core is promoted to a Hakoniwa group — translate-banned, swap-only, core members
-    // are detach-immune (NOTE: ADR-0024 §1 since RETIRED the Hakoniwa special, so IsCoreKind now only
-    // feeds legacy/diagnostic paths). ADR-0026 retires the `startup` dock window, so the core set
-    // reduces to {run_result} (a consequence of the placement supersession — ADR-0019 itself stays
-    // immutable; recorded in findings 0102). run_result remains the factory group's promoting core.
-    public static bool IsCoreKind(string kind) =>
-        kind == FloatingWindowCatalog.KIND_RUN_RESULT;
+    // ONE visible/live core was once promoted to a Hakoniwa group (translate-banned, swap-only). ADR-0024
+    // §1 RETIRED the Hakoniwa special (all groups drag identically), so IsCoreKind had no production
+    // consumer; ADR-0026 retired `startup` and ADR-0037 cuts `run_result` over to a popup — leaving NO
+    // dock core kind. The set is now EMPTY (dead-code simplify — findings 0125 F2/D4). Kept as a stable
+    // predicate (always false) so any lingering legacy/diagnostic caller degrades gracefully.
+    public static bool IsCoreKind(string kind) => false;
 }

@@ -223,7 +223,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     SettingsAppearanceSegmentView _settingsAppearanceView;   // ADR-0028: Dark/Light theme switch
     SettingsVenueSectionView _settingsVenueView;   // #128: venue connect/disconnect, re-homed from the menu
     SettingsDataSectionView _settingsDataView;     // #137 S4: DuckDB root editor (os.environ injection)
-    // #171 (ADR-0037): pure policy seam — decides when a 単発アクション section (Venue/Mode/Theme) auto-closes
+    // #171 (ADR-0039): pure policy seam — decides when a 単発アクション section (Venue/Mode/Theme) auto-closes
     // the modal on CONFIRMED success (sync at click / async on the latched-goal poll). Failure/cancel/no-op/
     // auto-replay never close. Host wires it at OnFooterMode / ApplyAppearance / OnVenueConnect/Disconnect and
     // feeds the confirming poll in DriveFooter.
@@ -685,7 +685,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         //   Mode     → SettingsModeSegmentView on _footerMode (OnFooterMode switch path reused verbatim)
         //   Venue    → SettingsVenueSectionView on _venueMenu (OnVenueConnect/Disconnect reused verbatim)
         _settings = new SettingsModalController();
-        _settingsAutoClose = new SettingsAutoCloseController();   // #171 (ADR-0037): single-action auto-close policy
+        _settingsAutoClose = new SettingsAutoCloseController();   // #171 (ADR-0039): single-action auto-close policy
         var settingsGo = new GameObject("SettingsModalOverlay");
         settingsGo.transform.SetParent(transform, false);
         _settingsOverlay = settingsGo.AddComponent<SettingsModalOverlay>();
@@ -886,7 +886,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // WindowChromeApplier subscription) re-applies — the switch transforms the running workspace in place.
     void ApplyAppearance(Appearance appearance)
     {
-        // #171 (ADR-0037): 単発アクション auto-close. Capture whether this is a real change BEFORE applying —
+        // #171 (ADR-0039): 単発アクション auto-close. Capture whether this is a real change BEFORE applying —
         // the theme apply is synchronous and never fails, so a real change closes Settings immediately while a
         // no-op (re-selecting the active theme) leaves it open ("成功"="実際に切り替わったとき" だけ).
         bool changed = ThemeService.Current.appearance != appearance;
@@ -1238,7 +1238,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         => Path.Combine(Path.GetTempPath(), "backcast_scratch", "untitled_strategy.py");
 
     // The screen-fixed authoring overlay (TWO buttons: [+] appends an empty Python cell, [m] appends a
-    // markdown `mo.md(...)` cell — #179 findings 0126). Owner override (2026-06-19): anchored
+    // markdown `mo.md(...)` cell — #179 findings 0128). Owner override (2026-06-19): anchored
     // BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate divergence from
     // TTWR/marimo parity at the owner's request. Its own ScreenSpaceOverlay canvas keeps it
     // screen-fixed (it does NOT pan with the canvas) and above Content but below the secret modal
@@ -1258,7 +1258,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         canvas.sortingOrder = 200;   // above the scene canvas (menu/footer @0), below the secret modal
 
         // [+] Add Cell (bottom-right; y = footer bar 40px + 16px gap) and, one slot ABOVE it, the
-        // #179 (findings 0126) [m] Add Markdown button. Both live in THIS overlay so they share the
+        // #179 (findings 0128) [m] Add Markdown button. Both live in THIS overlay so they share the
         // LiveManual hide (DriveStrategyEditor toggles _addCellOverlay — one switch, both buttons).
         BuildOverlayButton(overlayGo, "AddCellButton", "+",
             new Color(0.2314f, 0.7686f, 0.5961f, 0.95f),   // #3bc498 aurora-teal "Go" (space re-skin 2026-06-20)
@@ -1296,7 +1296,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     }
 
     void OnAddCell() => _coordinator?.AddCell();
-    void OnAddMarkdownCell() => _coordinator?.AddMarkdownCell();   // #179 (findings 0126)
+    void OnAddMarkdownCell() => _coordinator?.AddMarkdownCell();   // #179 (findings 0128)
 
     // #172/#173 (ADR-0037 / findings 0125 D1/D5/D7): build the screen-anchored Run Result popup and
     // Build the reused LivePanelTileView (FormatRunResult) into its body. The popup lives directly under
@@ -2156,7 +2156,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_settings.IsOpen != _settingsOpenPrev)
         {
             _settingsOverlay.SetVisible(_settings.IsOpen);
-            // #171 (ADR-0037): any close (manual [x]/ESC, or the auto-close itself) drops a pending async latch so
+            // #171 (ADR-0039): any close (manual [x]/ESC, or the auto-close itself) drops a pending async latch so
             // an action abandoned mid-flight can't auto-close a later re-open (the auto-close path already
             // disarmed via OnPoll, so this is a no-op there). The secret-modal connect keeps Settings OPEN behind
             // the secret overlay (no transition here), so its venue-live latch correctly survives password entry.
@@ -2194,7 +2194,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _host.Modal.Cancel();
         _host.Coord.SetSecretModalOpen(false);
         _secretModalOpenPrev = false;
-        // #171 (ADR-0037): cancelling the second-password prompt aborts the venue connect — drop the venue-live
+        // #171 (ADR-0039): cancelling the second-password prompt aborts the venue connect — drop the venue-live
         // auto-close latch so Settings stays open (パスワード取消は閉じない・z-order 契約は不変). No-op if no venue
         // goal is pending (NotifyFailed only clears a latched goal).
         _settingsAutoClose?.NotifyFailed();
@@ -2409,7 +2409,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (_footer == null || _footerMode == null) return;
 
-        // #171 (ADR-0037): a mode rejection releases the VM lock AND drops the auto-close latch — the Live
+        // #171 (ADR-0039): a mode rejection releases the VM lock AND drops the auto-close latch — the Live
         // target never confirmed, so Settings stays open with the error visible (失敗は閉じない).
         if (_footerModeRejected) { _footerModeRejected = false; _footerMode.NotifyModeResult(false); _settingsAutoClose?.NotifyFailed(); }
 
@@ -2423,11 +2423,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // clear the transient "connecting…" on success (the badge alone shows Connected); surface
             // the reason on failure.
             _menuBarView?.ShowMessage(lr == 2 ? "login failed: " + _venueLoginError : null);
-            // #171 (ADR-0037): a login failure drops the venue-live auto-close latch — venue never goes live,
+            // #171 (ADR-0039): a login failure drops the venue-live auto-close latch — venue never goes live,
             // so Settings stays open with the failure message (success closes on the venue-live poll instead).
             if (lr == 2) _settingsAutoClose?.NotifyFailed();
         }
-        // #171 (ADR-0037): a logout failure drops the venue-down latch — Settings stays open with the error.
+        // #171 (ADR-0039): a logout failure drops the venue-down latch — Settings stays open with the error.
         if (_venueLogoutFailed) { _venueLogoutFailed = false; _menuBarView?.ShowMessage("logout failed (write in flight?)"); _settingsAutoClose?.NotifyFailed(); }
 
         string st = _host.LatestStateJson;
@@ -2472,11 +2472,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (!_host.TeardownComplete && !_host.LiveRpcInFlight && _footerMode.ShouldAutoReplay)
         {
             _footerMode.ConsumeAutoReplay();
-            // #171 (ADR-0037): a venue drop yanked a pending LIVE-mode switch back to Replay → that Live target is
+            // #171 (ADR-0039): a venue drop yanked a pending LIVE-mode switch back to Replay → that Live target is
             // unreachable, so drop ONLY a live-mode latch (auto-replay 巻き込みは閉じない). This must NOT disarm a
             // Goal.VenueDown (the same drop FULFILLS a user-initiated Disconnect-from-Live → its 非live化 poll must
             // still close) nor a Replay-target Goal.Mode (the fallback reaches Replay = its target) — hence the
-            // surgical NotifyLiveModeAbandoned, not a blanket NotifyFailed (findings 0125 review fix).
+            // surgical NotifyLiveModeAbandoned, not a blanket NotifyFailed (findings 0127 review fix).
             _settingsAutoClose?.NotifyLiveModeAbandoned();
             if (_footerAuto.HasActiveRun)
                 _host.StopLiveThenSetMode(_footerAuto.ActiveRunId, FooterModeViewModel.Replay, ok => { if (!ok) _footerModeRejected = true; });
@@ -2484,7 +2484,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 _host.SetExecutionMode(FooterModeViewModel.Replay, ok => { if (!ok) _footerModeRejected = true; });
         }
 
-        // #171 (ADR-0037): single-action auto-close — feed the fresh poll-derived state to the policy seam. It
+        // #171 (ADR-0039): single-action auto-close — feed the fresh poll-derived state to the policy seam. It
         // returns true ONLY when the latched goal is reached EXACTLY (Live mode confirmed + venue live / venue
         // live化 / venue 非live化); an unrelated poll, a no-op, or a dropped latch never closes. Only checked while
         // Settings is open — a manual close disarms the latch (DriveSettings) so an abandoned action can't
@@ -2531,7 +2531,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             case FooterModeRequestKind.Ignore:
                 break;
         }
-        // #171 (ADR-0037): single-action auto-close. Replay (SwitchImmediate) is synchronous → close now; a Live
+        // #171 (ADR-0039): single-action auto-close. Replay (SwitchImmediate) is synchronous → close now; a Live
         // target (SwitchLockedLive / StopRunThenSwitch) latches the goal and closes on the confirming poll
         // (DriveFooter); Ignore (no-op) / BlockedVenueNotLive stay open. A rejection later drops the latch via
         // NotifyFailed (DriveFooter). The decision lives in the pure seam — host only acts on it.
@@ -2903,7 +2903,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint,
             (ok, ec) => { _venueLoginError = ec; _venueLoginResult = ok ? 1 : 2; });
         _menuBarView?.ShowMessage(venue == "MOCK" ? "connecting MOCK…" : "login (enter credentials)…");
-        // #171 (ADR-0037): latch the venue-live goal. Closes on the poll that turns venue_state live — for a
+        // #171 (ADR-0039): latch the venue-live goal. Closes on the poll that turns venue_state live — for a
         // second-password connect that is AFTER the secret modal login completes (the goal survives across the
         // secret interaction; a password cancel / login failure never reaches venue-live and drops the latch
         // via NotifyFailed in DriveFooter).
@@ -2926,7 +2926,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         else
             _host.VenueLogout(ok => { if (!ok) _venueLogoutFailed = true; });
         _menuBarView?.ShowMessage("disconnecting…");
-        // #171 (ADR-0037): latch the venue-down goal — closes on the poll that turns venue_state 非 live. A
+        // #171 (ADR-0039): latch the venue-down goal — closes on the poll that turns venue_state 非 live. A
         // logout failure drops the latch via NotifyFailed in DriveFooter.
         _settingsAutoClose?.ArmVenueDisconnect();
     }

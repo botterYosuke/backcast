@@ -55,10 +55,10 @@ public static class SettingsDialogE2ERunner
                       "(SETTINGS-07) / venue section + menu Venue retired (SETTINGS-08) / input-field border+placeholder+" +
                       "muted label (SETTINGS-09) / 2-tab 実行↔外観 switch (SETTINGS-10) / card面+role解決 (SETTINGS-11) / " +
                       "LIVE Dark↔Light re-theme while open: close btn + venue + mode (SETTINGS-13) / " +
-                      "auto-close (ADR-0037): sync theme/Replay + no-op stay (SETTINGS-14), async mode confirm poll " +
+                      "auto-close (ADR-0039): sync theme/Replay + no-op stay (SETTINGS-14), async mode confirm poll " +
                       "(SETTINGS-15), mode reject + auto-replay stay open (SETTINGS-16), venue connect/disconnect " +
                       "confirm poll (SETTINGS-17), venue fail/cancel + idle stay open (SETTINGS-18) " +
-                      "— ADR-0026/0037, findings 0102/0107/0125");
+                      "— ADR-0026/0039, findings 0102/0107/0127");
         else
             Debug.LogError("[E2E SETTINGS DIALOG FAIL]\n  - " + string.Join("\n  - ", _fail));
 
@@ -581,7 +581,7 @@ public static class SettingsDialogE2ERunner
         }
     }
 
-    // ── #171 (ADR-0037 / findings 0125): single-action auto-close policy seam. The SettingsAutoCloseController
+    // ── #171 (ADR-0039 / findings 0127): single-action auto-close policy seam. The SettingsAutoCloseController
     //    is pure C# (no UnityEngine), so the AFK probe drives every branch headlessly — no GameObjects, no
     //    Python. These sections ARE the headless「全分岐」driver the ADR requires (host 直書きにしない). ──
 
@@ -655,7 +655,7 @@ public static class SettingsDialogE2ERunner
     //   the auto-replay failure, NOT success, so it must NOT close — and the host's surgical
     //   NotifyLiveModeAbandoned drops the live-mode latch (but NOT a Replay-target one — see (c)).
     //   RED litmus: make NotifyFailed a no-op → the reject case closes; drop the `venueLive` guard for live
-    //   targets in OnPoll → the auto-replay case closes (the exact 巻き込み bug ADR-0037 forbids); make
+    //   targets in OnPoll → the auto-replay case closes (the exact 巻き込み bug ADR-0039 forbids); make
     //   NotifyLiveModeAbandoned disarm unconditionally → (c) fails (a Replay-target switch would never close).
     static string Section16_AutoCloseModeRejectAndAutoReplayStayOpen()
     {
@@ -721,7 +721,7 @@ public static class SettingsDialogE2ERunner
             return "disconnect did not close on the venue-非live poll";
         if (q.IsWaiting) return "disconnect latch not cleared after close";
 
-        // Disconnect FROM A LIVE MODE (findings 0125 review fix): disconnecting while in LiveManual/LiveAuto means
+        // Disconnect FROM A LIVE MODE (findings 0127 review fix): disconnecting while in LiveManual/LiveAuto means
         // the venue-drop poll ALSO fires the host's auto-replay branch (NotifyLiveModeAbandoned) — but the same
         // drop FULFILLS the user's Disconnect, so the venue-down latch must SURVIVE the surgical disarm and still
         // close on the 非live poll. (A blanket NotifyFailed here would eat the VenueDown goal → disconnect never

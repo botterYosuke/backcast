@@ -1,4 +1,4 @@
-// SettingsAutoCloseController.cs — issue #171 (ADR-0037 / findings 0125): auto-close the Settings modal
+// SettingsAutoCloseController.cs — issue #171 (ADR-0039 / findings 0127): auto-close the Settings modal
 // when a SINGLE-ACTION section's operation confirms success.
 //
 // ADR-0026's Settings 集約口 hosts 5 sections in 2 tabs. The 単発アクション系 sections — Venue 接続/切断,
@@ -6,17 +6,17 @@
 // CONFIRMS, the chrome should get out of the way. The フォーム系 sections (Scenario Startup / Data) are 据え置き
 // (edit→Save As, no single success boundary), so they never route through here.
 //
-// This is the PURE C# policy seam ADR-0037 requires (host 直書きにしない): it OWNS the decision of whether a
+// This is the PURE C# policy seam ADR-0039 requires (host 直書きにしない): it OWNS the decision of whether a
 // given action attempt + resulting state is a confirmed success worth closing on, so the AFK probe can drive
 // every branch headlessly (mirrors SettingsModalController / SecretModalController — no UnityEngine).
 //
-// 「確定成功」splits sync vs async (findings 0125 D2):
+// 「確定成功」splits sync vs async (findings 0127 D2):
 //   * SYNC   — 外観テーマ, モード Replay (engine can't reject = SwitchImmediate) → close at click (CloseNow).
 //   * ASYNC  — モード Manual/Auto (SwitchLockedLive / StopRunThenSwitch lock→poll), Venue Connect (venue_state
 //              live 化した poll), Venue Disconnect (非 live 化した poll) → LATCH this click's goal and close only
 //              on the poll that reaches it EXACTLY (Wait).
 //
-// 失敗・拒否・取消・no-op・auto-replay 巻き込み は閉じない (findings 0125 D3): NotifyFailed() drops the latched
+// 失敗・拒否・取消・no-op・auto-replay 巻き込み は閉じない (findings 0127 D3): NotifyFailed() drops the latched
 // goal so a later confirming poll can't fire; a no-op returns Stay; and a Live mode goal additionally requires the
 // venue to be live at the confirming poll, so a venue-drop→auto-replay poll (which momentarily shows
 // DisplayMode==target with the lock released) is NOT mistaken for success.
@@ -50,7 +50,7 @@ public sealed class SettingsAutoCloseController
     void Disarm() { _goal = Goal.None; _goalMode = null; }
 
     // ── 外観テーマ (sync): SetTheme/Save never fail, so close iff the theme actually CHANGED. A no-op
-    //    (re-selecting the active theme) returns Stay — "成功" = "実際に切り替わったとき" だけ (findings 0125 D3). ──
+    //    (re-selecting the active theme) returns Stay — "成功" = "実際に切り替わったとき" だけ (findings 0127 D3). ──
     public SettingsCloseDecision OnThemeSelected(bool changed)
     {
         if (!changed) return SettingsCloseDecision.Stay;
@@ -87,11 +87,11 @@ public sealed class SettingsAutoCloseController
     public void ArmVenueDisconnect() { _goal = Goal.VenueDown; _goalMode = null; }
 
     // ── 失敗・拒否・取消: drop the latched goal so no later poll can close. The lock release + error display
-    //    keep Settings open so the user can see the failure and retry (findings 0125 D3). Also called when the
+    //    keep Settings open so the user can see the failure and retry (findings 0127 D3). Also called when the
     //    user manually closes Settings mid-flight so an abandoned latch can't auto-close a later re-open. ──
     public void NotifyFailed() => Disarm();
 
-    // ── auto-replay 巻き込み (findings 0125 D3, review fix): a venue drop that yanks a pending LIVE-mode switch
+    // ── auto-replay 巻き込み (findings 0127 D3, review fix): a venue drop that yanks a pending LIVE-mode switch
     //    back to Replay makes that Live target unreachable → drop the latch. This is SURGICAL: a Goal.VenueDown
     //    is FULFILLED by the same drop (disconnect succeeded) and a Replay-target Goal.Mode still reaches Replay
     //    via the fallback — NEITHER must be disarmed here, so this only drops a live-mode goal. (The OnPoll
@@ -113,7 +113,7 @@ public sealed class SettingsAutoCloseController
                 // venue must ALSO be live: a venue-drop poll momentarily shows DisplayMode==target with the lock
                 // cleared (FooterModeViewModel.ApplyPoll releases it on polled==PendingTarget) while VenueLive is
                 // false and ShouldAutoReplay arms — that is the auto-replay failure, not success, so it must NOT
-                // close (findings 0125 D3 auto-replay 巻き込み).
+                // close (findings 0127 D3 auto-replay 巻き込み).
                 if (!modeLocked && displayMode == _goalMode && (!GoalModeIsLive || venueLive))
                 {
                     Disarm();

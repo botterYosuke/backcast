@@ -81,7 +81,7 @@ public sealed class NotebookCellCoordinator
     // region_001 shell first (new cascade position), else spawns region_002+. Returns the new cell.
     public Cell AddCell() => AddCell("");
 
-    // #179 (findings 0126): the shared `import marimo as mo` cell body that an [m] markdown cell
+    // #179 (findings 0128): the shared `import marimo as mo` cell body that an [m] markdown cell
     // depends on, and the `mo.md(...)` seed the [m] button lands. marimo has no markdown CELL TYPE —
     // a markdown cell is a normal cell whose body is `mo.md(r"""…""")` (owner: bare `mo` for本家 parity,
     // NOT a cell-local `_mo`), so it REFS `mo` and needs a sibling cell that DEFS `mo`. The seed is
@@ -95,7 +95,7 @@ public sealed class NotebookCellCoordinator
         "mo.md(r\"\"\"\n# 見出し\n\n本文をここに書く。\n\"\"\")";
 
     // ---- [m] : append a markdown cell (mo.md template), ensuring `import marimo as mo` exists ----
-    // #179 (findings 0126): the sibling of AddCell that seeds a MARKDOWN cell. It first guarantees a
+    // #179 (findings 0128): the sibling of AddCell that seeds a MARKDOWN cell. It first guarantees a
     // single shared `import marimo as mo` cell (idempotent — reuse if present, else add ONE) so the
     // bare-`mo` seed resolves, then appends the `mo.md(...)` cell exactly like AddCell (window + front +
     // ListMutated). The import cell is NOT bundled INTO the md cell on purpose: that would re-define
@@ -144,7 +144,7 @@ public sealed class NotebookCellCoordinator
     }
 
     // ---- [+] (overload) : append a new cell carrying `seedBody` and show its window ----
-    // #179 (findings 0126): the seeded form of AddCell, factored so AddMarkdownCell (and any future
+    // #179 (findings 0128): the seeded form of AddCell, factored so AddMarkdownCell (and any future
     // seeded-cell affordance) shares the window-lifecycle path. AddCell() is the seedBody="" case.
     public Cell AddCell(string seedBody)
     {

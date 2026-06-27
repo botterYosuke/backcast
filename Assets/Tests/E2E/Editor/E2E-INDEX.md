@@ -20,12 +20,12 @@
 >
 > #137 review fixes（findings 0107 追補）: **SettingsDialog** に SETTINGS-13（テーマ切替時の Settings 内ライブ再描画＝close ボタン/Venue 行/Mode セグメントの ApplyTheme 配線）追加。
 >
-> #171（ADR-0037・findings 0125）: 単発アクション auto-close——**SettingsDialog** に SETTINGS-14（同期テーマ/Replay 即クローズ＋no-op 据置）・
+> #171（ADR-0039・findings 0127）: 単発アクション auto-close——**SettingsDialog** に SETTINGS-14（同期テーマ/Replay 即クローズ＋no-op 据置）・
 > SETTINGS-15（非同期モード確定 poll クローズ）・SETTINGS-16（モード拒否＋auto-replay 巻き込みは開いたまま＝RED litmus 中核）・SETTINGS-17（Venue
 > Connect/Disconnect 確定 poll クローズ）・SETTINGS-18（Venue 失敗/取消/idle は開いたまま）追加。SETTINGS-19＝フォーム系は seam 非配線で対象外。
 > 判定は pure `SettingsAutoCloseController`。HITL SETTINGS-12 を自動クローズの実挙動確認まで拡張。
 >
-> #179（findings 0126）: `[m]` Add Markdown ボタン——**StrategyEditorNotebook** に STRATEGY-66（`[m]` が `mo.md` 種セル＋窓付き `import marimo as mo`
+> #179（findings 0128）: `[m]` Add Markdown ボタン——**StrategyEditorNotebook** に STRATEGY-66（`[m]` が `mo.md` 種セル＋窓付き `import marimo as mo`
 > セルを冪等に用意・[m]×2 で import 増えない・hardened `DefinesMoImport` が combined import 再利用＋markdown 本文の import 行を誤検出しない）追加。
 > runtime「素 mo が ▶ で NameError しない」半分は Python `test_notebook_markdown_cell.py`（同 `IncrementalNotebookSession` seam・import セル抜きで NameError＝RED litmus）。実画素 markdown レンダは HITL（STRATEGY-18）。
 

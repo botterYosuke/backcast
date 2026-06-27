@@ -9,7 +9,7 @@
 //
 // When a Connect requires a second password, the host raises the secret modal (sortingOrder 1000) which
 // draws OVER Settings (SETTINGS_SORT 900) — the z-order contract is UNCHANGED: while the password is being
-// entered Settings survives behind the secret modal (S1 z-order契約). What changed in #171 (ADR-0037, which
+// entered Settings survives behind the secret modal (S1 z-order契約). What changed in #171 (ADR-0039, which
 // partially supersedes ADR-0026's "送信後も開いたまま"): once login completes AND the venue goes live, the host
 // AUTO-CLOSES Settings (SettingsAutoCloseController arms a venue-live goal at OnVenueConnect and the confirming
 // venue_state-live poll closes the modal). A password cancel / login failure never reaches venue-live, so

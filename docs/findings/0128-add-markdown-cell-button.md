@@ -1,6 +1,6 @@
-# 0126 — [m] Add Markdown ボタン（マークダウンセルを spawn する・#179）
+# 0128 — [m] Add Markdown ボタン（マークダウンセルを spawn する・#179）
 
-**Issue**: #179（GitHub。findings 番号 0126 とは別物——issue#126 は ADR-0026 startup 退役で無関係）。
+**Issue**: #179（GitHub。findings 番号 0128 とは別物——issue#126 は ADR-0026 startup 退役で無関係）。
 **状態**: 設計凍結＋実装済み（grill-with-docs・2026-06-27）。レビュー待ち。
 **関連**: findings 0123（rich output サンプル・`text/markdown` 描画経路）/ findings 0075（Phase 6 rich output `{mimetype,data}` 契約・per-cell stale）/ findings 0124（種付き New `ObserveSeedBody`）/ ADR-0013（cell-as-floating-window）。
 **ADR は不要**: 容易に可逆（小さな additive ボタン）・marimo 本家忠実で驚きが小さい・トレードオフは本 finding に記録（3 条件のうち「hard to reverse」を欠く）。CONTEXT「マークダウンセル / [m] Add Markdown ボタン」項に glossary 化。

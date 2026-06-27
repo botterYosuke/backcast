@@ -1,6 +1,6 @@
-# findings 0125 — Settings の単発アクション系セクションを確定成功で自動クローズ
+# findings 0127 — Settings の単発アクション系セクションを確定成功で自動クローズ
 
-**方針: ADR-0037**（ADR-0026 の「Venue 送信後も開いたまま」を部分 supersede）。本 findings は設計の木の下位決定・
+**方針: ADR-0039**（ADR-0026 の「Venue 送信後も開いたまま」を部分 supersede）。本 findings は設計の木の下位決定・
 実装 seam・E2E gate を固定する。grill-with-docs（2026-06-27, owner HITL）。
 
 ## 依頼
@@ -51,7 +51,7 @@ Venue 接続の second password 入力中は secret modal(1000) が Settings(900
 
 ## docs 整合タスク（実装スライスで処理）
 
-- `SettingsVenueSectionView.cs` 先頭コメント「after submit Settings stays open」を ADR-0037 へ整合。
+- `SettingsVenueSectionView.cs` 先頭コメント「after submit Settings stays open」を ADR-0039 へ整合。
 - `SettingsDialogE2ERunner` SETTINGS-08／関連コメントの「Settings stays open」前提を更新。
 
 ## E2E gate（実装スライスで著す）
@@ -64,7 +64,7 @@ Venue 接続の second password 入力中は secret modal(1000) が Settings(900
 - no-op → **開いたまま**。
 - auto-replay 巻き込み → **開いたまま**。
 
-> 注: 採番は findings 0125 / ADR-0037（`ls docs/findings | sort` の次空き＝0125・ADR は 0037）。
+> 注: 採番は findings 0127 / ADR-0039（`ls docs/findings | sort` の次空き＝0127・ADR は 0039）。
 
 ## 実装着地（#171・2026-06-27）
 
@@ -72,7 +72,7 @@ Venue 接続の second password 入力中は secret modal(1000) が Settings(900
 
 ### 採用 seam — pure C# `SettingsAutoCloseController`（`Assets/Scripts/Live/SettingsAutoCloseController.cs`）
 `SettingsModalController` と同型の MonoBehaviour-free brain。**判定だけ**を持ち host は decision に従って `_settings.Close()` を呼ぶだけ
-（host 直書きにしない＝ADR-0037 の要件）。API:
+（host 直書きにしない＝ADR-0039 の要件）。API:
 - `OnThemeSelected(bool changed) → SettingsCloseDecision`：同期。変化あり＝`CloseNow`・無し（no-op）＝`Stay`。
 - `OnModeRequest(FooterModeRequestKind, target) → SettingsCloseDecision`：`SwitchImmediate`(Replay)＝`CloseNow`・`SwitchLockedLive`/
   `StopRunThenSwitch`＝`Wait`（`Goal.Mode` latch）・`Ignore`/`BlockedVenueNotLive`＝`Stay`。
@@ -97,7 +97,7 @@ Venue 接続の second password 入力中は secret modal(1000) が Settings(900
 
 ### docs 整合
 `SettingsVenueSectionView.cs` 先頭コメントの「after submit Settings stays open」を「z-order 契約は不変・login 完了＋venue live 化で
-auto-close」へ更新。`SettingsDialogE2ERunner.md` の HITL SETTINGS-12「送信後 Settings 残存」を ADR-0037 へ整合（入力中は z-order 不変・
+auto-close」へ更新。`SettingsDialogE2ERunner.md` の HITL SETTINGS-12「送信後 Settings 残存」を ADR-0039 へ整合（入力中は z-order 不変・
 確定後は auto-close）。
 
 ### E2E gate（`SettingsDialogE2ERunner` SETTINGS-14..18・rollup tag `[E2E SETTINGS-NN PASS]`）

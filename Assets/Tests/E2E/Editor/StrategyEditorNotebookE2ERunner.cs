@@ -187,7 +187,7 @@ public static class StrategyEditorNotebookE2ERunner
                       "firing the ▶ once per press (latch re-arms on KeyUp); plain Return stays a newline; the " +
                       "fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke(); single-line " +
                       "never swallows) " +
-                      "+ #179 [m] Add Markdown (STRATEGY-66 / findings 0126: AddMarkdownCell seeds a mo.md cell " +
+                      "+ #179 [m] Add Markdown (STRATEGY-66 / findings 0128: AddMarkdownCell seeds a mo.md cell " +
                       "+ ensures ONE windowed `import marimo as mo` cell; [m]×2 no duplicate import; hardened " +
                       "DefinesMoImport reuses a combined import + ignores the import line in markdown prose) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
@@ -1848,7 +1848,7 @@ public static class StrategyEditorNotebookE2ERunner
     //     shared `import marimo as mo` cell, BOTH windowed (cell↔window bijection — no windowless cell).
     //     The runtime "bare mo ▶ resolves without NameError" half is the Python gate
     //     (python/tests/test_notebook_markdown_cell.py, IncrementalNotebookSession autorun); this pins the
-    //     C# coordinator half the AC names ("import 冪等・種窓化" — findings 0126 §ゲート).
+    //     C# coordinator half the AC names ("import 冪等・種窓化" — findings 0128 §ゲート).
     //     Covers: STRATEGY-66 ([m] ensures ONE windowed import cell + seeds mo.md; [m]×2 no duplicate import;
     //             hardened DefinesMoImport reuses a combined import + ignores the import line in markdown prose)
     //     delete-the-production-logic litmus: drop EnsureMoImportCell() → no import cell → (a) RED; revert
@@ -1896,7 +1896,7 @@ public static class StrategyEditorNotebookE2ERunner
             return "S33: import cell is not windowed (a windowless cell would break CapturePositions — must use the windowed AddCell)";
 
         // (b) [m] pressed TWICE → a 2nd md cell, but the import cell stays ONE (a 2nd `import marimo as mo`
-        //     cell is a marimo MultipleDefinitionError — findings 0126 D2).
+        //     cell is a marimo MultipleDefinitionError — findings 0128 D2).
         var md2 = coord.AddMarkdownCell();
         if (md2 == null || ReferenceEquals(md2, md)) return "S33: 2nd AddMarkdownCell did not add a distinct md cell";
         if (CanonicalImports(nb) != 1) return "S33: [m] pressed twice duplicated the import cell (idempotency broken; got " + CanonicalImports(nb) + ")";
@@ -1919,7 +1919,7 @@ public static class StrategyEditorNotebookE2ERunner
         if (CanonicalImports(nProse) != 1)
             return "S33: the import line inside markdown prose falsely suppressed the real import (DefinesMoImport scanned string content — must skip mo.md cells)";
 
-        Debug.Log("[E2E STRATEGY-66 PASS] [m] Add Markdown: AddMarkdownCell seeds a mo.md cell + ensures EXACTLY ONE windowed `import marimo as mo` cell (cell↔window bijection); [m]×2 does not duplicate the import; hardened DefinesMoImport reuses a combined import (no duplicate def) and ignores the import line inside markdown prose (no false suppression). The runtime bare-mo-no-NameError half is the Python gate (test_notebook_markdown_cell.py / findings 0126 D3)");
+        Debug.Log("[E2E STRATEGY-66 PASS] [m] Add Markdown: AddMarkdownCell seeds a mo.md cell + ensures EXACTLY ONE windowed `import marimo as mo` cell (cell↔window bijection); [m]×2 does not duplicate the import; hardened DefinesMoImport reuses a combined import (no duplicate def) and ignores the import line inside markdown prose (no false suppression). The runtime bare-mo-no-NameError half is the Python gate (test_notebook_markdown_cell.py / findings 0128 D3)");
         return null;
     }
 

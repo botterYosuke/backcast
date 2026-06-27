@@ -1487,7 +1487,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 // DEFAULT right-anchor (max_history_len=1000 ring buffer stays readable at 6px). Mode
                 // can flip Replay↔Live at runtime; SetFitAllOnAutoScale is idempotent + re-anchors only
                 // on a real flip, so calling it every poll is cheap.
-                bool fitAll = _footerMode != null && !DockShape.IsLiveShape(_footerMode.DisplayMode);
+                bool fitAll = _footerMode != null && DockShape.ShouldFitChartToAll(_footerMode.DisplayMode);
                 foreach (var kv in _chartViews)
                 {
                     if (kv.Value == null) continue;

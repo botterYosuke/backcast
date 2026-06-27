@@ -19,6 +19,15 @@ public static class DockShape
     public static bool IsLiveShape(string displayMode) =>
         displayMode == FooterModeViewModel.LiveManual || displayMode == FooterModeViewModel.LiveAuto;
 
+    // #156 follow-up chart-fit policy: Replay charts fit the WHOLE cold-loaded series on auto_scale
+    // (ChartView.SetFitAllOnAutoScale), Live charts keep the DEFAULT 6px right-anchor so the recent
+    // ~90 bars of the max_history_len=1000 ring stay readable. Extracted here (pure, next to the
+    // mode classifier) so the mode→fit decision is gated independently of the poll loop:
+    // ChartFitAllE2ERunner FITALL-WIRING-05 pins it across all modes, so inverting this predicate
+    // (Live fits / Replay 6px) turns that gate RED — the regression litmus the poll's inline
+    // `!IsLiveShape` couldn't catch on its own.
+    public static bool ShouldFitChartToAll(string displayMode) => !IsLiveShape(displayMode);
+
     // True iff `id` belongs to the chart family (prefix `chart:`), i.e. the dynamic universe-driven
     // window family that the chart-window sync spawns/closes. Replaces HakoniwaBaseTiles.IsChartId.
     public static bool IsChartId(string id) => id != null && id.StartsWith(ChartIdPrefix);

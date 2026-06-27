@@ -93,23 +93,40 @@ public class ChartViewState
     //     more slots than bars; sizing by count would under-zoom and clip the oldest bars off the left
     //     edge. When the fit would fall below MIN_CELL_WIDTH_PX (more slots than pixels), the clamp pins
     //     MIN and the right-anchor below shows the most-recent plot_width slots (owner decision
-    //     2026-06-27: "MIN でクランプ＋右端寄せ").
+    //     2026-06-27: "MIN でクランプ＋右端寄せ"). When the whole series DOES fit, translation is pinned
+    //     EXACTLY on the first bar (not re-derived from a rounded visibleBars) so the oldest bar never
+    //     clips off the left edge — see the inline note (#156 follow-up float round-trip fix).
     public void ResetView(long first_bar_open_time_ms, long latest_bar_open_time_ms, float plot_width_px)
     {
         long basis = basis_ms ?? BASIS_MINUTE_MS;
         if (basis <= 0) basis = BASIS_MINUTE_MS;
+        auto_scale = true;
         if (fit_all_on_autoscale && latest_bar_open_time_ms > first_bar_open_time_ms)
         {
             // slots spanned inclusive of both ends = (last - first)/basis + 1. cell = plot / slots so the
             // window covers exactly [first .. last] in TIME (gaps included).
             double spanSlots = (double)(latest_bar_open_time_ms - first_bar_open_time_ms) / basis + 1.0;
-            cell_width_px = Mathf.Clamp(plot_width_px / (float)spanSlots, MIN_CELL_WIDTH_PX, MAX_CELL_WIDTH_PX);
+            float fit = plot_width_px / (float)spanSlots;
+            if (fit >= MIN_CELL_WIDTH_PX && fit <= MAX_CELL_WIDTH_PX)
+            {
+                // The whole series fits. Pin the left edge EXACTLY on the first bar instead of re-deriving
+                // translation from a rounded visibleBars: plot → cell_width(float32) → plot/cell_width
+                // round-trips through float32 and can push translation a few hundred ms PAST `first`, which
+                // the strict `open_time_ms < winStart` virtualization (ChartView.OnPopulateMesh) then drops
+                // — silently clipping the oldest bar off the left edge (~25% of spans; #156 follow-up).
+                cell_width_px = fit;
+                translation_ms = first_bar_open_time_ms;
+                return;
+            }
+            // fit < MIN → overflow (more slots than pixels): MIN-clamp + right-anchor the most-recent
+            // plot_width slots. fit > MAX → series too short to fill the plot even at MAX zoom: MAX +
+            // right-anchor so the latest bar stays at the edge. Both fall through to the right-anchor below.
+            cell_width_px = fit < MIN_CELL_WIDTH_PX ? MIN_CELL_WIDTH_PX : MAX_CELL_WIDTH_PX;
         }
         else
         {
             cell_width_px = DEFAULT_CELL_WIDTH_PX;
         }
-        auto_scale = true;
         // Right-anchor: the latest bar should sit at the right edge.
         float visibleBars = plot_width_px / cell_width_px;
         translation_ms = latest_bar_open_time_ms - (long)((visibleBars - 1) * basis);

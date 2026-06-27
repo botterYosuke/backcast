@@ -20,8 +20,12 @@
 // fail soft, NOT poison os.environ) + pytest test_replay_chart_spawn_preview.py (populate_replay_preview
 // against a real DuckDB). Do NOT treat a green here as "preview renders on the owner's machine".
 //
-// The Python half (engine.populate_replay_preview: D0 mode guard / D2 RUN guard / D3 fallback /
-// S1 graceful) is gated by python/tests/test_replay_chart_spawn_preview.py (PREVIEW-01..07).
+// The Python half (engine.populate_replay_preview: D0 mode guard / D2 RUN guard / full-catalog
+// history draw / S1 graceful) is gated by python/tests/test_replay_chart_spawn_preview.py
+// (PREVIEW-01..11). #156 reopen (findings 0129): the cold preview is DECOUPLED from the scenario
+// window — it always draws the instrument's full catalog history (get_date_range), so a valid
+// today-relative seed window past a frozen historical snapshot no longer renders empty. PREVIEW-11
+// is that regression gate (valid window outside the catalog still draws the full series).
 //
 // RED→GREEN litmus:
 //   * delete the `RequestChartPreviewsForAllLiveCharts();` call at SyncChartWindowsToUniverse tail

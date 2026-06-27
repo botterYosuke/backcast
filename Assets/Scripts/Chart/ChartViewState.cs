@@ -41,6 +41,13 @@ public class ChartViewState
     public long? basis_ms;             // null = unknown / hold previous
     public float cell_height_norm = 1f;  // derived in autoscale; falls back to 1.0 when no bars
 
+    // Opt-in fit-to-all (#156 follow-up / ADR-0034 D-4 amended). When TRUE, ResetView fits the ENTIRE
+    // loaded series into the plot instead of the DEFAULT_CELL_WIDTH_PX right-anchored window — so a
+    // Replay 全期間 cold-load is visible at spawn. Live keeps it FALSE so recent bars stay readable at
+    // 6px (max_history_len=1000 ring buffer). Host (BackcastWorkspaceRoot) sets it per-chart from the
+    // execution mode. NOT persisted (derived from mode every frame, like cell_height_norm).
+    public bool fit_all_on_autoscale = false;
+
     // Auto-scale price-axis cache (derived per Render or OnPopulateMesh). NOT persisted.
     public double visible_min_price = double.NaN;
     public double visible_max_price = double.NaN;
@@ -75,13 +82,34 @@ public class ChartViewState
         auto_scale = false;
     }
 
-    // ResetView: right-anchor on latest bar with DEFAULT_CELL_WIDTH_PX (findings 0119 D-4).
-    // Called by double-click (S2) and on initial spawn.
-    public void ResetView(long latest_bar_open_time_ms, float plot_width_px)
+    // ResetView: auto_scale "home" view, right-anchored on the latest bar. Called by double-click (S2),
+    // initial spawn, and every auto_scale Render.
+    //   * default (fit_all_on_autoscale == false) → DEFAULT_CELL_WIDTH_PX (findings 0119 D-4): readable
+    //     recent bars; the full series is reachable by zooming out.
+    //   * fit_all_on_autoscale == true → fit the WHOLE series on screen (Replay 全期間, #156 follow-up).
+    //     The chart positions + virtualizes bars by TIME (TimeToX(open_time_ms) / winEnd =
+    //     translation + (plot/cell)*basis), so the fit is computed from the calendar SPAN in basis-slots
+    //     — NOT the bar count. A gapped Daily series (~250 trading bars over ~365 calendar days) spans
+    //     more slots than bars; sizing by count would under-zoom and clip the oldest bars off the left
+    //     edge. When the fit would fall below MIN_CELL_WIDTH_PX (more slots than pixels), the clamp pins
+    //     MIN and the right-anchor below shows the most-recent plot_width slots (owner decision
+    //     2026-06-27: "MIN でクランプ＋右端寄せ").
+    public void ResetView(long first_bar_open_time_ms, long latest_bar_open_time_ms, float plot_width_px)
     {
-        cell_width_px = DEFAULT_CELL_WIDTH_PX;
-        auto_scale = true;
         long basis = basis_ms ?? BASIS_MINUTE_MS;
+        if (basis <= 0) basis = BASIS_MINUTE_MS;
+        if (fit_all_on_autoscale && latest_bar_open_time_ms > first_bar_open_time_ms)
+        {
+            // slots spanned inclusive of both ends = (last - first)/basis + 1. cell = plot / slots so the
+            // window covers exactly [first .. last] in TIME (gaps included).
+            double spanSlots = (double)(latest_bar_open_time_ms - first_bar_open_time_ms) / basis + 1.0;
+            cell_width_px = Mathf.Clamp(plot_width_px / (float)spanSlots, MIN_CELL_WIDTH_PX, MAX_CELL_WIDTH_PX);
+        }
+        else
+        {
+            cell_width_px = DEFAULT_CELL_WIDTH_PX;
+        }
+        auto_scale = true;
         // Right-anchor: the latest bar should sit at the right edge.
         float visibleBars = plot_width_px / cell_width_px;
         translation_ms = latest_bar_open_time_ms - (long)((visibleBars - 1) * basis);

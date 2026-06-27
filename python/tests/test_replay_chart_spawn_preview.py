@@ -6,9 +6,12 @@ Pins the contract for ``DataEngine.populate_replay_preview`` (findings 0104, sli
 - S1 PREVIEW-02: missing DuckDB file → graceful empty (no exception, returns NO_DATA).
 - S1 PREVIEW-03: Manual/Auto mode → no-op (Replay-only by D0).
 - S2 PREVIEW-04: ``duckdb_bars.get_date_range`` returns per-instrument (min, max) ISO dates.
-- S2 PREVIEW-05: empty start/end → falls back to the full DuckDB date range.
+- S2 PREVIEW-05: cold preview draws the full DuckDB date range (empty start/end included).
 - S3 PREVIEW-06: ``replay_state != "IDLE"`` (LOADED / RUNNING) → no-op.
 - S3 PREVIEW-07: ``load_replay_data`` fresh reset clears ``per_id_ohlc_points`` (RUN start cleanup).
+- #156 reopen PREVIEW-11: a VALID scenario window that sits ENTIRELY OUTSIDE (after) the catalog
+  still draws the full history — the regression #169 introduced (today-relative seed window past a
+  frozen historical snapshot → empty chart). Cold preview is decoupled from the scenario window.
 
 The conftest hook translates each ``@pytest.mark.scenario("PREVIEW-NN")`` into the canonical
 ``[E2E PREVIEW-NN PASS|FAIL]`` rollup tag.
@@ -137,7 +140,13 @@ def test_get_date_range_returns_min_max(tmp_path) -> None:
 
 @pytest.mark.scenario("PREVIEW-05")
 def test_empty_start_end_falls_back_to_full_range(tmp_path) -> None:
-    """S2 D3: empty/None start/end → use the full DuckDB date range per instrument."""
+    """S2: the cold preview draws the full DuckDB date range per instrument.
+
+    #156 reopen: this is now UNCONDITIONAL (the idle chart always shows the instrument's whole
+    history). Empty/None/malformed start/end are one case of that — they still yield the full
+    range, exactly as before. PREVIEW-11 covers the case the old code got wrong: a *valid* window
+    that misses the catalog.
+    """
     _build_daily(tmp_path, n=12, day0=datetime.date(2024, 3, 1))
     eng = DataEngine(duckdb_root=str(tmp_path))
 
@@ -148,9 +157,46 @@ def test_empty_start_end_falls_back_to_full_range(tmp_path) -> None:
     pts = eng._rs.per_id_ohlc_points[_IID]
     assert len(pts) == 12
 
-    # Malformed start → same fallback (treated as "missing").
+    # Malformed start → same full range (treated as "missing").
     ok2, _, count2 = eng.populate_replay_preview(_IID, "not-a-date", "", "Daily")
     assert ok2 and count2 == 12
+
+
+@pytest.mark.scenario("PREVIEW-11")
+def test_valid_window_outside_catalog_still_draws_full_history(tmp_path) -> None:
+    """#156 reopen — the exact regression #169 shipped, as a deterministic real-DuckDB gate.
+
+    The chart was empty on the owner's screen because the cold preview honoured the scenario's
+    *valid* today-relative seed window ([today-3mo, today], seeded by #169's New). The J-Quants
+    DuckDB is a frozen historical export that never reaches "today", so that window sat ENTIRELY
+    AFTER the data → ``load_bars`` returned 0 bars → empty chart. No prior gate exercised a valid
+    window that misses the catalog (PREVIEW-01/07 pass windows that equal the data; PREVIEW-05
+    passes empty/invalid windows), so the bug shipped green.
+
+    Contract now: the cold preview is DECOUPLED from the scenario window and always draws the full
+    catalog history. RED on the old code (count == 0, empty slot), GREEN after.
+    """
+    # Catalog: 10 daily bars in late 2024. The scenario window is in 2026 — valid ISO dates, but
+    # entirely past the end of the data (mirrors #169's SeedDefaults(today) = [today-3mo, today]).
+    _build_daily(tmp_path, n=10, day0=datetime.date(2024, 10, 1))
+    eng = DataEngine(duckdb_root=str(tmp_path))
+
+    future_start, future_end = "2026-03-27", "2026-06-27"
+    ok, ec, count = eng.populate_replay_preview(_IID, future_start, future_end, "Daily")
+
+    assert ok and ec == "" and count == 10, (
+        "cold preview must draw the FULL catalog history, not the out-of-range scenario window "
+        "(#156 reopen / #169 regression)"
+    )
+    pts = eng._rs.per_id_ohlc_points[_IID]
+    assert len(pts) == 10
+
+    # And it must reach the polled projection the chart decoder reads (full boundary, not just _rs).
+    pi_map = eng.get_current_state().per_instrument
+    assert _IID in pi_map and len(pi_map[_IID].ohlc_points) == 10, (
+        "full history must surface through get_current_state().per_instrument (chart renders empty "
+        "otherwise — the owner's symptom)"
+    )
 
 
 @pytest.mark.scenario("PREVIEW-06")

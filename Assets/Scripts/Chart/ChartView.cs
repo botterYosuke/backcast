@@ -15,8 +15,13 @@
 //     stays ~90 even when TotalBarCount is 1000 (VIRTUALIZE-01).
 //   * Default visible window = right-anchor on the latest bar with DEFAULT_CELL_WIDTH_PX=6.0f (findings
 //     0119 D-4). Replay's full-period cold load (S6, #156) hands engine a multi-thousand-bar OhlcPoint
-//     array, but the initial visible window is still ~90 bars; pan/zoom (S2) lets the owner navigate
-//     the rest. (Live keeps max_history_len=1000; no scope creep into kabu historical backfill.)
+//     array. OPT-IN fit-to-all (SetFitAllOnAutoScale(true), set by the host for Replay charts — #156
+//     follow-up / ADR-0034 D-4 amended) instead fits the WHOLE series on auto_scale: cell_width =
+//     plot_width / time-span-in-basis-slots clamped [MIN,MAX] (by TIME, not bar count — gapped Daily
+//     series span more days than bars), so the initial window shows every bar (overflow past MIN pins
+//     MIN + right-anchors the latest plot_width slots). Live leaves it FALSE → ~90 bars at 6px stay
+//     readable; pan/zoom (S2) navigates either way. (Live keeps max_history_len=1000; no scope creep
+//     into kabu historical backfill.)
 //
 // PUBLIC API (E2E / ThemeProbe seam — findings 0119 D-8):
 //   * int TotalBarCount       — bars received via Render() (CHARTRENDER-01 / VIRTUALIZE-01).
@@ -247,7 +252,7 @@ public class ChartView : MaskableGraphic,
         {
             var rect = rectTransform.rect;
             float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
-            ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
+            ViewState.ResetView(_bars[0].open_time_ms, _bars[_bars.Count - 1].open_time_ms, plotW);
         }
 
         UpdateTitle();
@@ -279,6 +284,22 @@ public class ChartView : MaskableGraphic,
         SetVerticesDirty();
     }
 
+    // Host opt-in (#156 follow-up): Replay charts fit the WHOLE loaded series on auto_scale; Live charts
+    // keep the DEFAULT right-anchor so recent bars stay readable. Idempotent — only re-anchors when the
+    // flag actually flips and the chart is in auto_scale with data (manual pan/zoom is preserved).
+    public void SetFitAllOnAutoScale(bool on)
+    {
+        if (ViewState.fit_all_on_autoscale == on) return;
+        ViewState.fit_all_on_autoscale = on;
+        if (ViewState.auto_scale && _bars.Count > 0)
+        {
+            var rect = rectTransform.rect;
+            float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
+            ViewState.ResetView(_bars[0].open_time_ms, _bars[_bars.Count - 1].open_time_ms, plotW);
+        }
+        SetVerticesDirty();
+    }
+
     // Allow callers (BackcastWorkspaceRoot) to thread the scenario granularity through so basis_ms
     // is locked from the spawn frame, not inferred from bar diffs. Auto-scale resets translation.
     public void SetGranularity(GranularityChoice g)
@@ -289,7 +310,7 @@ public class ChartView : MaskableGraphic,
         {
             var rect = rectTransform.rect;
             float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
-            ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
+            ViewState.ResetView(_bars[0].open_time_ms, _bars[_bars.Count - 1].open_time_ms, plotW);
         }
         SetVerticesDirty();
     }
@@ -590,7 +611,7 @@ public class ChartView : MaskableGraphic,
         {
             var rect = rectTransform.rect;
             float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
-            ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
+            ViewState.ResetView(_bars[0].open_time_ms, _bars[_bars.Count - 1].open_time_ms, plotW);
         }
         SetVerticesDirty();
     }
@@ -723,7 +744,7 @@ public class ChartView : MaskableGraphic,
         }
         var rect = rectTransform.rect;
         float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
-        ViewState.ResetView(_bars[_bars.Count - 1].open_time_ms, plotW);
+        ViewState.ResetView(_bars[0].open_time_ms, _bars[_bars.Count - 1].open_time_ms, plotW);
         SetVerticesDirty();
     }
 

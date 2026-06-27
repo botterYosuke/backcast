@@ -1501,10 +1501,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // FormatException, so keep the last per-id render rather than throwing out of Update each frame.
             try
             {
+                // #156 follow-up: in Replay the engine cold-loads the full scenario period into
+                // per_instrument[id].ohlc_points, so fit the WHOLE series on auto_scale. Live keeps the
+                // DEFAULT right-anchor (max_history_len=1000 ring buffer stays readable at 6px). Mode
+                // can flip Replay↔Live at runtime; SetFitAllOnAutoScale is idempotent + re-anchors only
+                // on a real flip, so calling it every poll is cheap.
+                bool fitAll = _footerMode != null && !DockShape.IsLiveShape(_footerMode.DisplayMode);
                 foreach (var kv in _chartViews)
                 {
+                    if (kv.Value == null) continue;
+                    kv.Value.SetFitAllOnAutoScale(fitAll);
                     InstrumentOhlcFrame f = InstrumentOhlcDecoder.Decode(state, kv.Key);
-                    if (!f.HasSeries || kv.Value == null) continue;
+                    if (!f.HasSeries) continue;
                     int cnt = f.Ohlc != null ? f.Ohlc.Count : 0;
                     if (!_chartRendered.TryGetValue(kv.Key, out int prev) || prev != cnt)
                     {

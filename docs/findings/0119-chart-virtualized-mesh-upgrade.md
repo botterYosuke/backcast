@@ -54,6 +54,17 @@
   - `auto_scale = true`
 - plot 幅 540px / cell 6px なら 90 本表示 → Daily で約 4 ヶ月、Minute で約 1.5 時間相当。owner 要望「軽くする」を満たす。
 
+#### D-4 追補（#156 follow-up・owner 2026-06-27）— fit-to-all opt-in
+
+当初 D-4 は「初期表示は右端 anchor + DEFAULT 6px（~90 本）固定、全期間は zoom-out で辿る」を**意図的に**ロックした（軽量化のため）。しかし owner が #156 着地後に「**初期化時にチャートに全期間の bar を見せたい**」と要望。D-5 で engine が全期間を `per_id_ohlc_points` に cold load 済みなのに描画窓が ~90 本固定だと「載っているが見えない」状態になるため、**opt-in の fit-to-all** を追加して D-4 を Replay 向けに上書きする:
+
+- `ChartViewState.fit_all_on_autoscale`（既定 **false** = 旧 D-4 のまま・Live 非回帰）。`true` のとき `ResetView` は
+  `cell_width_px = Mathf.Clamp(plot_width_px / span_slots, MIN, MAX)` で**全 series を 1 画面に収める**（right-anchor は不変）。
+  **注意: fit は bar 数ではなく時間 span（`span_slots = (last_open - first_open)/basis + 1`）で算出する**。チャートは bar を**時間**で配置・仮想化する（`TimeToX(open_time_ms)` / `winEnd = translation + (plot/cell)*basis`）ので、bar 数で割ると gapped 日足（週末/祝日穴あき・~250 営業日が ~365 暦日を張る）で窓が span を覆いきれず最古 bar が左端外に脱落する（code review 2026-06-27 で検出・E2E FITALL-FITS-02 を gapped 系列に強化して回帰ガード）。
+- **溢れる場合の policy（owner 決定 2026-06-27）**: span が広すぎて fit が `MIN_CELL_WIDTH_PX(1.0)` を割るときは **MIN でクランプし右端寄せ**（直近 plot_width slot＝540px なら ~540 暦日を表示）。「全期間を sub-pixel で無理やり全部」「ダウンサンプル」は不採用。
+- **適用範囲**: `BackcastWorkspaceRoot` が poll 毎に `SetFitAllOnAutoScale(!IsLiveShape(mode))` を呼び、**Replay チャートのみ** true。Live は false のまま（`max_history_len=1000` リングを 6px で読みやすく保つ）。mode flip は idempotent に追随。
+- **gate**: `ChartFitAllE2ERunner`（FITALL-OFF-01 = opt-in 床/Live 非回帰・FITALL-FITS-02 = 300 本 fit で全描画・FITALL-OVERFLOW-03 = 1000 本 MIN クランプ右端寄せ・FITALL-RESET-04 = reset で fit 復帰）。既存 RESET-INIT-01 / VIRTUALIZE-01/02 / RESET-01 は false 経路で不変緑。
+
 ### D-5 全期間データ supply（Replay / Live で別ポリシー）
 
 - **Replay**:
@@ -64,6 +75,7 @@
   - `max_history_len = 1000` を**維持**。kabu historical backfill での「Live 全期間」は本 finding スコープ外（必要なら別 issue）。
   - 当日 + reducer リングバッファに留める。
 - これにより RPC payload は Replay でも初期 1 回 cold seed のみ膨れる（以後の poll は per_id 増分だけ）。
+- **追補（#156 reopen・2026-06-27）**: D-5 は **RUN 経路**（`load_replay_data`）の cold load で、scenario 窓内の全 bar を載せる。**Run 前（New 直後）の preview 経路**は別物で、当初 scenario 窓を尊重していた。#169 が有効な今日基準窓 `[今日-3ヶ月, 今日]` を種付けした結果、凍結カタログを外して 0 本＝空チャートになった。**preview 経路は scenario 窓と分離し常にカタログ全履歴を描く**よう修正。詳細・gate（PREVIEW-11）は [[0129-replay-cold-preview-draws-full-catalog-history]]。
 
 ### D-6 ゴージャス要素のスコープ（v1 で全部入れる）
 

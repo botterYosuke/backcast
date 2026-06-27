@@ -15,17 +15,6 @@ from .replay import BaseReplayProvider
 _REPLAY_WARMUP_PRICE = 1.0
 
 
-def _is_valid_iso_date(value: str | None) -> bool:
-    """#129 D3: empty/non-ISO falls back to get_date_range."""
-    if not value:
-        return False
-    try:
-        time.strptime(value, "%Y-%m-%d")
-        return True
-    except (ValueError, TypeError):
-        return False
-
-
 class DataEngine:
     def __init__(
         self,
@@ -521,13 +510,27 @@ class DataEngine:
                 return False, "NO_DUCKDB_ROOT", 0
             root_str = str(root)
 
-            # D3: per-instrument range fallback when the scenario didn't supply a valid window.
-            effective_start, effective_end = start, end
-            if not _is_valid_iso_date(start) or not _is_valid_iso_date(end):
-                date_range = get_date_range(root_str, instrument_id, granularity_norm)
-                if date_range is None:
-                    return False, "NO_DATA", 0
-                effective_start, effective_end = date_range
+            # #156 reopen (owner 決定: 「全期間表示」): the cold preview ALWAYS draws the
+            # instrument's FULL available history, decoupled from the scenario run window. The
+            # scenario start/end define the RUN range (load_replay_data streams within it) — NOT
+            # what the idle, pre-run chart shows.
+            #
+            # Why this changed: preview used to honour the scenario [start, end] (D3 fell back to
+            # the full range only when the dates were empty/invalid). Once #169 seeded a *valid*
+            # today-relative window ([today-3mo, today]) into a fresh New document, that window sat
+            # PAST the end of the frozen J-Quants snapshot (the DuckDB is a historical export that
+            # never reaches "today"). load_bars then returned 0 bars → per_id_ohlc_points[iid] = []
+            # → the empty chart the owner saw. The valid window silently disabled the very full-range
+            # fallback #156 relied on. get_date_range gives the catalog (min, max) so the whole
+            # series ships; ChartView's fit-all autoscale frames it. start/end are intentionally
+            # unused for the display window here — kept on the signature for the wire contract.
+            date_range = get_date_range(root_str, instrument_id, granularity_norm)
+            if date_range is None:
+                # No rows for this iid (missing file or empty symbol): leave the chart empty,
+                # never crash. Mirror the FileNotFoundError arm's empty-slot contract below.
+                self._rs.per_id_ohlc_points[instrument_id] = []
+                return False, "NO_DATA", 0
+            effective_start, effective_end = date_range
 
             try:
                 bars = load_bars(

@@ -158,7 +158,9 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         if (GlyphText(runBtn) != "■")
             return "NBHAKO-04: the REAL cell button ▶ did not toggle to ■ while running";
 
-        // ── NBHAKO-05: running snapshot bar1 → the 4 Hakoniwa base tiles show the real figures (D6/D8). ──
+        // ── NBHAKO-05: running snapshot bar1 → the 3 base tiles + the run_result popup view show the real
+        //    figures (D6/D8). run_result is the screen-anchored popup now (ADR-0037); its body Text is still
+        //    the reused LivePanelTileView (_runResultView), driven by the unchanged PushReplayTiles content branch. ──
         SetReplayShape(root, ty);
         SetPortfolioOverride(seams.Host, SNAP1);
         PumpTiles(root, ty);
@@ -350,9 +352,10 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         // BuildWorkspace) is reused, so _cellRunButtons[region_001] stays valid.
         seams.Coordinator.New();
 
-        // the 4 Hakoniwa base tile views must have been built by SpawnBaseDockWindows during BuildWorkspace.
+        // the 3 base tile views (SpawnBaseDockWindows) + the run_result popup view (BuildRunResultPopup,
+        // ADR-0037) must all have been built during BuildWorkspace.
         foreach (var f in new[] { "_buyingPowerView", "_ordersView", "_positionsView", "_runResultView" })
-            if (ty.GetField(f, BF)?.GetValue(root) == null) { err = f + " not built (SpawnBaseDockWindows renamed?)"; return false; }
+            if (ty.GetField(f, BF)?.GetValue(root) == null) { err = f + " not built (SpawnBaseDockWindows / BuildRunResultPopup renamed?)"; return false; }
 
         // bind the controller's callbacks to the root's REAL private methods (wiring identity = production).
         var mScenario = ty.GetMethod("BuildNotebookScenarioJson", BF);

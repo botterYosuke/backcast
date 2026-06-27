@@ -17,7 +17,7 @@
 `DriveSidebarContext()` は `_sidebarView == null` だけをガードしていたが、実際に deref するのは
 `_footerMode.DisplayMode`。`_sidebarView` は serialize 復元され reload を跨いで非 null のままなので最初の
 ガードは通過し、null の `_footerMode` で初めて落ちる。兄弟ドライバ（`DriveFooter` / `RefreshLiveTiles` /
-`DriveStrategyEditor` / `DriveOrderTicket` / `DriveRunResult` / `DriveDepthLadders`）は全て runtime
+`DriveStrategyEditor` / `DriveOrderTicket` / `DriveRunResultPopup` / `DriveDepthLadders`）は全て runtime
 フィールドをガード済みで reload フレームでは安全に no-op する。修正は `DriveSidebarContext` を兄弟と同じく
 `_footerMode` でガードすること（1 行）。
 

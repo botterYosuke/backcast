@@ -1,30 +1,34 @@
-// ReplayRunResultTileE2ERunner.cs — Surface E2E (Panel category) for the Replay RunResult tile
-// (PushReplayTiles の running↔full-stats 分岐). 台本: ReplayRunResultTileE2ERunner.md.
+// ReplayRunResultTileE2ERunner.cs — Surface E2E (Panel category) for the Run Result POPUP
+// (#172/#173 / ADR-0037 / findings 0125). 台本: ReplayRunResultTileE2ERunner.md.
 //
 //   <Unity> -batchmode -nographics -projectPath <proj> -executeMethod ReplayRunResultTileE2ERunner.Run -logFile <log>
 //   # expect: [REPLAY RUNRESULT TILE PASS] ... / exit=0
 //
 // なぜ存在するか:
-//   #99 (commit 77e39c7) が Hakoniwa を floating-window 化した際、HakoniwaE2ERunner (836 行) を
-//   run_result タイルの B2 (running→full-stats switch) カバレッジごと wholesale 削除し「将来 Panel
-//   カテゴリ runner へ移送予定」のまま re-home されなかった。結果 PushReplayTiles の running↔full-stats
-//   分岐は C# AFK で無カバー化し、その死角に #100 ① (bt.replay 2 連続実行で run2 走行中ずっと run1 の
-//   full-stats が残る) が landed した。本 runner は削除された B2 を Panel surface として復活させ、
-//   さらに #100 ① の「再実行で summary が空へ戻ったら running へ戻る」不変条件 (RRT-04) を追加する。
+//   run_result は元々 back-plane の dock base singleton（DockLayer 1.0×）だった。ADR-0037 で
+//   **screen-anchored な右上ポップアップ**（RunResultPopup）へ cutover した（#172）。表示は content-derived、
+//   × close で dismiss latch（#173）。本 runner は (a) running↔full-stats のテキスト描画（#100① の再実行
+//   stale ガード含む・format 関数は無改変＝findings 0125 D5）、(b) content-derived 可視、(c) **LiveManual で
+//   出さない＝live hasContent を LiveAuto に scoping する D3 の sticky-flag ガード**、(d) **永続化しない**
+//   （CaptureLayout 非対象＝D6）、(e) × close + 同一 run dismiss latch（D7）、(f) **対称再 arm**（Replay の
+//   falling→rising / LiveAuto の run_id 変化＝D8・#164 の片側欠落死角を pin）を AFK で固定する。
 //
-// 2 ゲート分割 (behavior-to-e2e: DATA 経路の C#↔Python 跨ぎ):
-//   * DATA 半分 (#100 ① の根本原因 = engine.last_run_summary を run-begin で clear する source 挙動) は
-//     Python e2e が正本: python/tests/test_notebook_replay_afk.py
-//       ::test_run_summary_cleared_at_run_begin_so_rerun_shows_running_not_stale (findings 0077 §2)。
-//   * RENDER 半分 = 「summary source が空なら running、非空なら full-stats を描く」= Unity でしか
-//     証明できない。本 runner がそれ。両ゲートで #100 ① を C#/Python の両層から固定する。
+// 2 ゲート分割（behavior-to-e2e: DATA 経路の C#↔Python 跨ぎ）:
+//   * DATA 半分（#100① = engine.last_run_summary を run-begin で clear する source 挙動）は Python e2e が正本:
+//     python/tests/test_notebook_replay_afk.py::test_run_summary_cleared_at_run_begin_... (findings 0077 §2)。
+//   * RENDER + 可視 + latch 半分 = Unity でしか証明できない。本 runner がそれ。
 //
-// Python-FREE: WorkspaceEngineHost.TestPortfolioJsonOverride / TestRunSummaryJsonOverride で poll
-// snapshot を直接注入し、_lanes / 実 backend を一切起こさない (削除された HakoniwaBaseModeProbe と同型)。
+// Python-FREE: 内容は WorkspaceEngineHost.TestPortfolioJsonOverride / TestRunSummaryJsonOverride を、live の
+// telemetry は host.Panel.Apply(<wire>) を、mode は FooterModeViewModel.ApplyPoll を直接駆動。実 backend / _lanes は起こさない。
 //
-// RED litmus (delete-the-production-logic): BackcastWorkspaceRoot.PushReplayTiles の
-//   `string.IsNullOrWhiteSpace(summaryJson) ? running : complete` 分岐を complete 固定に潰すと
-//   RRT-02 と RRT-04 が RED。summary を sticky (最後の非空値を記憶) にする旧 #100 バグ形でも RRT-04 が RED。
+// RED litmus（delete-the-production-logic）:
+//   * PushReplayTiles の running/complete 分岐を complete 固定に潰す → RRT-02/04 RED。
+//   * DriveRunResultPopup の `&& DisplayMode==LiveAuto`（D3）を外す → RRT-06（LiveManual stale 漏れ）RED。
+//   * hasContent の `|| HasTelemetry` 半分 or telemetry run_id fallback を外す → RRT-06T RED（telemetry-only run が出ない／再 arm せず）。
+//   * run_result を再び controller window 化（CaptureLayout に乗る）→ RRT-07 RED。
+//   * popup overlay を Content（infinite canvas）配下に再 parent する → RRT-10 RED（pan で動く構造退行）。
+//   * × close の latch を no-op に → RRT-08 RED。
+//   * LiveAuto 再 arm を run_id 変化でなく boolean falling edge にする → RRT-09B RED（2nd run で再出現せず）。
 
 using System;
 using System.Reflection;
@@ -36,7 +40,6 @@ using UnityEngine.UI;
 public static class ReplayRunResultTileE2ERunner
 {
     const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
-    const float EPS = 0.01f;   // geometry equality tolerance (anchoredPosition / sizeDelta)
 
     // Self-consistent Replay portfolio snapshot: equity(155321) = cash(54321) + position MV(50×2002),
     // BUY 50 @2000 FILLED. Only needs to be non-empty + recognizable for the running-view render.
@@ -64,13 +67,25 @@ public static class ReplayRunResultTileE2ERunner
         "{\"fills_count\":3,\"equity_points\":70,\"total_pnl\":12345.0," +
         "\"max_drawdown\":222.0,\"sharpe\":1.25,\"sortino\":1.5}";
 
+    // Live lifecycle wire envelopes (PeelTag = {"<Tag>": <inner>}). run_id differs so RRT-09B can prove
+    // the LiveAuto re-arm keys off run_id (the sticky-flag-safe signal), not a boolean falling edge.
+    static string LifecycleWire(string runId, string status) =>
+        "{\"LiveStrategyEvent\":{\"run_id\":\"" + runId + "\",\"strategy_id\":\"s\",\"status\":\"" + status + "\",\"ts_ms\":1}}";
+
+    // Telemetry wire envelope (tag "LiveStrategyTelemetry"). Drives the HasTelemetry / telemetry-run_id path
+    // with NO lifecycle — the telemetry-only leg (RRT-06T) that pins the `|| HasTelemetry` half of hasContent
+    // and the `: p.HasTelemetry ? LatestTelemetry.RunId` re-arm fallback (findings 0125 F8 / code-review [Fix]).
+    static string TelemetryWire(string runId, double realized, double unrealized, int orders, int fills) =>
+        "{\"LiveStrategyTelemetry\":{\"run_id\":\"" + runId + "\",\"strategy_id\":\"s\",\"realized_pnl\":" + realized +
+        ",\"unrealized_pnl\":" + unrealized + ",\"order_count\":" + orders + ",\"fill_count\":" + fills + ",\"ts_ms\":1}}";
+
     public static void Run()
     {
         string fail = null;
         try
         {
             fail = RunSections();
-            if (fail == null) fail = RunModeVisibilitySections();   // #138 second slice (findings 0110 §7)
+            if (fail == null) fail = RunLiveScopeAndLatchSections();   // #172 D3 + #173 D7/D8
         }
         catch (Exception e)
         {
@@ -79,10 +94,14 @@ public static class ReplayRunResultTileE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[REPLAY RUNRESULT TILE PASS] RRT-01 empty / RRT-02 running / RRT-03 full-stats / " +
+            Debug.Log("[REPLAY RUNRESULT TILE PASS] RRT-01 empty→hidden / RRT-02 running→visible / RRT-03 full-stats / " +
                       "RRT-04 #100① rerun→running (not stale) / RRT-05 rerun→full-stats / " +
-                      "RRT-06 mode→visibility (LiveManual hidden, no collateral) / RRT-07 non-destructive / " +
-                      "RRT-08 self-heal (persisted-hidden boot, no brick) verified.");
+                      "RRT-06 LiveAuto visible · LiveManual hidden (sticky-flag anti-stale, D3) / " +
+                      "RRT-06T telemetry-only leg (|| HasTelemetry + telemetry run_id fallback) / " +
+                      "RRT-07 no-persist (absent from CaptureLayout, D6) / " +
+                      "RRT-10 screen-anchored ScreenSpaceOverlay outside Content (D1) / " +
+                      "RRT-08 × close latches · same-run stays dismissed (D7) / " +
+                      "RRT-09 symmetric re-arm (Replay rising · LiveAuto run_id, D8) verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -92,6 +111,7 @@ public static class ReplayRunResultTileE2ERunner
         }
     }
 
+    // ── RRT-01..05: content-derived render + visibility in the REPLAY shape (override seam). ──
     static string RunSections()
     {
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
@@ -104,35 +124,40 @@ public static class ReplayRunResultTileE2ERunner
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
 
         var host = ty.GetField("_host", BF).GetValue(root) as WorkspaceEngineHost;
-        var liveShape = ty.GetField("_lastLiveShape", BF);                 // #99: replaced #61 _baseLive
+        var liveShape = ty.GetField("_lastLiveShape", BF);
         var refresh = ty.GetMethod("RefreshLiveTiles", BF);               // per-frame driver → PushReplayTiles in Replay
+        var drivePopup = ty.GetMethod("DriveRunResultPopup", BF);         // #172/#173: visibility + latch
         var rrView = ty.GetField("_runResultView", BF)?.GetValue(root);
+        var popup = ty.GetField("_runResultPopup", BF)?.GetValue(root);
         var hostTy = typeof(WorkspaceEngineHost);
         var pfOverride = hostTy.GetField("TestPortfolioJsonOverride", BF);
         var smOverride = hostTy.GetField("TestRunSummaryJsonOverride", BF);
         if (host == null || liveShape == null || refresh == null || pfOverride == null || smOverride == null)
             return "root internals not found (renamed?) — host/_lastLiveShape/RefreshLiveTiles/overrides";
+        if (drivePopup == null)
+            return "RRT: DriveRunResultPopup not found (renamed? — the popup visibility/latch driver is missing)";
         if (rrView == null)
-            return "run_result tile not wired by BuildWorkspace (_runResultView is null) — the whole surface is uncovered";
+            return "run_result view not wired by BuildWorkspace (_runResultView is null) — the whole surface is uncovered";
+        if (popup == null)
+            return "RRT: _runResultPopup not built by BuildWorkspace — the popup surface is uncovered";
 
-        // Replay shape: RefreshLiveTiles routes to PushReplayTiles and drives the 4 base tiles from the
-        // get_portfolio_json / get_run_summary_json poll snapshots (here the test overrides).
-        liveShape.SetValue(root, false);
+        liveShape.SetValue(root, false);   // Replay shape → RefreshLiveTiles routes to PushReplayTiles
 
-        Action drive = () => refresh.Invoke(root, null);
+        Action drive = () => { refresh.Invoke(root, null); drivePopup.Invoke(root, null); };
         Action<string> pf = v => pfOverride.SetValue(host, v);
         Action<string> sm = v => smOverride.SetValue(host, v);
 
         try
         {
-            // ── RRT-01: no portfolio committed → RunResult (and all 4 tiles) honest-empty. ──
+            // ── RRT-01: no portfolio committed → popup HIDDEN (honest-empty no longer paints "(no data)" text). ──
             pf(null); sm(null); drive();
-            string t = ViewText(rrView);
-            if (t != LivePanelTileView.ReplayEmpty)
-                return "RRT-01 empty: RunResult is '" + t + "', expected the honest-empty sentinel before any run";
+            if (PopupVisible(popup))
+                return "RRT-01 empty: the popup is VISIBLE before any run — honest-empty must hide the card (content-derived)";
 
-            // ── RRT-02: run1 streaming (portfolio present, summary still empty) → RUNNING view. ──
+            // ── RRT-02: run1 streaming (portfolio present, summary still empty) → popup VISIBLE + RUNNING view. ──
             pf(PortfolioRun1); sm(null); drive();
+            if (!PopupVisible(popup))
+                return "RRT-02 running: portfolio-present did NOT show the popup (content-derived visibility broken)";
             string running1 = ViewText(rrView);
             if (running1 == null || !running1.Contains("running"))
                 return "RRT-02 running: portfolio-present + empty-summary did NOT render the running view (got: " + running1 + ")";
@@ -141,6 +166,7 @@ public static class ReplayRunResultTileE2ERunner
 
             // ── RRT-03: run1 completes (summary published) → FULL-STATS view (DecodeRunResult bound). ──
             sm(SummaryRun1); drive();
+            if (!PopupVisible(popup)) return "RRT-03 full-stats: popup hidden while a completed run has content";
             string full1 = ViewText(rrView);
             if (full1 == null || full1.Contains("running"))
                 return "RRT-03 full-stats: summary inject did NOT switch off the running view (dual-gate regressed? got: " + full1 + ")";
@@ -149,11 +175,11 @@ public static class ReplayRunResultTileE2ERunner
             if (!full1.Contains("-410010"))
                 return "RRT-03 full-stats: missing total_pnl -410010 (TotalPnl unbound / zero-filled; got: " + full1 + ")";
 
-            // ── RRT-04 (#100 ① GATE): bt.replay pressed a 2nd time → run2 begins, summary is cleared at
-            // run-begin (here override→"") WHILE the portfolio streams fresh fills. The RunResult tile MUST
-            // return to the RUNNING view — NOT keep showing run1's stale full-stats. Pre-#100 this stuck on
-            // run1's full-stats for the entire run2 (the bug). Render-layer half of findings 0077 D1. ──
+            // ── RRT-04 (#100① GATE): bt.replay pressed a 2nd time → run2 begins, summary cleared at run-begin
+            // (override→"") WHILE the portfolio streams fresh fills. The view MUST return to RUNNING — NOT keep
+            // run1's stale full-stats. Render-layer half of findings 0077 D1. ──
             pf(PortfolioRun2Streaming); sm(""); drive();
+            if (!PopupVisible(popup)) return "RRT-04 #100①: popup hidden while run2 is streaming content";
             string rerunRunning = ViewText(rrView);
             if (rerunRunning == null || !rerunRunning.Contains("running"))
                 return "RRT-04 #100①: a 2nd run with a cleared summary did NOT return to the running view — " +
@@ -161,8 +187,7 @@ public static class ReplayRunResultTileE2ERunner
             if (rerunRunning.Contains("fills:2") || rerunRunning.Contains("-410010"))
                 return "RRT-04 #100①: run1's stale full-stats (fills:2 / -410010) leaked into run2's running view (got: " + rerunRunning + ")";
 
-            // ── RRT-05: run2 completes (new summary) → full-stats again, with run2's numbers (cycle closes,
-            // proving the running↔full-stats flip is repeatable, not a one-shot). ──
+            // ── RRT-05: run2 completes (new summary) → full-stats again, with run2's numbers (cycle repeatable). ──
             sm(SummaryRun2); drive();
             string full2 = ViewText(rrView);
             if (full2 == null || full2.Contains("running"))
@@ -172,29 +197,15 @@ public static class ReplayRunResultTileE2ERunner
         }
         finally
         {
-            // Leave the probe seam clean for any later runner in the same Unity process.
             pf(null); sm(null);
         }
         return null;
     }
 
-    // ── #138 second slice (findings 0110 §7): the Run Result tile is hidden ONLY in LiveManual, the
-    // back-plane mirror of DriveOrderTicket. Drives the REAL root: DriveRunResult + FooterModeViewModel.ApplyPoll
-    // + the real _dockWindows (no Python, no _lanes). A fresh scene build (independent of the content sections'
-    // override seam).
-    //   RRT-06 = mode→visibility: run_result visible in Replay/LiveAuto, hidden in LiveManual; and the sibling
-    //            base tiles (orders/positions/buying_power) stay VISIBLE in LiveManual (only run_result toggles
-    //            — no collateral hiding).
-    //   RRT-07 = non-destructive: Replay→LiveManual→Replay keeps the SAME window instance + geometry + groupId
-    //            (pure SetActive, AC3), restored visible.
-    //   RRT-08 = self-heal (Finding 1 guard): first the PREMISE — run_result RIDES CaptureLayout, so a layout
-    //            saved while hidden in LiveManual persists visible=false (asserted via CaptureLayout(), making the
-    //            SetActive(false) proxy faithful instead of a bare stand-in). Then: ApplyGeometry restores it
-    //            hidden; on a Replay boot the ABSOLUTE toggle MUST re-show it — an in-memory remembered-set would
-    //            leave it permanently invisible (the brick the review caught). Self-heal simulated via SetActive(false).
-    // RED litmus: turn DriveRunResult into a no-op → RRT-06 LiveManual RED. Revert to a remembered-set
-    // (re-show only ids it itself hid) → RRT-08 RED (a restored-hidden run_result is never re-shown = bricked).
-    static string RunModeVisibilitySections()
+    // ── RRT-06..09: LiveAuto-scoped visibility (D3 anti-stale) + no-persist (D6) + × latch (D7) + symmetric
+    // re-arm (D8). Drives the REAL root: DriveRunResultPopup + FooterModeViewModel.ApplyPoll + host.Panel.Apply
+    // + the override seam. A fresh scene build. ──
+    static string RunLiveScopeAndLatchSections()
     {
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindAnyObjectByType<BackcastWorkspaceRoot>();
@@ -204,112 +215,205 @@ public static class ReplayRunResultTileE2ERunner
         ty.GetMethod("ResolvePaths", BF).Invoke(root, null);
         ty.GetMethod("BuildWorkspace", BF).Invoke(root, null);
 
-        var dockWindows = ty.GetField("_dockWindows", BF)?.GetValue(root) as FloatingWindowController;
+        var host = ty.GetField("_host", BF).GetValue(root) as WorkspaceEngineHost;
         var footerMode = ty.GetField("_footerMode", BF)?.GetValue(root);
-        var driveRunResult = ty.GetMethod("DriveRunResult", BF);
-        if (dockWindows == null) return "RRT-06: _dockWindows controller not built (renamed?)";
+        var liveShape = ty.GetField("_lastLiveShape", BF);
+        var drivePopup = ty.GetMethod("DriveRunResultPopup", BF);
+        var refresh = ty.GetMethod("RefreshLiveTiles", BF);   // drives PushLiveTiles (live body text via Refresh(p))
+        var popup = ty.GetField("_runResultPopup", BF)?.GetValue(root);
+        var rrView = ty.GetField("_runResultView", BF)?.GetValue(root);
+        if (host == null) return "RRT-06: _host not built (renamed?)";
         if (footerMode == null) return "RRT-06: _footerMode not built (renamed?)";
-        if (driveRunResult == null) return "RRT-06: DriveRunResult not found (renamed? — the back-plane mirror is missing)";
+        if (drivePopup == null) return "RRT-06: DriveRunResultPopup not found (renamed?)";
+        if (refresh == null) return "RRT-06: RefreshLiveTiles not found (renamed?)";
+        if (popup == null) return "RRT-06: _runResultPopup not built by BuildWorkspace";
+        if (rrView == null) return "RRT-06: _runResultView not built by BuildWorkspace";
         var applyPoll = footerMode.GetType().GetMethod("ApplyPoll");
         if (applyPoll == null) return "RRT-06: FooterModeViewModel.ApplyPoll not found (renamed?)";
+        var hostTy = typeof(WorkspaceEngineHost);
+        var pfOverride = hostTy.GetField("TestPortfolioJsonOverride", BF);
+        var smOverride = hostTy.GetField("TestRunSummaryJsonOverride", BF);
+        if (pfOverride == null || smOverride == null) return "RRT-06: host override fields not found (renamed?)";
 
-        Func<RectTransform> runResult = () => dockWindows.RectOf("run_result");
-        if (runResult() == null) return "RRT-06: run_result base dock window not spawned by BuildWorkspace";
-        // Sibling base tiles that MUST stay visible in LiveManual (manual fills/positions/buying power are live).
-        string[] siblings = { "orders", "positions", "buying_power" };
-        foreach (var s in siblings)
-            if (dockWindows.RectOf(s) == null) return "RRT-06: sibling base tile '" + s + "' not spawned (no-collateral test would be vacuous)";
+        void Poll(string mode) => applyPoll.Invoke(footerMode, new object[] { "{\"execution_mode\":\"" + mode + "\",\"venue_state\":\"CONNECTED\"}" });
+        void Drive() => drivePopup.Invoke(root, null);
+        void DriveLiveText() => refresh.Invoke(root, null);   // live shape → PushLiveTiles → _runResultView.Refresh(p)
+        void Shape(bool live) => liveShape.SetValue(root, live);
+        Action<string> pf = v => pfOverride.SetValue(host, v);
+        Action<string> sm = v => smOverride.SetValue(host, v);
+        void ApplyLifecycle(string runId, string status) => host.Panel.Apply(LifecycleWire(runId, status));
+        void ApplyTelemetry(string runId, double r, double u, int o, int f) => host.Panel.Apply(TelemetryWire(runId, r, u, o, f));
 
-        void Poll(string mode, string venueState)
-            => applyPoll.Invoke(footerMode, new object[] { "{\"execution_mode\":\"" + mode + "\",\"venue_state\":\"" + venueState + "\"}" });
-        void Drive() => driveRunResult.Invoke(root, null);
-        bool SiblingsVisible()
-        {
-            foreach (var s in siblings)
-            {
-                var rt = dockWindows.RectOf(s);
-                if (rt == null || !rt.gameObject.activeSelf) return false;
-            }
-            return true;
-        }
+        // ── RRT-06T (D3 / D8, the telemetry-only LiveAuto leg): a run that streams TELEMETRY before any
+        // lifecycle (HasTelemetry=true, HasLifecycle=false) still shows the popup with its telemetry body
+        // text, and its run_id (the telemetry fallback) arms + re-arms the latch. Pins the `|| HasTelemetry`
+        // half of hasContent AND the `: p.HasTelemetry ? LatestTelemetry.RunId` re-arm fallback (findings
+        // 0125 F8 / code-review [Fix]) — deleting either leaves this leg uncovered. Runs FIRST, while the
+        // sticky HasLifecycle is still false (a later run can never reach the telemetry branch — F4). ──
+        Shape(true);
+        Poll("LiveAuto");
+        ApplyTelemetry("run-T", 11.0, 22.0, 3, 2);   // HasTelemetry=true; HasLifecycle stays false
+        DriveLiveText();
+        Drive();
+        if (!PopupVisible(popup))
+            return "RRT-06T: a telemetry-only LiveAuto run did NOT show the popup (the `|| HasTelemetry` half of hasContent is broken)";
+        string teleText = ViewText(rrView);
+        if (teleText == null || !teleText.Contains("fills=2") || teleText.Contains("run="))
+            return "RRT-06T: telemetry-only popup body wrong — expected telemetry stats (fills=2) with NO lifecycle 'run=' line (got: " + teleText + ")";
+        InvokeClose(popup); Drive();
+        if (PopupVisible(popup)) return "RRT-06T: × close did not hide the telemetry-only popup";
+        ApplyTelemetry("run-U", 5.0, 6.0, 1, 1);   // a NEW run_id via telemetry alone (no lifecycle ever)
+        Drive();
+        if (!PopupVisible(popup))
+            return "RRT-06T (D8): a new telemetry-only run_id did NOT re-arm a dismissed popup — the telemetry run_id " +
+                   "fallback is missing (re-arm would never fire for a lifecycle-less run)";
+        Debug.Log("[E2E RRT-06T PASS] telemetry-only LiveAuto run shows the popup + a new telemetry run_id re-arms it (|| HasTelemetry + telemetry run_id fallback)");
+        ResetLatch(root, ty);   // clean slate for RRT-06 (the lifecycle-driven gate)
 
-        // ── RRT-06: mode → run_result visibility + no collateral. ──
-        Poll("Replay", "");
+        // ── RRT-06 (D3, the sticky-flag anti-stale gate): a LiveAuto run shows the popup with its run text;
+        // flipping to LiveManual HIDES it — even though LivePanelViewModel's flags are sticky (still true).
+        // Without the `&& DisplayMode==LiveAuto` scope the stale LiveAuto telemetry would leak into LiveManual.
+        // Also pins the live BODY TEXT wiring (PushLiveTiles → Refresh(p) → FormatRunResult into the popup
+        // body) — a visible-but-empty popup would otherwise pass a visibility-only gate. ──
+        Shape(true);
+        Poll("LiveAuto");
+        ApplyLifecycle("run-A", "RUNNING");       // host.Panel.HasLifecycle=true, RunId="run-A"
+        DriveLiveText();                          // PushLiveTiles writes FormatRunResult(p) into the popup body
         Drive();
-        if (!runResult().gameObject.activeSelf) return "RRT-06: run_result hidden under Replay (must be visible — backtest needs Python)";
-        Poll("LiveAuto", "CONNECTED");
+        if (!PopupVisible(popup)) return "RRT-06: LiveAuto run with telemetry did NOT show the popup";
+        string liveText = ViewText(rrView);
+        if (liveText == null || !liveText.Contains("run-A"))
+            return "RRT-06: LiveAuto popup is visible but its body text is empty/stale — the PushLiveTiles→Refresh(p)→FormatRunResult wiring is broken (got: " + liveText + ")";
+        Poll("LiveManual");
         Drive();
-        if (!runResult().gameObject.activeSelf) return "RRT-06: run_result hidden under LiveAuto (the cell drives the strategy — must stay visible)";
-        Poll("LiveManual", "CONNECTED");
+        if (PopupVisible(popup))
+            return "RRT-06 (D3): popup VISIBLE in LiveManual after a LiveAuto run — the sticky flags leaked STALE telemetry " +
+                   "(the live hasContent must be scoped to DisplayMode==LiveAuto)";
+        Poll("LiveAuto");
         Drive();
-        if (runResult().gameObject.activeSelf) return "RRT-06: run_result VISIBLE under LiveManual (must be hidden — strategy-run surface is empty there)";
-        if (!SiblingsVisible()) return "RRT-06: a sibling base tile (orders/positions/buying_power) was hidden under LiveManual — DriveRunResult must toggle ONLY run_result via RectOf(WINDOW_ID_RUN_RESULT) (no collateral)";
-        Debug.Log("[E2E RRT-06 PASS] run_result toggles with mode — visible in Replay/LiveAuto, hidden in LiveManual; Orders/Positions/Buying Power stay visible (no collateral)");
+        if (!PopupVisible(popup)) return "RRT-06: returning to LiveAuto did NOT re-show the popup (content still present)";
 
-        // ── RRT-07: non-destructive — same instance + geometry + groupId across the round-trip. ──
-        Poll("Replay", "");
+        // RRT-06 guard (the load-bearing `if(!IsNullOrEmpty(runId))` in DriveRunResultPopup): after a DISMISS,
+        // a LiveAuto→LiveManual→LiveAuto round-trip on the SAME run must NOT re-arm the popup. A naive
+        // `_runResultLastRunId = runId` (unconditional) would null the tracker in LiveManual, then see
+        // run-A != null on return and spuriously re-show a popup the user dismissed for the still-running run.
+        InvokeClose(popup);
         Drive();
-        var w = runResult();
-        int id = w.GetInstanceID();
-        Vector2 pos = w.anchoredPosition, size = w.sizeDelta;
-        string group = dockWindows.GroupIdOf("run_result");
-        Poll("LiveManual", "CONNECTED");
-        Drive();
-        if (runResult() == null) return "RRT-07: run_result was destroyed on entering LiveManual (must be hide-not-destroy)";
-        if (dockWindows.GroupIdOf("run_result") != group) return "RRT-07: run_result groupId changed while hidden (group membership must be preserved — AC3)";
-        Poll("Replay", "");
-        Drive();
-        var back = runResult();
-        if (back == null || back.GetInstanceID() != id) return "RRT-07: run_result is a new instance after a LiveManual round-trip (must be hide-not-destroy)";
-        if ((back.anchoredPosition - pos).sqrMagnitude > EPS || (back.sizeDelta - size).sqrMagnitude > EPS)
-            return "RRT-07: run_result geometry changed across the hide/show (pos/size not preserved — AC3)";
-        if (dockWindows.GroupIdOf("run_result") != group) return "RRT-07: run_result groupId changed across the round-trip (AC3)";
-        if (!back.gameObject.activeSelf) return "RRT-07: run_result not restored to visible after leaving LiveManual";
-        Debug.Log("[E2E RRT-07 PASS] LiveManual hide is pure visibility — same instance + geometry + groupId preserved across the round-trip");
+        if (PopupVisible(popup)) return "RRT-06 guard: × close did not hide the LiveAuto popup";
+        Poll("LiveManual"); Drive();
+        Poll("LiveAuto"); Drive();   // same run-A, no new Apply
+        if (PopupVisible(popup))
+            return "RRT-06 guard: a LiveManual round-trip spuriously RE-ARMED a dismissed popup on the SAME run " +
+                   "(the run_id tracker must not be clobbered to null in LiveManual — only a genuinely new run re-arms)";
+        Debug.Log("[E2E RRT-06 PASS] popup shows in LiveAuto with run text, hides in LiveManual despite sticky flags (D3); a mode round-trip does not spuriously re-arm a dismissed popup");
 
-        // ── RRT-08 (Finding 1 regression guard): run_result rides CaptureLayout, so a layout SAVED while
-        // hidden in LiveManual persists visible=false and ApplyGeometry restores it hidden on the next boot.
-        // Boot mode is Replay (NOT LiveManual), so the absolute toggle MUST self-heal it back to visible — an
-        // in-memory remembered-set would leave it permanently invisible with no recovery path (the brick the
-        // review caught). Simulate the restored-hidden state with a direct SetActive(false). ──
-
-        // RRT-08 PREMISE (proxy-faithfulness guard): the SetActive(false) below only STANDS IN for a
-        // LiveManual-saved layout if run_result genuinely rides CaptureLayout hidden. Prove that first —
-        // hide in LiveManual, capture, and assert run_result is on the captured list with visible==false
-        // (strategy_editor is excluded at :2553; run_result is NOT). If a future change excluded run_result
-        // from capture, a remembered-set would be safe and this whole self-heal section would be over-
-        // constraining against a state that can no longer occur — this premise check makes that rot loud.
-        Poll("LiveManual", "CONNECTED");
-        Drive();   // hides run_result
+        // ── RRT-07 (D6, no-persist): run_result must be ABSENT from CaptureLayout — the popup does not ride
+        // floatingWindows (it is not a controller window). A regression that re-windowed run_result would
+        // make it reappear here. ──
         var captureLayout = ty.GetMethod("CaptureLayout", BF);
-        if (captureLayout == null) return "RRT-08 premise: CaptureLayout not found (renamed?)";
+        if (captureLayout == null) return "RRT-07 premise: CaptureLayout not found (renamed?)";
         var doc = captureLayout.Invoke(root, null);
         var captured = doc?.GetType().GetField("floatingWindows")?.GetValue(doc) as System.Collections.IEnumerable;
-        if (captured == null) return "RRT-08 premise: CaptureLayout().floatingWindows was null (capture path broken?)";
-        bool rrOnList = false, rrCapturedHidden = false;
+        if (captured == null) return "RRT-07: CaptureLayout().floatingWindows was null (capture path broken?)";
         foreach (var entry in captured)
         {
             var et = entry.GetType();
-            if ((et.GetField("id")?.GetValue(entry) as string) != "run_result") continue;
-            rrOnList = true;
-            rrCapturedHidden = !(bool)et.GetField("visible").GetValue(entry);
+            if ((et.GetField("id")?.GetValue(entry) as string) == "run_result")
+                return "RRT-07 (D6): run_result is present in CaptureLayout — the popup must NOT be persisted " +
+                       "(it was re-windowed / re-added to a controller?)";
         }
-        if (!rrOnList)
-            return "RRT-08 premise: run_result is ABSENT from CaptureLayout — it no longer rides capture (added to the :2553 " +
-                   "exclusion?); the persisted-hidden boot can't occur and the absolute-toggle rationale is moot";
-        if (!rrCapturedHidden)
-            return "RRT-08 premise: run_result was captured visible=true while hidden in LiveManual — capture isn't recording " +
-                   "the hide, so ApplyGeometry could never restore it hidden and the SetActive(false) proxy below is unfaithful";
+        Debug.Log("[E2E RRT-07 PASS] run_result is absent from CaptureLayout — the popup is not persisted (D6)");
 
-        runResult().gameObject.SetActive(false);   // as ApplyGeometry would restore a LiveManual-saved layout
-        Poll("Replay", "");
+        // ── RRT-10 (D1, screen-anchored / pan-invariant STRUCTURAL pin): the popup card must live under a
+        // ScreenSpaceOverlay Canvas parented DIRECTLY to the workspace root transform — NOT under Content
+        // (the parallax infinite-canvas). Pan-invariance is the whole point of the cutover. A regression
+        // re-parenting it under Content would still pass RRT-07 (it rides no controller → absent from
+        // CaptureLayout either way); only this structural assert catches "the popup pans with the canvas". ──
+        var popupRoot = popup.GetType().GetField("_root", BF).GetValue(popup) as GameObject;
+        if (popupRoot == null) return "RRT-10: popup _root not built";
+        var overlayTf = popupRoot.transform.parent;
+        if (overlayTf == null) return "RRT-10: popup card has no overlay Canvas parent";
+        var popupCanvas = overlayTf.GetComponent<Canvas>();
+        if (popupCanvas == null) return "RRT-10: popup overlay has no Canvas component";
+        if (popupCanvas.renderMode != RenderMode.ScreenSpaceOverlay)
+            return "RRT-10 (D1): popup Canvas is not ScreenSpaceOverlay — it would not be screen-anchored (got: " + popupCanvas.renderMode + ")";
+        if (overlayTf.parent != root.transform)
+            return "RRT-10 (D1): popup overlay is NOT a direct child of the workspace root — if it sits under Content " +
+                   "it pans with the infinite canvas (the screen-anchored seam is broken)";
+        Debug.Log("[E2E RRT-10 PASS] popup is a ScreenSpaceOverlay Canvas parented to the root (outside Content) — screen-anchored / pan-invariant (D1)");
+
+        // ── RRT-08 (D7, × close latch + same-run stays dismissed). Replay shape via the override seam. ──
+        ResetLatch(root, ty);
+        Shape(false);
+        pf(PortfolioRun1); sm(null);
+        DriveReplay(root, ty); Drive();
+        if (!PopupVisible(popup)) return "RRT-08 setup: popup not visible before the close";
+        InvokeClose(popup);                         // simulate the × click (OnClose → _runResultDismissed=true)
         Drive();
-        if (!runResult().gameObject.activeSelf)
-            return "RRT-08 (Finding 1): a run_result restored hidden (layout saved in LiveManual) was NOT self-healed " +
-                   "by the Replay mode drive — it would be permanently invisible (a remembered-set brick)";
-        Debug.Log("[E2E RRT-08 PASS] run_result rides CaptureLayout hidden (premise) AND a persisted-hidden boot self-heals to visible on Replay — never permanently bricked");
+        if (PopupVisible(popup)) return "RRT-08 (D7): × close did not hide the popup (the dismiss latch is not honored)";
+        sm(SummaryRun1);                            // same run: running → complete transition (portfolio unchanged)
+        DriveReplay(root, ty); Drive();
+        if (PopupVisible(popup))
+            return "RRT-08 (D7): popup re-appeared on the running→complete transition of the SAME run — a dismiss must hold for the whole run";
+        Debug.Log("[E2E RRT-08 PASS] × close latches; same-run running→complete stays dismissed (D7)");
+
+        // ── RRT-09A (D8, Replay re-arm): after a dismiss, the portfolio falling to honest-empty then rising on
+        // the NEXT run re-arms the latch → the popup re-appears. ──
+        pf(null); DriveReplay(root, ty); Drive();   // honest-empty (falling edge)
+        if (PopupVisible(popup)) return "RRT-09A setup: popup visible while honest-empty between runs";
+        pf(PortfolioRun2Streaming); sm(null); DriveReplay(root, ty); Drive();   // next run injects content (rising)
+        if (!PopupVisible(popup))
+            return "RRT-09A (D8): the next Replay run (portfolio re-injected) did NOT re-show a dismissed popup — Replay re-arm is broken";
+        Debug.Log("[E2E RRT-09A PASS] Replay re-arm: next run (honest-empty→content rising edge) re-shows a dismissed popup (D8)");
+
+        // ── RRT-09B (D8, LiveAuto re-arm — the #164 symmetry trap): after a dismiss, a NEW LiveAuto run
+        // (different run_id) re-arms the latch. The flags are STICKY so a boolean falling edge never appears
+        // between two runs — keying off run_id is what keeps re-arm symmetric with Replay. ──
+        ResetLatch(root, ty);
+        pf(null); sm(null);
+        Shape(true);
+        Poll("LiveAuto");
+        ApplyLifecycle("run-A", "RUNNING");
+        Drive();
+        if (!PopupVisible(popup)) return "RRT-09B setup: first LiveAuto run did not show the popup";
+        InvokeClose(popup);
+        Drive();
+        if (PopupVisible(popup)) return "RRT-09B setup: × close did not hide the popup in LiveAuto";
+        ApplyLifecycle("run-B", "RUNNING");         // a genuinely NEW run (run_id changes; HasLifecycle stays sticky-true)
+        Drive();
+        if (!PopupVisible(popup))
+            return "RRT-09B (D8): a NEW LiveAuto run (run_id changed) did NOT re-show a dismissed popup — the re-arm " +
+                   "is keying off a boolean falling edge (which never fires for sticky flags) instead of run_id (#164 trap)";
+        Debug.Log("[E2E RRT-09B PASS] LiveAuto re-arm: a new run_id re-shows a dismissed popup despite sticky flags (D8 symmetry)");
 
         return null;
+    }
+
+    // Run the Replay tile poll once so the popup body text tracks the override before DriveRunResultPopup
+    // reads visibility (mirrors the real Update order: RefreshLiveTiles before DriveRunResultPopup).
+    static void DriveReplay(BackcastWorkspaceRoot root, Type ty)
+        => ty.GetMethod("RefreshLiveTiles", BF).Invoke(root, null);
+
+    // Reset the session-only dismiss latch + its per-mode edge trackers so a sub-scenario is self-contained.
+    static void ResetLatch(BackcastWorkspaceRoot root, Type ty)
+    {
+        ty.GetField("_runResultDismissed", BF).SetValue(root, false);
+        ty.GetField("_runResultPrevReplayHasContent", BF).SetValue(root, false);
+        ty.GetField("_runResultLastRunId", BF).SetValue(root, null);
+    }
+
+    // Simulate the × click: invoke the popup's OnClose action (exactly what the close Button's onClick calls).
+    static void InvokeClose(object popup)
+    {
+        var onClose = popup.GetType().GetField("OnClose").GetValue(popup) as Action;
+        onClose?.Invoke();
+    }
+
+    static bool PopupVisible(object popup)
+    {
+        if (popup == null) return false;
+        var p = popup.GetType().GetProperty("IsVisible");
+        return p != null && (bool)p.GetValue(popup);
     }
 
     // Read the rendered Text of a LivePanelTileView via its private _content field.

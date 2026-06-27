@@ -482,8 +482,9 @@ public static class ChartPlacementJourneyE2ERunner
             InvokeOnFileOpen(ty, root);
 
             // No sidecar + no inline scenario → universe stays empty → no chart spawns; base cluster intact.
-            // Asserting the base cluster's 4 windows exist on the dock plane (ADR-0026: KIND_STARTUP retired).
-            string[] baseIds = { "buying_power", "orders", "positions", "run_result" };
+            // Asserting the base cluster's 3 windows exist on the dock plane (ADR-0026 retired startup,
+            // ADR-0037 retired run_result → screen-anchored popup, so it is no longer a dock window).
+            string[] baseIds = { "buying_power", "orders", "positions" };
             for (int i = 0; i < baseIds.Length; i++)
                 if (!dockWindows.Has(baseIds[i]))
                     return "CP-S4-01: base dock window " + baseIds[i] + " missing after bare open";

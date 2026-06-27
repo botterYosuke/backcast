@@ -9,10 +9,10 @@
 // Default() ships:
 //   * `strategy_editor` and `order` — the GENUINE TTWR floating windows (findings 0008 §0/§1).
 //   * #99 Slice 2 / ADR-0017 / findings 0075 §2 — `chart` / `buying_power` / `orders` /
-//     `positions` / `run_result` / `startup`. The Hakoniwa surface is being ported FROM
-//     split-grid tiles TO the floating-window seam (ADR-0017 Decision 1), so the former tile
-//     KINDS land here. `chart` is MULTI-INSTANCE (ids "chart:<instrument-id>" share this one
-//     kind, same shape as `strategy_editor:<region>`); the other 5 are conceptually singletons
+//     `positions` (`run_result` retired by ADR-0037, `startup` by ADR-0026). The Hakoniwa surface
+//     was ported FROM split-grid tiles TO the floating-window seam (ADR-0017 Decision 1), so the
+//     former tile KINDS land here. `chart` is MULTI-INSTANCE (ids "chart:<instrument-id>" share this
+//     one kind, same shape as `strategy_editor:<region>`); the other 3 are conceptually singletons
 //     (one BuyingPower etc.). The catalog only maps kind -> spec; instance identity is the
 //     document's job. Per-kind accents come from PlayerColors so the dock cluster stays
 //     visually distinguishable without inline literals (findings 0020).
@@ -32,10 +32,12 @@ public class FloatingWindowCatalog
     public const string KIND_BUYING_POWER = "buying_power";
     public const string KIND_ORDERS = "orders";
     public const string KIND_POSITIONS = "positions";
-    public const string KIND_RUN_RESULT = "run_result";
     // KIND_STARTUP ("startup") RETIRED — ADR-0026: Scenario Startup moved to the Settings modal's
-    // Scenario section; the dock no longer hosts a startup window. A pre-ADR-0026 saved layout that
-    // names "startup" is forward-compat: TryGet("startup")=false → spawn skipped, layout entry kept.
+    // Scenario section; the dock no longer hosts a startup window.
+    // KIND_RUN_RESULT ("run_result") RETIRED — ADR-0037 (findings 0125 D4): run_result is cut over from
+    // a dock base singleton to a screen-anchored popup (RunResultPopup), so it is no longer a catalog
+    // kind. Both are forward-compat: a pre-retirement saved layout naming "startup"/"run_result" gets
+    // TryGet=false → spawn skipped, layout entry kept (forward-evolution discipline, findings 0008 §3).
 
     readonly Dictionary<string, FloatingWindowSpec> _specs;
 
@@ -57,10 +59,10 @@ public class FloatingWindowCatalog
     public bool Contains(string kind) => !string.IsNullOrEmpty(kind) && _specs.ContainsKey(kind);
 
     // The default catalog: the 2 floating-window seam kinds (strategy_editor / order) + the
-    // 6 #99 dock kinds (chart / buying_power / orders / positions / run_result / startup) that
-    // replace the retired Hakoniwa split-grid tile system (ADR-0017). Per-kind accents come from
-    // the theme PlayerColors palette (findings 0020) so the cluster stays distinguishable
-    // without inline literals; PlayerColors cycles modulo 8, so all 8 slots are used distinctly.
+    // #99 dock kinds (chart / buying_power / orders / positions; startup retired by ADR-0026,
+    // run_result by ADR-0037) that replaced the Hakoniwa split-grid tile system (ADR-0017). Per-kind
+    // accents come from the theme PlayerColors palette (findings 0020) so the cluster stays
+    // distinguishable without inline literals; PlayerColors cycles modulo 8.
     // closeable=false on the dock kinds: they are WORKSPACE-OWNED (the View menu / mode poll
     // governs visibility), so an in-title-bar X is suppressed — the user does not close them
     // accidentally and lose them (the strategy_editor / order frames keep their X as before).
@@ -96,12 +98,10 @@ public class FloatingWindowCatalog
                 KIND_POSITIONS, "Positions",
                 defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
                 accent: players.Get(5), closeable: false),
-            new FloatingWindowSpec(
-                KIND_RUN_RESULT, "Run Result",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(6), closeable: false),
-            // KIND_STARTUP spec RETIRED — ADR-0026 (Scenario Startup → Settings modal). Dropping it from
-            // Default() is what makes a saved "startup" window skip on restore (catalog TryGet=false).
+            // KIND_STARTUP spec RETIRED — ADR-0026 (Scenario Startup → Settings modal).
+            // KIND_RUN_RESULT spec RETIRED — ADR-0037 (run_result → RunResultPopup, findings 0125 D4).
+            // Dropping a kind from Default() is what makes a saved window of that kind skip on restore
+            // (catalog TryGet=false) while LayoutStore keeps the entry — forward-compat without migration.
         });
     }
 }

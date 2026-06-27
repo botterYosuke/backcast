@@ -21,7 +21,7 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 実行:
 ```
 <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 / exit 0
+# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-16 / exit 0
 ```
 
 ## 操作一覧表
@@ -37,13 +37,14 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 | ASB-07 | save→boot でバー位置/可視を復元しない（非永続） | `CaptureLayout` | floatingWindows にバー entry 無し | capture にバー id/kind 不在 | 自動(E2E済) | — |
 | ASB-08 | 旧保存 layout が退役 3 kind を名指しても restore skip | `RestoreFloating` / `FloatingWindowCatalog` / `DockShape.IsDockKind` | buying_power/orders/positions は spawn skip・chart は restore（非空虚）・IsDockKind=false | `!Has(retired)`・`Has(chart)`・`!IsDockKind` | 自動(E2E済) | — |
 | ASB-09 | Replay / LiveManual / LiveAuto 全モードで常時表示 | `BuildWorkspace`（hide 経路なし） | モード poll 後もバー active | `bar.gameObject.activeInHierarchy` | 自動(E2E済) | — |
-| ASB-10 | アイコン枠に 3D プリミティブ（RenderTexture→RawImage 差し替え seam） | `AccountSummaryIconStage.Build` / `SetIconTexture` | 各スロット RawImage に非 null texture | `IconTexture(i)!=null` | 自動(E2E済) | — |
+| ASB-10 | アイコン枠が RenderTexture→RawImage の差し替え seam（将来 sprite 置換） | `AccountSummaryIconStage.Build` / `SetIconTexture` | 各スロット RawImage に非 null texture | `IconTexture(i)!=null` | 自動(E2E済) | — |
 | ASB-11 | 帯背景が透明＋クリック透過（sidebar 同型・テーマ flip でも透明維持）（D8） | `AccountSummaryBarView.Build` / `ApplyTheme` | strip Image の `color.a==0`・`raycastTarget==false`・flip 後も alpha 0 | `stripBg.color.a==0`・`!raycastTarget` | 自動(E2E済) | — |
 | ASB-12 | スロットが左詰め固定 68px ピッチ（右は空白・全幅 stretch でない）（D9） | `AccountSummaryBarView.BuildSlot` | slot root `anchorMin.x==anchorMax.x==0`・隣接ピッチ 68・右端 < strip 幅 | `anchorMax.x==0`・`Δx==68`・rightEdge<stripW | 自動(E2E済) | — |
 | ASB-13 | 主数値がアイコンの下に縦積み（D10） | `AccountSummaryBarView.BuildSlot` | icon top-anchored（anchorY 1）・primary bottom-anchored（anchorY 0） | `icon.anchorY==1`・`primary.anchorY==0` | 自動(E2E済) | — |
 | ASB-14 | バー主数値は金額を k/M 短縮・ホバー card はフル桁維持（D11） | `AccountSummaryFormat.MoneyCompact` / `PushReplayAccountBar` | 7 桁で bar=`1.23M`・compact≠full・hover ②＝`FormatReplayBuyingPower`（raw 1234567 在） | `PrimaryText==MoneyCompact`・`!=Money`・`CardText` フル桁 | 自動(E2E済) | — |
 | ASB-15 | ホバー card が日本語ラベルを描けるよう専用 CJK フォントに配線（主数値は Latin 維持） | `BackcastWorkspaceRoot.CreateCjkFont` / `AccountSummaryBarView.Build`（cardText.font=_cjkFont） | card フォントが主数値フォント（Latin）と別オブジェクト・OS に日本語フェイスがある時は必須 | OS CJK フェイス在→`CardFont(0)!=PrimaryFont(0)`／不在→SKIP | 自動(E2E済・配線)＋HITL（実画素） | — |
-| — | 実 pan の奥行き目視 / 実アイコン（sprite）差し替え / 実 SDF lit 画素 / **ホバー card に日本語が豆腐でなく描画される** | — | 目視 | — | HITL専用（実画素・GPU・実 art） | — |
+| ASB-16 | アイコンが各指標に意味で寄った形状＋色（① 金貨/② 札束/③ 箱積/④ チェック・gold/blue/brown/green） | `AccountSummaryIconStage.BuildSemanticGroup` / `MakeMaterial` | mesh 構成が ①1/②2/③3/④2・各 stage の semantic 色が gold/blue/brown/green・4 色が pairwise distinct | `MeshCount(i)==[1,2,3,2]`・`IconColor(i)≈各 hex`・全 pair 非近似 | 自動(E2E済・構成+色)＋HITL（実 lit 画素） | — |
+| — | 実 pan の奥行き目視 / 実アイコン（sprite）差し替え / **実 lit メッシュ画素（金貨/札束/箱/チェックの見え方）** / 実 SDF lit 画素 / **ホバー card に日本語が豆腐でなく描画される** | — | 目視 | — | HITL専用（実画素・GPU・実 art） | — |
 
 ## RED→GREEN litmus（production を壊すと落ちる）
 
@@ -61,3 +62,4 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 - バー主数値を `Money`（フル桁）にする → ASB-14 RED（compact==full の vacuity guard が発火）。
 - 未取得時の card detail を `EmptyDetail` でなく裸の `—` に戻す → ASB-01 RED（①card に「純資産」不在）。
 - card テキストの font を `_cjkFont` でなく `_font`（Latin）に戻す → ASB-15 RED（OS に日本語フェイス在のとき card==primary font）。
+- アイコンを任意の単一白プリミティブ（cube/sphere/capsule/cylinder）に戻す → ASB-16 RED（mesh 数が 1/1/1/1・色が白で非 distinct）。

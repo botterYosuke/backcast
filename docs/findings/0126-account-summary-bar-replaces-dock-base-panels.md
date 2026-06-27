@@ -306,3 +306,26 @@ map したら FAIL）が誤った proxy を即座に露出させた**＝proxy ga
 **AFK 正本（RED→GREEN）**: ASB-01 に「未取得 card がラベル付き（①に『純資産』）」を追加・ASB-15（フォント配線）新設。compile PASS／
 ASB-01..15 全 GREEN（ASB-15 PASS＝owner Windows に Yu Gothic 在）／NBHAKO PASS（データ経路の byte 一致は formatter 再呼び出しゆえ
 日本語ラベルでも維持）。連動: NBHAKO/LiveManualTrade の card 文字列 literal（`bp=`→`買付け余力:`／`qty=`→`数量:` 等）を更新。
+
+## アイコン placeholder = 意味に寄せた形状＋色（owner・2026-06-27 追補 — #177 リファインメント / grill-with-docs）
+
+issue #177 の初版は 4 スロットを**任意の** Unity プリミティブ（① cube / ② sphere / ③ capsule / ④ cylinder・全て URP 既定の**白**マテリアル）で埋めていた（「4 指標を視覚的に区別」が目的だが形状も色も意味と無関係）。owner 要望「3D プリミティブを**意味に合わせた形状と色**にして」を grill-with-docs で設計確定。
+
+**スロット意味の正本（コードから裏取り）**: `BackcastWorkspaceRoot.PushAccountBar*` ＋ `AccountSummaryFormat`。
+① **純資産**（equity・主数値テキストが含み損益符号で緑/赤 recolor）／② **買付け余力**（cash）／③ **建玉数**（position count）／④ **約定注文数**（filled-order count）。
+
+**決定（4 つの下位決定）**:
+- **D-ICON-1 形状の語彙 = プリミティブ合成（scale＋group）**。真の vertex-authored procedural mesh は採らない（法線/UV/テスト面のコスト過剰・placeholder の趣旨に不釣り合い）。既存 `CreatePrimitive` 経路・bake-once（`cam.Render()` 一発・`cam.enabled=false`）・RenderTexture→RawImage swap seam（`SetIconTexture`）をそのまま再利用し、各 stage に**複数メッシュのグループ**を `ICON_LAYER`（31）で置き ortho cam（`orthographicSize 0.8`）で 1 枚に焼く。
+- **D-ICON-2 形状の割り当て（シルエット）**:
+  - ① 純資産 → **金貨** = Cylinder を Y≈16% に平たくしたディスク。
+  - ② 買付け余力 → **札束** = 薄い Cube 盤＋帯に細 Cube（紙幣束）。
+  - ③ 建玉数 → **箱の積み重ね** = Cube×3 をオフセット積み。
+  - ④ 約定注文数 → **チェックマーク** = 細 Cube×2 を V 字回転（✓）。
+  - 制約: 各グループは ortho framing（view 高 ≈1.6 unit）に収まるよう scale。
+- **D-ICON-3 色 = static な semantic 色（theme 非依存・bake-once）**。Dark/Light flip で**変えない**（金は常に金）。`ApplyTheme` はメッシュ色に触れない（RT は一度焼くだけ・clearFlags は透明 alpha0 維持で frame 背後は従来どおり）。URP/Lit ゆえ色は `_BaseColor` にセット（`Material.color`＝`_Color` は URP に無い）。
+  - ① 金 `#E8B84B` ／ ② 青 `#4C8DFF` ／ ③ 茶 `#A1714B` ／ ④ 緑 `#3FB950`。**4 色を色相で分離**（30px で識別）。緑は約定（完了/成功）に一本化し、札束は青（日本紙幣は緑でない・流動性＝青）、箱は茶（段ボール）。
+- **D-ICON-4 純資産アイコンは gain/loss を反映しない**。符号は主数値テキストの緑/赤が担い、金貨は**常に金（static）**。これで bake-once（毎 pnl 変化での再焼き不要）を保つ。
+
+**AFK ゲート（実装着手前に behavior-to-e2e formal invoke）**: 実画素（ライティング後のメッシュ色）は GPU 依存で headless -nographics 不可＝owner HITL。代わりに `AccountSummaryIconStage` に probe 観測点を足し、**CPU 側で検証可能**な不変条件を gate する —— (a) 4 stage が各**期待メッシュ構成**（grpごとの renderer 数）で建つ、(b) 各 stage の baked `_BaseColor` が**4 色とも相異**（任意白プリムだった旧実装は全色一致＝この leg で RED）。AC#4「4 スロットにアイコン枠が存在」は既存 ASB（icon texture 割当）が維持。新 leg を Action-ID で rollup に載せる。
+
+**AFK 正本（RED→GREEN）**: ASB-16 新設＝`_accountIconStage` を reflection で引き、(a) `MeshCount(i)==[1,2,3,2]`（金貨1/札束2/箱積3/チェック2）、(b) `IconColor(i)` が runner-local literal の semantic hex（gold/blue/brown/green）と ≈一致（eps 0.02）、(c) 4 色 pairwise distinct（eps 0.05）を assert。RED litmus＝アイコンを旧実装（任意の単一白プリム）に戻すと count 1/1/1/1・色 white 非 distinct で RED。compile PASS（`error CS` 0）／ASB-01..16 全 GREEN・exit 0（owner Windows・2026-06-27）。実 lit メッシュ画素（金貨/札束/箱/チェックの見え方）は HITL 行へ。

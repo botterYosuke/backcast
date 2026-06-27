@@ -696,9 +696,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (_cjkFont == null) _cjkFont = CreateCjkFont();
         _accountBar.Build(_font, _cjkFont, menuH);
 
-        // #177 S5: placeholder 3D-primitive icons (cube/sphere/capsule/cylinder) rendered to per-slot
-        // RenderTextures and fed to each slot's RawImage. The RawImage.texture is the swap seam for future
-        // real art (owner HITL). Real lit pixels are HITL; headless just wires the (non-null) RT objects.
+        // #177 S5: placeholder icons whose SHAPE+COLOUR match each metric — 金貨(純資産)/札束(買付け余力)/
+        // 箱積(建玉)/チェック(約定) — built from scaled+grouped primitives, rendered to per-slot RenderTextures
+        // and fed to each slot's RawImage. The RawImage.texture is the swap seam for future real art (owner
+        // HITL). Real lit pixels are HITL; headless just wires the (non-null) RT objects + baked mesh colours.
         var iconStageGo = new GameObject("AccountSummaryIconStage");
         iconStageGo.transform.SetParent(transform, false);
         _accountIconStage = iconStageGo.AddComponent<AccountSummaryIconStage>();

@@ -34,16 +34,21 @@
 //            so the Japanese labels render (owner report 2026-06-27); ① pre-data card is LABELED (純資産: — …),
 //            not a bare "—". RED if a Japanese OS face exists yet the card shares the Latin font; SKIPs on CI
 //            (no Japanese face); real glyph render is HITL. (HasCharacter is unusable — dynamic fonts OS-fall-back.)
+//   ASB-16 = icons MATCH each metric (#177 refinement): each slot's off-world group is built from scaled+grouped
+//            primitives whose mesh-count forms the silhouette (① 金貨=1 / ② 札束=2 / ③ 箱積=3 / ④ チェック=2) and
+//            is tinted a STATIC semantic colour (① gold / ② blue / ③ brown / ④ green), the 4 pairwise-distinct.
+//            Composition + baked colour are CPU-readable; real lit pixels are HITL.
 //
 //   <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 + per-id tags / exit 0.
+//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-16 + per-id tags / exit 0.
 // RED litmus: wire slot ② hover to FormatReplayOrders → ASB-05 RED; drop the equity uPnL term → ASB-04 RED;
 //             source ④ from telemetry.OrderCount → ASB-04 RED (expects FilledOrderCount=2, not 3); skip the
 //             cleared-portfolio reset → ASB-02 RED; drop ApplyTheme's tint re-resolve → ASB-03 RED;
 //             parent the bar under _content → ASB-06 RED; leave a retired spec in Default() → ASB-08 RED;
 //             give the band an opaque panel_background / raycastTarget=true → ASB-11 RED; restore the
 //             1/SLOT_COUNT-stretch slot layout → ASB-12 RED; right-of-icon (centred) value → ASB-13 RED;
-//             use Money (full digits) for the bar primary → ASB-14 RED (compact==full vacuity guard trips).
+//             use Money (full digits) for the bar primary → ASB-14 RED (compact==full vacuity guard trips);
+//             revert icons to 4 arbitrary single white primitives → ASB-16 RED (counts 1/1/1/1, colours not distinct).
 
 using System;
 using System.Collections;
@@ -67,7 +72,7 @@ public static class AccountSummaryBarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 verified.");
+            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-16 verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -409,8 +414,41 @@ public static class AccountSummaryBarE2ERunner
             Debug.Log("[E2E ASB-15 SKIP] no Japanese OS face installed (CI) — card falls back to the Latin font; Japanese render is HITL.");
         }
 
+        // ── ASB-16: icons MATCH each metric — shape composition + semantic colour (#177 refinement) ──
+        // The placeholders are no longer arbitrary white primitives (cube/sphere/capsule/cylinder, all the
+        // default white material). Each slot's off-world group is built from scaled+grouped primitives whose
+        // mesh-count forms the silhouette (① 金貨=1 / ② 札束=2 / ③ 箱積=3 / ④ チェック=2) and is tinted a
+        // STATIC semantic colour (gold/blue/brown/green). Real lit pixels are HITL; the composition + baked
+        // colour are CPU-readable, so this gate is non-vacuous (the OLD impl had counts 1/1/1/1 + 4× white).
+        var iconStage = ty.GetField("_accountIconStage", BF)?.GetValue(root) as AccountSummaryIconStage;
+        if (iconStage == null) return "ASB-16: _accountIconStage not built by BuildWorkspace (renamed?)";
+        int[] expCounts = { 1, 2, 3, 2 };
+        for (int i = 0; i < 4; i++)
+            if (iconStage.MeshCount(i) != expCounts[i])
+                return $"ASB-16: slot {i} icon group has {iconStage.MeshCount(i)} meshes, expected {expCounts[i]} "
+                     + "(① 金貨=1 / ② 札束=2 / ③ 箱積=3 / ④ チェック=2 — arbitrary single primitives would all be 1)";
+        // pin the exact semantic hues (runner-local literals so a palette drift in the stage is flagged).
+        Color gold  = new Color(0.910f, 0.722f, 0.294f);   // #E8B84B 純資産
+        Color blue  = new Color(0.298f, 0.553f, 1.000f);   // #4C8DFF 買付け余力
+        Color brown = new Color(0.631f, 0.443f, 0.294f);   // #A1714B 建玉
+        Color green = new Color(0.247f, 0.725f, 0.314f);   // #3FB950 約定
+        Color[] expColors = { gold, blue, brown, green };
+        for (int i = 0; i < 4; i++)
+            if (!ColorClose(iconStage.IconColor(i), expColors[i], 0.02f))
+                return $"ASB-16: slot {i} icon colour {iconStage.IconColor(i)} != semantic {expColors[i]} "
+                     + "(① gold / ② blue / ③ brown / ④ green — colours must MATCH the metric)";
+        // the 4 colours must be pairwise DISTINCT (the whole point of distinct icons — 4 white prims fail this).
+        for (int i = 0; i < 4; i++)
+            for (int j = i + 1; j < 4; j++)
+                if (ColorClose(iconStage.IconColor(i), iconStage.IconColor(j), 0.05f))
+                    return $"ASB-16: slots {i} and {j} share a colour {iconStage.IconColor(i)} — the 4 metrics must be visually distinct";
+        Debug.Log("[E2E ASB-16 PASS] icons match metrics: mesh groups 金貨1/札束2/箱積3/チェック2 + 4 distinct semantic colours (gold/blue/brown/green). Lit pixels = HITL.");
+
         return null;
     }
+
+    static bool ColorClose(Color a, Color b, float eps)
+        => Mathf.Abs(a.r - b.r) <= eps && Mathf.Abs(a.g - b.g) <= eps && Mathf.Abs(a.b - b.b) <= eps;
 
     static string InvokeReplayFmt(Type ty, string name, PortfolioSnapshot snap)
     {

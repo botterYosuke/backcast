@@ -8,6 +8,12 @@ issues **#174-178**「アカウントサマリーバー」（ADR-0038 / findings
 クリック透過**（Universe sidebar 同型・`color.a==0`／`raycastTarget==false`）／スロットは **左詰め固定幅**（右は空白）／
 主数値は **アイコン下に縦積み**／金額は **k/M 短縮表記**（バーは `1.23M`・ホバー card は `Money` フル桁の byte 一致再利用）。
 
+**日本語ラベル＆フォント（owner 2026-06-27・findings 0126 §日本語ラベル）**: ホバー card は「何の項目か」が分かるよう
+**日本語ラベル付き**（純資産／含み損益／確定損益／現金／買付け余力／数量／取得単価 …）。未取得時も **裸の `—` でなくラベル付き
+プレースホルダ**（`純資産: — …`）を出す。card テキストは **CJK 対応の動的 OS フォント**（Yu Gothic 等）に配線（主数値は数値ゆえ
+Latin フォント維持）。`LegacyRuntime.ttf` は Latin 専用で、TMP（コードエディタ）は OS フォールバックしないが、legacy `Text` は
+dynamic font 経由で OS フォールバックする（＝`Font.HasCharacter` は dynamic font に判別力なし）。実グリフ描画は GPU 依存ゆえ HITL。
+
 正本＝この `.md`（合否仕様）／自動判定＝`AccountSummaryBarE2ERunner.cs`。Python-FREE で実 `BackcastWorkspaceRoot` を
 scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfolioJsonOverride`（#65 poll seam）、Live は
 `LivePanelViewModel.Apply`（#20 sink seam）で駆動する。実 pan の奥行き目視・実アイコン差し替え・実 SDF 画素は owner HITL。
@@ -15,14 +21,14 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 実行:
 ```
 <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-14 / exit 0
+# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 / exit 0
 ```
 
 ## 操作一覧表
 
 | Action ID | 行動（ユーザー観測） | 入口(file:line) | 観測点 | 自動判定 | カバー状態 | 既存Probe |
 |---|---|---|---|---|---|---|
-| ASB-01 | バーがヘッダー直下に全幅・常時表示で出る（4 スロット・未取得「—」） | `AccountSummaryBarView.Build` / `BackcastWorkspaceRoot.BuildWorkspace` | 自前 ScreenSpaceOverlay canvas・Content の子でない・4 スロット・主数値「—」・icon frame 在 | `bar.Canvas.renderMode==ScreenSpaceOverlay`・`!IsChildOf(_content)`・`PrimaryText(i)=="—"` | 自動(E2E済) | — |
+| ASB-01 | バーがヘッダー直下に全幅・常時表示で出る（4 スロット・未取得は主数値「—」だがホバー card はラベル付き） | `AccountSummaryBarView.Build` / `BackcastWorkspaceRoot.BuildWorkspace` / `AccountSummaryFormat.EmptyDetail` | 自前 ScreenSpaceOverlay canvas・Content の子でない・4 スロット・主数値「—」・icon frame 在・①card に「純資産」②card に「買付け余力」 | `renderMode==ScreenSpaceOverlay`・`!IsChildOf(_content)`・`PrimaryText(i)=="—"`・`CardText(0).Contains("純資産")` | 自動(E2E済) | — |
 | ASB-02 | 4 スロット主数値が Replay snapshot の実値・データ消去で「—」復帰 | `PushReplayAccountBar` / `PushAccountBarEmpty` | equity/bp/建玉数/注文数 が pf1 と一致・portfolio クリアで全スロット「—」（#61 anti-stale） | `PrimaryText` 一致＋クリア後「—」 | 自動(E2E済) | — |
 | ASB-03 | ① の数値色が含み損益の符号で緑/赤・idle テーマ切替で色再解決 | `PushReplayAccountBar` / `AccountSummaryBarView.ApplyTheme` | uPnL≥0→`hakoniwa_up` / uPnL<0→`hakoniwa_down`・data 非 push のテーマ flip で tint→色 再解決（ADR-0028 trap） | `PrimaryColor(0)` 一致＋flip 後も追従 | 自動(E2E済) | — |
 | ASB-04 | Live 純資産＝`Cash + Σ(qty×avg+uPnL)` 導出＋色・④＝FilledOrderCount | `PushLiveAccountBar` / `AccountSummaryFormat.DeriveLiveEquity` | 建玉ありで導出 equity 一致・負 uPnL で赤・bp/建玉・④＝`FilledOrderCount`（LiveManual でも出る・telemetry.OrderCount ではない） | `PrimaryText/Color` 一致（④=="2"≠telemetry 3） | 自動(E2E済) | — |
@@ -36,7 +42,8 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 | ASB-12 | スロットが左詰め固定 68px ピッチ（右は空白・全幅 stretch でない）（D9） | `AccountSummaryBarView.BuildSlot` | slot root `anchorMin.x==anchorMax.x==0`・隣接ピッチ 68・右端 < strip 幅 | `anchorMax.x==0`・`Δx==68`・rightEdge<stripW | 自動(E2E済) | — |
 | ASB-13 | 主数値がアイコンの下に縦積み（D10） | `AccountSummaryBarView.BuildSlot` | icon top-anchored（anchorY 1）・primary bottom-anchored（anchorY 0） | `icon.anchorY==1`・`primary.anchorY==0` | 自動(E2E済) | — |
 | ASB-14 | バー主数値は金額を k/M 短縮・ホバー card はフル桁維持（D11） | `AccountSummaryFormat.MoneyCompact` / `PushReplayAccountBar` | 7 桁で bar=`1.23M`・compact≠full・hover ②＝`FormatReplayBuyingPower`（raw 1234567 在） | `PrimaryText==MoneyCompact`・`!=Money`・`CardText` フル桁 | 自動(E2E済) | — |
-| — | 実 pan の奥行き目視 / 実アイコン（sprite）差し替え / 実 SDF lit 画素 | — | 目視 | — | HITL専用（実画素・GPU・実 art） | — |
+| ASB-15 | ホバー card が日本語ラベルを描けるよう専用 CJK フォントに配線（主数値は Latin 維持） | `BackcastWorkspaceRoot.CreateCjkFont` / `AccountSummaryBarView.Build`（cardText.font=_cjkFont） | card フォントが主数値フォント（Latin）と別オブジェクト・OS に日本語フェイスがある時は必須 | OS CJK フェイス在→`CardFont(0)!=PrimaryFont(0)`／不在→SKIP | 自動(E2E済・配線)＋HITL（実画素） | — |
+| — | 実 pan の奥行き目視 / 実アイコン（sprite）差し替え / 実 SDF lit 画素 / **ホバー card に日本語が豆腐でなく描画される** | — | 目視 | — | HITL専用（実画素・GPU・実 art） | — |
 
 ## RED→GREEN litmus（production を壊すと落ちる）
 
@@ -52,3 +59,5 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 - スロットを 1/SLOT_COUNT stretch レイアウトに戻す → ASB-12 RED（左詰め固定幅でない）。
 - 主数値をアイコンの右（中央寄せ）に戻す → ASB-13 RED（縦積みでない）。
 - バー主数値を `Money`（フル桁）にする → ASB-14 RED（compact==full の vacuity guard が発火）。
+- 未取得時の card detail を `EmptyDetail` でなく裸の `—` に戻す → ASB-01 RED（①card に「純資産」不在）。
+- card テキストの font を `_cjkFont` でなく `_font`（Latin）に戻す → ASB-15 RED（OS に日本語フェイス在のとき card==primary font）。

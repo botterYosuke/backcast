@@ -48,7 +48,11 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     const float CARD_W = 300f;     // hover detail card width
     const float CARD_H = 96f;      // hover detail card height
 
-    Font _font;
+    Font _font;        // Latin font for the numeric primaries ("—" / "155k" / counts).
+    Font _cjkFont;     // CJK-capable font for the hover-card LABELS (純資産 / 買付け余力 …). LegacyRuntime.ttf
+                       // (Liberation Sans) has NO Japanese glyphs, so the labels render as tofu/blank with it
+                       // (#174-178 owner report 2026-06-27). The owner passes a dynamic OS font (Yu Gothic …);
+                       // glyph rasterisation itself is HITL (headless has no rasteriser), the wiring is gated.
     Canvas _canvas;
     RectTransform _strip;
     bool _built;
@@ -89,6 +93,8 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     public Color PrimaryColor(int i) => Valid(i) ? _slots[i].primary.color : default;
     public bool CardVisible(int i) => Valid(i) && _slots[i].card != null && _slots[i].card.gameObject.activeSelf;
     public string CardText(int i) => Valid(i) && _slots[i].cardText != null ? _slots[i].cardText.text : null;
+    public Font CardFont(int i) => Valid(i) && _slots[i].cardText != null ? _slots[i].cardText.font : null;
+    public Font PrimaryFont(int i) => Valid(i) && _slots[i].primary != null ? _slots[i].primary.font : null;
     public Texture IconTexture(int i) => Valid(i) && _slots[i].icon != null ? _slots[i].icon.texture : null;
     public RawImage IconImage(int i) => Valid(i) ? _slots[i].icon : null;
 
@@ -96,11 +102,14 @@ public sealed class AccountSummaryBarView : MonoBehaviour
 
     // Build the strip on its OWN ScreenSpaceOverlay canvas. `topOffset` = the menu bar height, so the
     // strip hangs flush UNDER the menu (derived, never hardcoded against the menu's authored height).
-    public void Build(Font font, float topOffset)
+    public void Build(Font font, Font cjkFont, float topOffset)
     {
         if (_built) return;
         _built = true;
         _font = font != null ? font : Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        // fall back to the Latin font if the owner could not create an OS CJK font (no Japanese face installed);
+        // the labels would then be tofu, but the bar still builds (the fallback is a last resort, not the norm).
+        _cjkFont = cjkFont != null ? cjkFont : _font;
         var c = ThemeService.Current.colors;
 
         // own override-sorting ScreenSpaceOverlay canvas (screen-anchored — independent of Content).
@@ -196,7 +205,8 @@ public sealed class AccountSummaryBarView : MonoBehaviour
         ctRt.anchorMin = Vector2.zero; ctRt.anchorMax = Vector2.one;
         ctRt.offsetMin = new Vector2(8f, 6f); ctRt.offsetMax = new Vector2(-8f, -6f);
         slot.cardText = ctGo.GetComponent<Text>();
-        slot.cardText.font = _font; slot.cardText.fontSize = 12;
+        // CJK font: the hover card is the only bar text that carries Japanese labels (primaries are numeric).
+        slot.cardText.font = _cjkFont; slot.cardText.fontSize = 12;
         slot.cardText.color = c.hakoniwa_text;
         slot.cardText.alignment = TextAnchor.UpperLeft;
         slot.cardText.horizontalOverflow = HorizontalWrapMode.Wrap;

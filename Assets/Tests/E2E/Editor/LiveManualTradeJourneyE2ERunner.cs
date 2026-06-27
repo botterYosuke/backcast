@@ -353,7 +353,7 @@ public static class LiveManualTradeJourneyE2ERunner
         Check(WaitLanes(() =>
               {
                   string s = (string)fmtPositions.Invoke(null, new object[] { _vm });
-                  return s.Contains(IID) && s.Contains("qty=100");
+                  return s.Contains(IID) && s.Contains("数量: 100");
               }, 10000, "position in Positions tile"),
               "JOURNEY-LIVE-10: fill position never surfaced in the Positions tile");
 

@@ -30,9 +30,13 @@
 //            so the right side of the band stays empty.
 //   ASB-13 = D10: the value is stacked BELOW the icon (icon top-anchored / value bottom-anchored).
 //   ASB-14 = D11: the bar primary abbreviates money (1234567→"1.23M") while the hover card keeps full precision.
+//   ASB-15 = hover-card font WIRING: the card uses a dedicated CJK OS font (≠ the numeric primary's Latin font)
+//            so the Japanese labels render (owner report 2026-06-27); ① pre-data card is LABELED (純資産: — …),
+//            not a bare "—". RED if a Japanese OS face exists yet the card shares the Latin font; SKIPs on CI
+//            (no Japanese face); real glyph render is HITL. (HasCharacter is unusable — dynamic fonts OS-fall-back.)
 //
 //   <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-14 + per-id tags / exit 0.
+//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 + per-id tags / exit 0.
 // RED litmus: wire slot ② hover to FormatReplayOrders → ASB-05 RED; drop the equity uPnL term → ASB-04 RED;
 //             source ④ from telemetry.OrderCount → ASB-04 RED (expects FilledOrderCount=2, not 3); skip the
 //             cleared-portfolio reset → ASB-02 RED; drop ApplyTheme's tint re-resolve → ASB-03 RED;
@@ -63,7 +67,7 @@ public static class AccountSummaryBarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-14 verified.");
+            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -117,7 +121,13 @@ public static class AccountSummaryBarE2ERunner
                 return $"ASB-01: slot {i} primary = '{bar.PrimaryText(i)}', expected '—' before data";
         for (int i = 0; i < 4; i++)
             if (bar.IconImage(i) == null) return $"ASB-01: slot {i} has no RawImage icon frame";
-        Debug.Log("[E2E ASB-01 PASS] bar built: ScreenSpaceOverlay, 4 slots, '—' placeholders, icon frames present.");
+        // owner report 2026-06-27: the hover card must be LABELED even pre-data (a bare "—" looked empty). The
+        // primary stays "—" but the card carries the labeled rows so a hover always says WHAT the slot is.
+        if (bar.CardText(0) == null || !bar.CardText(0).Contains("純資産"))
+            return $"ASB-01: ① pre-data hover card is not labeled (got '{bar.CardText(0)}', expected 純資産 … rows)";
+        if (bar.CardText(1) == null || !bar.CardText(1).Contains("買付け余力"))
+            return $"ASB-01: ② pre-data hover card is not labeled (got '{bar.CardText(1)}', expected 買付け余力)";
+        Debug.Log("[E2E ASB-01 PASS] bar built: ScreenSpaceOverlay, 4 slots, '—' primaries + labeled hover cards, icon frames present.");
 
         // ── ASB-02: Replay primaries match the snapshot ──
         // equity=155321, bp=54321, 1 position, 1 order.
@@ -371,6 +381,33 @@ public static class AccountSummaryBarE2ERunner
         if (boundary != "1M")
             return $"ASB-14: MoneyCompact(999999) = '{boundary}', expected '1M' (must promote a unit, not render '1000k')";
         Debug.Log("[E2E ASB-14 PASS] bar primary abbreviates (1.23M) while the hover card keeps full precision (1234567); 999999→1M boundary.");
+
+        // ── ASB-15: hover-card font wiring — the card uses a DEDICATED CJK OS font, not the primary's Latin font ──
+        // owner report 2026-06-27: the Japanese hover labels showed nothing. The fix wires a dynamic OS CJK font
+        // (Yu Gothic …) to the card text ONLY (primaries are numeric → keep the Latin font). NB: Font.HasCharacter
+        // is NOT a usable proxy here — a legacy DYNAMIC font generates glyphs on demand via OS fallback, so even
+        // LegacyRuntime.ttf returns HasCharacter('純')==true (verified 2026-06-27). The discriminating invariant is
+        // the WIRING: the card font must be a distinct object from the numeric primary's font. To make this a real
+        // RED (not a vacuous SKIP) we first probe whether a Japanese OS face EXISTS in this environment with the
+        // SAME face list production uses; if it does, the card MUST be on it (≠ primary font) or the fix regressed.
+        // Real glyph rasterisation needs a GPU → on-screen Japanese is HITL.
+        Font cardFont = bar.CardFont(0);
+        Font primFont = bar.PrimaryFont(0);
+        if (cardFont == null) return "ASB-15: ① hover card has no font (renamed?)";
+        if (primFont == null) return "ASB-15: ① primary has no font (renamed?)";
+        Font cjkProbe = Font.CreateDynamicFontFromOSFont(
+            new[] { "Yu Gothic UI", "Yu Gothic", "Meiryo", "MS Gothic", "MS PGothic" }, 14);
+        if (cjkProbe != null)
+        {
+            if (cardFont == primFont)
+                return "ASB-15: a Japanese OS face IS installed but the hover card shares the numeric primary's font — "
+                     + "the Japanese labels would tofu (production must wire _cjkFont to the card, not _font)";
+            Debug.Log("[E2E ASB-15 PASS] CJK OS face available → hover card wired to a dedicated CJK font (≠ the primary's Latin font); primaries stay numeric/Latin. On-screen Japanese render = HITL.");
+        }
+        else
+        {
+            Debug.Log("[E2E ASB-15 SKIP] no Japanese OS face installed (CI) — card falls back to the Latin font; Japanese render is HITL.");
+        }
 
         return null;
     }

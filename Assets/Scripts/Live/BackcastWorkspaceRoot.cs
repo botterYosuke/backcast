@@ -168,6 +168,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     LiveSubscriptionCoordinator _subCoord;   // #107: live market-data 購読の本番トリガ (ADR-0022)
     readonly Dictionary<string, StrategyEditorView> _editors = new Dictionary<string, StrategyEditorView>();
     Font _font;
+    Font _cjkFont;     // #174-178: CJK-capable dynamic OS font for the account-bar hover cards (Japanese labels).
+
+    // CJK-capable font for the account summary bar's hover-card labels (純資産 / 買付け余力 …). LegacyRuntime.ttf
+    // (Liberation Sans) has NO Japanese glyphs → the labels render as tofu/blank with it (owner report 2026-06-27),
+    // and the project bundles no CJK font (TMP/legacy are Latin-only). A DYNAMIC OS font rasterises Japanese from
+    // an installed Windows face; we try the common Japanese UI faces in order. Returns null if none is installed
+    // (then AccountSummaryBarView falls back to the Latin font). Glyph rasterisation needs a GPU, so the actual
+    // on-screen Japanese render is HITL — the AFK gate only checks the font CAN map 純/買 (Font.HasCharacter).
+    static Font CreateCjkFont()
+        => Font.CreateDynamicFontFromOSFont(new[] { "Yu Gothic UI", "Yu Gothic", "Meiryo", "MS Gothic", "MS PGothic" }, 14);
 
     // ── #69 multi-document layout surface (findings 0048) ──
     // The document is the (<strategy>.py, <strategy>.json) pair; the .json carries the engine's
@@ -296,6 +306,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         _font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         if (_font == null) _font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+        _cjkFont = CreateCjkFont();
 
         // ADR-0021: the server is built for an INITIAL venue (resolved from LIVE_VENUE env; default MOCK
         // keeps the Replay mainline credential-less), but the venue is NO LONGER locked — a later
@@ -680,7 +691,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         accountBarGo.transform.SetParent(transform, false);
         _accountBar = accountBarGo.AddComponent<AccountSummaryBarView>();
         float menuH = _menuBarView != null ? ((RectTransform)_menuBarView.transform).sizeDelta.y : 24f;
-        _accountBar.Build(_font, menuH);
+        // _cjkFont is created in Awake for the real app; guard here so an editmode harness that drives
+        // BuildWorkspace WITHOUT Awake (the AFK runner) still gets a CJK-capable hover-card font.
+        if (_cjkFont == null) _cjkFont = CreateCjkFont();
+        _accountBar.Build(_font, _cjkFont, menuH);
 
         // #177 S5: placeholder 3D-primitive icons (cube/sphere/capsule/cylinder) rendered to per-slot
         // RenderTextures and fed to each slot's RawImage. The RawImage.texture is the swap seam for future
@@ -1722,14 +1736,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // hover detail = "今のパネルと同じ詳細情報": ②③④ reuse the existing Format*/FormatReplay* BYTE-FOR-BYTE
     // (findings 0126 D5), ① is a NEW account summary (AccountSummaryFormat). Pre-data → "—" placeholder.
 
-    // No account / pre-run portfolio: every slot "—" (neutral). Detail cards stay empty (no snapshot).
+    // No account / pre-run portfolio: every slot primary "—" (neutral). The hover card keeps the LABELED rows
+    // (純資産: — …) so a hover is informative even pre-data (#174-178 owner report — a bare "—" looked empty).
     void PushAccountBarEmpty()
     {
         if (_accountBar == null) return;
         for (int i = 0; i < AccountSummaryBarView.SLOT_COUNT; i++)
         {
             _accountBar.SetPrimary(i, AccountSummaryFormat.PLACEHOLDER, AccountSummaryBarView.PrimaryTint.Neutral);
-            _accountBar.SetDetail(i, AccountSummaryFormat.PLACEHOLDER);
+            _accountBar.SetDetail(i, AccountSummaryFormat.EmptyDetail(i));
         }
     }
 
@@ -2320,10 +2335,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (vm.HasAccount)
         {
             var sb = new StringBuilder();
-            sb.Append("bp=").Append(vm.LatestAccount.BuyingPower).Append("  cash=").Append(vm.LatestAccount.Cash);
+            sb.Append("買付け余力: ").Append(vm.LatestAccount.BuyingPower).Append("  現金: ").Append(vm.LatestAccount.Cash);
             return sb.ToString();
         }
-        return "(no account snapshot)";
+        return "(口座情報なし)";
     }
 
     static string FormatOrders(LivePanelViewModel vm)
@@ -2333,10 +2348,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             LiveOrderEvent o = vm.LatestOrder;
             sb.Append(o.ClientOrderId).Append("  ").Append(o.Status)
-              .Append("  filled=").Append(o.FilledQty).Append('@').Append(o.AvgPrice).Append('\n');
+              .Append("  約定数量: ").Append(o.FilledQty).Append("  約定単価: ").Append(o.AvgPrice).Append('\n');
         }
-        else sb.Append("(none)\n");
-        sb.Append("filled-order count: ").Append(vm.FilledOrderCount);
+        else sb.Append("(注文なし)\n");
+        sb.Append("約定注文数: ").Append(vm.FilledOrderCount);
         return sb.ToString();
     }
 
@@ -2346,12 +2361,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             var sb = new StringBuilder();
             foreach (LivePosition p in vm.LatestAccount.Positions)
-                sb.Append(p.symbol).Append("  qty=").Append(p.qty).Append("  avg=").Append(p.avg_price)
-                  .Append("  uPnL=").Append(p.unrealized_pnl).Append('\n');
-            sb.Append("cash=").Append(vm.LatestAccount.Cash).Append("  bp=").Append(vm.LatestAccount.BuyingPower);
+                sb.Append(p.symbol).Append("  数量: ").Append(p.qty).Append("  取得単価: ").Append(p.avg_price)
+                  .Append("  含み損益: ").Append(p.unrealized_pnl).Append('\n');
+            sb.Append("現金: ").Append(vm.LatestAccount.Cash).Append("  買付け余力: ").Append(vm.LatestAccount.BuyingPower);
             return sb.ToString();
         }
-        return "(flat / no account snapshot)";
+        return "(建玉なし / 口座情報なし)";
     }
 
     static string FormatRunResult(LivePanelViewModel vm)
@@ -2373,7 +2388,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     static string FormatReplayBuyingPower(PortfolioSnapshot s)
     {
         var sb = new StringBuilder();
-        sb.Append("bp=").Append(s.BuyingPower).Append("  equity=").Append(s.Equity);
+        sb.Append("買付け余力: ").Append(s.BuyingPower).Append("  純資産: ").Append(s.Equity);
         return sb.ToString();
     }
 
@@ -2386,10 +2401,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // Show the most recent fill (Replay is MARKET-immediate → every order is a FILLED row).
             PortfolioOrderRow o = s.Orders[n - 1];
             sb.Append(o.symbol).Append("  ").Append(o.side).Append("  ").Append(o.status)
-              .Append("  qty=").Append(o.qty).Append('@').Append(o.price).Append('\n');
+              .Append("  数量: ").Append(o.qty).Append("  価格: ").Append(o.price).Append('\n');
         }
-        else sb.Append("(none)\n");
-        sb.Append("filled-order count: ").Append(n);
+        else sb.Append("(注文なし)\n");
+        sb.Append("約定注文数: ").Append(n);
         return sb.ToString();
     }
 
@@ -2399,12 +2414,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             var sb = new StringBuilder();
             foreach (PositionRow p in s.Positions)
-                sb.Append(p.symbol).Append("  qty=").Append(p.qty).Append("  avg=").Append(p.avg_price)
-                  .Append("  uPnL=").Append(p.unrealized_pnl).Append('\n');
-            sb.Append("cash=").Append(s.BuyingPower).Append("  equity=").Append(s.Equity);
+                sb.Append(p.symbol).Append("  数量: ").Append(p.qty).Append("  取得単価: ").Append(p.avg_price)
+                  .Append("  含み損益: ").Append(p.unrealized_pnl).Append('\n');
+            sb.Append("現金: ").Append(s.BuyingPower).Append("  純資産: ").Append(s.Equity);
             return sb.ToString();
         }
-        return "(flat)";
+        return "(建玉なし)";
     }
 
     // RunResult running view (TTWR run_result_panel.rs running branch): o:orders f:fills + realized/unrlz.

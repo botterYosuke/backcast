@@ -169,17 +169,17 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         string ord1 = seams.Bar.CardText(3);   // ④ orders hover    = FormatReplayOrders
         string bp1 = seams.Bar.CardText(1);    // ② buying power hover = FormatReplayBuyingPower
         string rr1 = TileText(root, ty, "_runResultView");
-        if (pos1 == null || !pos1.Contains("qty=100") || !pos1.Contains(FIRST))
+        if (pos1 == null || !pos1.Contains("数量: 100") || !pos1.Contains(FIRST))
             return "NBHAKO-05: positions hover card did not reflect the running snapshot (got [" + pos1 + "])";
-        if (ord1 == null || !ord1.Contains("filled-order count: 1"))
+        if (ord1 == null || !ord1.Contains("約定注文数: 1"))
             return "NBHAKO-05: orders hover card did not reflect the filled order (got [" + ord1 + "])";
-        if (bp1 == null || !bp1.Contains("bp=887600"))
+        if (bp1 == null || !bp1.Contains("買付け余力: 887600"))
             return "NBHAKO-05: buying_power hover card did not reflect the snapshot (got [" + bp1 + "])";
         if (rr1 == null || !rr1.Contains("running") || !rr1.Contains("o:1"))
             return "NBHAKO-05: run_result tile did not show the running view (got [" + rr1 + "])";
         // also pin the bar PRIMARY for ② (buying power) — the bar's headline figure, not just the hover detail.
         // D11 (findings 0126 §視覚リファインメント): the bar primary is the k/M-abbreviated MoneyCompact ("888k"),
-        // while the hover card (bp1, asserted above) keeps the full "bp=887600" precision.
+        // while the hover card (bp1, asserted above) keeps the full "買付け余力: 887600" precision.
         if (seams.Bar.PrimaryText(1) != AccountSummaryFormat.MoneyCompact(887600.0))
             return "NBHAKO-05: bar ② buying-power PRIMARY did not reflect the snapshot (got [" + seams.Bar.PrimaryText(1) + "])";
 
@@ -188,11 +188,11 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         PumpTiles(root, ty);
         string pos2 = seams.Bar.CardText(2);
         string bp2 = seams.Bar.CardText(1);
-        if (pos2 == null || !pos2.Contains("qty=200"))
+        if (pos2 == null || !pos2.Contains("数量: 200"))
             return "NBHAKO-06: positions hover card did not advance to the bar2 snapshot (got [" + pos2 + "])";
         if (pos2 == pos1)
             return "NBHAKO-06: positions hover card text did not change between bar1 and bar2 (no incremental update)";
-        if (bp2 == null || !bp2.Contains("bp=775200") || bp2 == bp1)
+        if (bp2 == null || !bp2.Contains("買付け余力: 775200") || bp2 == bp1)
             return "NBHAKO-06: buying_power hover card did not advance to the bar2 snapshot (got [" + bp2 + "])";
 
         // ── NBHAKO-07: terminal summary → run_result switches from running view to full-stats. ──
@@ -267,7 +267,7 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         SetPortfolioOverride(seams.Host, STEPSNAP);
         PumpTiles(root, ty);
         string pos = seams.Bar.CardText(2);   // ③ positions hover = FormatReplayPositions (byte-identical to the retired tile)
-        if (pos == null || !pos.Contains("qty=50") || !pos.Contains(FIRST))
+        if (pos == null || !pos.Contains("数量: 50") || !pos.Contains(FIRST))
             return "NBHAKO-11: the bt.step snapshot did not reach the positions hover card (got [" + pos + "])";
 
         ((IDisposable)seams.Lane).Dispose();

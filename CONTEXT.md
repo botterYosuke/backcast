@@ -896,10 +896,25 @@ Help→Settings で開く screen-fixed モーダル（ADR-0026・方針: ADR-000
 `KIND_STARTUP` window の移設先）。**brain（[[VenueMenuViewModel]] / [[FooterModeViewModel]] / scenario controller）は不変**
 ——ビュー層を同じ VM に作り直すだけで engine 経路は触らない。**ESC で開閉トグル（guard 付き）**：window drag 中は drag-revert
 （ADR-0024 §8）優先・[[secret modal]]/save-guard が開いている間はそちらが ESC を消費。`[x]` でも閉じる。z-order は
-[[secret modal]](1000)/save-guard より**下**——Venue 接続で second password を要求されたら secret が Settings の上に重なり、
-送信後は Settings が開いたまま venue 状態更新を映す。
+[[secret modal]](1000)/save-guard より**下**——Venue 接続で second password を要求されたら secret が Settings の上に重なる
+（送信中は Settings はその裏で生存し続ける＝z-order 契約）。**単発アクション系セクション（Venue 接続/切断・実行モード切替・外観テーマ）は
+「操作して確定成功したら Settings を自動クローズ」する**（[[Settings 自動クローズ（単発アクション確定成功）]]・ADR-0037）。**フォーム系
+セクション（[[Replay 実行設定（scenario startup）]]・Data）は据え置き**（編集→Save As 型で閉じない）。
 _Avoid_: brain を Settings 用に再実装すること（VM 再利用が正）／footer を廃止すること（footer は mode ステータス表示専用に残す）／
-Settings を secret modal より前面に置くこと（modal は常に secret/save-guard が最前面）
+Settings を secret modal より前面に置くこと（modal は常に secret/save-guard が最前面）／フォーム系セクションの編集で Settings を閉じること
+
+**Settings 自動クローズ（単発アクション確定成功）**:
+[[Settings ダイアログ]] の**単発アクション系セクション**（Venue 接続/切断・実行モード切替 Replay/Manual/Auto・外観テーマ Dark/Light）は、
+その操作が**確定成功した時点で Settings モーダルを自動で閉じる**（ADR-0037・ADR-0026 の「Venue 送信後も開いたまま」を部分 supersede）。
+**「確定成功」の定義はアクションの同期/非同期で分かれる**：① **同期**（外観テーマ・実行モード Replay＝engine が拒否しない `SwitchImmediate`）
+＝クリック直後に閉じる。② **非同期**（実行モード Manual/Auto＝[[FooterModeViewModel]] の `SwitchLockedLive`/`StopRunThenSwitch` で lock→poll が
+PendingTarget に到達／Venue 接続＝venue_state が live 化した poll／Venue 切断＝venue_state が非 live 化した poll）＝**確定 poll が来てから**閉じる。
+**失敗・拒否・取消は閉じない**（lock 解除＋エラー表示のまま開いておく——閉じるとユーザーが失敗に気づけず開き直す羽目になる）。**no-op（既に
+選択中のモード/テーマを押し直した＝実際には変化しない）も閉じない**（"成功"="実際に切り替わったとき"だけ）。Venue 接続が second password を
+要求する場合は、**secret モーダルでログインが完了し venue が live 化してから**閉じる（パスワード取消・ログイン失敗なら開いたまま）。**Live 切替の
+確定待ち中に venue が落ちて auto-replay した場合**は、意図した Live 目標に到達していない＝失敗扱いで閉じない。
+_Avoid_: 非同期アクションを「RPC を送った瞬間」に閉じること（拒否され得る・確定 poll が正）／失敗・取消で閉じること（エラーが見えなくなる）／
+no-op クリックで閉じること（変化がないのに閉じると混乱）／フォーム系（Scenario・Data）に同じ自動クローズを適用すること（編集中に消える）
 
 **footer（screen-fixed chrome / mode ステータス表示）**:
 アプリ最下段の screen-fixed chrome（[[infinite canvas]] の Content 外・pan/zoom 非追従）。**かつては TTWR `src/ui/footer.rs` の

@@ -42,6 +42,11 @@ public static class SettingsDialogE2ERunner
         Section("SETTINGS-10", Section10_TwoTabSwitch);
         Section("SETTINGS-11", Section11_CardSurfacesAndRoles);
         Section("SETTINGS-13", Section13_LiveReThemeWhileOpen);
+        Section("SETTINGS-14", Section14_AutoCloseSyncAndNoOp);
+        Section("SETTINGS-15", Section15_AutoCloseAsyncModeConfirm);
+        Section("SETTINGS-16", Section16_AutoCloseModeRejectAndAutoReplayStayOpen);
+        Section("SETTINGS-17", Section17_AutoCloseVenueConnectDisconnectConfirm);
+        Section("SETTINGS-18", Section18_AutoCloseVenueFailureCancelAndIdleStayOpen);
 
         if (_fail.Count == 0)
             Debug.Log("[E2E SETTINGS DIALOG PASS] modal shell open/close (SETTINGS-01) / ESC guard: " +
@@ -49,8 +54,11 @@ public static class SettingsDialogE2ERunner
                       "[x]+SetVisible (SETTINGS-05) / z-order menu<settings<secret (SETTINGS-06) / chrome+sections " +
                       "(SETTINGS-07) / venue section + menu Venue retired (SETTINGS-08) / input-field border+placeholder+" +
                       "muted label (SETTINGS-09) / 2-tab 実行↔外観 switch (SETTINGS-10) / card面+role解決 (SETTINGS-11) / " +
-                      "LIVE Dark↔Light re-theme while open: close btn + venue + mode (SETTINGS-13) " +
-                      "— ADR-0026, findings 0102/0107");
+                      "LIVE Dark↔Light re-theme while open: close btn + venue + mode (SETTINGS-13) / " +
+                      "auto-close (ADR-0037): sync theme/Replay + no-op stay (SETTINGS-14), async mode confirm poll " +
+                      "(SETTINGS-15), mode reject + auto-replay stay open (SETTINGS-16), venue connect/disconnect " +
+                      "confirm poll (SETTINGS-17), venue fail/cancel + idle stay open (SETTINGS-18) " +
+                      "— ADR-0026/0037, findings 0102/0107/0125");
         else
             Debug.LogError("[E2E SETTINGS DIALOG FAIL]\n  - " + string.Join("\n  - ", _fail));
 
@@ -571,6 +579,193 @@ public static class SettingsDialogE2ERunner
             // restore Dark so downstream sections (and other runners) start from the canonical baseline.
             ThemeService.SetTheme(Theme.Dark());
         }
+    }
+
+    // ── #171 (ADR-0037 / findings 0125): single-action auto-close policy seam. The SettingsAutoCloseController
+    //    is pure C# (no UnityEngine), so the AFK probe drives every branch headlessly — no GameObjects, no
+    //    Python. These sections ARE the headless「全分岐」driver the ADR requires (host 直書きにしない). ──
+
+    // SETTINGS-14 (Slice 1 — sync + no-op): a SYNCHRONOUS confirmed success closes at click; a no-op stays open.
+    //   外観テーマ change → CloseNow; same-theme re-select (no-op) → Stay. モード Replay (SwitchImmediate) → CloseNow;
+    //   モード no-op (Ignore) / venue-not-live block → Stay. Sync decisions latch nothing (IsWaiting stays false).
+    //   RED litmus: make OnThemeSelected ignore `changed` (always CloseNow) → the no-op assert fails; make
+    //   OnModeRequest return Wait/Stay for SwitchImmediate → the Replay close assert fails.
+    static string Section14_AutoCloseSyncAndNoOp()
+    {
+        var p = new SettingsAutoCloseController();
+        if (p.IsWaiting) return "controller starts with a latched goal (must start idle)";
+
+        // 外観テーマ: real change closes now, no latch.
+        if (p.OnThemeSelected(true) != SettingsCloseDecision.CloseNow) return "theme change did not CloseNow";
+        if (p.IsWaiting) return "a synchronous theme close latched a goal (sync must not Wait)";
+        // 外観テーマ no-op: re-selecting the active theme must NOT close ("成功"="実際に切り替わったとき"だけ).
+        if (p.OnThemeSelected(false) != SettingsCloseDecision.Stay) return "theme no-op did not Stay (no-op must not close)";
+
+        // モード Replay (engine can't reject) → close at click.
+        if (p.OnModeRequest(FooterModeRequestKind.SwitchImmediate, FooterModeViewModel.Replay) != SettingsCloseDecision.CloseNow)
+            return "Replay (SwitchImmediate) did not CloseNow";
+        if (p.IsWaiting) return "Replay sync close latched a goal (must not Wait)";
+        // モード no-op (target == current display → Ignore) → stay open.
+        if (p.OnModeRequest(FooterModeRequestKind.Ignore, FooterModeViewModel.Replay) != SettingsCloseDecision.Stay)
+            return "mode no-op (Ignore) did not Stay";
+        // Live target while venue not connected (BlockedVenueNotLive, no RPC sent) → stay open.
+        if (p.OnModeRequest(FooterModeRequestKind.BlockedVenueNotLive, FooterModeViewModel.LiveManual) != SettingsCloseDecision.Stay)
+            return "BlockedVenueNotLive did not Stay";
+        if (p.IsWaiting) return "a Stay decision latched a goal (no-op/blocked must not Wait)";
+        return null;
+    }
+
+    // SETTINGS-15 (Slice 2 — async mode confirm): モード Manual/Auto latches a goal and closes only on the poll
+    //   that reaches it EXACTLY (lock released + DisplayMode==target + venue live). Leaving LiveAuto via
+    //   StopRunThenSwitch to Replay also waits, and closes when DisplayMode→Replay (Replay is not venue-gated).
+    //   RED litmus: make OnPoll ignore `modeLocked` → it closes on the still-locked poll; make OnModeRequest
+    //   return CloseNow for SwitchLockedLive → it closes before the engine confirms.
+    static string Section15_AutoCloseAsyncModeConfirm()
+    {
+        var p = new SettingsAutoCloseController();
+
+        // LiveManual: dispatch latches Goal.Mode, does NOT close yet.
+        if (p.OnModeRequest(FooterModeRequestKind.SwitchLockedLive, FooterModeViewModel.LiveManual) != SettingsCloseDecision.Wait)
+            return "SwitchLockedLive did not Wait (Live must latch, not close at click)";
+        if (!p.IsWaiting || p.PendingGoal != SettingsAutoCloseController.Goal.Mode) return "Live click did not latch Goal.Mode";
+        // still locked → not confirmed.
+        if (p.OnPoll(FooterModeViewModel.LiveManual, modeLocked: true, venueLive: true))
+            return "closed on a still-locked poll (must wait for the lock to release)";
+        // wrong mode (an unrelated poll) → not confirmed.
+        if (p.OnPoll(FooterModeViewModel.LiveAuto, modeLocked: false, venueLive: true))
+            return "closed on an unrelated mode poll (must match the latched target exactly)";
+        // lock released + target reached + venue live → CONFIRMED close, latch cleared.
+        if (!p.OnPoll(FooterModeViewModel.LiveManual, modeLocked: false, venueLive: true))
+            return "did not close on the confirming poll (lock released + target + venue live)";
+        if (p.IsWaiting) return "latch not cleared after a confirmed close";
+
+        // Leaving LiveAuto → Replay (StopRunThenSwitch): waits, then closes on DisplayMode→Replay (not venue-gated).
+        if (p.OnModeRequest(FooterModeRequestKind.StopRunThenSwitch, FooterModeViewModel.Replay) != SettingsCloseDecision.Wait)
+            return "StopRunThenSwitch did not Wait";
+        if (p.OnPoll(FooterModeViewModel.LiveAuto, modeLocked: true, venueLive: true))
+            return "stop-then-switch closed before reaching Replay";
+        if (!p.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "stop-then-switch did not close on DisplayMode→Replay (Replay must not be venue-gated)";
+        return null;
+    }
+
+    // SETTINGS-16 (Slice 2 — reject + auto-replay STAY OPEN): the failure litmus. A Live rejection
+    //   (NotifyFailed) drops the latch so a later target-reaching poll does NOT close. A venue-drop→auto-replay
+    //   poll momentarily shows DisplayMode==Live target with the lock released while the venue is down — that is
+    //   the auto-replay failure, NOT success, so it must NOT close — and the host's surgical
+    //   NotifyLiveModeAbandoned drops the live-mode latch (but NOT a Replay-target one — see (c)).
+    //   RED litmus: make NotifyFailed a no-op → the reject case closes; drop the `venueLive` guard for live
+    //   targets in OnPoll → the auto-replay case closes (the exact 巻き込み bug ADR-0037 forbids); make
+    //   NotifyLiveModeAbandoned disarm unconditionally → (c) fails (a Replay-target switch would never close).
+    static string Section16_AutoCloseModeRejectAndAutoReplayStayOpen()
+    {
+        // (a) rejection: arm, then NotifyModeResult(false) → NotifyFailed → even a perfect confirming poll stays open.
+        var p = new SettingsAutoCloseController();
+        p.OnModeRequest(FooterModeRequestKind.SwitchLockedLive, FooterModeViewModel.LiveManual);
+        p.NotifyFailed();   // host: _footerModeRejected → NotifyModeResult(false) + NotifyFailed
+        if (p.IsWaiting) return "rejection did not drop the latch";
+        if (p.OnPoll(FooterModeViewModel.LiveManual, modeLocked: false, venueLive: true))
+            return "rejected Live switch still closed on a target poll (失敗は閉じない)";
+
+        // (b) auto-replay 巻き込み: arm LiveManual, venue drops → poll shows DisplayMode==LiveManual, lock cleared,
+        //     but venue NON-live. Must NOT close (intended Live target unreached).
+        var q = new SettingsAutoCloseController();
+        q.OnModeRequest(FooterModeRequestKind.SwitchLockedLive, FooterModeViewModel.LiveManual);
+        if (q.OnPoll(FooterModeViewModel.LiveManual, modeLocked: false, venueLive: false))
+            return "auto-replay poll (target reached but venue down) closed — must stay open (巻き込み)";
+        if (!q.IsWaiting) return "non-confirming poll wrongly cleared the latch";
+        // host then drops the live-mode latch on the auto-replay action; afterwards even a live poll can't close.
+        q.NotifyLiveModeAbandoned();   // host: ShouldAutoReplay branch → NotifyLiveModeAbandoned
+        if (q.IsWaiting) return "NotifyLiveModeAbandoned did not drop the abandoned live-mode latch";
+        if (q.OnPoll(FooterModeViewModel.LiveManual, modeLocked: false, venueLive: true))
+            return "closed after auto-replay dropped the latch (latch must stay dead)";
+
+        // (c) SURGICAL: NotifyLiveModeAbandoned must NOT drop a Replay-target Goal.Mode (leaving LiveAuto→Replay).
+        //     A venue blip during the stop fires the auto-replay branch, but the fallback ALSO lands on Replay =
+        //     the user's target, so it must still close. (Regression guard for the review fix — a blanket disarm
+        //     here breaks Disconnect-from-Live and Replay-exit auto-close.)
+        var r = new SettingsAutoCloseController();
+        r.OnModeRequest(FooterModeRequestKind.StopRunThenSwitch, FooterModeViewModel.Replay);
+        r.NotifyLiveModeAbandoned();   // venue blip during the stop → must be a no-op for a Replay target
+        if (!r.IsWaiting) return "NotifyLiveModeAbandoned wrongly dropped a Replay-target mode latch (must be surgical)";
+        if (!r.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "Replay-exit latch did not close on DisplayMode→Replay after a venue blip";
+        return null;
+    }
+
+    // SETTINGS-17 (Slice 3 — venue confirm): Venue Connect latches a venue-LIVE goal and closes on the poll
+    //   that turns venue_state live (for a second-password connect that is AFTER login completes — the goal
+    //   survives while venue stays non-live). Venue Disconnect latches a venue-DOWN goal and closes on the
+    //   non-live poll.
+    //   RED litmus: make ArmVenueConnect latch VenueDown (or OnPoll close on !venueLive for VenueLive) → connect
+    //   closes immediately while still disconnected, breaking the "after login + live化" contract.
+    static string Section17_AutoCloseVenueConnectDisconnectConfirm()
+    {
+        // Connect: latch venue-live; a non-live poll (still connecting / secret in progress) waits; live closes.
+        var p = new SettingsAutoCloseController();
+        p.ArmVenueConnect();
+        if (p.PendingGoal != SettingsAutoCloseController.Goal.VenueLive) return "connect did not latch Goal.VenueLive";
+        if (p.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "connect closed while venue still non-live (must wait for venue 接続/secret login)";
+        if (!p.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: true))
+            return "connect did not close on the venue-live poll";
+        if (p.IsWaiting) return "connect latch not cleared after close";
+
+        // Disconnect: latch venue-down; a live poll waits; non-live closes.
+        var q = new SettingsAutoCloseController();
+        q.ArmVenueDisconnect();
+        if (q.PendingGoal != SettingsAutoCloseController.Goal.VenueDown) return "disconnect did not latch Goal.VenueDown";
+        if (q.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: true))
+            return "disconnect closed while venue still live (must wait for 非live化)";
+        if (!q.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "disconnect did not close on the venue-非live poll";
+        if (q.IsWaiting) return "disconnect latch not cleared after close";
+
+        // Disconnect FROM A LIVE MODE (findings 0125 review fix): disconnecting while in LiveManual/LiveAuto means
+        // the venue-drop poll ALSO fires the host's auto-replay branch (NotifyLiveModeAbandoned) — but the same
+        // drop FULFILLS the user's Disconnect, so the venue-down latch must SURVIVE the surgical disarm and still
+        // close on the 非live poll. (A blanket NotifyFailed here would eat the VenueDown goal → disconnect never
+        // closes — the exact bug the review caught.)
+        var d = new SettingsAutoCloseController();
+        d.ArmVenueDisconnect();
+        d.NotifyLiveModeAbandoned();   // host auto-replay branch fires on the same drop — must NOT eat VenueDown
+        if (!d.IsWaiting || d.PendingGoal != SettingsAutoCloseController.Goal.VenueDown)
+            return "NotifyLiveModeAbandoned wrongly dropped the venue-down latch (disconnect-from-Live must close)";
+        if (!d.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "disconnect-from-Live did not close on the 非live poll (auto-replay must not eat VenueDown)";
+        return null;
+    }
+
+    // SETTINGS-18 (Slice 3 — venue failure/cancel + idle STAY OPEN): a login failure or second-password cancel
+    //   drops the venue-live latch (login never reaches venue-live, so Settings stays open with the error —
+    //   z-order 契約は不変). A logout failure drops the venue-down latch. And an IDLE controller (no click) never
+    //   closes on an unrelated poll (無関係な poll では閉じない).
+    //   RED litmus: make NotifyFailed a no-op → a later venue-live/非live poll would close after the failure.
+    static string Section18_AutoCloseVenueFailureCancelAndIdleStayOpen()
+    {
+        // connect failure / secret cancel: latch dropped → a venue-live poll does NOT close.
+        var p = new SettingsAutoCloseController();
+        p.ArmVenueConnect();
+        p.NotifyFailed();   // host: login lr==2  OR  CancelSecret
+        if (p.IsWaiting) return "connect failure/cancel did not drop the latch";
+        if (p.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: true))
+            return "venue connect closed after a failure/cancel (失敗・取消は閉じない)";
+
+        // disconnect failure: latch dropped → a venue-非live poll does NOT close.
+        var q = new SettingsAutoCloseController();
+        q.ArmVenueDisconnect();
+        q.NotifyFailed();   // host: logout failed
+        if (q.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "venue disconnect closed after a logout failure";
+
+        // idle (no latched goal): every poll is a no-op — an unrelated state change never closes Settings.
+        var idle = new SettingsAutoCloseController();
+        if (idle.IsWaiting) return "idle controller reports a latched goal";
+        if (idle.OnPoll(FooterModeViewModel.LiveManual, modeLocked: false, venueLive: true))
+            return "idle controller closed on an unrelated poll (無関係な poll では閉じない)";
+        if (idle.OnPoll(FooterModeViewModel.Replay, modeLocked: false, venueLive: false))
+            return "idle controller closed on an unrelated non-live poll";
+        return null;
     }
 
     static bool IsDescendant(Transform child, Transform ancestor)

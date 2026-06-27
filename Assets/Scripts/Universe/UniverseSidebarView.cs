@@ -16,7 +16,7 @@
 // (v19_morning_cell.json has a 150-instrument universe → 3300px of rows in a ~923px sidebar). Without
 // clipping, the overflow drew on the sidebar Canvas (sortingOrder=500) and overpainted the footer
 // (sortingOrder=0 before #84). The fix is structural: a RectMask2D + ScrollRect around BOTH rows AND
-// picker list so overflow can NEVER escape the sidebar's RectTransform. Pinned elements (Title top,
+// picker list so overflow can NEVER escape the sidebar's RectTransform. Pinned elements (top margin,
 // +Add between rows and picker, focus label bottom) sit on the un-masked _content so a click always
 // reaches them regardless of how many rows / candidates exist. The footer is also given its own
 // override-sorting Canvas above the sidebar — two independent guarantees so #84 cannot regress
@@ -49,7 +49,11 @@ public sealed class UniverseSidebarView : MonoBehaviour
     // workspace (findings 0045 / 0053).
     public const int SIDEBAR_SORT = 500;
 
-    const float PAD = 6f, ROW_H = 22f, TITLE_H = 22f, GAP = 2f, REMOVE_W = 24f;
+    const float PAD = 6f, ROW_H = 22f, GAP = 2f, REMOVE_W = 24f;
+    // #174-178: the screen-anchored AccountSummaryBar hangs over the sidebar's top band, so reserve a
+    // top margin equal to its height (derived from the bar, not a baked magic number) — the sidebar
+    // rows start BELOW the bar instead of being obscured by it. Replaces the old "Instruments" title slot.
+    const float TOP_MARGIN = AccountSummaryBarView.BAR_H + GAP;
 
     RectTransform _container;
     UniverseSidebarController _ctrl;
@@ -64,7 +68,7 @@ public sealed class UniverseSidebarView : MonoBehaviour
     bool _laidOutOnce;
 
     // stable widgets (built once; children rebuilt on change). Inside _content, top-to-bottom:
-    //   Title (pinned top, _content child) → RowsScroll [ScrollRect, viewport+RectMask2D, content] →
+    //   TopMargin (clears the account bar) → RowsScroll [ScrollRect, viewport+RectMask2D, content] →
     //   _addBtn (pinned, _content child) → _pickerRoot (visibility-toggled) {search label + InputField
     //   + PickerListScroll [ScrollRect, viewport+RectMask2D, content]} → _focusLabel (pinned bottom).
     RectTransform _content;
@@ -143,8 +147,6 @@ public sealed class UniverseSidebarView : MonoBehaviour
         _content = NewRect("Content", _container);
         Stretch(_content);
         _content.offsetMin = new Vector2(PAD, PAD); _content.offsetMax = new Vector2(-PAD, -PAD);
-
-        MakeText(_content, "Instruments", 13, t.status.info, TextAnchor.UpperLeft, 0f, TITLE_H);
 
         BuildVerticalScroll("RowsScroll", _content, out _rowsScrollContainer, out _rowsContent, out _rowsScroll);
 
@@ -404,10 +406,10 @@ public sealed class UniverseSidebarView : MonoBehaviour
     // The previous formula collapsed label+input into a single ROW_H slot, leaving the InputField
     // occluded by the picker list ScrollRect viewport — typing into the search box became impossible.
     //
-    // Layout (top→bottom): Title (TITLE_H) | gap | RowsScroll [variable] | gap | +Add (ROW_H) | gap |
+    // Layout (top→bottom): TopMargin (clears the account bar) | gap | RowsScroll [variable] | gap | +Add (ROW_H) | gap |
     // [picker { search label ROW_H + InputField ROW_H + PickerListScroll [variable] }] | FocusLabel (pinned).
     //
-    // 余高 = container.h − (TITLE_H + ROW_H_add + ROW_H_focus + 4*GAP); when picker is closed, RowsScroll
+    // 余高 = container.h − (TOP_MARGIN + ROW_H_add + ROW_H_focus + 4*GAP); when picker is closed, RowsScroll
     // takes all of 余高. When open, the picker header reserves 2*ROW_H (label + input + GAP before the
     // list) and the candidate list takes ALL the leftover so it reaches the footer; the ROWS pane is the
     // one capped at half (SidebarPaneSplit) — a big curated universe can't starve the picker, and a small
@@ -419,7 +421,7 @@ public sealed class UniverseSidebarView : MonoBehaviour
         float containerH = _content.rect.height;
         if (containerH <= 0f) return;   // F2: pre-layout frame; Update re-Relayouts once rect resolves.
 
-        float pinned = TITLE_H + ROW_H + ROW_H + 4f * GAP;   // title + add + focus + 4 separator gaps
+        float pinned = TOP_MARGIN + ROW_H + ROW_H + 4f * GAP;   // top margin + add + focus + 4 separator gaps
         float available = Mathf.Max(0f, containerH - pinned);
 
         bool pickerOpen = _ctrl != null && _ctrl.Picker.Visible && _pickerListScrollContainer != null;
@@ -432,8 +434,8 @@ public sealed class UniverseSidebarView : MonoBehaviour
         SidebarPaneSplit.Compute(available, PICKER_HEADER_H + GAP, naturalRowsH, naturalListH, pickerOpen,
                                  out float rowsViewportH, out float pickerListH);
 
-        // Title sits at y=0 with height TITLE_H (MakeText). Start below it.
-        float y = -(TITLE_H + GAP);
+        // No title now (#174-178); reserve TOP_MARGIN so rows start below the account summary bar.
+        float y = -(TOP_MARGIN + GAP);
         _rowsScrollContainer.anchoredPosition = new Vector2(0f, y);
         _rowsScrollContainer.sizeDelta = new Vector2(0f, rowsViewportH);
         y -= rowsViewportH + GAP;

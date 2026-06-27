@@ -1743,9 +1743,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         {
             LiveAccountEvent a = p.LatestAccount;
             double upnl = AccountSummaryFormat.SumUnrealized(a);
-            _accountBar.SetPrimary(0, AccountSummaryFormat.Money(AccountSummaryFormat.DeriveLiveEquity(a)),
+            // D11: bar primaries abbreviate money (k/M) for the compact column; hover cards keep full precision.
+            _accountBar.SetPrimary(0, AccountSummaryFormat.MoneyCompact(AccountSummaryFormat.DeriveLiveEquity(a)),
                                    upnl < 0 ? AccountSummaryBarView.PrimaryTint.Loss : AccountSummaryBarView.PrimaryTint.Gain);
-            _accountBar.SetPrimary(1, AccountSummaryFormat.Money(a.BuyingPower), NEU);
+            _accountBar.SetPrimary(1, AccountSummaryFormat.MoneyCompact(a.BuyingPower), NEU);
             int posCount = a.Positions != null ? a.Positions.Count : 0;
             _accountBar.SetPrimary(2, posCount.ToString(CultureInfo.InvariantCulture), NEU);
         }
@@ -1775,9 +1776,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (_accountBar == null) return;
         const AccountSummaryBarView.PrimaryTint NEU = AccountSummaryBarView.PrimaryTint.Neutral;
-        _accountBar.SetPrimary(0, AccountSummaryFormat.Money(s.Equity),
+        // D11: bar primaries abbreviate money (k/M) for the compact column; hover cards keep full precision.
+        _accountBar.SetPrimary(0, AccountSummaryFormat.MoneyCompact(s.Equity),
                                s.UnrealizedPnl < 0 ? AccountSummaryBarView.PrimaryTint.Loss : AccountSummaryBarView.PrimaryTint.Gain);
-        _accountBar.SetPrimary(1, AccountSummaryFormat.Money(s.BuyingPower), NEU);
+        _accountBar.SetPrimary(1, AccountSummaryFormat.MoneyCompact(s.BuyingPower), NEU);
         int posCount = s.Positions != null ? s.Positions.Count : 0;
         int ordCount = s.Orders != null ? s.Orders.Count : 0;
         _accountBar.SetPrimary(2, posCount.ToString(CultureInfo.InvariantCulture), NEU);

@@ -178,7 +178,9 @@ public static class NotebookToHakoniwaJourneyE2ERunner
         if (rr1 == null || !rr1.Contains("running") || !rr1.Contains("o:1"))
             return "NBHAKO-05: run_result tile did not show the running view (got [" + rr1 + "])";
         // also pin the bar PRIMARY for ② (buying power) — the bar's headline figure, not just the hover detail.
-        if (seams.Bar.PrimaryText(1) != AccountSummaryFormat.Money(887600.0))
+        // D11 (findings 0126 §視覚リファインメント): the bar primary is the k/M-abbreviated MoneyCompact ("888k"),
+        // while the hover card (bp1, asserted above) keeps the full "bp=887600" precision.
+        if (seams.Bar.PrimaryText(1) != AccountSummaryFormat.MoneyCompact(887600.0))
             return "NBHAKO-05: bar ② buying-power PRIMARY did not reflect the snapshot (got [" + seams.Bar.PrimaryText(1) + "])";
 
         // ── NBHAKO-06: bar2 snapshot → the SAME cards follow incrementally (not a one-shot paint). ──

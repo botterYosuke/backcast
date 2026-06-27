@@ -19,6 +19,7 @@
 //
 // Pure (no UnityEngine) so AccountSummaryBarE2ERunner can assert the exact strings/derivation headlessly.
 
+using System;
 using System.Globalization;
 using System.Text;
 
@@ -29,8 +30,30 @@ public static class AccountSummaryFormat
 
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    // Compact bar-primary money: thousands-grouped, no decimals (e.g. 154421.0 → "154,421").
+    // Compact bar-primary money: thousands-grouped, no decimals (e.g. 154421.0 → "154,421"). The HOVER
+    // cards keep this full-precision string (byte-identical reuse with the retired Format*/FormatReplay*).
     public static string Money(double v) => v.ToString("#,0", Inv);
+
+    // D11 (owner 2026-06-27, findings 0126 §視覚リファインメント): the BAR PRIMARY abbreviates money with a
+    // k/M/B suffix to keep the game-resource "one short number" look in the compact left-packed slots
+    // (298000→"298k", 3170→"3.17k", 1234567→"1.23M"). 3 significant figures, trailing zeros trimmed.
+    // |v| < 1000 stays the plain grouped integer (no suffix). This is a SEPARATE formatter from Money so the
+    // hover cards keep full precision (298,000) — never fold this back into Money (it would break the byte-
+    // identical hover reuse, findings 0126 D5). Counts (positions/orders) do NOT use this — they print plain.
+    static readonly string[] CompactSuffix = { "k", "M", "B", "T" };
+    public static string MoneyCompact(double v)
+    {
+        if (double.IsNaN(v) || double.IsInfinity(v)) return PLACEHOLDER;
+        if (Math.Abs(v) < 1000.0) return Money(v);   // plain grouped integer (same form the hover card uses)
+        int unit = 0;
+        double scaled = v / 1000.0;                  // keep the sign on `scaled` so ToString renders "-" itself
+        while (Math.Abs(scaled) >= 1000.0 && unit < CompactSuffix.Length - 1) { scaled /= 1000.0; unit++; }
+        double mag = Math.Abs(scaled);
+        string fmt = mag >= 100.0 ? "0" : mag >= 10.0 ? "0.#" : "0.##";
+        // rounding guard: 999.6 with fmt "0" would render "1000k"; promote to the next unit so it reads "1M".
+        if (mag >= 999.5 && unit < CompactSuffix.Length - 1) { scaled /= 1000.0; unit++; fmt = "0.##"; }
+        return scaled.ToString(fmt, Inv) + CompactSuffix[unit];
+    }
 
     // §Decision 4 / D8: Live equity = Cash + Σ(qty × avg_price + unrealized_pnl). The venue account
     // snapshot carries cash/positions but NO equity, so we derive it (cash + mark-to-market position

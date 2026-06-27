@@ -38,8 +38,13 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     // BELOW the menu dropdowns (which must still spill over it). 550 satisfies both relations.
     public const int BAR_SORT = MenuBarView.MENU_SORT - 50;
 
-    const float BAR_H = 44f;       // strip height (below the 24px menu strip)
+    // D10 (findings 0126 §視覚リファインメント): value stacks BELOW the icon, so the strip is tall enough for
+    // icon (30) + gap + value text (~16). D9: slots are left-packed at a fixed pitch (NOT 1/SLOT_COUNT of the
+    // full width), so the right side stays empty (the reference game resource-strip look).
+    public const float BAR_H = 52f;       // strip height (icon stacked above value; below the 24px menu strip)
     const float ICON = 30f;        // icon frame square
+    const float SLOT_W = 68f;      // D9: fixed slot pitch (icon+value column), left-packed
+    const float LEFT_PAD = 8f;     // D9: gap from the strip's left edge to slot ①
     const float CARD_W = 300f;     // hover detail card width
     const float CARD_H = 96f;      // hover detail card height
 
@@ -58,6 +63,10 @@ public sealed class AccountSummaryBarView : MonoBehaviour
         public RectTransform card;
         public Text cardText;
     }
+
+    // D8: the strip band is fully transparent (alpha 0) so clicks pass through to the canvas (sidebar mirror).
+    // Build AND ApplyTheme share this so a theme flip re-themes the RGB but keeps the band click-through.
+    static Color BandColor(ThemeColors c) { var col = c.panel_background; col.a = 0f; return col; }
 
     static Color ResolveTint(PrimaryTint tint)
     {
@@ -114,7 +123,12 @@ public sealed class AccountSummaryBarView : MonoBehaviour
         _strip.sizeDelta = new Vector2(0f, BAR_H);
         _strip.anchoredPosition = new Vector2(0f, -topOffset);
         _stripBg = stripGo.GetComponent<Image>();
-        _stripBg.color = c.panel_background;   // raycast target: the bar gutter eats clicks
+        // D8 (owner 2026-06-27, findings 0126 §視覚リファインメント): the strip band is TRANSPARENT and lets
+        // clicks pass THROUGH to the canvas behind it — mirroring the Universe sidebar (UniverseSidebarView:
+        // "透明背景はクリックを遮らず後ろの canvas へ透過させる"). Only the small left-packed slot regions keep a
+        // raycast target (for hover); the empty band no longer eats clicks. ApplyTheme keeps the alpha at 0.
+        _stripBg.color = BandColor(c);
+        _stripBg.raycastTarget = false;
 
         for (int i = 0; i < SLOT_COUNT; i++) _slots[i] = BuildSlot(i, c);
     }
@@ -123,37 +137,42 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     {
         var slot = new Slot();
 
-        // slot root spans 1/SLOT_COUNT of the width; raycast target so PointerEnter/Exit fire on it.
+        // D9: slot is a FIXED-WIDTH column left-packed from the strip's left edge (NOT 1/SLOT_COUNT stretch),
+        // so the right side of the band stays empty (the reference resource-strip look). raycast target so
+        // PointerEnter/Exit fire on the small slot region only (the empty band passes clicks through — D8).
         var rootGo = new GameObject("slot" + index, typeof(RectTransform), typeof(Image), typeof(EventTrigger));
         var root = (RectTransform)rootGo.transform;
         root.SetParent(_strip, false);
-        float w = 1f / SLOT_COUNT;
-        root.anchorMin = new Vector2(index * w, 0f);
-        root.anchorMax = new Vector2((index + 1) * w, 1f);
-        root.offsetMin = new Vector2(4f, 0f); root.offsetMax = new Vector2(-4f, 0f);
-        rootGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);   // invisible but raycastable
+        root.anchorMin = new Vector2(0f, 0f);
+        root.anchorMax = new Vector2(0f, 1f);
+        root.pivot = new Vector2(0f, 0.5f);
+        root.sizeDelta = new Vector2(SLOT_W, 0f);
+        root.anchoredPosition = new Vector2(LEFT_PAD + index * SLOT_W, 0f);
+        rootGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);   // invisible but raycastable (hover)
 
-        // icon frame (RawImage; #177 fills .texture). Left-aligned square.
+        // D10: icon frame on TOP, horizontally centred in the column. (RawImage; #177 fills .texture.)
         var iconGo = new GameObject("icon", typeof(RectTransform), typeof(RawImage));
         var iconRt = (RectTransform)iconGo.transform;
         iconRt.SetParent(root, false);
-        iconRt.anchorMin = new Vector2(0f, 0.5f); iconRt.anchorMax = new Vector2(0f, 0.5f);
-        iconRt.pivot = new Vector2(0f, 0.5f);
+        iconRt.anchorMin = new Vector2(0.5f, 1f); iconRt.anchorMax = new Vector2(0.5f, 1f);
+        iconRt.pivot = new Vector2(0.5f, 1f);
         iconRt.sizeDelta = new Vector2(ICON, ICON);
-        iconRt.anchoredPosition = new Vector2(6f, 0f);
+        iconRt.anchoredPosition = new Vector2(0f, -2f);
         slot.icon = iconGo.GetComponent<RawImage>();
         slot.icon.color = c.element_background;   // visible placeholder frame until a texture is assigned
         slot.icon.raycastTarget = false;
 
-        // primary value text, right of the icon, vertically centred. "—" until the owner drives a value.
+        // D10: primary value text BELOW the icon, centred under the column. "—" until the owner drives a value.
         var pGo = new GameObject("primary", typeof(RectTransform), typeof(Text));
         var pRt = (RectTransform)pGo.transform;
         pRt.SetParent(root, false);
-        pRt.anchorMin = new Vector2(0f, 0f); pRt.anchorMax = new Vector2(1f, 1f);
-        pRt.offsetMin = new Vector2(ICON + 12f, 0f); pRt.offsetMax = new Vector2(-4f, 0f);
+        pRt.anchorMin = new Vector2(0f, 0f); pRt.anchorMax = new Vector2(1f, 0f);
+        pRt.pivot = new Vector2(0.5f, 0f);
+        pRt.sizeDelta = new Vector2(0f, 16f);
+        pRt.anchoredPosition = new Vector2(0f, 2f);
         slot.primary = pGo.GetComponent<Text>();
         slot.primary.font = _font; slot.primary.fontSize = 15; slot.primary.color = c.text;
-        slot.primary.alignment = TextAnchor.MiddleLeft;
+        slot.primary.alignment = TextAnchor.MiddleCenter;
         slot.primary.horizontalOverflow = HorizontalWrapMode.Overflow;
         slot.primary.verticalOverflow = VerticalWrapMode.Overflow;
         slot.primary.raycastTarget = false;
@@ -244,7 +263,8 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     {
         if (!_built) return;
         var c = ThemeService.Current.colors;
-        if (_stripBg != null) _stripBg.color = c.panel_background;
+        // D8: keep the band transparent on a theme flip (re-themed RGB but alpha stays 0 — click-through).
+        if (_stripBg != null) _stripBg.color = BandColor(c);
         foreach (var s in _slots)
         {
             if (s == null) continue;

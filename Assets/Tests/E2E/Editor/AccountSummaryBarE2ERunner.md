@@ -4,6 +4,10 @@ issues **#174-178**「アカウントサマリーバー」（ADR-0038 / findings
 パネルを退役し、口座状態をヘッダー（メニューバー）直下の **screen-anchored 全幅バー**（4 スロット・主数値＋色）＋
 **ホバー詳細 card** で出す。退役パネルの format 関数はホバー card が **byte 一致**で再利用する。
 
+**視覚リファインメント（owner 2026-06-27・findings 0126 §視覚リファインメント D8-D11）**: 帯（strip）背景は **透明＋
+クリック透過**（Universe sidebar 同型・`color.a==0`／`raycastTarget==false`）／スロットは **左詰め固定幅**（右は空白）／
+主数値は **アイコン下に縦積み**／金額は **k/M 短縮表記**（バーは `1.23M`・ホバー card は `Money` フル桁の byte 一致再利用）。
+
 正本＝この `.md`（合否仕様）／自動判定＝`AccountSummaryBarE2ERunner.cs`。Python-FREE で実 `BackcastWorkspaceRoot` を
 scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfolioJsonOverride`（#65 poll seam）、Live は
 `LivePanelViewModel.Apply`（#20 sink seam）で駆動する。実 pan の奥行き目視・実アイコン差し替え・実 SDF 画素は owner HITL。
@@ -11,7 +15,7 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 実行:
 ```
 <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-10 / exit 0
+# expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-14 / exit 0
 ```
 
 ## 操作一覧表
@@ -28,6 +32,10 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 | ASB-08 | 旧保存 layout が退役 3 kind を名指しても restore skip | `RestoreFloating` / `FloatingWindowCatalog` / `DockShape.IsDockKind` | buying_power/orders/positions は spawn skip・chart は restore（非空虚）・IsDockKind=false | `!Has(retired)`・`Has(chart)`・`!IsDockKind` | 自動(E2E済) | — |
 | ASB-09 | Replay / LiveManual / LiveAuto 全モードで常時表示 | `BuildWorkspace`（hide 経路なし） | モード poll 後もバー active | `bar.gameObject.activeInHierarchy` | 自動(E2E済) | — |
 | ASB-10 | アイコン枠に 3D プリミティブ（RenderTexture→RawImage 差し替え seam） | `AccountSummaryIconStage.Build` / `SetIconTexture` | 各スロット RawImage に非 null texture | `IconTexture(i)!=null` | 自動(E2E済) | — |
+| ASB-11 | 帯背景が透明＋クリック透過（sidebar 同型・テーマ flip でも透明維持）（D8） | `AccountSummaryBarView.Build` / `ApplyTheme` | strip Image の `color.a==0`・`raycastTarget==false`・flip 後も alpha 0 | `stripBg.color.a==0`・`!raycastTarget` | 自動(E2E済) | — |
+| ASB-12 | スロットが左詰め固定 68px ピッチ（右は空白・全幅 stretch でない）（D9） | `AccountSummaryBarView.BuildSlot` | slot root `anchorMin.x==anchorMax.x==0`・隣接ピッチ 68・右端 < strip 幅 | `anchorMax.x==0`・`Δx==68`・rightEdge<stripW | 自動(E2E済) | — |
+| ASB-13 | 主数値がアイコンの下に縦積み（D10） | `AccountSummaryBarView.BuildSlot` | icon top-anchored（anchorY 1）・primary bottom-anchored（anchorY 0） | `icon.anchorY==1`・`primary.anchorY==0` | 自動(E2E済) | — |
+| ASB-14 | バー主数値は金額を k/M 短縮・ホバー card はフル桁維持（D11） | `AccountSummaryFormat.MoneyCompact` / `PushReplayAccountBar` | 7 桁で bar=`1.23M`・compact≠full・hover ②＝`FormatReplayBuyingPower`（raw 1234567 在） | `PrimaryText==MoneyCompact`・`!=Money`・`CardText` フル桁 | 自動(E2E済) | — |
 | — | 実 pan の奥行き目視 / 実アイコン（sprite）差し替え / 実 SDF lit 画素 | — | 目視 | — | HITL専用（実画素・GPU・実 art） | — |
 
 ## RED→GREEN litmus（production を壊すと落ちる）
@@ -40,3 +48,7 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 - バーを `_content` の子にする → ASB-06 RED（パンで動く）。
 - 退役 spec を `Default()` に残す → ASB-08 RED（restore skip 破綻）＋ S12d（FloatingWindowE2ERunner）RED。
 - ① の色を符号非依存に固定 → ASB-03 RED（負ケース）。
+- 帯を不透明 `panel_background`／`raycastTarget=true` に戻す → ASB-11 RED（透過・click-through 破綻）。
+- スロットを 1/SLOT_COUNT stretch レイアウトに戻す → ASB-12 RED（左詰め固定幅でない）。
+- 主数値をアイコンの右（中央寄せ）に戻す → ASB-13 RED（縦積みでない）。
+- バー主数値を `Money`（フル桁）にする → ASB-14 RED（compact==full の vacuity guard が発火）。

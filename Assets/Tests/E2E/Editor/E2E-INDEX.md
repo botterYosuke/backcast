@@ -19,6 +19,15 @@
 > （DUCKROOT-01..05＝DuckDB root の store/validation/browse/os.environ 注入。`.env` から Settings「Data」節へ移設）。
 >
 > #137 review fixes（findings 0107 追補）: **SettingsDialog** に SETTINGS-13（テーマ切替時の Settings 内ライブ再描画＝close ボタン/Venue 行/Mode セグメントの ApplyTheme 配線）追加。
+>
+> #171（ADR-0039・findings 0127）: 単発アクション auto-close——**SettingsDialog** に SETTINGS-14（同期テーマ/Replay 即クローズ＋no-op 据置）・
+> SETTINGS-15（非同期モード確定 poll クローズ）・SETTINGS-16（モード拒否＋auto-replay 巻き込みは開いたまま＝RED litmus 中核）・SETTINGS-17（Venue
+> Connect/Disconnect 確定 poll クローズ）・SETTINGS-18（Venue 失敗/取消/idle は開いたまま）追加。SETTINGS-19＝フォーム系は seam 非配線で対象外。
+> 判定は pure `SettingsAutoCloseController`。HITL SETTINGS-12 を自動クローズの実挙動確認まで拡張。
+>
+> #179（findings 0128）: `[m]` Add Markdown ボタン——**StrategyEditorNotebook** に STRATEGY-66（`[m]` が `mo.md` 種セル＋窓付き `import marimo as mo`
+> セルを冪等に用意・[m]×2 で import 増えない・hardened `DefinesMoImport` が combined import 再利用＋markdown 本文の import 行を誤検出しない）追加。
+> runtime「素 mo が ▶ で NameError しない」半分は Python `test_notebook_markdown_cell.py`（同 `IncrementalNotebookSession` seam・import セル抜きで NameError＝RED litmus）。実画素 markdown レンダは HITL（STRATEGY-18）。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -29,10 +38,10 @@
 | [InfiniteCanvasE2ERunner](./InfiniteCanvasE2ERunner.md) ✅ | `CANVAS-01..09` | 9 | 8 | 0 | 0 | 1 | 0 |
 | [FloatingWindowE2ERunner](./FloatingWindowE2ERunner.md) ✅ | `WINDOW-01..12,SNAP-01,02,DOCK-01..05,PLANE-01..04,GROUP-01,02,04,11,DRAG-01..20` | 48 | 42 | 0 | 0 | 5 | 1 |
 | [FloatingWindowResizeE2ERunner](./FloatingWindowResizeE2ERunner.md) ✅ | `RESIZE-01..13` | 13 | 12 | 0 | 0 | 1 | 0 |
-| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..65` | 65 | 62 | 0 | 0 | 2 | 1 |
+| [StrategyEditorNotebookE2ERunner](./StrategyEditorNotebookE2ERunner.md) ✅ | `STRATEGY-01..66` | 66 | 63 | 0 | 0 | 2 | 1 |
 | [StrategyEditorZoomCrispnessE2ERunner](./StrategyEditorZoomCrispnessE2ERunner.md) ✅ | `ZOOM-01..04` | 4 | 4 | 0 | 0 | 0 | 0 |
 | [ScenarioStartupE2ERunner](./ScenarioStartupE2ERunner.md) ✅ | `SCENARIO-01..17` | 17 | 15 | 0 | 0 | 2 | 0 |
-| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..13` | 13 | 12 | 0 | 0 | 1 | 0 |
+| [SettingsDialogE2ERunner](./SettingsDialogE2ERunner.md) ✅ | `SETTINGS-01..19` | 19 | 17 | 0 | 0 | 1 | 1 |
 | [DuckDbRootSettingsE2ERunner](./DuckDbRootSettingsE2ERunner.md) ✅ | `DUCKROOT-01..05` | 5 | 4 | 0 | 0 | 1 | 0 |
 | ~~RunButtonE2ERunner~~ **RETIRED #95 Phase 6 / findings 0075 §3c** | — | — | — | — | — | — | — |
 | [OrderTicketE2ERunner](./OrderTicketE2ERunner.md) ✅ | `ORDER-01..16` | 16 | 15 | 0 | 0 | 1 | 0 |

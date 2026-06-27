@@ -82,7 +82,8 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section29_EscapeKeyPumpKeepsEditing(spawned)
                 ?? Section30_CaretVisible(spawned)
                 ?? Section31_RichOutputSample(spawned)
-                ?? Section32_RunShortcut(spawned);
+                ?? Section32_RunShortcut(spawned)
+                ?? Section33_AddMarkdownCell(spawned);
         }
         catch (Exception e)
         {
@@ -186,6 +187,9 @@ public static class StrategyEditorNotebookE2ERunner
                       "firing the ▶ once per press (latch re-arms on KeyUp); plain Return stays a newline; the " +
                       "fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke(); single-line " +
                       "never swallows) " +
+                      "+ #179 [m] Add Markdown (STRATEGY-66 / findings 0128: AddMarkdownCell seeds a mo.md cell " +
+                      "+ ensures ONE windowed `import marimo as mo` cell; [m]×2 no duplicate import; hardened " +
+                      "DefinesMoImport reuses a combined import + ignores the import line in markdown prose) " +
                       "— Unity-owned, ADR-0003/0013 capability parity, under Unity Mono");
             EditorApplication.Exit(0);
         }
@@ -1836,6 +1840,86 @@ public static class StrategyEditorNotebookE2ERunner
             return "S32h: latch stranded disarmed after focus loss — the next Shift+Return was swallowed but never fired (M1: re-arm gate narrower than the disarm)";
 
         Debug.Log("[E2E STRATEGY-65 PASS] code editor run shortcut: Shift/Ctrl/Cmd+Return + numpad Enter swallow the newline and fire the ▶ once per press (held re-fires only after KeyUp); plain Return stays a newline; the fire relays StrategyInputField → StrategyEditorView → ▶ onClick.Invoke() (byte-identical to a click); single-line never swallows; production builder is MultiLineNewline; the REAL BackcastWorkspaceRoot's WireCellRunButton wiring routes a real Shift+Return to the real cell ▶ (g); and an interrupted hold (focus lost before KeyUp) re-arms so the latch never strands disarmed (h)");
+        return null;
+    }
+
+    // ======================================================================
+    // 33. #179 [m] Add Markdown — AddMarkdownCell seeds a markdown (mo.md) cell, idempotently ensuring ONE
+    //     shared `import marimo as mo` cell, BOTH windowed (cell↔window bijection — no windowless cell).
+    //     The runtime "bare mo ▶ resolves without NameError" half is the Python gate
+    //     (python/tests/test_notebook_markdown_cell.py, IncrementalNotebookSession autorun); this pins the
+    //     C# coordinator half the AC names ("import 冪等・種窓化" — findings 0128 §ゲート).
+    //     Covers: STRATEGY-66 ([m] ensures ONE windowed import cell + seeds mo.md; [m]×2 no duplicate import;
+    //             hardened DefinesMoImport reuses a combined import + ignores the import line in markdown prose)
+    //     delete-the-production-logic litmus: drop EnsureMoImportCell() → no import cell → (a) RED; revert
+    //     DefinesMoImport to the old line-exact `== MoImportBody` → (c) combined-import RED (duplicate def) and
+    //     drop the `mo.md(` skip → (d) markdown-prose RED (real import falsely suppressed).
+    static string Section33_AddMarkdownCell(List<GameObject> spawned)
+    {
+        // Build a fresh bare-RT harness (mirrors Section12): real FloatingWindowController + Fake synth,
+        // the adopted region_001 shell, cell 0 synced. Returned by-tuple so each sub-scenario is isolated.
+        (NotebookCellCoordinator coord, MarimoNotebookDocument nb, FloatingWindowController ctrl) Build(string tag)
+        {
+            var layerGo = new GameObject("FWLayer33_" + tag, typeof(RectTransform));
+            spawned.Add(layerGo);
+            var controller = new FloatingWindowController(
+                layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
+                (spec, id) => { var go = new GameObject("W_" + id, typeof(RectTransform)); spawned.Add(go); return go.GetComponent<RectTransform>(); },
+                go => UnityEngine.Object.DestroyImmediate(go));
+            var adoptGo = new GameObject("region001_33_" + tag, typeof(RectTransform));
+            spawned.Add(adoptGo);
+            controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, NotebookCellCoordinator.AdoptedRegionId, adoptGo.GetComponent<RectTransform>());
+            var doc = new MarimoNotebookDocument(new FakeMarimoSynthesizer());
+            var c = new NotebookCellCoordinator(doc, controller, _ => null, () => Vector2.zero, new Vector2(520f, 380f));
+            c.SyncWindowsToNotebook(null);
+            return (c, doc, controller);
+        }
+
+        // count cells that ARE the canonical `import marimo as mo` body (the one AddMarkdownCell adds).
+        int CanonicalImports(MarimoNotebookDocument doc)
+        {
+            int n = 0;
+            foreach (var c in doc.Cells) if (c.Body == NotebookCellCoordinator.MoImportBody) n++;
+            return n;
+        }
+
+        // (a) fresh notebook → AddMarkdownCell seeds the mo.md cell + ensures EXACTLY ONE import cell, both windowed.
+        var (coord, nb, ctrl) = Build("a");
+        var md = coord.AddMarkdownCell();
+        if (md == null) return "S33: AddMarkdownCell returned null";
+        if (md.Body != NotebookCellCoordinator.MarkdownSeedBody) return "S33: returned cell body is not the markdown seed (D5)";
+        if (md.Body.IndexOf("mo.md(", StringComparison.Ordinal) < 0) return "S33: markdown seed missing mo.md(";
+        if (CanonicalImports(nb) != 1) return "S33: AddMarkdownCell did not ensure exactly ONE import cell (got " + CanonicalImports(nb) + ")";
+        if (coord.RegionOf(md) == null || !ctrl.Has(coord.RegionOf(md))) return "S33: md cell is not windowed (cell↔window bijection broken)";
+        Cell imp = null; foreach (var c in nb.Cells) if (c.Body == NotebookCellCoordinator.MoImportBody) imp = c;
+        if (imp == null || coord.RegionOf(imp) == null || !ctrl.Has(coord.RegionOf(imp)))
+            return "S33: import cell is not windowed (a windowless cell would break CapturePositions — must use the windowed AddCell)";
+
+        // (b) [m] pressed TWICE → a 2nd md cell, but the import cell stays ONE (a 2nd `import marimo as mo`
+        //     cell is a marimo MultipleDefinitionError — findings 0128 D2).
+        var md2 = coord.AddMarkdownCell();
+        if (md2 == null || ReferenceEquals(md2, md)) return "S33: 2nd AddMarkdownCell did not add a distinct md cell";
+        if (CanonicalImports(nb) != 1) return "S33: [m] pressed twice duplicated the import cell (idempotency broken; got " + CanonicalImports(nb) + ")";
+
+        // (c) hardened DefinesMoImport — false-NEGATIVE fix: a COMBINED import already binds `mo`, so
+        //     AddMarkdownCell must NOT add a 2nd canonical import (the old line-exact `==` missed this →
+        //     duplicate def). Expect 0 canonical-import cells (the combined one is reused).
+        var (cCombined, nCombined, _) = Build("c");
+        cCombined.AddCell("import marimo as mo, pandas as pd");
+        cCombined.AddMarkdownCell();
+        if (CanonicalImports(nCombined) != 0)
+            return "S33: a combined `import marimo as mo, pandas as pd` was not detected — a duplicate canonical import was added (DefinesMoImport too strict)";
+
+        // (d) hardened DefinesMoImport — false-POSITIVE fix: a markdown cell whose PROSE contains the line
+        //     `import marimo as mo` REFS mo, it never DEFS it — it must NOT suppress the real import (else ▶
+        //     NameErrors). AddMarkdownCell must still add a real canonical import cell.
+        var (cProse, nProse, _) = Build("d");
+        cProse.AddCell("mo.md(r\"\"\"\nimport marimo as mo\n\"\"\")");
+        cProse.AddMarkdownCell();
+        if (CanonicalImports(nProse) != 1)
+            return "S33: the import line inside markdown prose falsely suppressed the real import (DefinesMoImport scanned string content — must skip mo.md cells)";
+
+        Debug.Log("[E2E STRATEGY-66 PASS] [m] Add Markdown: AddMarkdownCell seeds a mo.md cell + ensures EXACTLY ONE windowed `import marimo as mo` cell (cell↔window bijection); [m]×2 does not duplicate the import; hardened DefinesMoImport reuses a combined import (no duplicate def) and ignores the import line inside markdown prose (no false suppression). The runtime bare-mo-no-NameError half is the Python gate (test_notebook_markdown_cell.py / findings 0128 D3)");
         return null;
     }
 

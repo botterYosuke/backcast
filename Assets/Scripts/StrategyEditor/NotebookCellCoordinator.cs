@@ -79,16 +79,83 @@ public sealed class NotebookCellCoordinator
     // ---- [+] : append a new empty cell and show its window ----
     // marimo createNewCell {type:"__end__"}: body="", anonymous, default config. Reuses a dormant
     // region_001 shell first (new cascade position), else spawns region_002+. Returns the new cell.
-    public Cell AddCell()
+    public Cell AddCell() => AddCell("");
+
+    // #179 (findings 0128): the shared `import marimo as mo` cell body that an [m] markdown cell
+    // depends on, and the `mo.md(...)` seed the [m] button lands. marimo has no markdown CELL TYPE —
+    // a markdown cell is a normal cell whose body is `mo.md(r"""…""")` (owner: bare `mo` for本家 parity,
+    // NOT a cell-local `_mo`), so it REFS `mo` and needs a sibling cell that DEFS `mo`. The seed is
+    // column-0 / no trailing newline (the canonical cell-body form, mirrors ObserveSeedBody) so
+    // synth→decompose stays byte-idempotent; synthesis adds the `def _():` wrapper + indent and
+    // `mo.md` dedents it for rendering. Pressing ▶ on the md cell runs its STALE upstream ancestor
+    // (the import cell) first (IncrementalNotebookSession autorun = pressed + stale ancestors +
+    // reactive descendants), so bare `mo` resolves WITHOUT a NameError on the first press.
+    public const string MoImportBody = "import marimo as mo";
+    public const string MarkdownSeedBody =
+        "mo.md(r\"\"\"\n# 見出し\n\n本文をここに書く。\n\"\"\")";
+
+    // ---- [m] : append a markdown cell (mo.md template), ensuring `import marimo as mo` exists ----
+    // #179 (findings 0128): the sibling of AddCell that seeds a MARKDOWN cell. It first guarantees a
+    // single shared `import marimo as mo` cell (idempotent — reuse if present, else add ONE) so the
+    // bare-`mo` seed resolves, then appends the `mo.md(...)` cell exactly like AddCell (window + front +
+    // ListMutated). The import cell is NOT bundled INTO the md cell on purpose: that would re-define
+    // `mo` on every [m] press (marimo treats cell-level imports as global defs → duplicate-definition
+    // error). Returns the new markdown cell. Created idle — the user presses ▶ to render (no auto-run,
+    // mirrors [+]).
+    public Cell AddMarkdownCell()
     {
-        Cell cell = _notebook.AddCell();
+        EnsureMoImportCell();
+        return AddCell(MarkdownSeedBody);
+    }
+
+    // Idempotently ensure ONE cell binds `mo` via an `import marimo as mo`. C# does NOT re-implement
+    // marimo's def/ref analysis (its job over the seam — [[ttwr-parity-first]]); a text scan of the
+    // existing cell bodies is enough to avoid a SECOND cell defining `mo` (a marimo MultipleDefinitionError).
+    // The import cell is added through the WINDOWED AddCell (not _notebook.AddCell) so it gets its own
+    // window/▶/✕ and is tracked — every cell↔window bijection path (AddCell / SyncWindowsToNotebook / Open)
+    // holds, so CapturePositions never sees a windowless cell. marimo likewise shows the import as a normal cell.
+    void EnsureMoImportCell()
+    {
+        foreach (var c in _notebook.Cells)
+            if (DefinesMoImport(c.Body)) return;
+        AddCell(MoImportBody);
+    }
+
+    // Matches a TOP-LEVEL `import marimo as mo`, tolerating whitespace variants, a trailing comment, and a
+    // combined import (`import marimo as mo, pandas as pd`) — so a user's / loaded-.py's non-canonical `mo`
+    // import is REUSED, not duplicated into a 2nd defining cell (the duplicate-definition failure D2 forbids).
+    // `\bmo\b` keeps `import marimo as molecule` from matching. This stays a text predicate by design (not
+    // def/ref) — see the [[ttwr-parity-first]] note above.
+    static readonly System.Text.RegularExpressions.Regex MoImportLine =
+        new System.Text.RegularExpressions.Regex(@"^import\s+marimo\s+as\s+mo\b");
+
+    static bool DefinesMoImport(string body)
+    {
+        if (string.IsNullOrEmpty(body)) return false;
+        // A markdown cell (body is `mo.md(r"""…""")`) REFS `mo`, it never DEFS it — yet its prose / a code
+        // fence inside it can literally contain the line `import marimo as mo` as TEXT. Treating that string
+        // content as the import would suppress the real import cell → NameError on ▶. Skip markdown-seed cells;
+        // only a code cell defines the import. (A code cell mixing `import marimo as mo` + `mo.md(...)` still
+        // STARTS with the import line, so it is not skipped — its first non-whitespace token is `import`.)
+        if (body.TrimStart().StartsWith("mo.md(")) return false;
+        foreach (var line in body.Split('\n'))
+            if (MoImportLine.IsMatch(line.Trim())) return true;
+        return false;
+    }
+
+    // ---- [+] (overload) : append a new cell carrying `seedBody` and show its window ----
+    // #179 (findings 0128): the seeded form of AddCell, factored so AddMarkdownCell (and any future
+    // seeded-cell affordance) shares the window-lifecycle path. AddCell() is the seedBody="" case.
+    public Cell AddCell(string seedBody)
+    {
+        Cell cell = _notebook.AddCell(seedBody);
 
         string region;
         if (_region001Dormant)
         {
             region = AdoptedRegionId;
             _region001Dormant = false;
-            RevealAt(region, NextSpawnTopLeft());   // shell reuse: NEW position, not old hidden coords
+            RevealAt(region, NextSpawnTopLeft());
         }
         else
         {
@@ -99,8 +166,8 @@ public sealed class NotebookCellCoordinator
 
         Track(region, cell);
         _viewFor(region)?.Bind(cell);
-        _windows.Show(region);   // reveal + raise (front)
-        ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
+        _windows.Show(region);
+        ListMutated?.Invoke();
         return cell;
     }
 

@@ -85,5 +85,6 @@ Within a bar, cells communicate by **variable dataflow** (a cell's returned vars
 | `mo.state` / feedback across bars | mirror `_runtime/state.py`; ADR-0012 D1, findings 0046 D1 |
 | C# editor ⇄ Python boundary | `Assets/Scripts/StrategyEditor/*`, `WorkspaceEngineHost.cs`; ADR-0013 |
 | dynamic universe from a cell | `bt.universe.*`; findings 0115 / ADR-0031 |
+| markdown cell (`mo.md`) detect/seed | NO cell type — a normal cell `mo.md(r"""…""")`. Detect: mirror `_convert/common/format.py::get_markdown_from_cell` (refs=={mo}, no defs). Canonical seed: `_ast/codegen.py::construct_markdown_call` (bare `mo`, prefix `r`). backcast [m] button + shared-import-cell: findings 0128 |
 
 Tests run with `cd python && uv run pytest <file> -v`.

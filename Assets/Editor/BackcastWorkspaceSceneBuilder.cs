@@ -10,10 +10,10 @@
 // references.
 //
 // #99 (ADR-0017 / findings 0075): the Hakoniwa split-grid surface and its 5 tile GameObjects
-// (startup / chart / orders / positions / run_result) are RETIRED — the dock cluster is built
-// entirely at runtime by `SpawnBaseDockWindows` / `SyncChartWindowsToUniverse`, so the scene no
-// longer authors them. Two scene-authored floating windows remain: the adopted Strategy Editor
-// (region_001 shell) and the Order ticket (the #23 re-home).
+// (startup / chart / orders / positions / run_result) are RETIRED — the dock plane is built entirely
+// at runtime. After ADR-0026/0037/0038 every base singleton is gone, so the dock plane is now the chart
+// family only (`SyncChartWindowsToUniverse`); the scene authors no dock windows. Two scene-authored
+// floating windows remain: the adopted Strategy Editor (region_001 shell) and the Order ticket (#23 re-home).
 //
 // Run: Tools > Backcast > Build Workspace Scene  → expect "[BackcastWorkspaceSceneBuilder] built ...".
 

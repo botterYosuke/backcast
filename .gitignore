@@ -134,3 +134,8 @@ e_api_public_key_demo.pem
 *.alf
 bin/
 *.ulf
+
+# Local shippable-build outputs (scripts/build-and-release.ps1)
+/dist/
+/smoke-extract/
+/build-and-release.progress.log

@@ -9,9 +9,12 @@
 // GPU or real pointer events.
 //
 //   ASB-01 = bar built: own ScreenSpaceOverlay canvas (NOT under Content), 4 slots, "—" placeholder pre-data.
-//   ASB-02 = Replay primaries match the snapshot (equity / bp / position count / order count).
-//   ASB-03 = slot ① recolours green (uPnL≥0) / red (uPnL<0) by the unrealized-pnl sign.
-//   ASB-04 = Live equity = Cash + Σ(qty×avg+uPnL) derived (account has no equity field) + colour sign.
+//   ASB-02 = Replay primaries match the snapshot (equity / bp / position count / order count); a CLEARED
+//            portfolio resets every slot back to "—" (anti-stale #61 honest-empty — PushAccountBarEmpty).
+//   ASB-03 = slot ① recolours green (uPnL≥0) / red (uPnL<0) by the unrealized-pnl sign; a theme flip WHILE
+//            IDLE (no data re-push) re-resolves ①'s colour from its tint (ADR-0028 trap — PrimaryTint/ApplyTheme).
+//   ASB-04 = Live equity = Cash + Σ(qty×avg+uPnL) derived (account has no equity field) + colour sign;
+//            ④ = FilledOrderCount (M1: works under manual trading, NOT LiveAuto-only telemetry.OrderCount).
 //   ASB-05 = hover detail: ②③④ BYTE-IDENTICAL to the dock-panel Format*/FormatReplay*; ① the new summary;
 //            pointer enter shows the card / exit hides it.
 //   ASB-06 = pan-immune: a canvas pan/zoom moves Content but NOT the bar (screen-anchored).
@@ -21,11 +24,26 @@
 //            (retired kinds → catalog TryGet=false) while a chart entry still restores (non-vacuity).
 //   ASB-09 = always visible across Replay / LiveManual / LiveAuto (mode flips never hide the bar).
 //   ASB-10 = icon seam: each slot's RawImage has a non-null texture (the RenderTexture swap seam, #177/S5).
+//   ASB-11 = D8 (視覚リファインメント): the strip band is TRANSPARENT (color.a==0) and click-through
+//            (raycastTarget==false), mirroring the Universe sidebar; a theme flip keeps the band transparent.
+//   ASB-12 = D9: the 4 slots are left-packed at a fixed 68px pitch (left-anchored, NOT 1/SLOT_COUNT stretch),
+//            so the right side of the band stays empty.
+//   ASB-13 = D10: the value is stacked BELOW the icon (icon top-anchored / value bottom-anchored).
+//   ASB-14 = D11: the bar primary abbreviates money (1234567→"1.23M") while the hover card keeps full precision.
+//   ASB-15 = hover-card font WIRING: the card uses a dedicated CJK OS font (≠ the numeric primary's Latin font)
+//            so the Japanese labels render (owner report 2026-06-27); ① pre-data card is LABELED (純資産: — …),
+//            not a bare "—". RED if a Japanese OS face exists yet the card shares the Latin font; SKIPs on CI
+//            (no Japanese face); real glyph render is HITL. (HasCharacter is unusable — dynamic fonts OS-fall-back.)
 //
 //   <Unity> -batchmode -nographics -quit -projectPath <abs> -executeMethod AccountSummaryBarE2ERunner.Run -logFile <abs>
-//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-10 + per-id tags / exit 0.
+//   expect: [E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 + per-id tags / exit 0.
 // RED litmus: wire slot ② hover to FormatReplayOrders → ASB-05 RED; drop the equity uPnL term → ASB-04 RED;
-//             parent the bar under _content → ASB-06 RED; leave a retired spec in Default() → ASB-08 RED.
+//             source ④ from telemetry.OrderCount → ASB-04 RED (expects FilledOrderCount=2, not 3); skip the
+//             cleared-portfolio reset → ASB-02 RED; drop ApplyTheme's tint re-resolve → ASB-03 RED;
+//             parent the bar under _content → ASB-06 RED; leave a retired spec in Default() → ASB-08 RED;
+//             give the band an opaque panel_background / raycastTarget=true → ASB-11 RED; restore the
+//             1/SLOT_COUNT-stretch slot layout → ASB-12 RED; right-of-icon (centred) value → ASB-13 RED;
+//             use Money (full digits) for the bar primary → ASB-14 RED (compact==full vacuity guard trips).
 
 using System;
 using System.Collections;
@@ -49,7 +67,7 @@ public static class AccountSummaryBarE2ERunner
 
         if (fail == null)
         {
-            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-10 verified.");
+            Debug.Log("[E2E ACCOUNT SUMMARY BAR PASS] ASB-01..ASB-15 verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -103,7 +121,13 @@ public static class AccountSummaryBarE2ERunner
                 return $"ASB-01: slot {i} primary = '{bar.PrimaryText(i)}', expected '—' before data";
         for (int i = 0; i < 4; i++)
             if (bar.IconImage(i) == null) return $"ASB-01: slot {i} has no RawImage icon frame";
-        Debug.Log("[E2E ASB-01 PASS] bar built: ScreenSpaceOverlay, 4 slots, '—' placeholders, icon frames present.");
+        // owner report 2026-06-27: the hover card must be LABELED even pre-data (a bare "—" looked empty). The
+        // primary stays "—" but the card carries the labeled rows so a hover always says WHAT the slot is.
+        if (bar.CardText(0) == null || !bar.CardText(0).Contains("純資産"))
+            return $"ASB-01: ① pre-data hover card is not labeled (got '{bar.CardText(0)}', expected 純資産 … rows)";
+        if (bar.CardText(1) == null || !bar.CardText(1).Contains("買付け余力"))
+            return $"ASB-01: ② pre-data hover card is not labeled (got '{bar.CardText(1)}', expected 買付け余力)";
+        Debug.Log("[E2E ASB-01 PASS] bar built: ScreenSpaceOverlay, 4 slots, '—' primaries + labeled hover cards, icon frames present.");
 
         // ── ASB-02: Replay primaries match the snapshot ──
         // equity=155321, bp=54321, 1 position, 1 order.
@@ -113,11 +137,19 @@ public static class AccountSummaryBarE2ERunner
             "\"orders\":[{\"symbol\":\"7203.TSE\",\"side\":\"BUY\",\"qty\":50.0,\"price\":2000.0,\"status\":\"FILLED\",\"ts_ms\":2}]," +
             "\"realized_pnl\":5.0,\"unrealized_pnl\":100.0}";
         setPortfolio(pf1); driveReplay();
-        if (bar.PrimaryText(0) != AccountSummaryFormat.Money(155321.0)) return $"ASB-02: ① equity = '{bar.PrimaryText(0)}', expected '{AccountSummaryFormat.Money(155321.0)}' (PortfolioSnapshot.Equity)";
-        if (bar.PrimaryText(1) != AccountSummaryFormat.Money(54321.0)) return $"ASB-02: ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.Money(54321.0)}'";
+        if (bar.PrimaryText(0) != AccountSummaryFormat.MoneyCompact(155321.0)) return $"ASB-02: ① equity = '{bar.PrimaryText(0)}', expected '{AccountSummaryFormat.MoneyCompact(155321.0)}' (PortfolioSnapshot.Equity, D11 compact)";
+        if (bar.PrimaryText(1) != AccountSummaryFormat.MoneyCompact(54321.0)) return $"ASB-02: ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.MoneyCompact(54321.0)}' (D11 compact)";
         if (bar.PrimaryText(2) != "1") return $"ASB-02: ③ position count = '{bar.PrimaryText(2)}', expected '1'";
         if (bar.PrimaryText(3) != "1") return $"ASB-02: ④ order count = '{bar.PrimaryText(3)}', expected '1'";
-        Debug.Log("[E2E ASB-02 PASS] Replay primaries match snapshot (equity/bp/positions/orders).");
+        // anti-stale (#61 honest-empty): after REAL data, a cleared portfolio must RESET every slot back to
+        // "—" (PushReplayTiles → PushAccountBarEmpty), never leave stale figures on the bar. This is the
+        // production reset path ASB-01 cannot reach (ASB-01's "—" is BuildSlot's constructor default, pre-data).
+        setPortfolio(null); driveReplay();
+        for (int i = 0; i < 4; i++)
+            if (bar.PrimaryText(i) != AccountSummaryFormat.PLACEHOLDER)
+                return $"ASB-02: slot {i} kept stale '{bar.PrimaryText(i)}' after the portfolio cleared (anti-stale reset broken)";
+        setPortfolio(pf1); driveReplay();   // restore the real snapshot for ASB-03/05
+        Debug.Log("[E2E ASB-02 PASS] Replay primaries match snapshot; cleared portfolio resets every slot to '—'.");
 
         // ── ASB-03: ① colour by unrealized-pnl sign (Replay) ──
         if (bar.PrimaryColor(0) != colors.hakoniwa_up)
@@ -129,7 +161,15 @@ public static class AccountSummaryBarE2ERunner
         setPortfolio(pfLoss); driveReplay();
         if (bar.PrimaryColor(0) != colors.hakoniwa_down)
             return "ASB-03: ① colour for uPnL<0 is not the loss (down) colour — sign recolour broken";
-        Debug.Log("[E2E ASB-03 PASS] ① recolours green (uPnL≥0) / red (uPnL<0).");
+        // theme-flip-while-idle (ADR-0028 trap): with NO data re-push, a theme flip must re-resolve slot ①'s
+        // colour from its remembered tint (SetPrimary stores PrimaryTint; ApplyTheme re-resolves it via
+        // ThemeService.Changed). Flip to the NonDefault verification palette — shipped Dark==Light (Theme.cs
+        // "Light is the dark stub"), so a Dark→Light flip would be vacuous (down colour unchanged).
+        ThemeService.SetTheme(Theme.NonDefault());
+        if (bar.PrimaryColor(0) != ThemeService.Current.colors.hakoniwa_down)
+            return "ASB-03: ① colour did NOT re-resolve on a theme flip while idle (PrimaryTint/ApplyTheme broken — ADR-0028 trap)";
+        ThemeService.SetTheme(Theme.Dark());   // restore: later sections compare against the dark `colors` captured above
+        Debug.Log("[E2E ASB-03 PASS] ① recolours green (uPnL≥0) / red (uPnL<0); colour re-resolves on a theme flip while idle.");
 
         // ── ASB-04: Live equity derivation (Cash + Σ(qty×avg+uPnL)) + colour ──
         // account: cash 54321, one position qty 50 @ 2000 with uPnL -100 → equity = 54321 + (50*2000-100) = 154221.
@@ -139,16 +179,23 @@ public static class AccountSummaryBarE2ERunner
         const string teleWire =
             "{\"LiveStrategyTelemetry\":{\"run_id\":\"r1\",\"strategy_id\":\"s\",\"realized_pnl\":1234.0," +
             "\"unrealized_pnl\":-100.0,\"order_count\":3,\"fill_count\":2,\"ts_ms\":1}}";
+        // M1 (owner 2026-06-27): ④ = FilledOrderCount (works in LiveManual, matches the ④ hover card),
+        // NOT telemetry.OrderCount (LiveAuto-only → "—" under manual trading). Apply 2 FILLED orders so
+        // FilledOrderCount=2; telemetry.order_count=3 differs, so ④=="2" PROVES the source is FilledOrderCount.
+        const string fillWire1 = "{\"OrderEvent\":{\"order_id\":\"o1\",\"client_order_id\":\"c1\",\"status\":\"FILLED\",\"filled_qty\":50.0,\"avg_price\":2000.0,\"ts_ms\":1}}";
+        const string fillWire2 = "{\"OrderEvent\":{\"order_id\":\"o2\",\"client_order_id\":\"c2\",\"status\":\"FILLED\",\"filled_qty\":50.0,\"avg_price\":2010.0,\"ts_ms\":2}}";
         panel.Apply(acctWire);
+        panel.Apply(fillWire1);
+        panel.Apply(fillWire2);
         panel.Apply(teleWire);
         setShape(true); drive();
-        string expEquity = AccountSummaryFormat.Money(154221.0);
-        if (bar.PrimaryText(0) != expEquity) return $"ASB-04: Live ① equity = '{bar.PrimaryText(0)}', expected derived '{expEquity}' (Cash + Σ(qty×avg+uPnL))";
+        string expEquity = AccountSummaryFormat.MoneyCompact(154221.0);
+        if (bar.PrimaryText(0) != expEquity) return $"ASB-04: Live ① equity = '{bar.PrimaryText(0)}', expected derived '{expEquity}' (Cash + Σ(qty×avg+uPnL), D11 compact)";
         if (bar.PrimaryColor(0) != colors.hakoniwa_down) return "ASB-04: Live ① colour not red for negative Σ unrealized";
-        if (bar.PrimaryText(1) != AccountSummaryFormat.Money(80000.0)) return $"ASB-04: Live ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.Money(80000.0)}'";
+        if (bar.PrimaryText(1) != AccountSummaryFormat.MoneyCompact(80000.0)) return $"ASB-04: Live ② buying power = '{bar.PrimaryText(1)}', expected '{AccountSummaryFormat.MoneyCompact(80000.0)}' (D11 compact)";
         if (bar.PrimaryText(2) != "1") return $"ASB-04: Live ③ position count = '{bar.PrimaryText(2)}', expected '1'";
-        if (bar.PrimaryText(3) != "3") return $"ASB-04: Live ④ order count = '{bar.PrimaryText(3)}', expected '3' (telemetry.OrderCount)";
-        Debug.Log("[E2E ASB-04 PASS] Live equity derived = Cash + Σ(qty×avg+uPnL); colour by sign; bp/positions/orders.");
+        if (bar.PrimaryText(3) != "2") return $"ASB-04: Live ④ order count = '{bar.PrimaryText(3)}', expected '2' (FilledOrderCount, NOT telemetry.OrderCount=3)";
+        Debug.Log("[E2E ASB-04 PASS] Live equity derived = Cash + Σ(qty×avg+uPnL); colour by sign; bp/positions; ④=FilledOrderCount.");
 
         // ── ASB-05: hover detail byte-identity (②③④ = Format*/FormatReplay*) + ① summary; show/hide ──
         // Re-drive Replay so the hover cards are populated from pf1 (a known snapshot).
@@ -246,6 +293,121 @@ public static class AccountSummaryBarE2ERunner
             if (bar.IconTexture(i) == null)
                 return $"ASB-10: slot {i} icon has no texture (the RenderTexture→RawImage swap seam is unwired)";
         Debug.Log("[E2E ASB-10 PASS] each slot's RawImage icon has a (RenderTexture) texture — swap seam wired.");
+
+        // ── ASB-11: D8 transparent band + click-through (mirrors the Universe sidebar) ──
+        var stripBg = bar.Strip != null ? bar.Strip.GetComponent<Image>() : null;
+        if (stripBg == null) return "ASB-11: strip has no Image background (renamed?)";
+        if (stripBg.color.a != 0f)
+            return $"ASB-11: strip band is not transparent (alpha={stripBg.color.a}) — must be click-through like the sidebar (D8)";
+        if (stripBg.raycastTarget)
+            return "ASB-11: strip band still eats clicks (raycastTarget=true) — the empty band must pass clicks through (D8)";
+        // a theme flip must KEEP the band transparent (ApplyTheme re-themes RGB but holds alpha 0 — ADR-0028
+        // trap applied to the band). Flip to the NonDefault palette (shipped Dark==Light is vacuous) then restore.
+        ThemeService.SetTheme(Theme.NonDefault());
+        bar.ApplyTheme();
+        if (stripBg.color.a != 0f)
+            return $"ASB-11: a theme flip restored an OPAQUE band (alpha={stripBg.color.a} after ApplyTheme) — must stay transparent (D8)";
+        ThemeService.SetTheme(Theme.Dark());
+        bar.ApplyTheme();
+        Debug.Log("[E2E ASB-11 PASS] band transparent (alpha 0) + click-through (raycastTarget false); stays transparent on a theme flip.");
+
+        // ── ASB-12: D9 slots left-packed at a fixed pitch (NOT 1/SLOT_COUNT stretch) → right side empty ──
+        var slotRoots = new RectTransform[4];
+        for (int i = 0; i < 4; i++)
+        {
+            var img = bar.IconImage(i);
+            if (img == null || img.transform.parent == null) return $"ASB-12: slot {i} icon/parent missing";
+            slotRoots[i] = (RectTransform)img.transform.parent;
+        }
+        for (int i = 0; i < 4; i++)
+        {
+            // left-anchored fixed width: anchorMin.x == anchorMax.x == 0 (the OLD layout stretched each slot to
+            // (index+1)/SLOT_COUNT, so anchorMax.x was ≥0.25 — this distinguishes the packed layout).
+            if (slotRoots[i].anchorMin.x != 0f || slotRoots[i].anchorMax.x != 0f)
+                return $"ASB-12: slot {i} is width-STRETCHED (anchorMin.x={slotRoots[i].anchorMin.x}, anchorMax.x={slotRoots[i].anchorMax.x}) — must be left-anchored fixed width (D9)";
+        }
+        for (int i = 1; i < 4; i++)
+        {
+            float dx = slotRoots[i].anchoredPosition.x - slotRoots[i - 1].anchoredPosition.x;
+            if (dx <= 0f) return $"ASB-12: slot {i} is not to the RIGHT of slot {i - 1} (Δx={dx}) — slots must left-pack in order (D9)";
+            if (Mathf.Abs(dx - 68f) > 1f) return $"ASB-12: slot pitch {dx} ≠ fixed 68 (slots must pack at a constant pitch, not spread to full width — D9)";
+        }
+        // right side empty: the rightmost slot ends well left of the full-width strip (when the strip has laid out).
+        float stripW = bar.Strip.rect.width;
+        if (stripW > 1f)
+        {
+            float rightEdge = slotRoots[3].anchoredPosition.x + slotRoots[3].rect.width;
+            if (rightEdge >= stripW)
+                return $"ASB-12: slots fill the whole strip width (rightEdge={rightEdge} ≥ stripW={stripW}) — the right side must stay empty (D9)";
+        }
+        Debug.Log("[E2E ASB-12 PASS] slots left-packed at a fixed 68px pitch (not full-width stretch); right side empty.");
+
+        // ── ASB-13: D10 value stacked BELOW the icon (icon top-anchored, primary bottom-anchored) ──
+        for (int i = 0; i < 4; i++)
+        {
+            var iconRt = bar.IconImage(i).rectTransform;
+            var pRt = slotRoots[i].Find("primary") as RectTransform;
+            if (pRt == null) return $"ASB-13: slot {i} has no 'primary' child (renamed?)";
+            // structural (layout-independent): icon anchored to the TOP edge, value to the BOTTOM edge. The OLD
+            // layout centred the icon (anchorY 0.5) and full-height-stretched the value — this fails that.
+            if (iconRt.anchorMin.y != 1f || iconRt.anchorMax.y != 1f)
+                return $"ASB-13: slot {i} icon is not top-anchored (anchorY={iconRt.anchorMin.y}/{iconRt.anchorMax.y}) — icon must sit ABOVE the value (D10)";
+            if (pRt.anchorMin.y != 0f || pRt.anchorMax.y != 0f)
+                return $"ASB-13: slot {i} value is not bottom-anchored (anchorY={pRt.anchorMin.y}/{pRt.anchorMax.y}) — value must sit BELOW the icon (D10)";
+        }
+        Debug.Log("[E2E ASB-13 PASS] value stacked below the icon (icon top-anchored / value bottom-anchored).");
+
+        // ── ASB-14: D11 bar primary abbreviates (k/M) while the hover card keeps full precision ──
+        // 7-digit money: bar shows "1.23M", hover keeps the raw double (separate formatters — never folded).
+        const string pfBig =
+            "{\"buying_power\":1234567.0,\"cash\":1234567.0,\"equity\":1234567.0," +
+            "\"positions\":[],\"orders\":[],\"realized_pnl\":0.0,\"unrealized_pnl\":0.0}";
+        setPortfolio(pfBig); driveReplay();
+        string compact = AccountSummaryFormat.MoneyCompact(1234567.0);   // "1.23M"
+        string full = AccountSummaryFormat.Money(1234567.0);             // "1,234,567"
+        if (compact == full) return "ASB-14: MoneyCompact did not abbreviate a 7-digit value (compact==full → vacuous)";
+        if (bar.PrimaryText(0) != compact) return $"ASB-14: ① bar primary '{bar.PrimaryText(0)}' != abbreviated '{compact}' (D11)";
+        if (bar.PrimaryText(1) != compact) return $"ASB-14: ② bar primary '{bar.PrimaryText(1)}' != abbreviated '{compact}' (D11)";
+        if (bar.PrimaryText(0) == full || bar.PrimaryText(1) == full)
+            return "ASB-14: bar primary shows FULL digits — D11 abbreviation not applied to the bar";
+        // hover ② keeps full precision (byte-identical to FormatReplayBuyingPower, which carries the raw 1234567).
+        PortfolioSnapshot bigSnap = ReplayPanelDecoder.DecodePortfolio(pfBig);
+        string expBpFull = InvokeReplayFmt(ty, "FormatReplayBuyingPower", bigSnap);
+        if (bar.CardText(1) != expBpFull) return $"ASB-14: ② hover '{bar.CardText(1)}' != FormatReplayBuyingPower '{expBpFull}' (hover must keep full precision)";
+        if (!expBpFull.Contains("1234567"))
+            return "ASB-14: hover ② lost full precision (does not contain the raw '1234567') — D11 must abbreviate ONLY the bar primary";
+        // rounding boundary (code-review fix): 999,999 must roll to "1M", NOT a 4-digit "1000k".
+        string boundary = AccountSummaryFormat.MoneyCompact(999999.0);
+        if (boundary != "1M")
+            return $"ASB-14: MoneyCompact(999999) = '{boundary}', expected '1M' (must promote a unit, not render '1000k')";
+        Debug.Log("[E2E ASB-14 PASS] bar primary abbreviates (1.23M) while the hover card keeps full precision (1234567); 999999→1M boundary.");
+
+        // ── ASB-15: hover-card font wiring — the card uses a DEDICATED CJK OS font, not the primary's Latin font ──
+        // owner report 2026-06-27: the Japanese hover labels showed nothing. The fix wires a dynamic OS CJK font
+        // (Yu Gothic …) to the card text ONLY (primaries are numeric → keep the Latin font). NB: Font.HasCharacter
+        // is NOT a usable proxy here — a legacy DYNAMIC font generates glyphs on demand via OS fallback, so even
+        // LegacyRuntime.ttf returns HasCharacter('純')==true (verified 2026-06-27). The discriminating invariant is
+        // the WIRING: the card font must be a distinct object from the numeric primary's font. To make this a real
+        // RED (not a vacuous SKIP) we first probe whether a Japanese OS face EXISTS in this environment with the
+        // SAME face list production uses; if it does, the card MUST be on it (≠ primary font) or the fix regressed.
+        // Real glyph rasterisation needs a GPU → on-screen Japanese is HITL.
+        Font cardFont = bar.CardFont(0);
+        Font primFont = bar.PrimaryFont(0);
+        if (cardFont == null) return "ASB-15: ① hover card has no font (renamed?)";
+        if (primFont == null) return "ASB-15: ① primary has no font (renamed?)";
+        Font cjkProbe = Font.CreateDynamicFontFromOSFont(
+            new[] { "Yu Gothic UI", "Yu Gothic", "Meiryo", "MS Gothic", "MS PGothic" }, 14);
+        if (cjkProbe != null)
+        {
+            if (cardFont == primFont)
+                return "ASB-15: a Japanese OS face IS installed but the hover card shares the numeric primary's font — "
+                     + "the Japanese labels would tofu (production must wire _cjkFont to the card, not _font)";
+            Debug.Log("[E2E ASB-15 PASS] CJK OS face available → hover card wired to a dedicated CJK font (≠ the primary's Latin font); primaries stay numeric/Latin. On-screen Japanese render = HITL.");
+        }
+        else
+        {
+            Debug.Log("[E2E ASB-15 SKIP] no Japanese OS face installed (CI) — card falls back to the Latin font; Japanese render is HITL.");
+        }
 
         return null;
     }

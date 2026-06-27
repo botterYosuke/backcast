@@ -1,5 +1,7 @@
 # findings 0050 — CI shippable build pipeline（GitHub Actions / GameCI / draft Release）
 
+> **退役（2026-06-27・[ADR-0038](../adr/0038-shippable-build-local-script-not-github-actions.md) / issue #180）**: 本 findings が記述する GitHub Actions pipeline（`deploy-gh-release.yml`）は退役した。shippable build は owner マシン上の **`scripts/build-and-release.ps1`** に一本化（self-hosted runner も不要化）。以下は歴史的記録として保持する。実証済みの build/smoke ステップ・bundled venv hermetic 設計（findings 0049）は script に移植済みで不変。
+
 - Issue: #83
 - 関連 ADR: [ADR-0001](../adr/0001-unity-pythonnet-embedded-frontend.md)（d3 executor orphan-absence・d4 Mono2x）/ [ADR-0002](../adr/0002-embedded-python-runtime-placement-and-resolution.md)（runtime 配置・本 CI が build leg を hosted で再現）
 - 関連 findings: [0049](0049-shippable-standalone-bundled-venv.md)（本 CI が wrap する build script）

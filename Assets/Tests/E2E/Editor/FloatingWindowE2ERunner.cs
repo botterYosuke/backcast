@@ -1426,9 +1426,10 @@ public static class FloatingWindowE2ERunner
             return "S23c: same-edge alignment with gap minted a group (must not attach)";
 
         // (d) NO Hakoniwa-priority (ADR-0024 §1): two equal-size groups merge by DICT-MIN, NOT by which one
-        // contains a "core". The Hakoniwa core concept is fully retired (ADR-0024 §1; ADR-0026 dropped
-        // startup; ADR-0037 dropped run_result → there is NO core kind any more — DockShape.IsCoreKind ≡ false),
-        // so both groups here are plain. Group (S, O) at grp_zzz… and group (M, N) at grp_aaa… both size 2;
+        // contains a "core". The Hakoniwa core concept is fully retired (ADR-0024 §1; ADR-0026 dropped startup;
+        // ADR-0037 dropped run_result; ADR-0038 dropped buying_power/orders/positions → there is NO core kind
+        // any more — the IsCoreKind predicate was deleted), so both groups here are plain. Group (S, O) at
+        // grp_zzz… and group (M, N) at grp_aaa… both size 2;
         // the dragged S flush-attaches onto M. The winner is the lexicographically-smallest id (grp_aaa…).
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer4, out _);
         var c4 = MakeController(spawned, layer4);
@@ -1738,8 +1739,9 @@ public static class FloatingWindowE2ERunner
     static string Section27_HakoniwaRetired(List<GameObject> spawned)
     {
         // Island of two windows (plain dock kinds — the Hakoniwa "core" concept is fully retired: ADR-0024 §1
-        // dropped the special, ADR-0026 dropped startup, ADR-0037 dropped run_result → DockShape.IsCoreKind ≡
-        // false). Stacked vertically (so a horizontal drag never enters the sibling rect). Bootstrap via SetGroupId.
+        // dropped the special, ADR-0026/0037/0038 dropped startup/run_result/buying_power/orders/positions →
+        // there is no core kind (the IsCoreKind predicate was deleted). Stacked vertically (so a horizontal
+        // drag never enters the sibling rect). Bootstrap via SetGroupId.
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER, "buying_power", 0, 0,    280, 180, true);
@@ -2067,21 +2069,22 @@ public static class FloatingWindowE2ERunner
         return null;
     }
 
-    // ---- 32. #105 / ADR-0020 / ADR-0024 §1: factory first-launch grouping — FormFactoryBaseGroup bundles
-    //      the base dock cluster into ONE PLAIN island (ADR-0024 retires the Hakoniwa special). Covers
-    //      DRAG-14: FormGroup mints ONE shared non-null groupId across every named member; a programmatic
-    //      Spawn still mints nothing (S20 invariant); the cluster is a NORMAL island (cores drag freely —
-    //      no core-lock); <2 live members ⇒ no group; first-launch placement is FLUSH (docked), not gapped.
+    // ---- 32. #105 / ADR-0020 / ADR-0024 §1: window-group mechanics — FloatingWindowController.FormGroup
+    //      bundles N already-live windows into ONE PLAIN island (ADR-0024 retires the Hakoniwa special). The
+    //      first-launch *factory* caller (FormFactoryBaseGroup) was retired with ADR-0038 (the base set is
+    //      empty), but FormGroup itself is STILL production — saved-layout restore re-stamps a doc's groupId
+    //      through it. Covers DRAG-14: FormGroup mints ONE shared non-null groupId across every named member;
+    //      a programmatic Spawn still mints nothing (S20 invariant); the island is NORMAL (cores drag freely —
+    //      no core-lock); <2 live members ⇒ no group; flush (docked) placement, not gapped.
     //      RED→GREEN litmus: no-op FormGroup's body ⇒ (b)/(c) FAIL; restore a non-zero placement gap ⇒ (e) FAIL.
     static string Section32_FactoryBaseGroup(List<GameObject> spawned)
     {
         BuildCanvasStack(spawned, out _, out _, out RectTransform layer, out _);
         var c = MakeController(spawned, layer);
 
-        // ADR-0026 retired startup, ADR-0037 retired run_result (→ popup) → the factory base cluster is now
-        // 3 windows. Spawn them ungrouped — mirrors BuildWorkspace.SpawnBaseDockWindows (the factory grouping
-        // runs AFTER spawn, stamping the shared groupId onto already-live windows). FormGroup's ≥2 threshold
-        // is still met by 3, so the base group still forms (findings 0125 D4/F5).
+        // Spawn 3 representative ungrouped windows, then FormGroup them — the same shape a saved-layout
+        // restore drives (spawn windows, then stamp the persisted shared groupId onto the already-live set).
+        // FormGroup's ≥2 threshold is met by 3, so the group forms.
         c.Spawn(FloatingWindowCatalog.KIND_ORDER, "buying_power", 0,    0,    280, 180, true);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,       "orders",       280,  0,    280, 180, true);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,    "positions",    0,   -180,  280, 180, true);
@@ -2129,9 +2132,9 @@ public static class FloatingWindowE2ERunner
             return $"S32d: lone member got a groupId ({c2.GroupIdOf("only")})";
         if (c2.FormGroup(null) != null) return "S32d: FormGroup(null) did not return null";
 
-        // (e) The factory cluster must be DOCKED (flush, touching) — not just grouped. SpawnBaseDockWindows
-        //     uses DockDefaultPlacement.ComputeFlushRects (the SAME call). ADR-0037: the base cluster is n=3
-        //     now (run_result → popup), so the grid is cols=ceil(√3)=2 / rows=2 with slot 3 absent. Row-major,
+        // (e) A docked cluster must be FLUSH (touching) — not just grouped. DockDefaultPlacement.ComputeFlushRects
+        //     is the placement helper (still used by the AFK gate and any flush-docking caller). For n=3 the
+        //     grid is cols=ceil(√3)=2 / rows=2 with slot 3 absent. Row-major,
         //     y up-positive: [0][1] / [2]. Flush pairs: 0-1 (horizontal top row), 0-2 (vertical left col).
         //     RED→GREEN: if the placement gap is restored to non-zero (DefaultGap), these go NOT-flush.
         var flush = DockDefaultPlacement.ComputeFlushRects(3);

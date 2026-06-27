@@ -44,11 +44,7 @@ public static class DockShape
     public static bool IsDockKind(string kind) =>
         kind == FloatingWindowCatalog.KIND_CHART;
 
-    // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kind(s). A group containing AT LEAST
-    // ONE visible/live core was once promoted to a Hakoniwa group (translate-banned, swap-only). ADR-0024
-    // §1 RETIRED the Hakoniwa special (all groups drag identically), so IsCoreKind had no production
-    // consumer; ADR-0026 retired `startup` and ADR-0037 cuts `run_result` over to a popup — leaving NO
-    // dock core kind. The set is now EMPTY (dead-code simplify — findings 0125 F2/D4). Kept as a stable
-    // predicate (always false) so any lingering legacy/diagnostic caller degrades gracefully.
-    public static bool IsCoreKind(string kind) => false;
+    // (The Hakoniwa group CORE-kind predicate IsCoreKind was retired with ADR-0038 #174-178: ADR-0024 §1
+    // dropped the Hakoniwa special, then ADR-0026/0037/0038 retired startup/run_result/buying_power/orders/
+    // positions, leaving no dock core kind and no caller. Deleted rather than frozen as an always-false stub.)
 }

@@ -66,6 +66,47 @@ UNITY_EDITOR_PATH="C:\Program Files\Unity\Hub\Editor\6000.4.11f1\Editor\Unity.ex
 > 注意: 上記 runner は `credentials_source="env"` で**実 venue へのログイン**を検証する（headless 可）。
 > #122 の **prompt（tkinter ダイアログ）経路は表示が要るため headless では走らない**——実ダイアログの確認は owner の HITL 専用（findings 0093 §HITL）。
 
+## リリース手順（shippable build → draft Release → HITL publish）
+
+> shippable Windows64 build は **GitHub Actions を退役**し、owner マシン上の **`scripts/build-and-release.ps1`** に一本化した（ADR-0038 / findings 0050 退役バナー / issue #180）。self-hosted runner は不要。正本はこの script のヘッダ docstring。
+
+### 前提条件（満たさないと script が exit 2/3 で止まる）
+
+- **Unity Editor を閉じる**：同プロジェクトを開いたままだと project lock で `exit 3`（script は stale lock の排他削除を試行し、消せなければ実 Editor が保持中とみなす）
+- **`.env` の `UNITY_EDITOR_PATH`**：process env → `<repo>/.env` → `<repo>/python/.env` の順で解決。未設定なら `ProjectVersion.txt` のバージョンから Hub パス（`C:\Program Files\Unity\Hub\Editor\<ver>\Editor\Unity.exe`）へフォールバック。実体が無ければ `exit 2`
+- **`uv` が PATH または `%USERPROFILE%\.local\bin\uv.exe`**：無ければ `exit 2`（`uv sync --frozen` で `python/.venv` を materialize する）
+- **Release を発行する場合のみ**：`gh auth` 済みで write 権限を持つ owner アカウント（**`-GhAccount botterYosuke`**）。token は gh サブプロセスにだけ渡され、global の active account は変えない（[[gh-two-accounts-workflow-scope]] 参照）
+
+### コマンド
+
+```powershell
+# ① build + smoke のみ（リリースに触れない。ローカル検証 / bit-rot チェック）
+powershell -ExecutionPolicy Bypass -File scripts/build-and-release.ps1 -SkipRelease
+
+# ② build + smoke + draft Release 発行（既定。HITL publish 待ち）
+powershell -ExecutionPolicy Bypass -File scripts/build-and-release.ps1 -GhAccount botterYosuke
+
+# ③ tag を切ってリリース（version を明示。未指定なら HEAD の tag、無ければ local-<shortsha>）
+powershell -ExecutionPolicy Bypass -File scripts/build-and-release.ps1 -Version v0.3.0 -GhAccount botterYosuke
+```
+
+主なフラグ: `-SkipRelease`（build+smoke 止まり）/ `-PublishNow`（draft でなく即 publish・HITL を飛ばす）/ `-SkipSmoke`（4 stage smoke を省略・本番前は非推奨）/ `-BuildTimeoutMin`（既定 40）。
+
+### 処理フロー（script が自動でやること）
+
+clean → `uv sync --frozen` → Unity build（`BackcastShippableBuild.BuildWindows64`・**`-Wait` を使わず artifact poll + timeout force-kill**：duckdb 上流の shutdown hang 対策、成否は exit code でなく成果物で判定）→ build 出力検証 → Library 8GB ガード → `dist/` 組み立て + single-top-folder zip（System32 bsdtar で long-path 対応）→ Python SBOM（CycloneDX）→ **smoke 4 stage**（zip 整合 / manifest schema / venv import / Player GUI contract）→ SHA256SUMS → **draft** GitHub Release 作成・asset upload。
+
+進捗は repo 直下 `build-and-release.progress.log` に即時 flush（`Get-Content -Wait` でライブ追跡可）。成果物は `dist/`（zip・`runtime-manifest.json`・SBOM・`SHA256SUMS.txt`）。
+
+### HITL publish（owner 手動・script は draft 止まり）
+
+1. draft Release の zip を `gh release download <ver> -p '*.zip' -p 'SHA256SUMS.txt'` で取得し、`Get-FileHash` で `SHA256SUMS.txt` と照合
+2. **clean machine** で展開（system Python / VC++ Redist 不要：cpython + vcruntime DLL は bundle 済み）
+3. Replay AC を完走確認
+4. GitHub で「Publish release」をクリック
+
+> 終了コード: `0`=OK / `1`=build or smoke 失敗 / `2`=設定不備 / `3`=Editor 起動中。
+
 ## E2E実行時のルール
 
 - 原則としてUI操作を通じて確認する

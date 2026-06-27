@@ -1237,13 +1237,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     static string UntitledScratchPath()
         => Path.Combine(Path.GetTempPath(), "backcast_scratch", "untitled_strategy.py");
 
-    // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override
-    // (2026-06-19): anchored BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate
-    // divergence from TTWR/marimo parity at the owner's request. Its own ScreenSpaceOverlay canvas keeps
-    // it screen-fixed (it does NOT pan with the canvas) and above Content but below the secret modal
+    // The screen-fixed authoring overlay (TWO buttons: [+] appends an empty Python cell, [m] appends a
+    // markdown `mo.md(...)` cell — #179 findings 0126). Owner override (2026-06-19): anchored
+    // BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate divergence from
+    // TTWR/marimo parity at the owner's request. Its own ScreenSpaceOverlay canvas keeps it
+    // screen-fixed (it does NOT pan with the canvas) and above Content but below the secret modal
     // (z帯, findings 0050).
-    // #138 (findings 0110): the [+] Add Cell overlay GameObject, kept so DriveStrategyEditor can hide the
-    // whole authoring affordance in LiveManual (mirror of the order ticket's mode-conditional visibility).
+    // #138 (findings 0110): the overlay GameObject, kept so DriveStrategyEditor can hide the whole
+    // authoring affordance (BOTH buttons) in LiveManual (mirror of the order ticket's mode-conditional
+    // visibility).
     GameObject _addCellOverlay;
 
     void BuildAddCellButton()
@@ -1255,13 +1257,29 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
         canvas.sortingOrder = 200;   // above the scene canvas (menu/footer @0), below the secret modal
 
-        var btnGo = new GameObject("AddCellButton", typeof(RectTransform), typeof(Image), typeof(Button));
+        // [+] Add Cell (bottom-right; y = footer bar 40px + 16px gap) and, one slot ABOVE it, the
+        // #179 (findings 0126) [m] Add Markdown button. Both live in THIS overlay so they share the
+        // LiveManual hide (DriveStrategyEditor toggles _addCellOverlay — one switch, both buttons).
+        BuildOverlayButton(overlayGo, "AddCellButton", "+",
+            new Color(0.2314f, 0.7686f, 0.5961f, 0.95f),   // #3bc498 aurora-teal "Go" (space re-skin 2026-06-20)
+            new Vector2(-20f, 56f), OnAddCell);
+        BuildOverlayButton(overlayGo, "AddMarkdownButton", "m",
+            new Color(0.3490f, 0.5176f, 0.8392f, 0.95f),   // #5984d6 markdown-blue, distinct from the teal [+]
+            new Vector2(-20f, 94f), OnAddMarkdownCell);     // directly above [+] (56 + 30 size + 8 gap)
+    }
+
+    // Build one square overlay button (anchored bottom-right) with a centred glyph. Shared by [+] and
+    // [m] so a tweak to size/label styling can't make the two authoring buttons diverge.
+    void BuildOverlayButton(GameObject overlay, string name, string glyph, Color color,
+                            Vector2 anchoredPos, UnityEngine.Events.UnityAction onClick)
+    {
+        var btnGo = new GameObject(name, typeof(RectTransform), typeof(Image), typeof(Button));
         var rt = (RectTransform)btnGo.transform;
-        rt.SetParent(overlayGo.transform, false);
+        rt.SetParent(overlay.transform, false);
         rt.anchorMin = new Vector2(1f, 0f); rt.anchorMax = new Vector2(1f, 0f); rt.pivot = new Vector2(1f, 0f);
         rt.sizeDelta = new Vector2(30f, 30f);
-        rt.anchoredPosition = new Vector2(-20f, 56f);   // bottom-right; y = footer bar (40px, scene-authored) + 16px gap
-        btnGo.GetComponent<Image>().color = new Color(0.2314f, 0.7686f, 0.5961f, 0.95f); // #3bc498 aurora-teal "Go" (space re-skin 2026-06-20)
+        rt.anchoredPosition = anchoredPos;
+        btnGo.GetComponent<Image>().color = color;
 
         var lblGo = new GameObject("Label", typeof(RectTransform), typeof(CanvasRenderer), typeof(Text));
         var lrt = (RectTransform)lblGo.transform;
@@ -1269,15 +1287,16 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         lrt.anchorMin = Vector2.zero; lrt.anchorMax = Vector2.one; lrt.offsetMin = Vector2.zero; lrt.offsetMax = Vector2.zero;
         var t = lblGo.GetComponent<Text>();
         t.font = _font;
-        t.text = "+";
+        t.text = glyph;
         t.alignment = TextAnchor.MiddleCenter;
         t.color = Color.white;
         t.fontSize = 14;
 
-        btnGo.GetComponent<Button>().onClick.AddListener(OnAddCell);
+        btnGo.GetComponent<Button>().onClick.AddListener(onClick);
     }
 
     void OnAddCell() => _coordinator?.AddCell();
+    void OnAddMarkdownCell() => _coordinator?.AddMarkdownCell();   // #179 (findings 0126)
 
     // #172/#173 (ADR-0037 / findings 0125 D1/D5/D7): build the screen-anchored Run Result popup and
     // Build the reused LivePanelTileView (FormatRunResult) into its body. The popup lives directly under

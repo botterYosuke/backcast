@@ -514,9 +514,9 @@ _Avoid_: バーを [[floating window / FloatingWindowLayer / z-order]] や `Dock
 **前後関係の契約**。chrome はすべて uGUI（ScreenSpaceOverlay）で描き、順序は **`Canvas.sortingOrder` で決定的に**持つ。
 IMGUI（`OnGUI`）の `GUI.depth` は単一カメラ Screen-Space では無視され、IMGUI 同士の描画順は MonoBehaviour 実行順依存で
 制御不能（＝#77 の不具合源：menu と sidebar が両方 IMGUI で、後に走る sidebar が dropdown を上塗りした）。ゆえに
-chrome は IMGUI を撤去して uGUI 化する。契約の順序は **field/windows < sidebar < footer < menu+dropdown < secret modal**：
+chrome は IMGUI を撤去して uGUI 化する。契約の順序は **field/windows < sidebar < footer < [[アカウントサマリーバー]] < menu+dropdown < secret modal**：
 footer は sidebar overflow に決して隠されず（#84/findings 0053）、dropdown は footer/sidebar の前面に描かれ、
-secret modal は常に最前面。**EventSystem はクリックを最前面 raycaster だけへ配送**するので、この順序が視覚 z-order と
+secret modal は常に最前面。アカウントサマリーバー（[[ADR-0038]]）は menu 直下の画面固定 chrome で `sortingOrder=550`（menu backdrop 599 / menu 600 の下・workspace/sidebar/footer の上）＝メニューの dropdown は常にバーの前面へ spill する。**EventSystem はクリックを最前面 raycaster だけへ配送**するので、この順序が視覚 z-order と
 入力到達の両方を一意に決める（dropdown 直下の sidebar への取りこぼしクリックも構造的に消える）。menu 展開中は menu と
 footer/sidebar の間に全画面 backdrop（`sortingOrder=599`＝menu−1, footer より前）を一枚敷き、外側クリックで閉じつつ
 footer/sidebar への到達を断つ（menu 開いたままモード切替する exotic state が起きない）。同層内 overflow（特に sidebar の

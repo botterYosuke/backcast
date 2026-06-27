@@ -38,13 +38,11 @@ public static class DockShape
     // predicate that routes a kind to its depth plane: BackcastWorkspaceRoot uses it on layout
     // restore, and the AFK gate uses it to prove the round-trip plane routing — so the two cannot
     // drift. Pure (the catalog consts are compile-time strings) so probes drive it headlessly.
-    // ADR-0026: startup is no longer a dock kind (moved to the Settings modal). The dock plane is now
-    // chart + the 4 base singletons (buying_power / orders / positions / run_result).
+    // ADR-0026: startup is no longer a dock kind (moved to the Settings modal). ADR-0038 (#174-178):
+    // buying_power / orders / positions retired to the account summary bar. The dock plane is now
+    // chart + run_result (run_result retired separately by sister #172 → eventually chart only).
     public static bool IsDockKind(string kind) =>
         kind == FloatingWindowCatalog.KIND_CHART ||
-        kind == FloatingWindowCatalog.KIND_BUYING_POWER ||
-        kind == FloatingWindowCatalog.KIND_ORDERS ||
-        kind == FloatingWindowCatalog.KIND_POSITIONS ||
         kind == FloatingWindowCatalog.KIND_RUN_RESULT;
 
     // #104 (ADR-0019 / findings 0082 §2): the Hakoniwa group CORE kind(s). A group containing AT LEAST

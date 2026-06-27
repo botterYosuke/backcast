@@ -182,9 +182,9 @@ public static class ReplayRunResultTileE2ERunner
     // back-plane mirror of DriveOrderTicket. Drives the REAL root: DriveRunResult + FooterModeViewModel.ApplyPoll
     // + the real _dockWindows (no Python, no _lanes). A fresh scene build (independent of the content sections'
     // override seam).
-    //   RRT-06 = mode→visibility: run_result visible in Replay/LiveAuto, hidden in LiveManual; and the sibling
-    //            base tiles (orders/positions/buying_power) stay VISIBLE in LiveManual (only run_result toggles
-    //            — no collateral hiding).
+    //   RRT-06 = mode→visibility: run_result visible in Replay/LiveAuto, hidden in LiveManual; and a sibling
+    //            dock window (a chart — the orders/positions/buying_power tiles are retired by ADR-0038) stays
+    //            VISIBLE in LiveManual (only run_result toggles — no collateral hiding).
     //   RRT-07 = non-destructive: Replay→LiveManual→Replay keeps the SAME window instance + geometry + groupId
     //            (pure SetActive, AC3), restored visible.
     //   RRT-08 = self-heal (Finding 1 guard): first the PREMISE — run_result RIDES CaptureLayout, so a layout
@@ -215,10 +215,13 @@ public static class ReplayRunResultTileE2ERunner
 
         Func<RectTransform> runResult = () => dockWindows.RectOf("run_result");
         if (runResult() == null) return "RRT-06: run_result base dock window not spawned by BuildWorkspace";
-        // Sibling base tiles that MUST stay visible in LiveManual (manual fills/positions/buying power are live).
-        string[] siblings = { "orders", "positions", "buying_power" };
+        // ADR-0038 (#174-178): the orders/positions/buying_power sibling base tiles are RETIRED (→ account
+        // summary bar). The remaining dock-plane neighbour that MUST stay visible in LiveManual (DriveRunResult
+        // toggles ONLY run_result — no collateral) is a chart window; spawn one as the no-collateral witness.
+        string[] siblings = { "chart:RRT" };
+        dockWindows.Spawn(FloatingWindowCatalog.KIND_CHART, "chart:RRT", 600f, -300f, 520f, 360f, true);
         foreach (var s in siblings)
-            if (dockWindows.RectOf(s) == null) return "RRT-06: sibling base tile '" + s + "' not spawned (no-collateral test would be vacuous)";
+            if (dockWindows.RectOf(s) == null) return "RRT-06: collateral witness '" + s + "' not spawned (no-collateral test would be vacuous)";
 
         void Poll(string mode, string venueState)
             => applyPoll.Invoke(footerMode, new object[] { "{\"execution_mode\":\"" + mode + "\",\"venue_state\":\"" + venueState + "\"}" });
@@ -243,8 +246,8 @@ public static class ReplayRunResultTileE2ERunner
         Poll("LiveManual", "CONNECTED");
         Drive();
         if (runResult().gameObject.activeSelf) return "RRT-06: run_result VISIBLE under LiveManual (must be hidden — strategy-run surface is empty there)";
-        if (!SiblingsVisible()) return "RRT-06: a sibling base tile (orders/positions/buying_power) was hidden under LiveManual — DriveRunResult must toggle ONLY run_result via RectOf(WINDOW_ID_RUN_RESULT) (no collateral)";
-        Debug.Log("[E2E RRT-06 PASS] run_result toggles with mode — visible in Replay/LiveAuto, hidden in LiveManual; Orders/Positions/Buying Power stay visible (no collateral)");
+        if (!SiblingsVisible()) return "RRT-06: a sibling dock window (chart) was hidden under LiveManual — DriveRunResult must toggle ONLY run_result via RectOf(WINDOW_ID_RUN_RESULT) (no collateral)";
+        Debug.Log("[E2E RRT-06 PASS] run_result toggles with mode — visible in Replay/LiveAuto, hidden in LiveManual; the chart sibling stays visible (no collateral)");
 
         // ── RRT-07: non-destructive — same instance + geometry + groupId across the round-trip. ──
         Poll("Replay", "");

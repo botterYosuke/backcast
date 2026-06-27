@@ -61,7 +61,7 @@ public static class ScenarioStartupE2ERunner
 
             // Section13/14 are independent pure checks (reflection over BaseDockWindowIds / catalog lookup),
             // so run them unconditionally for accurate per-section verdicts even if an earlier section failed.
-            s16 = Section13_DockClusterIsFour();
+            s16 = Section13_DockClusterIsRunResultOnly();
             s17 = Section14_ForwardCompatSkipsStartup();
             fail = fail ?? s16 ?? s17;
         }
@@ -79,7 +79,8 @@ public static class ScenarioStartupE2ERunner
         if (fail == null)
         {
             Debug.Log("[E2E SCENARIO STARTUP PASS] merge-preserve + validation + registry + File→New clear + " +
-                      "dock 5→4 (SCENARIO-16) + forward-compat startup skip (SCENARIO-17) verified");
+                      "dock base → run_result only (SCENARIO-16: ADR-0026 startup + ADR-0038 3 panels retired) + " +
+                      "forward-compat startup skip (SCENARIO-17) verified");
             EditorApplication.Exit(0);
         }
         else
@@ -688,22 +689,26 @@ public static class ScenarioStartupE2ERunner
         finally { UnityEngine.Object.DestroyImmediate(go); }
     }
 
-    // ---- 13. dock cluster reduced 5→4 (startup retired to the Settings modal) ----
-    // Covers: SCENARIO-16 (#126 / ADR-0026): BackcastWorkspaceRoot.BaseDockWindowIds has 4 ids and no
-    // "startup". This is the single source SpawnBaseDockWindows + FormFactoryBaseGroup both read, so a
-    // 4-length array IS the 5→4 reduction. RED litmus: re-add WINDOW_ID_STARTUP to the array → 5 → RED.
-    static string Section13_DockClusterIsFour()
+    // ---- 13. dock cluster reduced to run_result only (ADR-0026 startup → Settings; ADR-0038 3 panels → bar) ----
+    // Covers: SCENARIO-16: BackcastWorkspaceRoot.BaseDockWindowIds. ADR-0026 retired "startup"; ADR-0038
+    // (#174-178) retired buying_power/orders/positions to the account summary bar, so base is now just
+    // run_result (sister #172 retires the last one next → 0). This is the single source SpawnBaseDockWindows
+    // + FormFactoryBaseGroup both read; a 1-length {run_result} array IS the reduction. RED litmus: re-add a
+    // retired id to the array → length 2 → RED. Non-vacuity: assert the retired ids are ABSENT.
+    static string Section13_DockClusterIsRunResultOnly()
     {
         var f = typeof(BackcastWorkspaceRoot).GetField("BaseDockWindowIds",
             BindingFlags.NonPublic | BindingFlags.Static);
         if (f == null) return "S13: BaseDockWindowIds field not found (renamed?)";
         var ids = (string[])f.GetValue(null);
         if (ids == null) return "S13: BaseDockWindowIds is null";
-        if (ids.Length != 4) return $"S13: base dock has {ids.Length} windows, expected 4 (startup retired by ADR-0026)";
+        if (ids.Length != 1) return $"S13: base dock has {ids.Length} windows, expected 1 (run_result only — ADR-0026/0038)";
         var set = new System.Collections.Generic.HashSet<string>(ids);
         if (set.Contains("startup")) return "S13: base dock still contains 'startup'";
-        if (!set.Contains("buying_power") || !set.Contains("orders") || !set.Contains("positions") || !set.Contains("run_result"))
-            return "S13: base dock missing one of buying_power/orders/positions/run_result (non-vacuity)";
+        foreach (var retired in new[] { "buying_power", "orders", "positions" })
+            if (set.Contains(retired)) return $"S13: base dock still contains retired '{retired}' (ADR-0038)";
+        if (!set.Contains("run_result"))
+            return "S13: base dock missing run_result (non-vacuity)";
         return null;
     }
 

@@ -239,9 +239,9 @@ public static class FloatingWindowResizeE2ERunner
         var c = MakeController(spawned, layer);
         // order minSize 280x180 → use 280x180 tiles flush in a row.
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,     "A", 0f,    0f, 280f, 180f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS,    "B", 280f,  0f, 280f, 180f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_POSITIONS, "C", 560f,  0f, 280f, 180f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_BUYING_POWER, "Z", 840f, 0f, 280f, 180f, true);   // external (no group)
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT,    "B", 280f,  0f, 280f, 180f, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "C", 560f,  0f, 280f, 180f, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "Z", 840f, 0f, 280f, 180f, true);   // external (no group)
         const string G = "grp_rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr";
         c.SetGroupId("A", G); c.SetGroupId("B", G); c.SetGroupId("C", G);
 
@@ -290,7 +290,7 @@ public static class FloatingWindowResizeE2ERunner
         // desired width 200 < min 280 ⇒ clamp to 280 ⇒ R2 shrinks by 120, so Bf pulls back to x=280 (clamped),
         // NOT x=200 (desired).
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "R2", 0f,   -400f, 400f, 180f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "Bf", 400f, -400f, 280f, 180f, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "Bf", 400f, -400f, 280f, 180f, true);
         const string GC = "grp_cccccccccccccccccccccccccccccccc";
         c.SetGroupId("R2", GC); c.SetGroupId("Bf", GC);
         c.BeginResize("R2", Vector2.zero);
@@ -310,7 +310,7 @@ public static class FloatingWindowResizeE2ERunner
         BuildLayer(spawned, out RectTransform layer);
         var c = MakeController(spawned, layer);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "A", 0f,   0f, 280f, 180f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "B", 280f, 0f, 280f, 180f, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "B", 280f, 0f, 280f, 180f, true);
         const string G = "grp_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
         c.SetGroupId("A", G); c.SetGroupId("B", G);
         Vector2 aSize0 = c.RectOf("A").sizeDelta, bPos0 = c.RectOf("B").anchoredPosition;
@@ -375,7 +375,7 @@ public static class FloatingWindowResizeE2ERunner
         var c = MakeController(spawned, layer);
         // .5 values serialize unambiguously. A.right rest = 100.5+300.5 = 401.0 = B.left (flush).
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "A", 100.5f, -50.5f, 300.5f, 200.5f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "B", 401.0f, -50.5f, 280.5f, 200.5f, true);
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "B", 401.0f, -50.5f, 280.5f, 200.5f, true);
         const string G = "grp_dddddddddddddddddddddddddddddddd";
         c.SetGroupId("A", G); c.SetGroupId("B", G);
 
@@ -506,7 +506,7 @@ public static class FloatingWindowResizeE2ERunner
         BuildLayer(spawned, out RectTransform layer);
         var c = MakeController(spawned, layer);
         c.Spawn(FloatingWindowCatalog.KIND_ORDER,  "back",  0f, 0f, 300f, 200f, true);
-        c.Spawn(FloatingWindowCatalog.KIND_ORDERS, "front", 0f, 0f, 300f, 200f, true);   // spawned later ⇒ in front
+        c.Spawn(FloatingWindowCatalog.KIND_RUN_RESULT, "front", 0f, 0f, 300f, 200f, true);   // spawned later ⇒ in front
         if (c.RectOf("back").GetSiblingIndex() >= c.RectOf("front").GetSiblingIndex())
             return "S12: precondition — 'back' is not behind 'front'";
 

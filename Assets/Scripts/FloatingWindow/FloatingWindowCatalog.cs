@@ -29,10 +29,12 @@ public class FloatingWindowCatalog
     // `Hakoniwa` (the dock cluster). Names preserve the existing tile ids so an old persisted
     // doc that mentions e.g. "orders" is forward-compatible when read as a floating-window kind.
     public const string KIND_CHART = "chart";
-    public const string KIND_BUYING_POWER = "buying_power";
-    public const string KIND_ORDERS = "orders";
-    public const string KIND_POSITIONS = "positions";
     public const string KIND_RUN_RESULT = "run_result";
+    // KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS ("buying_power"/"orders"/"positions") RETIRED —
+    // ADR-0038 (#174-178): the 3 base singletons are replaced by the screen-anchored account summary bar
+    // + hover cards. Dropping them from Default() is what makes a saved "buying_power"/"orders"/"positions"
+    // window skip on restore (catalog TryGet=false → spawn skipped, layout entry kept — forward-compat,
+    // same discipline as the retired "startup"). KIND_RUN_RESULT is retired separately by sister #172.
     // KIND_STARTUP ("startup") RETIRED — ADR-0026: Scenario Startup moved to the Settings modal's
     // Scenario section; the dock no longer hosts a startup window. A pre-ADR-0026 saved layout that
     // names "startup" is forward-compat: TryGet("startup")=false → spawn skipped, layout entry kept.
@@ -84,18 +86,9 @@ public class FloatingWindowCatalog
                 KIND_CHART, "Chart",
                 defaultSize: new Vector2(520f, 360f), minSize: new Vector2(280f, 200f),
                 accent: players.Get(1), closeable: false),
-            new FloatingWindowSpec(
-                KIND_BUYING_POWER, "Buying Power",
-                defaultSize: new Vector2(340f, 140f), minSize: new Vector2(220f, 100f),
-                accent: players.Get(3), closeable: false),
-            new FloatingWindowSpec(
-                KIND_ORDERS, "Orders",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(4), closeable: false),
-            new FloatingWindowSpec(
-                KIND_POSITIONS, "Positions",
-                defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),
-                accent: players.Get(5), closeable: false),
+            // KIND_BUYING_POWER / KIND_ORDERS / KIND_POSITIONS specs RETIRED — ADR-0038 (#174-178):
+            // replaced by the account summary bar + hover cards. Absence from Default() is the forward-
+            // compat skip for old saved layouts that still name those window ids.
             new FloatingWindowSpec(
                 KIND_RUN_RESULT, "Run Result",
                 defaultSize: new Vector2(380f, 220f), minSize: new Vector2(240f, 140f),

@@ -343,9 +343,10 @@ public static class BackcastWorkspaceProbe
         if (scenario == null || windows == null || chartViews == null)
             return "chartwin: root internals not found (renamed?)";
 
-        // #99 base dock cluster: the 5 base dock windows are spawned by SpawnBaseDockWindows at
-        // BuildWorkspace; they live in _windows under fixed ids.
-        string[] baseIds = { "startup", "buying_power", "orders", "positions", "run_result" };
+        // base dock cluster spawned by SpawnBaseDockWindows at BuildWorkspace. ADR-0026 retired "startup";
+        // ADR-0038 (#174-178) retired buying_power/orders/positions to the account summary bar, so the base
+        // is now just run_result (sister #172 retires it next). NOTE: base dock windows live on _dockWindows.
+        string[] baseIds = { "run_result" };
         foreach (var id in baseIds)
             if (!windows.Has(id)) return "chartwin: base dock window missing: " + id;
 

@@ -266,12 +266,9 @@ public static class ScenarioStartupE2ERunner
     }
 
     // ---- 5. controller: populate → edit → run-gate → commit → restore (stages 3+4 core) ----
-    sealed class FakeProvider : IStrategyFileProvider
-    {
-        public string Path;
-        public bool Supplyable;
-        public bool TryGetStrategyFile(out string path) { path = Path; return Supplyable; }
-    }
+    // #169 (ADR-0036 D5): the run gate takes a Func<string> resolver (the path to run, or null when nothing is
+    // supplyable). A supplyable strategy yields its path; a non-supplyable one yields null (→ BlockedNoStrategy).
+    static Func<string> Supply(string path, bool supplyable) => () => supplyable ? path : null;
 
     // Covers: SCENARIO-09 (editing→validated-for-write run-gate), SCENARIO-10 (populate/restore round-trip)
     static string Section5_ControllerRoundTripAndRunGate()
@@ -289,7 +286,7 @@ public static class ScenarioStartupE2ERunner
         if (ctrl.Validate().Universe == null) return "controller: empty universe not flagged after seed";
 
         // run gate before a strategy exists → BlockedNoStrategy (distinct from scenario errors).
-        var noStrat = ctrl.TryStartRun(new FakeProvider { Path = strat, Supplyable = false });
+        var noStrat = ctrl.TryStartRun(Supply(strat, false));
         if (noStrat.Gate != RunGate.BlockedNoStrategy) return "controller: missing strategy not gated";
 
         // edit a valid scenario + universe.
@@ -303,7 +300,7 @@ public static class ScenarioStartupE2ERunner
         if (ctrl.Validate().Any) return "controller: valid edited scenario reported errors";
 
         // run gate with a supplyable strategy → Ready + sidecar written + Dirty cleared.
-        var ready = ctrl.TryStartRun(new FakeProvider { Path = strat, Supplyable = true });
+        var ready = ctrl.TryStartRun(Supply(strat, true));
         if (!ready.IsReady) return "controller: valid run gate not Ready (" + ready.Message + ")";
         if (ready.StrategyPath != strat) return "controller: run gate returned wrong strategy path";
         if (ctrl.Params.Dirty) return "controller: Dirty not cleared after commit";
@@ -322,7 +319,7 @@ public static class ScenarioStartupE2ERunner
         // run gate with an invalidated scenario (empty universe) → BlockedInvalidScenario.
         ctrl2.RemoveInstrument("8918.TSE");
         ctrl2.RemoveInstrument("7203.TSE");
-        var bad = ctrl2.TryStartRun(new FakeProvider { Path = strat, Supplyable = true });
+        var bad = ctrl2.TryStartRun(Supply(strat, true));
         if (bad.Gate != RunGate.BlockedInvalidScenario) return "controller: invalid scenario not gated at run";
         if (bad.Errors == null || bad.Errors.Universe == null) return "controller: run-block missing universe error";
 

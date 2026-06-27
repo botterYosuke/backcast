@@ -27,10 +27,18 @@ public sealed class NotebookCellCoordinator
 {
     public const string AdoptedRegionId = "strategy_editor:region_001";
 
-    // The single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell). The
-    // injected globals aren't in a generic marimo note, so backcast names them in the placeholder —
-    // NEVER seeded into the body (findings 0050).
-    public const string HostApiHint = "get_bar()\nget_portfolio()\nsubmit_market(qty)";
+    // #169 (ADR-0036 D2, supersedes findings 0050's "本体 seed 却下＝空セル＋placeholder"): the body seeded
+    // into the SINGLE cell of a fresh File→New / no-resume boot notebook. An observe-only replay loop (zero
+    // trades — never calls bt.submit_market) so the workspace lands on "トヨタを眺めて replay 観察できる、すぐ
+    // Run 可能な雛形". `cell_synthesis` wraps it with `@app.cell / def _(bt): / return` (bt is an undefined
+    // ref → captured as the def arg). New(seedBody) lands it; the per-cell RUN runs the unsaved buffer (untitled
+    // scratch, D6). The host-API placeholder hint mechanism is RETIRED here (D3) — a non-empty seed makes it
+    // moot, and keeping it would resurrect a hint that disagrees with the seed once the cell is emptied.
+    // No trailing newline: a cell body is canonically stored without one (mirrors the golden gate's
+    // _BODIES), which keeps synth→decompose→synth byte-idempotent and matches the owner-spec synth output
+    // (no blank line before the bare `return`). Verified by test_marimo_cell_synthesis_golden NEWSEED-05.
+    public const string ObserveSeedBody =
+        "for bar in bt.replay(bars_per_second=2):\n    pass  # 観察のみ。bt.submit_market() を呼ばない＝売買ゼロ";
 
     readonly MarimoNotebookDocument _notebook;
     readonly FloatingWindowController _windows;
@@ -92,7 +100,6 @@ public sealed class NotebookCellCoordinator
         Track(region, cell);
         _viewFor(region)?.Bind(cell);
         _windows.Show(region);   // reveal + raise (front)
-        UpdatePlaceholders();
         ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
         return cell;
     }
@@ -118,7 +125,6 @@ public sealed class NotebookCellCoordinator
         {
             _windows.Close(regionId);    // despawn + deregister
         }
-        UpdatePlaceholders();
         ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
         return true;
     }
@@ -139,10 +145,13 @@ public sealed class NotebookCellCoordinator
         return true;
     }
 
-    // ---- File->New : unbound notebook with one empty cell ----
-    public void New()
+    // ---- File->New : unbound notebook with one cell ----
+    // #169 (ADR-0036 D2): `seedBody` lands in the single cell (default "" = the pre-#169 empty-cell New, kept
+    // for the AFK gates that drive the coordinator primitive directly). The root passes ObserveSeedBody on the
+    // fresh File→New / no-resume boot paths so the workspace lands on the observe-replay 雛形.
+    public void New(string seedBody = "")
     {
-        _notebook.ResetUnboundEmpty();
+        _notebook.ResetUnboundSeeded(seedBody);
         SyncWindowsToNotebook(null);
     }
 
@@ -187,7 +196,6 @@ public sealed class NotebookCellCoordinator
             Track(region, cells[i]);
             _viewFor(region)?.Bind(cells[i]);
         }
-        UpdatePlaceholders();
         ListMutated?.Invoke();   // #102 findings 0079 §6 D7: drop any in-flight run against the prior list
     }
 
@@ -236,13 +244,5 @@ public sealed class NotebookCellCoordinator
             region, FloatingWindowCatalog.KIND_STRATEGY_EDITOR,
             topLeft.x, topLeft.y, _cellWindowSize.x, _cellWindowSize.y, 0, true));
         _windows.Show(region);
-    }
-
-    // Single-cell host-API hint on the only cell window; cleared otherwise (marimo hasOnlyOneCell).
-    void UpdatePlaceholders()
-    {
-        bool single = _notebook.CellCount == 1;
-        foreach (var kv in _cellByRegion)
-            _viewFor(kv.Key)?.SetPlaceholderHint(single ? HostApiHint : null);
     }
 }

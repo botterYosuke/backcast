@@ -35,10 +35,12 @@ DepthLadder=0059 / Hakoniwa=0060）。`.cs.meta` も git mv で GUID（371a9c089
 
 ## 据え置き / 仕分け
 
-- **STRATEGY-11（単一セル placeholder hint）= 要新規自動化のまま据え置き**。`NotebookCellCoordinator.UpdatePlaceholders`
+- **STRATEGY-11（単一セル placeholder hint）= 要新規自動化のまま据え置き**（当時）。`NotebookCellCoordinator.UpdatePlaceholders`
   → `_viewFor(regionId)?.SetPlaceholderHint` は実 `StrategyEditorView`(MonoBehaviour)＋`InputField`＋placeholder `Text`
   harness を要し、S12 の bare-RT 経路（`viewFor = _ => null`）の verbatim 移送に収まらない。「安い昇格」方針に沿い
   本昇格では追加しない。将来 view harness を組む slice で昇格する。
+  > **supersede: ADR-0036（#169・2026-06-26）** — その後 #95 で Section20 へ昇格 → #169 で placeholder hint 機構ごと
+  > RETIRED（Section20 は撤去 pin に反転・findings 0124）。STRATEGY-11 は現在「撤去 pin」として自動化済み。
 - **STRATEGY-13（CapturePositions cell-order）= S12 が既に assert 済み**（`CapturePositions().Count == CellCount`）→
   自動(E2E済) へ再分類（新規コード不要）。move/drag 本体は FloatingWindow 共有ロジックで FloatingWindow 台本が正本。
 - **STRATEGY-15（File→New reset）**: aggregate 側（`ResetUnboundEmpty`）は S10 で昇格。root/MenuBar 側は

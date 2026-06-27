@@ -400,7 +400,10 @@ public static class BackcastWorkspaceProbe
         if (scenario0.Universe.Count != 0)
             return "editor-seed: UNBOUND editor seeded a non-empty universe (got [" +
                    string.Join(",", scenario0.Universe.Ids) + "]) — #78: nothing loaded must seed nothing";
-        var gate0 = scenario0.TryStartRun(new RegistryStrategyFileProvider(registry0, NOTEBOOK_ID));
+        // #169 (ADR-0036 D5): the gate takes a Func<string> resolver. An UNBOUND registry provider resolves to
+        // null → BlockedNoStrategy (the #78 "未ロード→走らない" guarantee, unchanged for a raw registry provider).
+        var provider0 = new RegistryStrategyFileProvider(registry0, NOTEBOOK_ID);
+        var gate0 = scenario0.TryStartRun(() => provider0.TryGetStrategyFile(out var x) ? x : null);
         if (gate0.Gate != RunGate.BlockedNoStrategy)
             return "editor-seed: UNBOUND notebook did NOT block Run (gate=" + gate0.Gate + ") — #78: 空エディタ→Run封鎖";
 

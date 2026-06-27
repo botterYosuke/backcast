@@ -45,6 +45,7 @@ owner はこの 2 つを覆し、起動直後に「**トヨタを眺めて repla
 - **universe↔chart 不変条件は無改変**で honor される（トヨタ chart は既存 `SyncChartWindowsToUniverse` で spawn）。デフォルト universe は in-memory（sidecar 無し）で、Save As 時に既存 `scenario.instruments` writeback に自然に乗る（追加実装ゼロ）。
 - **トヨタの replay 可否は DuckDB の `7203.TSE` データ有無に依存**（実行時）。データが無ければ replay は 0 bar で即終了するだけで crash しない（findings 0097 no-trade-day 経路）。種コード自体は `__file__` も相対 I/O も使わないので cwd に非依存。
 - 下位の実装事実（種定数の置き場・ゲート述語の正確な配線・scratch パスの location と書き出し seam・probe 更新の正確な section）は本 ADR に書き戻さず **findings 0124** に記録し、本 ADR を「方針: ADR-0036」として参照する。
+- **D 番号の対応表（cross-doc 注記）**: 本 ADR の Decision は **D1–D5**、findings 0124 の「設計の木」は **D1–D8**（D1=トリガ統一を別立てにするため 1 つズレる）。コード/台本コメントは findings 0124 の D 番号で「ADR-0036 DN」と表記しているので、ADR 単体を読む際は次の対応で解決すること: **ADR D1（観察ノート種付け）＝findings D2**／**ADR D2（placeholder 撤去）＝findings D3**／**ADR D3（universe トヨタ）＝findings D4**／**ADR D4（untitled Run 可ゲート）＝findings D5**／**ADR D5（遅延 scratch）＝findings D6**。よってソース中の「ADR-0036 D2＝種セル」「D4＝universe」「D6＝遅延 scratch」は findings 0124 番号での参照（正本は method/Covers・[[action-id-renumber-drift]] 同型）。
 
 ## 自己保護
 

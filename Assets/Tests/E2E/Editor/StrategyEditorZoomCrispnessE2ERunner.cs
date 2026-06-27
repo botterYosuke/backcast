@@ -26,7 +26,7 @@
 //
 // SECTIONS:
 //   01 — the built editor surface is TMP_InputField + TMP_Text; ZERO legacy uGUI Text / InputField (litmus)
-//   02 — editor textComponent + placeholder use an SDF TMP_FontAsset (SDF render mode + Distance Field shader)
+//   02 — editor textComponent uses an SDF TMP_FontAsset (SDF render mode + Distance Field shader; #169 retired the placeholder)
 //   03 — both output panes (rich + console) are TMP_Text on an SDF font
 //   04 — scale-independence: under an ancestor localScale 5×, the editor TMP fontSize is UNCHANGED
 
@@ -104,10 +104,11 @@ public static class StrategyEditorZoomCrispnessE2ERunner
     }
 
     // =====================================================================================================
-    // 02 — the editing surface (textComponent + placeholder) renders through an SDF TMP_FontAsset: an SDF
-    // atlasRenderMode AND a Distance-Field shader material. That shader is what reconstructs glyph outlines
-    // at any zoom — the crispness mechanism. (Tolerates the production Cascadia SDF or the default SDF
-    // fallback; both satisfy SDF-ness, which is the crispness invariant — findings 0096 D1.)
+    // 02 — the editing surface (textComponent) renders through an SDF TMP_FontAsset: an SDF atlasRenderMode
+    // AND a Distance-Field shader material. That shader is what reconstructs glyph outlines at any zoom — the
+    // crispness mechanism. (Tolerates the production Cascadia SDF or the default SDF fallback; both satisfy
+    // SDF-ness, which is the crispness invariant — findings 0096 D1.) #169 (ADR-0036 D3): the host-API
+    // placeholder surface was RETIRED, so only the editing textComponent remains to assert here.
     // =====================================================================================================
     static string Section02_EditorFontIsSdf(RectTransform body)
     {
@@ -117,30 +118,23 @@ public static class StrategyEditorZoomCrispnessE2ERunner
         string e = AssertSdf(editor, "editor textComponent");
         if (e != null) return e;
 
-        // The placeholder Graphic (the host-API hint surface) must be SDF too — it shares the zoom.
-        var ph = field.placeholder as TMP_Text;
-        if (ph == null) return "ZOOM-02: placeholder is not a TMP_Text";
-        e = AssertSdf(ph, "placeholder");
-        if (e != null) return e;
-
-        Debug.Log("[E2E ZOOM-02 PASS] editor textComponent + placeholder render through an SDF TMP_FontAsset " +
+        Debug.Log("[E2E ZOOM-02 PASS] editor textComponent renders through an SDF TMP_FontAsset " +
                   "(font=" + editor.font.name + ", renderMode=" + editor.font.atlasRenderMode + ").");
         return null;
     }
 
     // =====================================================================================================
     // 03 — the per-cell output panes (rich + console, #118) are TMP_Text on an SDF font too, so a 5× zoom
-    // keeps RUN output crisp, not just the code. There are exactly 4 TMP surfaces in the editor (editor,
-    // placeholder, rich, console); 01/02 cover the first two, this covers the remaining two.
+    // keeps RUN output crisp, not just the code. After #169 (ADR-0036 D3) retired the placeholder, the editor
+    // has 3 TMP surfaces (editor, rich, console); 01/02 cover the editor, this covers the remaining two.
     // =====================================================================================================
     static string Section03_OutputPanesAreSdf(RectTransform body)
     {
         var field = body.GetComponentInChildren<StrategyInputField>(true);
         var editor = field != null ? field.textComponent : null;
-        var ph = field != null ? field.placeholder as TMP_Text : null;
 
         var outputs = body.GetComponentsInChildren<TMP_Text>(true)
-                          .Where(t => t != editor && t != ph)
+                          .Where(t => t != editor)
                           .ToArray();
         if (outputs.Length < 2)
             return "ZOOM-03: expected >=2 output TMP_Text panes (rich + console), found " + outputs.Length;

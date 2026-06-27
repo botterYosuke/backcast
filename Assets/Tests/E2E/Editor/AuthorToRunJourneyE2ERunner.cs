@@ -50,7 +50,10 @@ public static class AuthorToRunJourneyE2ERunner
     const BindingFlags BF = BindingFlags.NonPublic | BindingFlags.Instance;
     const string ADOPTED_CELL = NotebookCellCoordinator.AdoptedRegionId;   // strategy_editor:region_001
     const string FIRST = "8918.TSE";
-    const string SECOND = "7203.TSE";
+    // #169 (ADR-0036 D4): the SECOND (post-save delta) instrument must NOT be the seeded default universe
+    // (7203.TSE トヨタ) — else File→New pre-seeds it and the "only the run gate's Commit persists this delta"
+    // non-vacuity collapses (SaveAs would already have it). 6758.TSE (ソニーG) is a distinct non-seeded id.
+    const string SECOND = "6758.TSE";
 
     static WorkspaceEngineHost s_host;
 
@@ -130,17 +133,24 @@ public static class AuthorToRunJourneyE2ERunner
         // still intact here, proving New did NOT clear immediately (delete the #87 guard → this fails).
         if (coordinator.Notebook.CellCount != 2)
             return "JOURNEY-AUTHOR-02: File→New on a DIRTY notebook did not DEFER the clear behind the SaveGuard (#87) — count " + coordinator.Notebook.CellCount;
-        onGuardDiscard.Invoke(root, null);   // "Don't Save" → New proceeds with the clear
+        onGuardDiscard.Invoke(root, null);   // "Don't Save" → New proceeds with the clear+seed
         if (coordinator.Notebook.CellCount != 1)
             return "JOURNEY-AUTHOR-02: File→New (after Discard) left " + coordinator.Notebook.CellCount + " cells (expected 1)";
-        if (!string.IsNullOrEmpty(coordinator.Notebook.Cells[0].Body))
-            return "JOURNEY-AUTHOR-02: File→New cell 0 is not empty";
-        if (scenario.Universe.Count != 0)
-            return "JOURNEY-AUTHOR-02: File→New did not clear the universe (count " + scenario.Universe.Count + ")";
+        // #169 (ADR-0036 D2/D4, supersedes #76's blank New): File→New now SEEDS the single cell with the
+        // observe-replay body and the universe with the default Toyota (7203.TSE) — not a blank cell / empty
+        // universe. Still UNTITLED + not-supplyable (the document stays unbound until Save As).
+        if (coordinator.Notebook.Cells[0].Body != NotebookCellCoordinator.ObserveSeedBody)
+            return "JOURNEY-AUTHOR-02: File→New cell 0 not seeded with the observe body (got [" + coordinator.Notebook.Cells[0].Body + "])";
+        if (coordinator.Notebook.IsDirty)
+            return "JOURNEY-AUTHOR-02: a freshly seeded New must be clean (not dirty)";
+        if (scenario.Universe.Count != 1 || scenario.Universe.Ids[0] != "7203.TSE")
+            return "JOURNEY-AUTHOR-02: File→New did not seed the default Toyota universe (got [" + string.Join(",", scenario.Universe.Ids) + "])";
+        if (!chartViews.Contains("7203.TSE"))
+            return "JOURNEY-AUTHOR-02: the seeded Toyota chart (chart:7203.TSE) did not auto-spawn (universe→chart wiring)";
         if ((currentPathField.GetValue(root) as string) != "")
             return "JOURNEY-AUTHOR-02: File→New did not drop _currentLayoutPath to untitled";
         if (provider.TryGetStrategyFile(out _))
-            return "JOURNEY-AUTHOR-02: an untitled notebook must not be supplyable";
+            return "JOURNEY-AUTHOR-02: an untitled (unsaved) notebook must not be supplyable";
 
         // ── JOURNEY-AUTHOR-03: author the cell body → notebook dirty → provider NOT supplyable. (The notebook
         //   is still UNBOUND here, so this false is the "untitled/unsaved → can't run" guard; the DIRTY-specific
@@ -204,7 +214,7 @@ public static class AuthorToRunJourneyE2ERunner
         scenario.AddInstrument(SECOND);
         if (!provider.TryGetStrategyFile(out _))
             return "JOURNEY-AUTHOR-09: growing the universe wrongly flipped the (notebook) provider to false";
-        var gate = scenario.TryStartRun(provider);
+        var gate = scenario.TryStartRun(Resolve(provider));
         if (!gate.IsReady)
             return "JOURNEY-AUTHOR-09: run gate not Ready (gate=" + gate.Gate + ", msg=" + gate.Message + ")";
         var committed = ScenarioSidecarStore.ReadScenario(savePy);
@@ -262,7 +272,7 @@ public static class AuthorToRunJourneyE2ERunner
         scenario.RemoveInstrument(FIRST);
         if (!provider.TryGetStrategyFile(out _))
             return "JOURNEY-AUTHOR-11: clearing the universe wrongly flipped the (notebook) provider to false";
-        var invalidGate = scenario.TryStartRun(provider);
+        var invalidGate = scenario.TryStartRun(Resolve(provider));
         if (invalidGate.Gate != RunGate.BlockedInvalidScenario)
             return "JOURNEY-AUTHOR-11: an empty-universe run was not BlockedInvalidScenario (got " + invalidGate.Gate + ")";
         if (File.ReadAllText(json) != jsonBefore)
@@ -278,7 +288,7 @@ public static class AuthorToRunJourneyE2ERunner
             return "JOURNEY-AUTHOR-12: re-editing the cell did not mark the notebook dirty";
         if (provider.TryGetStrategyFile(out _))
             return "JOURNEY-AUTHOR-12: a dirty (unsaved) notebook must not be supplyable";
-        var dirtyGate = scenario.TryStartRun(provider);
+        var dirtyGate = scenario.TryStartRun(Resolve(provider));
         if (dirtyGate.Gate != RunGate.BlockedNoStrategy)
             return "JOURNEY-AUTHOR-12: a dirty-editor run was not BlockedNoStrategy (got " + dirtyGate.Gate + ")";
 
@@ -287,10 +297,23 @@ public static class AuthorToRunJourneyE2ERunner
 
     // ---- helpers ----
 
+    // #169 (ADR-0036 D5): the run gate now takes a `Func<string>` resolver (named .py / untitled scratch),
+    // not an IStrategyFileProvider. These NAMED-doc journeys keep the provider semantics by adapting it —
+    // a supplyable provider yields its path, a non-supplyable one yields null (→ BlockedNoStrategy).
+    static Func<string> Resolve(IStrategyFileProvider p) =>
+        () => p != null && p.TryGetStrategyFile(out var x) ? x : null;
+
     // Compose the REAL workspace root Python-FREE (mirrors LayoutPersistenceJourneyE2ERunner.ComposeRoot):
     // OpenScene → inject a builtin font → FakeMarimoSynthesizer → ResolvePaths → BuildWorkspace.
     static BackcastWorkspaceRoot ComposeRoot(out Type ty)
     {
+        // This runner composes the root TWICE (Section1 + Section2). A 2nd OpenScene(Single) destroys the 1st
+        // root, but its static ThemeService.Changed handler (ApplyViewportTheme) survives the destroy (the
+        // batchmode process gets no per-Play domain reload to clear statics — memory e2e-single-openscene-per-runner).
+        // The 2nd BuildWorkspace's ApplyPersistedAppearance→SetTheme would then invoke that stale handler against the
+        // destroyed 1st root's SettingsModeSegmentView (a MissingReferenceException). Drop stale subscribers + reset
+        // the theme to the pristine default before each compose (the documented ThemeService.ResetForTests purpose).
+        ThemeService.ResetForTests();
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
         ty = typeof(BackcastWorkspaceRoot);

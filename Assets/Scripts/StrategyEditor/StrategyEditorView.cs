@@ -84,7 +84,6 @@ public class StrategyEditorView : MonoBehaviour
     TMP_InputField _input;      // #119: TMP(SDF) editing surface (was UnityEngine.UI.InputField)
     PythonSyntaxMeshEffect _effect;
     EditHistory _history;
-    TMP_Text _placeholder;      // #119: host-API hint shown when this is the only cell and it is empty (TMP_Text)
     TMP_Text _output;           // #95 Phase 2 土台 / #118: per-cell RUN output text (TMP_Text/SDF, rich block)
     RawImage _image;            // #95 Phase 6 Slice 5: image/png|jpeg sibling inside the rich block
     LayoutElement _imageLE;     // image's per-child LayoutElement (drives Content height when active)
@@ -114,10 +113,10 @@ public class StrategyEditorView : MonoBehaviour
 
     // Wire the view to its surface + cores. Call once after the subtree is built. `cell` may be null
     // (an unbound shell — e.g. the adopted region_001 before the notebook binds cell 0); Bind() points
-    // it at a real cell later. `placeholder` is optional (the single-cell host-API hint).
+    // it at a real cell later. #169 (ADR-0036 D3): the single-cell host-API placeholder hint is retired.
     public void Initialize(
         TMP_InputField input, PythonSyntaxMeshEffect effect, EditHistory history,
-        Cell cell, TMP_Text placeholder,
+        Cell cell,
         TMP_Text output, RawImage image, LayoutElement imageLE,
         RectTransform richBlock, RectTransform richViewport, RectTransform richContent,
         LayoutElement richLE, ScrollRect richScroll,
@@ -128,7 +127,6 @@ public class StrategyEditorView : MonoBehaviour
         _input = input;
         _effect = effect;
         _history = history;
-        _placeholder = placeholder;
         _output = output;
         _image = image;
         _imageLE = imageLE;
@@ -363,17 +361,6 @@ public class StrategyEditorView : MonoBehaviour
         => Mathf.Max(StrategyEditorContentBuilder.EditorMinFloorPx,
                      bodyH * StrategyEditorContentBuilder.EditorMinFractionOfBody);
 
-    // Show/hide the single-cell host-API placeholder hint (marimo showPlaceholder = hasOnlyOneCell).
-    // The coordinator calls this with the hint text for the only remaining cell, or null otherwise.
-    // The hint is NEVER written into the body (no seed焼き込み, findings 0050) — it is a placeholder
-    // Graphic that uGUI shows only while the field is empty.
-    public void SetPlaceholderHint(string hint)
-    {
-        if (_placeholder == null) return;
-        _placeholder.text = hint ?? string.Empty;
-        _placeholder.gameObject.SetActive(!string.IsNullOrEmpty(hint));
-    }
-
     public void ApplyTheme()
     {
         var c = ThemeService.Current.colors;
@@ -387,7 +374,6 @@ public class StrategyEditorView : MonoBehaviour
             // on every theme switch so the caret stays themed and opaque.
             var caretCol = c.text; caretCol.a = 1f; _input.caretColor = caretCol;
         }
-        if (_placeholder != null) { var pc = c.text; pc.a = 0.4f; _placeholder.color = pc; }
         if (_effect != null) _effect.ApplyTheme();
     }
 

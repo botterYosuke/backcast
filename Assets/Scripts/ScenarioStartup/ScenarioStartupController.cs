@@ -12,13 +12,15 @@
 //     projection").
 //   * Commit — validate → write the sidecar (SetStartupParams + SetInstruments), merge-
 //     preserving the v3 optionals (ADR-0005).
-//   * Run gate — re-query the strategy provider's supplyable contract AT run time (CONTEXT
-//     "active strategy 選択") AND validate the scenario; only then write the sidecar and
-//     hand the caller a path to launch load_replay_data → start_engine (CONTEXT "backcast
-//     Replay 起動経路"). The two block reasons are surfaced distinctly (AC④ scenario invalid
-//     vs "save your strategy" supplyability).
+//   * Run gate — resolve the runnable strategy path via a `Func<string>` resolver AT run time (#169
+//     ADR-0036 D5: the resolver — BackcastWorkspaceRoot.BuildNotebookStrategyPath — owns the named-WYSIWYR
+//     vs untitled-scratch decision, so this gate stays altitude-agnostic) AND validate the scenario; only
+//     then write the sidecar and hand the caller a path to launch load_replay_data → start_engine (CONTEXT
+//     "backcast Replay 起動経路"). The two block reasons are surfaced distinctly (AC④ scenario invalid vs
+//     "no runnable strategy").
 
 using System;
+using System.Collections.Generic;
 
 public enum RunGate { Ready, BlockedNoStrategy, BlockedInvalidScenario }
 
@@ -94,6 +96,26 @@ public sealed class ScenarioStartupController
         Errors = new ScenarioStartupErrors();
     }
 
+    // ---- SEED FRESH DEFAULTS (#169 / ADR-0036 D4 — fresh New / no-resume boot). Unconditional (like
+    // Clear — a deliberate discard, NOT an external re-sync, so the dirty-guard does NOT apply): seed a
+    // VALID default scenario (today-relative dates / granularity / cash via SeedDefaults) AND the default
+    // `instruments` universe, both CLEAN (Dirty=false). Distinct from Clear (empty/blank) — the seeded
+    // observe cell is then actually runnable (load_replay_data needs a real date window) and the FIRST Save
+    // As COMMITS the scenario so the universe rides the sidecar writeback (otherwise an invalid empty
+    // scenario fails Commit, the universe is never persisted, and the post-save reseed wipes it). Universe
+    // last so its Changed fires after the params are in place. ----
+    public void SeedFreshDefaults(DateTime today, IReadOnlyList<string> instruments)
+    {
+        Params = ScenarioStartupParams.SeedDefaults(today);   // today-3mo..today dates + cash, Dirty=false
+        // SeedDefaults leaves Granularity = None (the populate path wants the user to pick); the FRESH seed
+        // must be VALID so the observe cell runs (load_replay_data needs a granularity) and Save As commits —
+        // pick Daily (universally available, the most "眺めやすい" for the observe replay). Field-set, not
+        // SetGranularity, so Params stays clean (Dirty=false).
+        Params.Granularity = GranularityChoice.Daily;
+        Errors = new ScenarioStartupErrors();
+        Universe.ReplaceAll(instruments);                      // fires Changed → chart spawn (universe↔chart)
+    }
+
     // ---- EDIT (each mutates the buffer and flips Dirty) ----
     public void SetStart(string v) { Params.Start = v; Params.Dirty = true; }
     public void SetEnd(string v) { Params.End = v; Params.Dirty = true; }
@@ -127,13 +149,19 @@ public sealed class ScenarioStartupController
         return true;
     }
 
-    // ---- RUN GATE. Re-queries the provider AT call time (supplyability can flip if the
-    // strategy editor went dirty after populate; CONTEXT "active strategy 選択") and
-    // validates the scenario. On Ready the sidecar is written and StrategyPath is returned;
-    // the caller then drives load_replay_data → start_engine. ----
-    public RunGateResult TryStartRun(IStrategyFileProvider provider)
+    // ---- RUN GATE. Resolves the runnable strategy file AT call time via `strategyPathResolver` and
+    // validates the scenario. On Ready the sidecar is written and StrategyPath is returned; the caller
+    // then drives load_replay_data → start_engine.
+    //
+    // #169 (ADR-0036 D5): the resolver — BackcastWorkspaceRoot.BuildNotebookStrategyPath — encodes the
+    // full "what file does a RUN execute" decision so this gate stays altitude-agnostic (it just gets a
+    // path or null): a NAMED clean doc → its bound .py (WYSIWYR — supplyability flips to null if the editor
+    // went dirty); an UNTITLED doc with a non-empty cell → a lazily-written scratch .py (起動直後 Run 可・D6);
+    // a named+dirty doc or an all-empty untitled buffer → null → BlockedNoStrategy (WYSIWYR unchanged). ----
+    public RunGateResult TryStartRun(Func<string> strategyPathResolver)
     {
-        if (provider == null || !provider.TryGetStrategyFile(out string path) || string.IsNullOrEmpty(path))
+        string path = strategyPathResolver?.Invoke();
+        if (string.IsNullOrEmpty(path))
         {
             return new RunGateResult
             {

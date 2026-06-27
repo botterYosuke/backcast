@@ -20,8 +20,9 @@
 //   S6 layout round-trip（spatial 永続化の正本は Layout/FloatingWindow 台本）/ S7 restore full-replacement /
 //   S9 #78 RegistryStrategyFileProvider run-wiring（正本は RunButtonE2ERunner）。verbatim 移送・改名のみ。
 //
-// 据え置き（台本「カバー状態」）: STRATEGY-11（単一セル placeholder hint）は実 StrategyEditorView+InputField+
-// placeholder Graphic harness を要するため本昇格では追加せず 要新規自動化 のまま（findings 0061）。
+// STRATEGY-11（単一セル placeholder hint）は #169（ADR-0036 D3）で RETIRED — Section20 は撤去を pin する
+// （Placeholder GO 不在 / input.placeholder 未配線 / _placeholder・SetPlaceholderHint 不在）。fresh New が観察
+// セルを種付けするためヒントは無用（findings 0124）。
 // STRATEGY-05(scroll 着色)/STRATEGY-18(IME・実キーボード) は HITL専用、STRATEGY-14(click-to-front) は
 // FloatingWindow 共有ロジックで 対象外。
 
@@ -69,7 +70,7 @@ public static class StrategyEditorNotebookE2ERunner
                 ?? Section17_BlockPopup(spawned)
                 ?? Section18_DocumentBadge()
                 ?? Section19_RichOutput(spawned)
-                ?? Section20_PlaceholderHint(spawned)
+                ?? Section20_PlaceholderRetired(spawned)
                 ?? Section21_ConsoleAndDynamicLayout(spawned)
                 ?? Section22_ConsoleAuditGaps(spawned)
                 ?? Section23_ModeAwareLiveLaunch(spawned)
@@ -127,8 +128,8 @@ public static class StrategyEditorNotebookE2ERunner
                       "Untitled on New/Open/edit/Save; STRATEGY-32,33 rich output routes image/png→RawImage " +
                       "(decode+RawImage-activation HITL-only in headless batch; mimetype passthrough AFK), " +
                       "text/markdown+text/html→rich Text, unsupported→labelled plain fallback) " +
-                      "+ STRATEGY-11 single-cell host-API placeholder hint (HostApiHint shown only when CellCount==1, " +
-                      "cleared at ≥2 cells, restored back at 1, never seeded into Cell.Body — findings 0050) " +
+                      "+ STRATEGY-11 host-API placeholder hint RETIRED (#169/ADR-0036 D3: no Placeholder GO / unwired " +
+                      "field / no SetPlaceholderHint — fresh New seeds the observe cell so the hint is moot) " +
                       "+ #102 console + dynamic output layout (STRATEGY-34..38: per-cell stdout/stderr " +
                       "segments paint into the console block in arrival order with stderr amber-tagged, " +
                       "an empty rich+console body collapses to editor-only — blocks deactivate so the " +
@@ -2888,85 +2889,44 @@ public static class StrategyEditorNotebookE2ERunner
     }
 
     // ======================================================================
-    // 20. STRATEGY-11 — single-cell host-API placeholder hint (#81 / findings 0050).
-    //     Covers STRATEGY-11 (when the notebook has exactly ONE cell, every cell window shows the
-    //     HostApiHint placeholder; with ≥2 cells the hint clears; the hint is NEVER written into
-    //     Cell.Body — findings 0050 "seed 焼き込み禁止"). Previously the台本's only `要新規自動化` row.
-    //     Python-FREE: a bare FloatingWindowController + REAL StrategyEditorView(s) (the Placeholder
-    //     Text is built by StrategyEditorContentBuilder) + a real NotebookCellCoordinator whose
-    //     UpdatePlaceholders runs on every Sync/Add/Delete.
-    //     RED litmus: NotebookCellCoordinator.UpdatePlaceholders' `single ? HostApiHint : null` — drop
-    //     the CellCount==1 gate (always HostApiHint) → the 2-cell assert goes RED; seed the hint into
-    //     Cell.Body → the "body stays empty" assert goes RED.
+    // 20. STRATEGY-11 RETIRED — #169 (ADR-0036 D3): the single-cell host-API placeholder hint mechanism is
+    //     REMOVED (it superseded findings 0050's "空セル＋placeholder"). A fresh notebook now SEEDS an
+    //     observe-replay cell body (non-empty), so the hint never showed anyway, and keeping it would
+    //     resurrect a hint that DISAGREES with the seed once the cell is emptied. This section pins the
+    //     removal on a REAL StrategyEditorView built by the production ContentBuilder:
+    //       (a) no "Placeholder" child GameObject is built,
+    //       (b) the TMP_InputField has no placeholder Graphic wired,
+    //       (c) the view no longer carries the hint field/method (_placeholder / SetPlaceholderHint).
+    //     delete-the-production-logic litmus: restore the Placeholder GameObject + `input.placeholder =
+    //     placeholder` in StrategyEditorContentBuilder → (a)/(b) go RED. Python-FREE (bare RT, real builder).
     // ======================================================================
-    static string Section20_PlaceholderHint(List<GameObject> spawned)
+    static string Section20_PlaceholderRetired(List<GameObject> spawned)
     {
-        const string R1 = NotebookCellCoordinator.AdoptedRegionId;
-        const string R2 = "strategy_editor:region_002";
-        var views = new Dictionary<string, StrategyEditorView>();
-
-        var layerGo = new GameObject("FWLayer20", typeof(RectTransform));
-        spawned.Add(layerGo);
-        var controller = new FloatingWindowController(
-            layerGo.GetComponent<RectTransform>(), FloatingWindowCatalog.Default(),
-            (spec, id) =>
-            {
-                var rt = StrategyEditorWindowFrame.Build(id, out _, out var body);
-                spawned.Add(rt.gameObject);
-                var v = StrategyEditorContentBuilder.Build(body);
-                if (v != null) views[id] = v;
-                return rt;
-            },
-            go => UnityEngine.Object.DestroyImmediate(go));
-
-        var adoptRoot = StrategyEditorWindowFrame.Build(R1, out _, out var adoptBody);
+        var adoptRoot = StrategyEditorWindowFrame.Build(NotebookCellCoordinator.AdoptedRegionId, out _, out var body);
         spawned.Add(adoptRoot.gameObject);
-        var view1 = StrategyEditorContentBuilder.Build(adoptBody);
-        if (view1 == null) return "S20: adopted view build failed";
-        views[R1] = view1;
-        controller.Adopt(FloatingWindowCatalog.KIND_STRATEGY_EDITOR, R1, adoptRoot);
+        var view = StrategyEditorContentBuilder.Build(body);
+        if (view == null) return "S20: adopted view build failed";
 
-        var nb = new MarimoNotebookDocument(new FakeMarimoSynthesizer());   // 1 empty cell
-        var coord = new NotebookCellCoordinator(
-            nb, controller, r => views.TryGetValue(r, out var v) ? v : null, () => Vector2.zero, new Vector2(520f, 380f));
-        coord.SyncWindowsToNotebook(null);
-        if (coord.RegionOf(nb.Cells[0]) != R1) return "S20: precondition — cell0 not bound to region_001";
+        // (a) the production builder no longer creates a "Placeholder" GameObject anywhere in the subtree.
+        foreach (var t in adoptRoot.GetComponentsInChildren<Transform>(true))
+            if (t.name == "Placeholder")
+                return "S20/#169: a Placeholder GameObject is still built (ADR-0036 D3 removal regressed)";
 
-        // STRATEGY-11a: a single cell shows the host-API hint (placeholder active + text == HostApiHint).
-        if (PlaceholderText(view1) != NotebookCellCoordinator.HostApiHint)
-            return "S20/STRATEGY-11: single-cell placeholder is not the HostApiHint (got [" + PlaceholderText(view1) + "])";
-        if (!PlaceholderActive(view1))
-            return "S20/STRATEGY-11: single-cell placeholder GameObject is not active";
-        // the hint is NEVER written into the cell body (findings 0050: seed 焼き込み禁止).
-        if (!string.IsNullOrEmpty(nb.Cells[0].Body))
-            return "S20/STRATEGY-11: the host-API hint leaked into Cell.Body (got [" + nb.Cells[0].Body + "])";
+        // (b) the editing field carries no placeholder Graphic.
+        var input = adoptRoot.GetComponentInChildren<TMPro.TMP_InputField>(true);
+        if (input == null) return "S20: built subtree has no TMP_InputField";
+        if (input.placeholder != null)
+            return "S20/#169: TMP_InputField.placeholder is still wired (ADR-0036 D3 removal regressed)";
 
-        // STRATEGY-11b: adding a 2nd cell clears the hint on every window (CellCount==2 → null).
-        coord.AddCell();
-        if (coord.RegionOf(nb.Cells[1]) != R2) return "S20: precondition — 2nd cell not region_002";
-        if (PlaceholderActive(view1))
-            return "S20/STRATEGY-11: placeholder still active with 2 cells (the single-cell gate failed)";
-        if (views.TryGetValue(R2, out var view2) && PlaceholderActive(view2))
-            return "S20/STRATEGY-11: the spawned cell's placeholder is active with 2 cells";
-        if (!string.IsNullOrEmpty(nb.Cells[0].Body) || !string.IsNullOrEmpty(nb.Cells[1].Body))
-            return "S20/STRATEGY-11: a cell body was seeded when the hint cleared";
+        // (c) the view no longer exposes the host-API hint field/method (structural proof the mechanism is gone).
+        if (typeof(StrategyEditorView).GetField("_placeholder", BindingFlags.NonPublic | BindingFlags.Instance) != null)
+            return "S20/#169: StrategyEditorView._placeholder field still exists (D3 removal incomplete)";
+        if (typeof(StrategyEditorView).GetMethod("SetPlaceholderHint", BindingFlags.Public | BindingFlags.Instance) != null)
+            return "S20/#169: StrategyEditorView.SetPlaceholderHint still exists (D3 removal incomplete)";
 
-        // STRATEGY-11c: deleting back to a single cell restores the hint.
-        if (!coord.DeleteCell(R2)) return "S20: DeleteCell(region_002) failed";
-        if (PlaceholderText(view1) != NotebookCellCoordinator.HostApiHint || !PlaceholderActive(view1))
-            return "S20/STRATEGY-11: returning to a single cell did not restore the host-API hint";
-
+        Debug.Log("[E2E STRATEGY-11 PASS] host-API placeholder hint mechanism retired (no Placeholder GO / unwired field / no SetPlaceholderHint)");
         return null;
     }
-
-    static FieldInfo s_placeholderField;
-    static TMPro.TMP_Text Placeholder(StrategyEditorView v)   // #119: placeholder is now a TMP_Text
-    {
-        s_placeholderField ??= typeof(StrategyEditorView).GetField("_placeholder", BindingFlags.NonPublic | BindingFlags.Instance);
-        return s_placeholderField?.GetValue(v) as TMPro.TMP_Text;
-    }
-    static string PlaceholderText(StrategyEditorView v) { var t = Placeholder(v); return t != null ? t.text : null; }
-    static bool PlaceholderActive(StrategyEditorView v) { var t = Placeholder(v); return t != null && t.gameObject.activeSelf; }
 
     static string GlyphText(UnityEngine.UI.Button runButton)
     {

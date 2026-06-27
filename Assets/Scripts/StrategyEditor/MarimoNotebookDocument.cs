@@ -79,7 +79,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     // Remove a cell. #146 (ADR-0033 supersedes ADR-0013 D5): the >=1 floor is LIFTED — the last cell
     // CAN be removed, reaching 0 cells (the empty-canvas state; the only authoring affordance left is
     // the screen-fixed [+] Add Cell button). The down-stream (SyncWindowsToNotebook / CapturePositions /
-    // UpdatePlaceholders / run routing) is all 0-cell-safe (findings 0114 §3), so the floor removal does
+    // run routing) is all 0-cell-safe (findings 0114 §3), so the floor removal does
     // NOT crash. false is now returned ONLY for a genuine anomaly (a null or unknown cell). A structural
     // change -> dirty. Position re-packing is the caller's regenerate-from-live job (findings 0050 trap 1:
     // never splice an index-parallel array).
@@ -98,13 +98,21 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
     // synthesiser seam failure (the caller skips the run + surfaces a notice).
     public string SynthesizeLiveSource() => _synth.Synthesize(_cells);
 
+    // Synthesise the ordered cells and atomic temp+replace them onto `path`. ONE place for the
+    // "synth the live buffer → atomic write" shape (Save / SaveAs / untitled scratch all share it), so
+    // the on-disk byte contract can never drift between them. No state change — the caller owns dirty/path.
+    bool WriteSynthesized(string path)
+    {
+        string py = _synth.Synthesize(_cells);
+        if (py == null) return false;                       // unexpected seam failure
+        return AtomicPyFile.Write(path, py);                // replace-failure preserves on-disk
+    }
+
     // Synthesise the ordered cells and write them to the bound path via an atomic temp+replace.
     public bool Save()
     {
         if (_path == null) return false;
-        string py = _synth.Synthesize(_cells);
-        if (py == null) return false;                       // unexpected seam failure: retain dirty/path
-        if (!AtomicPyFile.Write(_path, py)) return false;   // replace-failure preserves on-disk
+        if (!WriteSynthesized(_path)) return false;   // seam failure / replace-failure: retain dirty/path
         _dirty = false;
         _openedOrSaved = true;
         return true;
@@ -120,9 +128,7 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
         catch { return false; }
         if (!string.Equals(Path.GetExtension(full), ".py", StringComparison.OrdinalIgnoreCase)) return false;
 
-        string py = _synth.Synthesize(_cells);
-        if (py == null) return false;
-        if (!AtomicPyFile.Write(full, py)) return false;
+        if (!WriteSynthesized(full)) return false;
 
         _path = full;
         _dirty = false;
@@ -186,13 +192,54 @@ public sealed class MarimoNotebookDocument : IStrategyFileProvider
 
     // Restore-boundary / File->New reset to unbound with ONE empty cell (marimo File->New = one
     // empty cell). NOT a normal Open failure (which leaves the notebook unchanged).
-    public void ResetUnboundEmpty()
+    public void ResetUnboundEmpty() => ResetUnboundSeeded("");
+
+    // #169 (ADR-0036 D2): File->New reset to unbound with ONE cell carrying `seedBody`. The seed STRING
+    // is a product decision owned by the caller (NotebookCellCoordinator.ObserveSeedBody) — this method
+    // stays PURE (no policy): it just lands one cell with the given body, unbound and NOT dirty (a fresh
+    // New is clean, so the Untitled badge and the WYSIWYR floor hold). `ResetUnboundEmpty` is the seedBody=""
+    // case (kept so the pure-document AFK gate still pins the empty-cell floor).
+    public void ResetUnboundSeeded(string seedBody)
     {
         _cells.Clear();
-        _cells.Add(NewCell("", "_", "{}"));
+        _cells.Add(NewCell(seedBody ?? "", "_", "{}"));
         _path = null;
         _dirty = false;
         _openedOrSaved = false;
+    }
+
+    // #169 (ADR-0036 D5): true iff at least one cell carries a non-whitespace body. The untitled-Run
+    // gate predicate — an untitled notebook is runnable iff it has authored content (the seeded observe
+    // cell qualifies; a 0-cell or all-blank buffer does not). Distinct from the supplyable 5-condition
+    // (TryGetStrategyFile), which is named-doc WYSIWYR only.
+    public bool HasNonEmptyCell
+    {
+        get
+        {
+            foreach (var c in _cells)
+                if (!string.IsNullOrWhiteSpace(c.Body)) return true;
+            return false;
+        }
+    }
+
+    // #169 (ADR-0036 D5/D6): the file an UNTITLED notebook's per-cell RUN executes. The document owns the whole
+    // run-file decision (it already owns the named supplyable 5-condition via TryGetStrategyFile): an untitled
+    // notebook (_path == null) with a non-empty cell synthesises the LIVE buffer to `scratchPath` and returns it,
+    // so the run gets a real `.py` on disk → the backend sets `__file__` to it (findings 0089) and a cell's
+    // Path(__file__).parent artifact resolution works without a Save (ADR-0011 §4 解消; the os.chdir cwd policy
+    // itself stays #79). A BOUND (named) notebook returns false here — its run-file is TryGetStrategyFile (named
+    // WYSIWYR), so a named+dirty doc stays blocked, NOT silently run from a scratch. An empty / 0-cell untitled
+    // buffer returns false. Writing the scratch does NOT bind the notebook (_path stays null → Untitled badge /
+    // WYSIWYR floor intact). Returns false on a synth or write failure (the caller leaves the run path null).
+    public bool TryGetUntitledScratch(string scratchPath, out string path)
+    {
+        path = null;
+        if (_path != null) return false;                    // bound (named) → its run-file is TryGetStrategyFile
+        if (!HasNonEmptyCell) return false;                 // empty / 0-cell buffer → not runnable
+        if (string.IsNullOrEmpty(scratchPath)) return false;
+        if (!WriteSynthesized(scratchPath)) return false;
+        path = scratchPath;
+        return true;
     }
 
     // IStrategyFileProvider — supplyable iff ALL 5 conditions hold (findings 0010 §5, moved up here):

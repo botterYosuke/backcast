@@ -9,8 +9,9 @@
 // Since #81 (ADR-0013) the produced StrategyEditorView is a FRAGMENT VIEW over a Cell, NOT a file:
 // no document, no provider registration (the notebook aggregate is the sole IStrategyFileProvider,
 // registered by the coordinator under the logical notebook id). The view binds to `cell` (or stays
-// unbound until the coordinator Bind()s one). A placeholder Text carries the single-cell host-API
-// hint (shown by uGUI only while the field is empty; the coordinator toggles it per cell count).
+// unbound until the coordinator Bind()s one). #169 (ADR-0036 D3): the single-cell host-API placeholder
+// hint was RETIRED — a fresh notebook now seeds an observe-replay cell body, so the builder no longer
+// creates a Placeholder Graphic and the field's `placeholder` stays null.
 //
 // #102 / findings 0079 — body layout is DYNAMIC: the body holds three children vertically in a
 // VerticalLayoutGroup — code editor (top, flex + min-height floor) + rich output (middle, auto)
@@ -46,8 +47,9 @@ public static class StrategyEditorContentBuilder
     {
         if (body == null) return null;
         history ??= new EditHistory();
-        // #119: the editor + placeholder now render through EditorTmpFont() (Cascadia SDF); the legacy
-        // `Font font` parameter (and BuiltinFont fallback) is gone — the surface is TMP/SDF end-to-end.
+        // #119: the editor renders through EditorTmpFont() (Cascadia SDF); the legacy `Font font` parameter
+        // (and BuiltinFont fallback) is gone — the surface is TMP/SDF end-to-end. (#169/ADR-0036 D3: the
+        // host-API placeholder hint was removed, so no placeholder Graphic is built here anymore.)
 
         // VerticalLayoutGroup on the body: children stack top→bottom, child-controlled height + width
         // so each LayoutElement's preferredHeight (set by SetOutput/SetConsole) is honoured.  Spacing
@@ -106,30 +108,15 @@ public static class StrategyEditorContentBuilder
         text.textWrappingMode = TextWrappingModes.NoWrap;   // code editor: no wrap (parity w/ legacy Overflow)
         text.overflowMode = TextOverflowModes.Overflow;     // the TextArea RectMask2D clips overflow
 
-        // Placeholder (#81): the single-cell host-API hint. TMP_InputField shows the placeholder Graphic
-        // only while the field is empty; the coordinator sets the hint text for the only cell and clears
-        // it otherwise (marimo showPlaceholder = hasOnlyOneCell). Hidden by default.
-        var phGo = new GameObject("Placeholder", typeof(RectTransform), typeof(CanvasRenderer), typeof(TextMeshProUGUI));
-        var phRt = (RectTransform)phGo.transform;
-        phRt.SetParent(areaRt, false);
-        Stretch(phRt);
-        var placeholder = phGo.GetComponent<TextMeshProUGUI>();
-        placeholder.font = EditorTmpFont();
-        placeholder.fontSize = 14;
-        placeholder.richText = false;   // host-API hint is literal text; never parse '<...>' as a TMP tag (parity w/ editor)
-        placeholder.alignment = TextAlignmentOptions.TopLeft;
-        placeholder.textWrappingMode = TextWrappingModes.NoWrap;
-        placeholder.overflowMode = TextOverflowModes.Overflow;
-        var phColor = ThemeService.Current.colors.text; phColor.a = 0.4f;
-        placeholder.color = phColor;
-        phGo.SetActive(false);
+        // #169 (ADR-0036 D3): the single-cell host-API placeholder hint is RETIRED — the fresh notebook now
+        // seeds an observe-replay cell body (non-empty), so the hint never showed anyway, and keeping it would
+        // resurrect a hint that disagrees with the seed once the cell is emptied. No Placeholder Graphic is built.
 
         var effect = textGo.GetComponent<PythonSyntaxMeshEffect>();
 
         var input = inputGo.AddComponent<StrategyInputField>();   // added while inactive -> no premature OnEnable
         input.textViewport = areaRt;
         input.textComponent = text;
-        input.placeholder = placeholder;
         input.lineType = TMP_InputField.LineType.MultiLineNewline;
         input.characterLimit = 0;
         input.richText = false;   // user code may contain '<...>'; never parse it as a TMP tag
@@ -176,7 +163,7 @@ public static class StrategyEditorContentBuilder
 
         var view = inputGo.AddComponent<StrategyEditorView>();
         view.Initialize(
-            input, effect, history, cell, placeholder,
+            input, effect, history, cell,
             rich.Text, image, imgLE,
             rich.Block, rich.Viewport, rich.Content, rich.LayoutElement, rich.ScrollRect,
             console.Block, console.Viewport, console.Content, console.Text, console.LayoutElement, console.ScrollRect,

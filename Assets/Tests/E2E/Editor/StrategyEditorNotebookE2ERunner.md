@@ -40,7 +40,7 @@ notebook 効果なので参照行として載せる。
 | STRATEGY-03 | Redo（Cmd/Ctrl+Shift+Z・Ctrl+Y） | `StrategyEditorView.cs:144`→`DoRedo`（key: `:134-135`） | `EditHistory.Redo`→`ApplyTextAndSelection`、fresh edit 後は redo 枝クリア | `DoRedo` 反射 invoke 後の body／RedoCount を assert（key 経路は HITL） | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S2) |
 | STRATEGY-04 | 構文ハイライト（lexical token 計算） | `StrategyEditorView.cs:117`→`Retokenize`→`PythonHighlighter.Tokenize` | token の ascending/non-overlap/in-range・keyword/string/comment/number/decorator/definition 分類 | `PythonHighlighter.Tokenize` を直接 assert（純ロジック） | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S1) |
 | STRATEGY-05 | ハイライトの**実 mesh 着色**（視覚） | `PythonSyntaxMeshEffect.ModifyMesh` | glyph 頂点色が token 色・Default 不変・scroll 追従・tag 非注入 | non-scroll は real Text で assert、scroll 着色は HITL | HITL専用（visible-range scroll 着色は実 TextGenerator/GPU 前提・findings 0010 §9） | `StrategyEditorNotebookE2ERunner`(S8) `Strategy Editor HITL` |
-| STRATEGY-06 | [+] でセル追加（region_002+ spawn） | `BackcastWorkspaceRoot.cs:590`→`OnAddCell`→`NotebookCellCoordinator.cs:64`→`AddCell` | `Notebook.AddCell`→dirty・`AllocRegion`→`SpawnAuto`・`Track`・`Bind`・front 化・`UpdatePlaceholders` | coordinator `AddCell` 後に `RegionOf(cell)==region_002`・window 存在・CellCount+1・dirty を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
+| STRATEGY-06 | [+] でセル追加（region_002+ spawn） | `BackcastWorkspaceRoot.cs:590`→`OnAddCell`→`NotebookCellCoordinator.cs:64`→`AddCell` | `Notebook.AddCell`→dirty・`AllocRegion`→`SpawnAuto`・`Track`・`Bind`・front 化（placeholder hint は #169/ADR-0036 D3 で RETIRED） | coordinator `AddCell` 後に `RegionOf(cell)==region_002`・window 存在・CellCount+1・dirty を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
 | STRATEGY-07 | [+] が dormant region_001 を再利用 | `NotebookCellCoordinator.cs:69`（`_region001Dormant` 分岐） | dormant 時は新規 spawn せず region_001 を `RevealAt`（**新 cascade 位置**・旧 hidden 座標は使わない findings 0050 trap2） | 1セル化→[X]で region_001 dormant→[+]で `RegionOf(c)==region_001` ＆ 再 active を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
 | STRATEGY-08 | [X] でセル削除（region_002+ despawn） | `BackcastWorkspaceRoot.cs:548`→`OnDeleteCell`→`NotebookCellCoordinator.cs:92`→`DeleteCell` | `Notebook.RemoveCell`→dirty・region_002 は `Close`（despawn+deregister）・`Untrack` | `DeleteCell(region_002)` 後に window 不在・CellCount-1 を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
 | STRATEGY-09 | [X] でセル削除（region_001 は hide-dormant） | `NotebookCellCoordinator.cs:99`（`regionId==AdoptedRegionId` 分岐） | region_001 は never-Destroy → `Hide`＋`_region001Dormant=true`＋`Bind(null)`（破棄しない・ADR-0013 Decision4） | 2セルで `DeleteCell(region_001)`→shell 残存・`activeSelf==false` を assert | 自動(E2E済) | `StrategyEditorNotebookE2ERunner`(S12) |
@@ -121,9 +121,11 @@ notebook 効果なので参照行として載せる。
   **最後の 1 セルも削除可で 0 cell（#146・≥1 床撤去）** / 0→1 dormant reuse / CapturePositions cell-order を assert。Section10 は
   aggregate 側の 0-cell 到達＋X1 round-trip。**Section26** が「全消し→0 窓→[+]再 spawn→X1 床=1」を per-Action-ID タグ
   （`[E2E STRATEGY-56/57/58 PASS]`）付きで gate（surface 要約タグ `[E2E STRATEGY NOTEBOOK PASS]` は空白入りで rollup 非対象）。
-- **STRATEGY-11（placeholder）**: `single = CellCount==1` のときだけ `HostApiHint` を全セル窓へ付与し、それ以外は null。
-  hint は placeholder Graphic で、**`Cell.Body` には決して書き込まない**（seed 焼き込み禁止・findings 0050）。
-  **Section20 で昇格**（実 `StrategyEditorView` の `_placeholder` を反射読みし、CellCount 1↔2 遷移で hint 付与/解除＋body 非焼き込みを assert）。
+- **STRATEGY-11（placeholder）= #169（ADR-0036 D3）で RETIRED**: 旧 single-cell host-API placeholder hint
+  機構（`HostApiHint` / `UpdatePlaceholders` / `SetPlaceholderHint` / `_placeholder` / Placeholder GameObject）は
+  **撤去済み**。fresh New が観察セルを種付けするためヒントは無用（findings 0124）。**Section20 は撤去を pin**
+  （実 `StrategyEditorContentBuilder` 経由で (a) Placeholder GO 不在 (b) `TMP_InputField.placeholder` 未配線
+  (c) `_placeholder` フィールド / `SetPlaceholderHint` メソッド 不在 を assert）。
 - **STRATEGY-12（供給可能）**: dirty source は body 編集（`Cell.SetBody`→`MarkDirty`）AND 構造変化（add/delete）。
   「窓を足したが未保存」が正しく not-supplyable へ落ちる（aggregate が dirty を持つ・CONTEXT「供給可能」）。
 - **STRATEGY-13/14（窓 move / front）**: floating window 共有ロジック。move/front 本体は **FloatingWindow Surface
@@ -139,9 +141,8 @@ notebook 効果なので参照行として載せる。
   FAIL] S10/#146: the last cell must now be removable` を確認）／`FakeMarimoSynthesizer.Decompose` の empty→1 inflation を消すと
   STRATEGY-58（X1 床=1）が落ちる（往復が 0 で戻る）／`Cell.SetBody` の dirty hook を消すと STRATEGY-12 が落ちる／
   `NotebookCellCoordinator.DeleteCell` の region_001 分岐（hide vs close）を入れ替えると STRATEGY-08/09 が落ちること。
-- **STRATEGY-11（placeholder hint）litmus**: `NotebookCellCoordinator.UpdatePlaceholders` の `single ? HostApiHint : null` の
-  `single`（CellCount==1）ゲートを外して常に `HostApiHint` を渡すと Section20 の「2 セルで非 active」assert が落ちる／hint を
-  `Cell.Body` へ seed すると「body 空」assert が落ちる。
+- **STRATEGY-11（placeholder RETIRED）litmus**: `StrategyEditorContentBuilder` に Placeholder GameObject ＋
+  `input.placeholder = placeholder` 配線を**復活**させると Section20 の (a)/(b) assert が落ちる（撤去の regression を検出）。
 - **STRATEGY-19/20（per-cell RUN）litmus**: `StrategyEditorWindowFrame.EnsureRunButton` を消すと STRATEGY-19 が落ちる／
   `NotebookRunController.ApplyResult` の index→region routing を「常に cells[0] の region」へ collapse させると STRATEGY-20 が
   落ちる（**実証済み RED→GREEN**・findings 0071: `cells[co.Index]`→`cells[0]` で `region_001 did not show its own (cell 0)
@@ -224,8 +225,8 @@ notebook 効果なので参照行として載せる。
 
 > **実装済み（第二波8本目・findings 0061）**: `StrategyEditorNotebookE2ERunner`（旧 `StrategyEditorProbe`）を git mv＋改名で昇格
 > （assert verbatim 移送・S1-12 に Covers 付与）。実際の経路は下記「軽量経路」（Section12 の bare-RT `FloatingWindowController`＋
-> `FakeMarimoSynthesizer`）で、ComposeRoot 反射合成は未使用。STRATEGY-11（placeholder hint）は **#95 E2E 仕上げで Section20 として
-> 昇格済み**（bare-RT＋実 `StrategyEditorView` の `_placeholder` 反射読み・findings 0076）。本台本の `要新規自動化` 残はゼロ。
+> `FakeMarimoSynthesizer`）で、ComposeRoot 反射合成は未使用。STRATEGY-11（placeholder hint）は **#95 で Section20 へ
+> 昇格後、#169（ADR-0036 D3）で機構ごと RETIRED**（Section20 は撤去 pin に反転・findings 0124）。本台本の `要新規自動化` 残はゼロ。
 
 - `StrategyEditorNotebookE2ERunner` Section12 と同型に **実 `BackcastWorkspaceRoot` を反射合成**（`ComposeRoot`: `OpenScene` →
   `SetSynthesizer(FakeMarimoSynthesizer)` → `ResolvePaths` → `BuildWorkspace`）か、または coordinator を bare-RT

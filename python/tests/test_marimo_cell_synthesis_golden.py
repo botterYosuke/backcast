@@ -322,6 +322,95 @@ def test_entry_point_empty_notebook_floor_is_one_cell():
     assert recovered[0]["body"] == "", "the floor cell must be empty"
 
 
+# ── 7. #169 (ADR-0036 D2) — the New/初期化 observe-seed cell synthesises to the owner-spec marimo .py ──
+#
+# A fresh File→New / no-resume boot seeds ONE cell with this body (zero trades — the loop body is `pass`,
+# never calls bt.submit_market; the Japanese comment documents that intent). The synth output is the
+# owner-specified observe notebook: `import marimo` / `app = marimo.App()` / `@app.cell def _(bt): for bar in
+# bt.replay(bars_per_second=2): pass / return`. `bt` is the sole free ref → captured as the def arg; the loop
+# produces nothing downstream → a bare `return`. This MIRRORS NotebookCellCoordinator.ObserveSeedBody (C#) —
+# the golden the C# fake (layer 1) and real pythonnet (layer 2) synth bind to (the shared-golden discipline).
+
+_OBSERVE_SEED_BODY = (
+    "for bar in bt.replay(bars_per_second=2):\n"
+    "    pass  # 観察のみ。bt.submit_market() を呼ばない＝売買ゼロ"
+)
+
+
+@pytest.mark.scenario("NEWSEED-05")
+def test_observe_seed_cell_synthesises_to_owner_spec():
+    """S2 golden: the observe-seed body synthesises BYTE-for-byte (version masked) to the owner-spec
+    marimo .py in issue #169 / ADR-0036 D1. LITMUS: change ObserveSeedBody's text/indent or marimo's
+    arg-capture of `bt` → this byte-match goes RED."""
+    py = _mask(_synth([_OBSERVE_SEED_BODY]))
+    expected = (
+        "import marimo\n\n"
+        '__generated_with = "MASKED"\n'
+        "app = marimo.App()\n\n\n"
+        "@app.cell\n"
+        "def _(bt):\n"
+        "    for bar in bt.replay(bars_per_second=2):\n"
+        "        pass  # 観察のみ。bt.submit_market() を呼ばない＝売買ゼロ\n"
+        "    return\n\n\n"
+        'if __name__ == "__main__":\n'
+        "    app.run()\n"
+    )
+    assert py == expected
+
+
+@pytest.mark.scenario("NEWSEED-05")
+def test_observe_seed_cell_round_trips_byte_idempotent():
+    """The observe seed survives the entry-point synth→decompose→synth round-trip byte-idempotently
+    (the C# Save→Open floor binds to this)."""
+    from engine.strategy_runtime.cell_synthesis import decompose_json, synthesize_json
+
+    cells = [{"body": _OBSERVE_SEED_BODY, "name": "_", "config": {}}]
+    py1 = synthesize_json(json.dumps(cells))
+    recovered_json = decompose_json(py1)
+    assert recovered_json is not None
+    recovered = json.loads(recovered_json)
+    assert len(recovered) == 1
+    assert recovered[0]["body"].strip() == _OBSERVE_SEED_BODY.strip()
+    assert synthesize_json(recovered_json) == py1
+
+
+# The C# production seed const — the SAME observe body the Unity runner seeds at New/初期化
+# (NotebookCellCoordinator.ObserveSeedBody). The "shared-golden discipline" only holds if this C# literal and
+# the Python golden copy above agree byte-for-byte; they are INDEPENDENT hand-maintained literals (C# can't import
+# the Python const), so without an explicit cross-check, editing ObserveSeedBody (indent / comment / text) would
+# silently drift the SHIPPED seed away from the owner-spec synth while both this module (its own copy) and the C#
+# runner's NEWSEED-01/03 (which assert cell0.Body == ObserveSeedBody — a self-comparison) stay GREEN.
+_CS_COORDINATOR = (
+    Path(__file__).resolve().parents[2] / "Assets" / "Scripts" / "StrategyEditor" / "NotebookCellCoordinator.cs"
+)
+
+
+def _csharp_unescape(literal: str) -> str:
+    """Decode the escapes in a C# regular (non-verbatim) string literal. The seed only uses \\n, but handle the
+    common set so a future edit (e.g. a tab) doesn't silently mis-decode."""
+    return re.sub(
+        r"\\(.)",
+        lambda m: {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\"}.get(m.group(1), m.group(1)),
+        literal,
+    )
+
+
+@pytest.mark.scenario("NEWSEED-05")
+def test_csharp_observe_seed_const_matches_python_golden():
+    """#169 (ADR-0036 D1) C#↔Python drift guard: the C# production seed const
+    (NotebookCellCoordinator.ObserveSeedBody) must equal this module's golden copy (_OBSERVE_SEED_BODY)
+    byte-for-byte, else the shipped New/初期化 seed drifts from the owner-spec marimo synth (NEWSEED-05).
+    LITMUS: change ObserveSeedBody's text / indent / comment in the C# file → this goes RED."""
+    src = _CS_COORDINATOR.read_text(encoding="utf-8")
+    m = re.search(r'ObserveSeedBody\s*=\s*"((?:[^"\\]|\\.)*)"', src)
+    assert m is not None, f"could not find the ObserveSeedBody const literal in {_CS_COORDINATOR}"
+    cs_body = _csharp_unescape(m.group(1))
+    assert cs_body == _OBSERVE_SEED_BODY, (
+        "C# NotebookCellCoordinator.ObserveSeedBody has drifted from the Python golden _OBSERVE_SEED_BODY:\n"
+        f"  C#:     {cs_body!r}\n  Python: {_OBSERVE_SEED_BODY!r}"
+    )
+
+
 def _write_golden() -> None:
     """Refresh the checked-in golden from live marimo output (run this module as __main__ after a
     deliberate skeleton/marimo change). Keeps the fixture byte-faithful, never hand-edited."""

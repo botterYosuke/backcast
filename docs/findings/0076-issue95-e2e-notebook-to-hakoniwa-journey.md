@@ -54,6 +54,10 @@ null scenario→running 立たず（D5）。**13 対象外**（engine DATA = Pyt
 
 ## 2. STRATEGY-11 placeholder hint 昇格（Section20）
 
+> **supersede: ADR-0036（#169・2026-06-26）** — placeholder hint 機構（`HostApiHint`/`UpdatePlaceholders`/
+> `SetPlaceholderHint`/`_placeholder`/Placeholder GameObject）は **RETIRED**。Section20 は撤去 pin に反転した
+> （fresh New が観察セルを種付けするためヒントは無用・findings 0124）。以下は履歴記録。
+
 `StrategyEditorNotebookE2ERunner` に Section20 を追加。bare-RT `FloatingWindowController` ＋ 実 `StrategyEditorView`
 （`StrategyEditorContentBuilder.Build` が Placeholder Text を作る）＋ 実 `NotebookCellCoordinator` で、
 `UpdatePlaceholders`（`single = CellCount==1` のときだけ `HostApiHint`）を Sync/Add/Delete で駆動し、実 view の
@@ -68,8 +72,8 @@ private `_placeholder` を反射読みして assert。これで本台本の `要
   → NBHAKO-12（null でも ■）RED。
 - `RunCell` の `_btRunActive` 早期 return を消す → NBHAKO-09 RED（2nd RUN が executor に到達）。
 - `ApplyResult` の `_btRunActive=false` 解除を消す → NBHAKO-08 RED（drain 後も ■）。
-- `UpdatePlaceholders` の `single` ゲートを外す → STRATEGY-11 の「2 セルで非 active」RED／hint を `Cell.Body` へ seed
-  → 「body 空」RED。
+- ~~`UpdatePlaceholders` の `single` ゲートを外す → STRATEGY-11 の「2 セルで非 active」RED／hint を `Cell.Body` へ seed
+  → 「body 空」RED。~~ **（ADR-0036/#169 で機構撤去・新 litmus は「Placeholder GO + input.placeholder を復活させると Section20 RED」）**
 
 ## 4. AFK 実走結果（2026-06-21・全 GREEN）
 

@@ -1190,7 +1190,23 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // when the editor is unbound (fresh install / no restore) — the backend then leaves __file__ at
     // its default (matches the #78 fail-closed gate that blocks Run when nothing is bound).
     string BuildNotebookStrategyPath()
-        => EditorFileProvider.TryGetStrategyFile(out string strategyPath) ? strategyPath : null;
+    {
+        if (EditorFileProvider.TryGetStrategyFile(out string named)) return named;   // #78 named WYSIWYR (registry-resolved)
+        // #169 (ADR-0036 D5/D6): an UNTITLED notebook with a non-empty buffer (the seeded observe cell, or any
+        // authored content) runs from a lazily-written scratch .py — so the per-cell RUN gets a real __file__ for
+        // a cell's Path(__file__).parent artifact resolution without forcing a Save (findings 0089). The whole
+        // untitled/empty/named-dirty policy lives in the document (TryGetUntitledScratch); the root only supplies
+        // the temp path. A New stays scratch-free until the first Run (resolver not called → _path=null → Untitled
+        // badge, ディスク非汚染); re-resolved every press so バッファ synth が毎回 scratch へ反映される.
+        var nb = _coordinator?.Notebook;
+        return nb != null && nb.TryGetUntitledScratch(UntitledScratchPath(), out string scratch) ? scratch : null;
+    }
+
+    // #169 (ADR-0036 D6): the fixed scratch .py for an untitled run (OS temp 配下の backcast scratch dir). One
+    // stable path so repeated presses OVERWRITE (毎回 synth を反映) instead of littering temp; AtomicPyFile.Write
+    // creates the dir. cwd=scratch-dir の os.chdir 方針は ADR-0011 proposed (#79) のまま — ここは __file__ を実体化する.
+    static string UntitledScratchPath()
+        => Path.Combine(Path.GetTempPath(), "backcast_scratch", "untitled_strategy.py");
 
     // The screen-fixed "+ Python cell" overlay (ONE button, appends an empty cell). Owner override
     // (2026-06-19): anchored BOTTOM-RIGHT, not marimo's top-centre (edit-app.tsx:454) — a deliberate
@@ -2439,17 +2455,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // is reset IN PLACE (never destroyed), region_002+ cell windows are despawned. canvas pan/zoom +
         // Hakoniwa are NOT reset (§4 targets strategy/editor state).
         //
-        // #76↔#81 reconciliation: #76's U2 seeded MarimoStrategyTemplate.NewStrategy into the single editor
-        // buffer. The #81 cell model (findings 0050) DELIBERATELY rejects body-seeding (marimo-faithful: a
-        // fresh cell is empty, with the host-API names shown as a placeholder, not as "example to delete").
-        // A one-empty-cell notebook still synthesises to a valid (runnable-once-saved) marimo app. #76
-        // (2026-06-19): a no-resume boot lands in this SAME File→New blank state (OpenFileNewDefault →
-        // _coordinator.New()); strategies are opened via File→Open, not auto-opened at boot.
+        // #169 (ADR-0036 D1/D2/D3, supersedes findings 0050 / #76): File→New no longer lands in a blank
+        // placeholder state. It SEEDS one observe-replay cell (NotebookCellCoordinator.ObserveSeedBody, zero
+        // trades) so the editor opens on a runnable "watch Toyota replay" template; the old host-API
+        // placeholder hint mechanism is removed (D3). A no-resume boot lands in this SAME seeded File→New
+        // state (OpenFileNewDefault → _coordinator.New(ObserveSeedBody)); strategies are opened via File→Open.
         _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
-        _coordinator.New();
+        _coordinator.New(NotebookCellCoordinator.ObserveSeedBody);   // #169 (ADR-0036 D2): seed the observe-replay cell
 
-        // scenario buffer + universe (the in-memory clear the host owns).
-        _scenario.Clear();
+        // scenario buffer + universe: #169 (ADR-0036 D4) seeds VALID default params + Toyota (supersedes #76's
+        // blank Clear) so the observe cell runs and Save As commits the universe. Unconditional like the old
+        // Clear (a deliberate File→New discard).
+        SeedFreshDocumentDefaults();
         _tile?.SyncFieldsFromController();
 
         // mode side-effect (findings 0027 D3): SetExecutionMode(LiveManual) ONLY when connected — the VM
@@ -2720,16 +2737,32 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         OpenFileNewDefault();                    // #76: boot to the File→New blank state (no canonical auto-open)
     }
 
-    // #76 (2026-06-19): the no-resume / unresumable boot state = the File→New blank document (one empty
-    // cell in region_001, unbound). Identical to OnFileNew's notebook reset (`_coordinator.New()` =
-    // ResetUnboundEmpty + SyncWindowsToNotebook) so boot and File→New land in the SAME state; Run stays
-    // blocked until the user saves (WYSIWYR). The layout document stays UNTITLED (_currentLayoutPath = "").
+    // #76 (2026-06-19) / #169 (ADR-0036): the no-resume / unresumable boot state = the File→New document.
+    // Identical to OnFileNew's notebook reset (`_coordinator.New(ObserveSeedBody)` = ResetUnboundSeeded +
+    // SyncWindowsToNotebook) so boot and File→New land in the SAME state — a SEEDED observe-replay cell +
+    // Toyota universe + valid default params (ADR-0036 supersedes #76's blank+Save-to-run: untitled is now
+    // Run-ready immediately via a lazy scratch .py). The layout document stays UNTITLED (_currentLayoutPath = "").
     void OpenFileNewDefault()
     {
         _notebookRun?.Invalidate();   // #95 Phase 2: drop any in-flight per-cell run against the replaced notebook
-        _coordinator.New();
-        ReseedFromEditor();
+        _coordinator.New(NotebookCellCoordinator.ObserveSeedBody);   // #169 (ADR-0036 D2): seed the observe-replay cell
+        ReseedFromEditor();           // unbound → seeds nothing from the (absent) editor sidecar
+        SeedFreshDocumentDefaults();  // #169 (ADR-0036 D4): no-resume boot default scenario + Toyota universe
+        _tile?.SyncFieldsFromController();   // mirror DoFileNew: push the just-seeded params into the tile fields
+                                             // (ReseedFromEditor's sync ran BEFORE the seed → would render blank, findings 0025 §12)
     }
+
+    // #169 (ADR-0036 D4): seed the fresh-document scenario defaults — VALID default params (today-relative
+    // dates / granularity / cash) AND the default Toyota (7203.TSE) universe. The universe seed fires
+    // InstrumentRegistry.Changed → SyncChartWindowsToUniverse, spawning the Toyota chart for free (universe↔chart
+    // 不変条件 honor・追加制御なし). In-memory only (no sidecar): the FIRST Save As commits the now-VALID scenario,
+    // so the universe rides the existing scenario.instruments writeback (追加実装ゼロ — but it only rides because
+    // the params are valid; an empty scenario fails Commit and the post-save reseed would wipe the universe).
+    // Called ONLY on the two document-less fresh seams (DoFileNew / OpenFileNewDefault) — NOT on the saved-layout
+    // restore path nor the corrupt-sidecar Open degradation (those honor their own universe), so 種付けは fresh
+    // だけ (findings 0124 F8). Shared by both seams so the seed pair can never diverge between them.
+    const string DefaultSeedInstrument = "7203.TSE";   // トヨタ自動車 (venue-suffixed canonical id)
+    void SeedFreshDocumentDefaults() => _scenario.SeedFreshDefaults(DateTime.Now, new[] { DefaultSeedInstrument });
 
     // ---- Venue submenu → host venue RPCs (findings 0027 D5). Connect builds the request via the reused
     // VenueMenuViewModel (MOCK = credential-less dev venue → "env" source so no tkinter prompt spawns),

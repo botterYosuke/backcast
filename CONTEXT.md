@@ -474,6 +474,10 @@ chart に渡るデータの上限ポリシーが mode 別:
 描画側（ChartView / [[視窓仮想化（virtualized chart）]]）はデータ件数に依存せず一定コスト。
 _Avoid_: Live で `max_history_len` を上げて当日外の bar を kabu から自動 backfill すること（別 issue・本決定スコープ外）／Replay の cold seed を「streaming で代替できる」と見なすこと（findings 0104 で証明済の症状）
 
+**観られる再生（watchable playback・Replay 実行中の可視カーソル）** ※2026-06-28 新設・[[#182]]（findings 0131）:
+`bt.replay(bars_per_second=N)` の再生は **RUN 開始後、これまでにストリーミングされた本数ぶんだけ**チャートに描かれ、ペースに合わせて1本ずつ前進する（＝観られる）。RUN 前（LOADED / preview）は **chart 全期間 supply** の cold seed をそのまま全期間表示（fit-all）。両者を分けるのが **可視カーソル**＝最新のストリーム済 primary bar の時刻（replay clock）。RUN 中・RUN 後（完走 or 途中 break）は per-instrument 系列をこのカーソルまでにクリップし、RUN 前と再 load 後は全期間に戻す。例外（D4）: RUN 後に `populate_replay_preview` で**再 preview した銘柄**（`_full_preview_iids`）は全期間 fit-all に戻す。
+_Avoid_: 可視カーソルを「ストリーム済件数」で持つこと（multi-instrument で非 primary を誤クリップ・正は replay timestamp）／クリップ gate を「RUNNING のときだけ」にすること（完走/break 後に host が IDLE へ戻すので、break 時点の本数が全期間へ snap back する）／run 完走後の **再 preview**（`populate_replay_preview` は IDLE で発火・全カタログ再シード）を古い run cursor でクリップすること（review H1・D4 で免除＝免除しないと完走後に追加した新銘柄チャートが run 終端までしか描かれない）
+
 **mode-conditional base tile / base retile（モード別 base・[[ExecutionMode（実行モード）]] 所有）** ※**縮退 SUPERSEDED 2026-06-21**・[[ADR-0017]]（findings 0075）:
 despawn/respawn の base retile は廃止。mode 差は **`startup` window を Replay のときだけ Show / Live で Hide** の可視性トグルだけに縮退
 （`FloatingWindowController.Show`/`Hide`・dormant 温存）。chart は mode をまたいで identity 保持（spawn したまま）。以下は履歴:

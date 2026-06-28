@@ -59,6 +59,7 @@ public class ChartView : MaskableGraphic,
     // Canvas's separate font sub-mesh; mesh integration would buy nothing here) ----
     bool _showTitleBar;
     Text _titleLabel, _priceText, _changeText;
+    Text _noDataLabel;   // #182: centered "no data" marker, shown when !_hasFrame (see NoDataShown).
     Font _font;
 
     // ---- data ----
@@ -84,6 +85,17 @@ public class ChartView : MaskableGraphic,
     public int LastGridLineCount { get; private set; }
     public int LastPriceLabelCount => _priceLabels.Count;
     public int LastTimeLabelCount => _timeLabels.Count;
+    // #182 secondary: the pool counts above are MONOTONIC (excess labels are hidden, not destroyed —
+    // EnsureLabelPool), so they can't tell "no labels shown" from "labels hidden". This counts the
+    // labels that are actually VISIBLE, which the no-data gate (CHART-NODATA-01) reads to prove the
+    // misleading 1970-epoch time axis is suppressed when a chart has no series.
+    public int ActiveTimeLabelCount
+    {
+        get { int n = 0; for (int i = 0; i < _timeLabels.Count; i++) if (_timeLabels[i].gameObject.activeSelf) n++; return n; }
+    }
+    // #182 secondary: a chart with no bar series shows this "no data" marker instead of leaving an
+    // empty plot framed by a default/stale (1970-epoch) time axis. True ⟺ no real frame is rendered.
+    public bool NoDataShown => _noDataLabel != null && _noDataLabel.gameObject.activeSelf;
     // S3 + S4: list of price/time tick values the most recent OnPopulateMesh used. Reused by the
     // axis label rebuild path so labels and grid lines stay in lockstep.
     List<double> _lastPriceTicks = new List<double>();
@@ -172,8 +184,44 @@ public class ChartView : MaskableGraphic,
         _priceLabelsRoot = NewChildRect("PriceAxisLabels");
         _timeLabelsRoot = NewChildRect("TimeAxisLabels");
 
+        // #182 secondary: a no-data marker centered in the plot. A freshly-spawned chart (and one
+        // whose instrument has no bars in the confirmed window / streamed nothing) has no frame, so
+        // it would otherwise sit empty behind a default time axis that formats translation_ms=0 as
+        // 1970 (ChartScale.FormatTimeLabel). Showing this instead — and suppressing the time labels
+        // (UpdateNoData) — makes "no data" unmistakable. ASCII so it renders in LegacyRuntime.ttf
+        // without a CJK glyph fallback (mojibake □ — see TmpFoundationSetup); localizable later.
+        _noDataLabel = BuildNoDataLabel((RectTransform)transform);
+
         ThemeService.Changed += OnThemeChanged;
         OnThemeChanged();   // sets initial title bar colors; SetVerticesDirty schedules a Mesh emit.
+        UpdateNoData();     // _hasFrame is false at build → marker visible until the first real frame.
+    }
+
+    Text BuildNoDataLabel(RectTransform parent)
+    {
+        var go = new GameObject("NoDataLabel", typeof(RectTransform), typeof(Text));
+        var rt = go.GetComponent<RectTransform>();
+        rt.SetParent(parent, false);
+        rt.anchorMin = Vector2.zero; rt.anchorMax = Vector2.one;
+        rt.offsetMin = Vector2.zero; rt.offsetMax = Vector2.zero;
+        var t = go.GetComponent<Text>();
+        t.font = _font; t.fontSize = 13; t.text = "NO DATA";
+        t.alignment = TextAnchor.MiddleCenter;
+        t.horizontalOverflow = HorizontalWrapMode.Overflow;
+        t.verticalOverflow = VerticalWrapMode.Overflow;
+        t.raycastTarget = false;
+        return t;
+    }
+
+    // #182: the no-data marker is visible exactly when there is no real frame; in that state the
+    // time/price axis labels are also suppressed (cleared in Render's empty branch) so no stale or
+    // 1970-epoch axis frames the empty plot.
+    void UpdateNoData()
+    {
+        if (_noDataLabel == null) return;
+        var th = ThemeService.Current;
+        _noDataLabel.color = th.colors.hakoniwa_text_muted;
+        _noDataLabel.gameObject.SetActive(!_hasFrame);
     }
 
     RectTransform NewChildRect(string n)
@@ -236,7 +284,15 @@ public class ChartView : MaskableGraphic,
         if (_bars.Count == 0)
         {
             _hasFrame = false;
+            // #182 secondary: clear the tick caches and rebuild labels so a series that went empty
+            // (instrument left the confirmed window, or never warmed) does NOT keep a stale time
+            // axis — and a never-rendered chart never shows the default 1970-epoch axis. OnPopulateMesh
+            // early-returns for empty bars (it won't recompute ticks), so the clear must happen here.
+            _lastTimeTicks.Clear();
+            _lastPriceTicks.Clear();
+            _axisLabelsDirty = true;
             UpdateTitle();
+            UpdateNoData();
             SetVerticesDirty();
             return;
         }
@@ -244,6 +300,7 @@ public class ChartView : MaskableGraphic,
         _firstOpen = _bars[0].open;
         _lastClose = _bars[_bars.Count - 1].close;
         _hasFrame = true;
+        UpdateNoData();
 
         // Auto-scale = right-anchor to the latest bar (findings 0119 D-4). Manual pan/zoom (S2)
         // sets auto_scale=false; in that case the user's chosen translation_ms is preserved across
@@ -558,6 +615,7 @@ public class ChartView : MaskableGraphic,
     {
         SetVerticesDirty();   // bg + axes + candles re-emit with new palette colors.
         UpdateTitle();
+        UpdateNoData();       // #182: recolor the no-data marker on theme change.
     }
 
     void UpdateTitle()

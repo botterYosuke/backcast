@@ -30,6 +30,10 @@ public interface IFileDialog
     // chosen ABSOLUTE directory, or null on cancel / when native folder selection is unavailable (Player
     // off the supported OS) — the caller keeps the typed text field working regardless (fail-soft).
     string BrowseFolder(string title, string initialDir);
+
+    // #181 / ADR-0040: pick a private-key .pem (the venue login modal's 秘密鍵「参照…」). Returns the chosen
+    // ABSOLUTE path, or null on cancel / when native selection is unavailable (fail-soft, parity with Open).
+    string OpenPrivateKey(string initialDir);
 }
 
 // Picks the native dialog for the current OS: Win32 (comdlg32) on Windows, the Editor's Cocoa panel
@@ -81,5 +85,16 @@ public sealed class StubFileDialog : IFileDialog
     {
         LastBrowseTitle = title; LastBrowseInitialDir = initialDir;
         return NextFolderResult;
+    }
+
+    // #181 / ADR-0040: the .pem picker seam. Separate result slot so the venue-login key picker doesn't
+    // collide with the .py picker (NextResult) or the folder picker (NextFolderResult).
+    public string NextKeyResult;
+    public string LastKeyInitialDir;
+
+    public string OpenPrivateKey(string initialDir)
+    {
+        LastKeyInitialDir = initialDir;
+        return NextKeyResult;
     }
 }

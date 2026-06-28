@@ -33,7 +33,7 @@ def _verify_prefill() -> str:
 
     Returns ``DEV_KABU_API_PASSWORD`` in debug builds, else ``""`` (release build
     or key absent). Never reads the prod key ``PROD_KABU_API_PASSWORD`` (D2). The
-    env read lives here in the pure presenter so ``run_dialog`` stays env-free
+    env read lives here in the pure presenter so the login surface stays env-free
     (PRODGATE-08).
     """
     from engine.live._build_mode import IS_DEBUG_BUILD
@@ -53,8 +53,8 @@ def build_form_init(env_hint: str) -> FormInit:
     だけで決める (prod=18080 / verify=18081)。
 
     ADR-0033: verify モードの API パスワードは debug ビルドのとき .env から prefill
-    する (D1)。prod モードは prefill せず常にユーザー入力 (D2)。run_dialog はラジオ
-    切替のたびに build_form_init(mode) を呼び直して prefill を再導出する。
+    する (D1)。prod モードは prefill せず常にユーザー入力 (D2)。#181/ADR-0040: Unity モーダルは
+    モード切替のたびに venue_login_form_init→build_form_init(mode) を呼び直して prefill を再導出する。
     """
     station_port = 18080 if env_hint == "prod" else 18081
     api_password_prefill = "" if env_hint == "prod" else _verify_prefill()

@@ -1,7 +1,8 @@
 // VenueMenuM3Probe.cs — issue #21 M3 focused gate (throwaway, pure C#)
-// docs/findings/0012-venue-login-secret-flow.md (D4/D6/D7). Locks the venue-menu
-// presentation logic: connect fires prompt for both venues, badge derives from the
-// poll, and disconnect is disabled while a write is in flight. No pythonnet/venue.
+// docs/findings/0012-venue-login-secret-flow.md (D6/D7) + ADR-0021. Locks the venue-menu
+// presentation logic: badge derives from the poll, connect/disconnect gating, and the
+// LIVE_VENUE menu filter. No pythonnet/venue. (#181/ADR-0040 retired the "prompt" dispatch
+// assertion — login credentials are now collected by the Unity uGUI modal, not this menu.)
 //
 //   <Unity> -batchmode -nographics -quit -projectPath /Users/sasac/backcast \
 //       -executeMethod VenueMenuM3Probe.Run
@@ -21,7 +22,6 @@ public static class VenueMenuM3Probe
     {
         try
         {
-            BothVenuesUsePrompt();
             BadgeFollowsPoll();
             ConnectGate();
             DisconnectGatedByWrite();
@@ -32,7 +32,7 @@ public static class VenueMenuM3Probe
 
         if (_fail.Count == 0)
         {
-            Debug.Log("[VENUE MENU M3 PASS] prompt dispatch / poll badge / write-disable disconnect");
+            Debug.Log("[VENUE MENU M3 PASS] poll badge / connect+disconnect gating / LIVE_VENUE filter");
             EditorApplication.Exit(0);
         }
         else
@@ -47,19 +47,6 @@ public static class VenueMenuM3Probe
         var conn = new VenueConnectionViewModel();
         var coord = new LiveLogoutCoordinator();
         return (new VenueMenuViewModel(conn, coord), conn, coord);
-    }
-
-    // D4 (superseded by #122/findings 0093): the menu never builds a credential form — both
-    // venues fire prompt; the in-process tkinter dialog collects credentials. Env hints are demo/verify.
-    static void BothVenuesUsePrompt()
-    {
-        var (m, _, _) = Make();
-        var t = m.BuildConnectRequest("TACHIBANA");
-        Check(t.CredentialsSource == "prompt", "tachibana must use prompt");
-        Check(t.EnvironmentHint == "demo", "tachibana env should be demo");
-        var k = m.BuildConnectRequest("KABU");
-        Check(k.CredentialsSource == "prompt", "kabu must use prompt (NOT env — D4)");
-        Check(k.EnvironmentHint == "verify", "kabu env should be verify");
     }
 
     // D6: badge derives from the poll-canonical connection state.

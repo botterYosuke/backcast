@@ -56,13 +56,14 @@ class SubscriptionLimitExceeded(Exception):
 class VenueCredentials(BaseModel):
     """ログイン要求の入力。
 
-    重要: 平文 password を含まない。Phase 8 §3.2 で定義した
-    credentials_source ベース（prompt / session_cache / env）で
-    resolve する。具体的な credential 値は adapter 内部で
-    subprocess / env / cache から取得する。
+    重要: 平文 password を含まない。credentials_source ベース
+    （session_cache / env / prompt_result）で resolve する。具体的な
+    credential 値は adapter 内部で env / cache から取得する。#181/ADR-0040 で
+    対話 "prompt" は廃止（ログイン UI は Unity uGUI モーダルへ移管）。kabu の
+    モーダルログインは headless 認証で得た token を prompt_result で渡す。
     """
 
-    credentials_source: Literal["prompt", "session_cache", "env", "prompt_result"]
+    credentials_source: Literal["session_cache", "env", "prompt_result"]
     environment_hint: str | None = None  # "prod" / "demo" 等のヒント
     token: str | None = None  # kabu prompt_result 専用
 

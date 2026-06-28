@@ -80,6 +80,15 @@ class InprocLiveServer:
     ) -> dict:
         return self._svc.venue_login(venue_id, credentials_source, environment_hint)
 
+    def venue_login_form_init(self, venue_id: str, mode: str) -> dict:
+        return self._svc.venue_login_form_init(venue_id, mode)
+
+    def venue_login_probe_station(self, venue_id: str, mode: str) -> dict:
+        return self._svc.venue_login_probe_station(venue_id, mode)
+
+    def submit_venue_login(self, venue_id: str, mode: str, fields_json: str, secret: str) -> dict:
+        return self._svc.submit_venue_login(venue_id, mode, fields_json, secret)
+
     def venue_logout(self) -> dict:
         return self._svc.venue_logout()
 

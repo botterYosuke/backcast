@@ -1,113 +1,78 @@
-"""macOS regression — venue-login prompt dialog must not touch tkinter/Cocoa
-off the main thread (findings 0130).
+"""macOS crash, structurally fixed — the venue-login path no longer creates any GUI
+in Python (findings 0130 → 0131 / #181 / ADR-0040).
 
-Symptom (owner, this terminal): clicking Settings ▸ "Connect Tachibana (Demo)"
-crashes the Unity app on macOS.
+Original symptom (owner, macOS): clicking Settings ▸ "Connect Tachibana (Demo)"
+crashed the Unity app. Root cause (findings 0130): the prompt-login path ran
+``tkinter.Tk()`` on the off-main ``venue-login-dialog`` executor thread, violating
+Cocoa's NSWindow main-thread requirement → ``libc++abi`` abort (SIGABRT). That abort
+is an Objective-C abort, not a Python exception, so the host (Unity) died.
 
-Root cause (empirically pinned, findings 0130):
+The fix is structural: #181 moves the login GUI to Unity (uGUI modal) and makes
+Python authenticate *headless* (``submit_venue_login`` → ``venue_login_headless``).
+Python never imports or constructs ``tkinter`` for login anymore, so the off-main
+``Tk()`` — and therefore the macOS abort — cannot occur on any platform.
 
-    Settings button ▸ BackcastWorkspaceRoot.OnVenueConnect
-      ▸ WorkspaceEngineHost.VenueLogin  (spawns a "WorkspaceVenueLogin" worker thread)
-      ▸ Py.GIL ▸ venue_login("TACHIBANA","prompt","demo")
-      ▸ _attempt("prompt") ▸ asyncio.run_coroutine_threadsafe(_handle_prompt_login, live_loop)
-      ▸ _handle_prompt_login ▸ loop.run_in_executor(executor, _run)   # "venue-login-dialog" thread
-      ▸ _run ▸ _try_create_tk() ▸ tkinter.Tk()
-
-``tkinter.Tk()`` initializes a Cocoa ``NSWindow``, which AppKit requires on the
-MAIN thread. Constructed on the dedicated ``venue-login-dialog`` executor thread
-it raises ``NSInternalInconsistencyException`` ("NSWindow drag regions should
-only be invalidated on the Main Thread!") → ``libc++abi`` abort (SIGABRT, process
-exit 134). That abort is an Objective-C abort, NOT a Python exception, so the
-``except Exception`` guards in ``_try_create_tk`` / ``_handle_prompt_login``
-cannot catch it — the whole host process (Unity) dies.
-
-The #122 in-process dialog architecture (findings 0093) was validated on Windows,
-where Tk on a secondary thread is legal; macOS Cocoa is not. Every existing
-prompt-login test monkeypatches ``_try_create_tk`` to ``lambda: True``, so none of
-them ever runs the real Tk probe off-main — this is the death-angle they all miss.
-
-Why this gate asserts the *cause*, not the *symptom*: the abort is a Cocoa
-main-thread UB and is NONDETERMINISTIC (observed both exit 134 and exit 0 from the
-same code across runs), so a "process aborts" gate would be flaky. The
-deterministic, method-independent invariant is: on macOS the prompt-login path
-must never construct ``tkinter.Tk()`` on a non-main thread. Both candidate fixes
-satisfy it — (a) marshal the dialog to the main thread, or (b) refuse off-main and
-degrade to NO_DISPLAY_AVAILABLE — so the gate does not prejudge the fix.
-
-xfail(strict) on darwin: lands RED without reddening the suite; once a fix makes
-Tk main-thread-only (or absent), the test XPASSes and strict-xfail hard-fails,
-forcing removal of the marker so this becomes an enforcing gate. Skipped off
-darwin (Tk-off-main is legal there; the invariant is macOS-specific).
+This was the ``@pytest.mark.xfail(strict=True)`` RED gate of findings 0130. With the
+fix landed it is now an **enforcing** gate (xfail removed): it fails if any login-path
+module reintroduces a tkinter dependency. It is cross-platform — "the login path does
+not import tkinter" is a universal invariant, not a macOS-only one (re-adding a
+tkinter dialog would re-open the macOS crash vector specifically).
 """
 from __future__ import annotations
 
-import asyncio
-import sys
-import threading
+import inspect
 
-import pytest
-
-from engine.live.live_orchestrator import LiveLoopManager
-from engine.exchanges import tachibana_login_flow
-
-
-def _run_on_selector_loop(coro):
-    """Run *coro* on a fresh SelectorEventLoop, on THIS (main) thread — mirrors how
-    the live loop awaits ``_handle_prompt_login`` (the inner ``run_in_executor``
-    still hops the dialog work onto a separate worker thread, which is the point)."""
-    loop = asyncio.SelectorEventLoop()
-    try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
-
-
-@pytest.mark.skipif(
-    sys.platform != "darwin",
-    reason="Cocoa main-thread requirement is macOS-specific; Tk off-main is legal elsewhere",
+from engine.live import live_orchestrator
+from engine.exchanges import (
+    venue_login_headless,
+    tachibana_login_form_state,
+    kabusapi_login_form_state,
 )
-@pytest.mark.xfail(
-    strict=True,
-    reason="findings 0130: _handle_prompt_login runs _try_create_tk()/tkinter.Tk() on a "
-    "run_in_executor worker thread; on macOS Cocoa requires the main thread → process "
-    "abort. Fix must marshal Tk to the main thread or refuse off-main (NO_DISPLAY).",
+
+
+# Modules on the venue-login path. None may import tkinter: the login GUI now lives
+# in Unity (uGUI modal), Python only authenticates headless.
+_LOGIN_PATH_MODULES = (
+    live_orchestrator,
+    venue_login_headless,
+    tachibana_login_form_state,
+    kabusapi_login_form_state,
 )
-def test_prompt_login_never_creates_tk_off_main_thread(monkeypatch):
-    main = threading.main_thread()
-    tk_construction_threads: list[threading.Thread] = []
 
-    class _FakeTk:
-        # Records the constructing thread instead of building a real Cocoa window,
-        # so the test is deterministic (no real NSWindow → no flaky abort) and
-        # observes ONLY the invariant under test: which thread Tk() runs on.
-        def __init__(self, *args, **kwargs):
-            tk_construction_threads.append(threading.current_thread())
 
-        def withdraw(self):
-            pass
-
-        def destroy(self):
-            pass
-
-    monkeypatch.setattr("tkinter.Tk", _FakeTk)
-    # The display-bound human-input dialog is downstream of the crash point; stub it
-    # to a no-op so the test exercises only the Tk-probe seam.
-    monkeypatch.setattr(
-        tachibana_login_flow,
-        "run_dialog",
-        lambda env_hint, cancel_event=None: {"success": True, "error_code": ""},
+def test_login_path_modules_do_not_reference_tkinter():
+    offenders = []
+    for mod in _LOGIN_PATH_MODULES:
+        src = inspect.getsource(mod)
+        # Scan for real import statements, not the word "tkinter" in prose/docstrings.
+        if "import tkinter" in src or "from tkinter" in src or "import _login_dialog" in src:
+            offenders.append(mod.__name__)
+    assert not offenders, (
+        "findings 0130/0131: a login-path module reintroduced a tkinter dependency, "
+        "re-opening the macOS off-main Tk() crash vector: " + ", ".join(offenders)
     )
 
-    mgr = LiveLoopManager.__new__(LiveLoopManager)  # _handle_prompt_login touches no instance state
-    result = _run_on_selector_loop(mgr._handle_prompt_login("TACHIBANA", "demo"))
 
-    # Anti-vacuity: the prompt-login coroutine must have run to completion (3-tuple),
-    # otherwise an empty thread list would pass for the wrong reason.
-    assert result is not None and len(result) == 3, f"path did not complete: {result!r}"
+def test_retired_in_proc_dialog_seam_is_gone():
+    # The #122 in-proc tkinter dialog seam (_handle_prompt_login / _try_create_tk) is
+    # removed — there is no longer any code that could run Tk() on a worker thread.
+    from engine.live.live_orchestrator import LiveLoopManager
 
-    off_main = [t for t in tk_construction_threads if t is not main]
-    assert not off_main, (
-        "tkinter.Tk() was constructed on non-main thread(s) "
-        f"{[t.name for t in off_main]} — on macOS this aborts the host process "
-        "(Cocoa NSWindow main-thread requirement)"
-    )
+    assert not hasattr(LiveLoopManager, "_handle_prompt_login")
+    assert not hasattr(live_orchestrator, "_try_create_tk")
+
+
+def test_retired_tkinter_login_flow_modules_are_deleted():
+    # The tkinter dialog modules themselves are gone (full deletion, not unwiring).
+    import importlib
+
+    for name in (
+        "engine.exchanges.tachibana_login_flow",
+        "engine.exchanges.kabusapi_login_flow",
+        "engine.exchanges._login_dialog",
+    ):
+        try:
+            importlib.import_module(name)
+        except ModuleNotFoundError:
+            continue
+        raise AssertionError(f"{name} should have been deleted (#181/ADR-0040)")

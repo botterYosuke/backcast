@@ -7,7 +7,6 @@ extracted from DataEngineBackend.
 from __future__ import annotations
 
 import asyncio
-import gc
 import logging
 import sys
 import threading
@@ -21,7 +20,6 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from engine.live.adapter import OrderingVenueAdapter
 
-from engine.live._build_mode import IS_DEBUG_BUILD
 from engine.live.adapter import SubscriptionLimitExceeded
 from engine.live.live_runner import LiveRunner
 from engine.live.reducer_bridge import LiveReducerBridge
@@ -62,40 +60,19 @@ from engine._backend_impl import (
 )
 
 
-# --- in-process venue-login dialog (#122) ------------------------------------
-# Login runs the tkinter dialog IN-PROCESS (no subprocess). The bug class this
-# removes: the embedded marimo server installs WindowsSelectorEventLoopPolicy
-# globally, and a SelectorEventLoop cannot spawn subprocesses on Windows — so the
-# old create_subprocess_exec login path raised NotImplementedError, which the
-# orchestrator swallowed into the catch-all VENUE_LOGIN_FAILED. These validators
-# (relocated from the retired login_dialog_runner) now gate the in-proc dispatch.
-# See docs/findings/0093 (supersedes findings 0012 D4).
+# --- venue login: Unity uGUI modal + headless auth (#181 / ADR-0040) ---------
+# The login GUI now lives in Unity (uGUI modal); Python authenticates *headless*
+# with the form values the modal collects (no tkinter — findings 0130: a tkinter
+# Tk() on the off-main login worker aborts macOS Cocoa). The modal drives three
+# RPCs: venue_login_form_init (prefill), venue_login_probe_station (kabu 本体起動
+# 確認), and submit_venue_login (validate → headless auth → finalize). These
+# validators gate the venue/env passed from C#. See docs/findings/0131
+# (supersedes the in-proc tkinter dialog of findings 0093 / D4).
 _VALID_LOGIN_VENUES = ("tachibana", "kabu")
 _ENV_PER_VENUE: dict[str, frozenset[str]] = {
     "tachibana": frozenset({"demo", "prod"}),
     "kabu": frozenset({"verify", "prod"}),
 }
-
-
-def _try_create_tk() -> bool:
-    """tkinter import + Tk() probe. False on headless hosts (no display).
-
-    #133: the probe creates a real Tcl interpreter, so it must be torn down on THIS
-    (creating) thread — ``teardown_tk`` destroys it here; the probe's reference cycle is
-    then reclaimed by ``_run``'s ``finally: gc.collect()`` (this frame is popped by then),
-    on this same thread — never left for a later cross-thread finalize (Tcl_AsyncDelete).
-    On a headless host ``Tk()`` raises before any interpreter exists, so we return
-    False with nothing to tear down (no regression to the NO_DISPLAY_AVAILABLE path).
-    """
-    try:
-        import tkinter
-        root = tkinter.Tk()
-        root.withdraw()
-    except Exception:
-        return False
-    from engine.exchanges._login_dialog import teardown_tk
-    teardown_tk(root)
-    return True
 
 
 @dataclass
@@ -132,7 +109,7 @@ class LiveLoopManager:
     """
 
     _KNOWN_VENUES = {"TACHIBANA", "KABU", "MOCK"}
-    _KNOWN_CRED_SOURCES = {"prompt", "session_cache", "env", "prompt_result"}
+    _KNOWN_CRED_SOURCES = {"session_cache", "env", "prompt_result"}
     _KNOWN_MODES = {"Replay", "LiveManual", "LiveAuto"}
 
     def __init__(
@@ -226,9 +203,9 @@ class LiveLoopManager:
         # Windows: the embedded marimo server sets WindowsSelectorEventLoopPolicy
         # globally (marimo/_server/utils.py), and SelectorEventLoop has no
         # subprocess support — create_subprocess_exec raises NotImplementedError.
-        # That trap used to break venue_login(source="prompt") with
-        # VENUE_LOGIN_FAILED; #122 removed the login subprocess (it now runs the
-        # dialog in-process), so this is no longer load-bearing for login. We keep
+        # That trap historically broke the interactive login subprocess; #122 moved it
+        # in-process and #181/ADR-0040 retired the Python login GUI entirely (auth is now
+        # headless on this loop), so it is no longer load-bearing for login. We keep
         # forcing the ProactorEventLoop as defense-in-depth: it restores Windows'
         # default loop that marimo clobbered, so any future async subprocess on
         # this loop stays safe. See docs/findings/0093.
@@ -563,100 +540,289 @@ class LiveLoopManager:
         return err
 
 
-    async def _handle_prompt_login(
-        self, venue_id: str, env_hint: str
-    ) -> tuple[bool, str, Optional[str]]:
-        """Run the login tkinter dialog IN-PROCESS on a dedicated thread.
+    def _finalize_login(self, adapter_creds) -> tuple[bool, str]:
+        """Post-auth wiring shared by venue_login (env/session_cache) and
+        submit_venue_login (modal headless auth).
 
-        Returns (success, error_code, token_or_none).
-        Tachibana: token_or_none is always None (uses session_cache on disk).
-        Kabu: token_or_none is the bearer token returned by run_dialog directly.
-
-        No subprocess (#122): the dialog runs on a private single-use thread —
-        a shared executor pool would be exhausted by the dialog's long human-input
-        block — and its result is awaited on the live loop. The API password stays
-        in the embedded Python's memory, and login no longer depends on the live
-        loop being subprocess-capable (the marimo SelectorEventLoop trap that used
-        to surface as VENUE_LOGIN_FAILED). See docs/findings/0093.
+        Assumes ``_start_live_components`` already built ``self._session``. Logs the
+        adapter in (if not already), converges venue_sm to CONNECTED, then starts the
+        deferred background components (account sync / health watchdog / instruments).
+        Returns ``(ok, error_code)``: ok=True → success; ok=False → caller should _fail.
         """
-        venue = venue_id.lower()
-        if venue not in _VALID_LOGIN_VENUES:
-            return False, "UNKNOWN_VENUE", None
-        if env_hint not in _ENV_PER_VENUE.get(venue, frozenset()):
-            return False, "INVALID_ENV", None
-        # ADR-0027 (D1/D2): prod 解禁の env ゲート (PROD_NOT_ALLOWED front-stop) は廃止。
-        # 本番接続の可否は「ユーザーがダイアログで prod を選ぶ＋本物の prod 資格情報＋prod
-        # 本体の起動」だけで決まる。env_hint="prod" もそのままダイアログ経路へ進む
-        # （未知 env は上の INVALID_ENV で弾く——prod は valid env として通す）。
-
-        # Cross-thread cancel: on timeout we cannot kill the dialog thread, but we
-        # can ask the Tk dialog to close itself (it polls this event via root.after,
-        # which is Tk-thread-safe). Without it a timed-out login would leave an
-        # orphan window that stacks on the next Connect.
-        cancel_event = threading.Event()
-
-        def _run() -> dict:
-            # All tkinter touches happen on this one dedicated thread (Tk() and
-            # mainloop() must share a thread; the Tk-probe runs here too).
-            if not _try_create_tk():
-                return {"success": False, "error_code": "NO_DISPLAY_AVAILABLE", "token": None}
-            try:
-                if venue == "tachibana":
-                    from engine.exchanges.tachibana_login_flow import run_dialog
-                    return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
-                from engine.exchanges.kabusapi_login_flow import run_dialog
-                return run_dialog(env_hint=env_hint, cancel_event=cancel_event)
-            finally:
-                # #133: a same-thread collect that (a) reclaims the _try_create_tk
-                # probe's Tk cycle — only unreachable now that _try_create_tk's frame is
-                # popped (teardown_tk destroyed it but cannot collect it from inside) —
-                # and (b) catches any late ref drop from the dialog's daemon auth thread
-                # that outlives run_dialog's own wrapper collect. Both finalize HERE, on
-                # this creating thread, never on a picker-fetch worker (Tcl_AsyncDelete).
-                gc.collect()
-
-        loop = asyncio.get_running_loop()
-        # Dedicated single-use executor: the dialog blocks on human input for up
-        # to the login timeout, so it must NOT share the default thread pool
-        # (which would starve other live work). Torn down in finally.
-        executor = futures.ThreadPoolExecutor(
-            max_workers=1, thread_name_prefix="venue-login-dialog"
-        )
+        if self._session is None:
+            return False, "VENUE_ADAPTER_NOT_CONFIGURED"
+        adapter = self._session.runner.adapter
+        loop = self._ensure_live_loop()
         try:
-            result = await asyncio.wait_for(
-                loop.run_in_executor(executor, _run),
-                timeout=_live_login_timeout_s(),
-            )
-        except asyncio.TimeoutError:
-            # Inner timeout (the subprocess path used to proc.kill() here). Report a
-            # distinct LOGIN_TIMEOUT instead of the generic VENUE_LOGIN_FAILED; the
-            # finally block signals the dialog to close.
-            logging.warning("venue login dialog timed out (venue=%s)", venue)
-            return False, "LOGIN_TIMEOUT", None
-        except Exception:
-            # The one tradeoff of dropping the subprocess is losing crash
-            # isolation: a Tk()/mainloop blow-up must degrade to an error_code,
-            # never take down the host process.
-            logging.exception("venue login dialog crashed (venue=%s)", venue)
-            return False, "VENUE_LOGIN_FAILED", None
-        finally:
-            # Signal the dialog to close on EVERY exit path — including a live-loop
-            # teardown CancelledError (BaseException, not caught above) and the
-            # success path (no-op: the dialog already returned). Without this a
-            # cancelled login leaves a non-daemon executor worker stuck in
-            # mainloop() → atexit join hang.
-            cancel_event.set()
-            executor.shutdown(wait=False)
+            if not adapter.is_logged_in:
+                login_fut = asyncio.run_coroutine_threadsafe(
+                    adapter.login(adapter_creds), loop,
+                )
+                login_fut.result(timeout=_live_login_timeout_s())
 
-        if not result.get("success"):
-            return False, result.get("error_code") or "AUTH_FAILED", None
-        token: Optional[str] = result.get("token") if venue == "kabu" else None
-        if venue == "kabu" and (not isinstance(token, str) or not token):
-            return False, "LOGIN_INVALID_RESPONSE", None
-        return True, "", token
+            if self.venue_sm is not None and self.venue_sm.current == "DISCONNECTED":
+                self.venue_sm.transition_to("AUTHENTICATING")
+            if self.venue_sm is not None and self.venue_sm.current == "AUTHENTICATING":
+                self.venue_sm.transition_to("CONNECTED")
+            # Phase 9 Step 4/7/9: now that the adapter is logged in, start the
+            # account sync (forced initial fetch_account sees a live session), the
+            # kabu health watchdog, and the instruments daily refresh (login-time
+            # persist, then 5:00 JST). Deferred from _start_live_components (pre-login).
+            self._start_account_sync_after_login()
+            self._start_health_watchdog_after_login()
+            self._start_instruments_scheduler_after_login()
+            # Arm clear-on-toggle: suppress stale errors from a prior session.
+            self._suppressed_error_baseline = self._resolve_live_last_error()
+            self._suppress_live_last_error = True
+            return True, ""
+        except ValueError as exc:
+            # adapter 層が定義する判別可能エラーは error_code として透過。
+            # それ以外の ValueError は VENUE_LOGIN_FAILED に丸める。
+            code = str(exc)
+            if code in _ADAPTER_ERROR_CODES:
+                logging.warning("venue_login adapter error: %s", code)
+                return False, code
+            logging.exception("venue_login finalize failed: %s", exc)
+            return False, "VENUE_LOGIN_FAILED"
+        except Exception as exc:
+            logging.exception("venue_login finalize failed: %s", exc)
+            return False, "VENUE_LOGIN_FAILED"
+
+    # --- #181 / ADR-0040: Unity uGUI modal-driven headless login RPCs ----------
+
+    def venue_login_form_init(self, venue_id, mode) -> dict:
+        """Prefill state for the Unity login modal (open + mode-switch re-derive).
+
+        Wraps the venue's ``build_form_init`` (ADR-0033: debug-build prefill only;
+        release/prod → empty). Returns plain values the modal seeds into its fields.
+        """
+        venue_lc = (venue_id or "").lower()
+        if venue_lc == "tachibana":
+            from engine.exchanges.tachibana_login_form_state import build_form_init
+            init = build_form_init(env_hint=mode or "demo")
+            return {
+                "venue": "TACHIBANA",
+                "initial_mode": init.initial_mode,
+                "auth_id_prefill": init.auth_id_prefill,
+                "key_path_prefill": init.key_path_prefill,
+            }
+        if venue_lc == "kabu":
+            from engine.exchanges.kabusapi_login_form_state import build_form_init
+            init = build_form_init(env_hint=mode or "verify")
+            return {
+                "venue": "KABU",
+                "initial_mode": "prod" if (mode or "verify") == "prod" else "verify",
+                "station_port": init.station_port,
+                "api_password_prefill": init.api_password_prefill,
+            }
+        return {"venue": (venue_id or "").upper(), "error_code": "UNKNOWN_VENUE"}
+
+    def venue_login_probe_station(self, venue_id, mode) -> dict:
+        """Probe whether the venue's local station/app is reachable (kabu 本体起動確認).
+
+        kabu: socket-probe 18080 (prod) / 18081 (verify) via ``probe_station``. Other
+        venues have no local station → ``running=True`` so the modal's OK-enable logic
+        stays uniform. Drives the modal's 再確認 button / open / mode-switch.
+        """
+        if (venue_id or "").lower() == "kabu":
+            from engine.exchanges.kabusapi_login_form_state import probe_station
+            port = 18080 if (mode or "verify") == "prod" else 18081
+            return {"venue": "KABU", "running": bool(probe_station(port=port)), "port": port}
+        return {"venue": (venue_id or "").upper(), "running": True, "port": 0}
+
+    def submit_venue_login(self, venue_id, mode, fields_json, secret) -> dict:
+        """Modal submit: validate → headless auth → (on success) finalize wiring.
+
+        Called once per form submit while the Unity modal is open; may be called
+        repeatedly (a failed attempt leaves the modal open to retry). No GUI is created
+        in Python (findings 0130/0131). Returns a dict the modal renders:
+        ``{success, error_code, status_text, allow_retry, venue_state}``.
+
+        ``fields_json``: JSON of non-secret fields ({auth_id,key_path} for tachibana,
+        {} for kabu). ``secret``: kabu API password (transient string built from the
+        modal's char[] buffer at the pythonnet boundary); "" for tachibana.
+        """
+        import json
+        from engine.exchanges.venue_login_headless import (
+            LoginSubmitFailure,
+            authenticate_kabu,
+            authenticate_tachibana,
+        )
+
+        venue_norm = (venue_id or "").upper()
+        venue_lc = venue_norm.lower()
+
+        def _result(success, error_code, status_text="", allow_retry=True) -> dict:
+            return {
+                "success": success,
+                "error_code": error_code,
+                "status_text": status_text,
+                "allow_retry": allow_retry,
+                "venue_state": self.venue_sm.current if self.venue_sm is not None else "DISCONNECTED",
+            }
+
+        # --- validate venue / env / fields (presenter logic; no auth yet) ------
+        if venue_lc not in _VALID_LOGIN_VENUES:
+            return _result(False, "UNKNOWN_VENUE", "対応していない venue です", allow_retry=False)
+        if mode not in _ENV_PER_VENUE.get(venue_lc, frozenset()):
+            return _result(False, "INVALID_ENV", "不正な環境指定です", allow_retry=False)
+
+        try:
+            fields = json.loads(fields_json) if fields_json else {}
+            if not isinstance(fields, dict):
+                fields = {}
+        except Exception:
+            fields = {}
+
+        if venue_lc == "tachibana":
+            from engine.exchanges.tachibana_login_form_state import validate_submission
+            auth_id = str(fields.get("auth_id", "") or "")
+            key_path = str(fields.get("key_path", "") or "")
+            err = validate_submission(auth_id, key_path, mode)
+            if err:
+                return _result(False, err, "認証 ID と秘密鍵ファイルを指定してください")
+        else:  # kabu
+            from engine.exchanges.kabusapi_login_form_state import (
+                KABU_STATION_NOT_RUNNING,
+                auth_failure_view,
+                probe_station,
+                validate_submission,
+            )
+            api_password = secret or ""
+            err = validate_submission(api_password)
+            if err:
+                return _result(False, err, "API パスワードを入力してください")
+            port = 18080 if mode == "prod" else 18081
+            if not probe_station(port=port):
+                view = auth_failure_view(KABU_STATION_NOT_RUNNING)
+                return _result(False, KABU_STATION_NOT_RUNNING, view.status_text, view.allow_retry)
+
+        # --- guards + factory (shared venue_login preamble) -------------------
+        guard = self._login_preamble(venue_norm)
+        if guard is not None:
+            return _result(False, guard, "", allow_retry=True)
+
+        # Idempotent retry: the C# host calls set_execution_mode(LiveManual) AFTER a
+        # successful submit; if THAT fails the modal stays open and the user may resubmit
+        # while Python is already CONNECTED to this venue. Mirror venue_login's already-
+        # connected no-op so the resubmit does not rebuild/tear down the live session.
+        if (self.venue_sm is not None
+                and self.venue_sm.current in ("CONNECTED", "SUBSCRIBED")
+                and self._resolve_live_last_error() is None):
+            return _result(True, "", "", allow_retry=False)
+
+        # --- start components + AUTHENTICATING + headless auth ----------------
+        try:
+            self._start_live_components(environment_hint=mode)
+        except Exception as exc:
+            logging.exception("submit_venue_login start components failed: %s", exc)
+            self._reset_after_login_failure()
+            return _result(False, "VENUE_LOGIN_FAILED", "ログインに失敗しました")
+        if self._session is None:
+            self._reset_after_login_failure()
+            return _result(False, "VENUE_ADAPTER_NOT_CONFIGURED", "venue アダプタが構成されていません")
+
+        if self.venue_sm is not None and self.venue_sm.current == "DISCONNECTED":
+            self.venue_sm.transition_to("AUTHENTICATING")
+
+        from engine.live.adapter import VenueCredentials
+        fut = None
+        try:
+            # _ensure_live_loop lives INSIDE the reset-guarded block: a raise here (after
+            # AUTHENTICATING was set) must still reset venue_sm, or it strands at
+            # AUTHENTICATING and ALREADY_AUTHENTICATING locks out every future login.
+            loop = self._ensure_live_loop()
+            if venue_lc == "tachibana":
+                fut = asyncio.run_coroutine_threadsafe(
+                    authenticate_tachibana(auth_id, key_path, mode), loop,
+                )
+                fut.result(timeout=_live_login_timeout_s())
+                adapter_creds = VenueCredentials(
+                    credentials_source="session_cache", environment_hint=mode,
+                )
+            else:
+                fut = asyncio.run_coroutine_threadsafe(
+                    authenticate_kabu(api_password, mode), loop,
+                )
+                token = fut.result(timeout=_live_login_timeout_s())
+                adapter_creds = VenueCredentials(
+                    credentials_source="prompt_result", environment_hint=mode, token=token,
+                )
+        except LoginSubmitFailure as failure:
+            self._reset_after_login_failure()
+            return _result(False, failure.error_code, failure.status_text, failure.allow_retry)
+        except futures.TimeoutError:
+            logging.warning("submit_venue_login auth timed out (venue=%s)", venue_lc)
+            # Best-effort cancel so an orphaned auth coroutine can't complete after we told
+            # the modal it timed out (a tachibana login would otherwise still save_session).
+            if fut is not None:
+                fut.cancel()
+            self._reset_after_login_failure()
+            return _result(False, "LOGIN_TIMEOUT", "ログインがタイムアウトしました。再試行してください")
+        except Exception as exc:
+            logging.exception("submit_venue_login auth failed (venue=%s): %s", venue_lc, exc)
+            self._reset_after_login_failure()
+            return _result(False, "VENUE_LOGIN_FAILED", "ログインに失敗しました")
+
+        # --- finalize (adapter.login + CONNECTED + bg components) -------------
+        # Guard the finalize too: _finalize_login dereferences the adapter and the live
+        # loop OUTSIDE its own try, so an unexpected raise here would otherwise strand
+        # venue_sm at AUTHENTICATING and lock out every future login.
+        try:
+            ok, error_code = self._finalize_login(adapter_creds)
+        except Exception as exc:
+            logging.exception("submit_venue_login finalize raised (venue=%s): %s", venue_lc, exc)
+            self._reset_after_login_failure()
+            return _result(False, "VENUE_LOGIN_FAILED", "ログインに失敗しました")
+        if not ok:
+            self._reset_after_login_failure()
+            return _result(False, error_code, f"ログインに失敗しました: {error_code}")
+        return _result(True, "", "", allow_retry=False)
+
+    def _reset_after_login_failure(self) -> None:
+        """Tear down a half-built session and clear a stuck AUTHENTICATING so the next
+        submit (the modal stays open) starts clean. Mirrors venue_login's _fail tail."""
+        if self._session is not None:
+            self._teardown_live_components()
+        if self.venue_sm is not None and self.venue_sm.current == "AUTHENTICATING":
+            try:
+                self.venue_sm.transition_to("ERROR")
+            except Exception:
+                pass
+            self.venue_sm.reset()
+
+    def _login_preamble(self, venue_id) -> Optional[str]:
+        """Shared venue guards for the modal submit path: unknown-venue, cross-venue
+        mismatch (no hot-swap while live), adapter-factory (re)build (ADR-0021 runtime
+        venue switch), and double-AUTHENTICATING. Returns an error_code to surface, or
+        None to proceed. venue_login keeps its own inline preamble (which additionally
+        handles cred_source-specific rejects + the idempotent already-connected no-op)."""
+        if venue_id not in self._KNOWN_VENUES:
+            return "UNKNOWN_VENUE"
+        bound_venue = self._live_venue_id.upper() if self._live_venue_id else None
+        live_session = self.venue_sm is not None and self.venue_sm.current in (
+            "AUTHENTICATING", "CONNECTED", "SUBSCRIBED", "RECONNECTING")
+        if bound_venue is not None and bound_venue != venue_id and live_session:
+            return "VENUE_MISMATCH"
+        if self._live_adapter_factory is None or bound_venue != venue_id:
+            try:
+                from engine.live.live_adapter_factory import build_live_adapter_factory
+                self._live_adapter_factory = build_live_adapter_factory(venue_id)
+            except Exception:
+                logging.warning(
+                    "[submit_venue_login] adapter factory build failed for venue_id=%r",
+                    venue_id, exc_info=True,
+                )
+                return "LIVE_ADAPTER_NOT_CONFIGURED"
+            self._live_venue_id = venue_id
+        if self.venue_sm is not None and self.venue_sm.current == "AUTHENTICATING":
+            return "ALREADY_AUTHENTICATING"
+        return None
 
     def venue_login(self, venue_id, credentials_source, environment_hint):
-        cred_source = credentials_source or "prompt"
+        # #181 / ADR-0040: "prompt" is retired; an empty source is now an explicit
+        # error rather than silently opening an (abolished) dialog.
+        cred_source = credentials_source or ""
         if cred_source not in self._KNOWN_CRED_SOURCES:
             return VenueSessionResult(
                 success=False, error_code="INVALID_CREDENTIALS_SOURCE",
@@ -759,109 +925,27 @@ class LiveLoopManager:
                 instruments_loaded=0,
             )
 
-        def _attempt(effective_source: str):
-            """Returns (handled: bool, error_code: str).
+        # #181 / ADR-0040: the interactive "prompt" source is gone — login UI now
+        # lives in Unity (submit_venue_login). venue_login only handles the
+        # non-interactive sources (env=MOCK / session_cache=startup re-login).
+        try:
+            self._start_live_components(environment_hint=env_hint)
+        except Exception as exc:
+            logging.exception("venue_login start components failed: %s", exc)
+            return _fail("VENUE_LOGIN_FAILED")
+        if self._session is None:
+            return _fail("VENUE_ADAPTER_NOT_CONFIGURED")
 
-            handled=True, error_code="" → success path
-            handled=True, error_code!="" → _fail(error_code)
-            handled=False, error_code="NO_DISPLAY_AVAILABLE" → retry with "env" (debug only)
-            """
-            try:
-                self._start_live_components(environment_hint=env_hint)
-                if self._session is None:
-                    return True, "VENUE_ADAPTER_NOT_CONFIGURED"
-                runner = self._session.runner
-                adapter = runner.adapter
-                loop = self._ensure_live_loop()
+        from engine.live.adapter import VenueCredentials
+        try:
+            adapter_creds = VenueCredentials(
+                credentials_source=cred_source, environment_hint=env_hint,
+            )
+        except Exception:
+            return _fail("INVALID_CREDENTIALS_SOURCE")
 
-                if effective_source == "prompt":
-                    if self.venue_sm is not None and self.venue_sm.current == "DISCONNECTED":
-                        self.venue_sm.transition_to("AUTHENTICATING")
-
-                    if venue_id == "TACHIBANA":
-                        effective_env = env_hint if env_hint in ("demo", "prod") else "demo"
-                    else:
-                        effective_env = env_hint if env_hint in ("verify", "prod") else "verify"
-
-                    fut = asyncio.run_coroutine_threadsafe(
-                        self._handle_prompt_login(venue_id, effective_env),
-                        loop,
-                    )
-                    # TODO(将来): VenueLoginStream で逐次 push できるようにする
-                    success, ec, token = fut.result(timeout=_live_login_timeout_s() + 10)
-
-                    if not success:
-                        if ec == "NO_DISPLAY_AVAILABLE" and IS_DEBUG_BUILD:
-                            return False, ec  # caller retries with "env"
-                        return True, ec
-
-                    from engine.live.adapter import VenueCredentials
-                    if venue_id == "TACHIBANA":
-                        adapter_creds = VenueCredentials(
-                            credentials_source="session_cache",
-                            environment_hint=effective_env,
-                        )
-                    else:
-                        adapter_creds = VenueCredentials(
-                            credentials_source="prompt_result",
-                            environment_hint=effective_env,
-                            token=token,
-                        )
-                else:
-                    from engine.live.adapter import VenueCredentials
-                    adapter_creds = VenueCredentials(
-                        credentials_source=effective_source,
-                        environment_hint=env_hint,
-                    )
-
-                if not adapter.is_logged_in:
-                    login_fut = asyncio.run_coroutine_threadsafe(
-                        adapter.login(adapter_creds), loop,
-                    )
-                    login_fut.result(timeout=_live_login_timeout_s())
-
-                if self.venue_sm is not None and self.venue_sm.current == "DISCONNECTED":
-                    self.venue_sm.transition_to("AUTHENTICATING")
-                if self.venue_sm is not None and self.venue_sm.current == "AUTHENTICATING":
-                    self.venue_sm.transition_to("CONNECTED")
-                # Phase 9 Step 4: the adapter is now logged in — start the account
-                # sync (deferred from _start_live_components_async, which runs before
-                # login) so its forced initial fetch_account() sees a live session.
-                self._start_account_sync_after_login()
-                # Phase 9 Step 7: start the kabu health watchdog now that the
-                # adapter is logged in (no-op for Tachibana/mock, which have none).
-                self._start_health_watchdog_after_login()
-                # Phase 9 Step 9: start the instruments daily refresh. Its forced
-                # initial fetch+persist writes the parquet store now that the adapter
-                # is logged in (= login-time persist), then refreshes at 5:00 JST.
-                self._start_instruments_scheduler_after_login()
-                # Arm clear-on-toggle: suppress stale errors from a prior session.
-                self._suppressed_error_baseline = self._resolve_live_last_error()
-                self._suppress_live_last_error = True
-                return True, ""
-            except ValueError as exc:
-                # adapter 層が定義する判別可能エラーは error_code として透過。
-                # それ以外の ValueError は VENUE_LOGIN_FAILED に丸める。
-                code = str(exc)
-                if code in _ADAPTER_ERROR_CODES:
-                    logging.warning("venue_login adapter error (source=%s): %s", effective_source, code)
-                    return True, code
-                logging.exception("venue_login attempt failed (source=%s): %s", effective_source, exc)
-                return True, "VENUE_LOGIN_FAILED"
-            except Exception as exc:
-                logging.exception("venue_login attempt failed (source=%s): %s", effective_source, exc)
-                return True, "VENUE_LOGIN_FAILED"
-
-        handled, error_code = _attempt(cred_source)
-        if not handled and cred_source == "prompt":
-            if IS_DEBUG_BUILD:
-                if self._session is not None:
-                    self._teardown_live_components()
-                handled, error_code = _attempt("env")
-            else:
-                error_code = "NO_DISPLAY_AVAILABLE"
-
-        if error_code:
+        ok, error_code = self._finalize_login(adapter_creds)
+        if not ok:
             return _fail(error_code)
 
         return VenueSessionResult(

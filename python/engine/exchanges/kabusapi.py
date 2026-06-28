@@ -165,8 +165,8 @@ class KabuStationAdapter:
             self._exchange_ambiguity_warned.clear()
             self._token = creds.token
             return
-        if source == "prompt":
-            raise NotImplementedError("prompt credentials_source not yet supported for kabu")
+        # #181/ADR-0040: "prompt" is retired; kabu modal login passes the headless token via
+        # prompt_result above. VenueCredentials.credentials_source (a Literal) can't be "prompt".
         if source != "env":
             raise ValueError(f"unknown credentials_source: {source!r}")
 

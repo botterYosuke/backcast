@@ -25,6 +25,7 @@ public sealed class Win32FileDialog : IFileDialog
     const int OFN_EXPLORER        = 0x00080000;
 
     const string PyFilter = "Strategy (*.py)\0*.py\0All files (*.*)\0*.*\0\0";
+    const string PemFilter = "Private key (*.pem)\0*.pem\0All files (*.*)\0*.*\0\0";
 
     public string SaveStrategyAs(string initialDir, string initialFileName)
     {
@@ -36,6 +37,14 @@ public sealed class Win32FileDialog : IFileDialog
     {
         return Show(save: false, initialDir: initialDir, initialFile: null,
                     flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER);
+    }
+
+    // #181 / ADR-0040: venue login modal の秘密鍵「参照…」（.pem ピッカー）。
+    public string OpenPrivateKey(string initialDir)
+    {
+        return Show(save: false, initialDir: initialDir, initialFile: null,
+                    flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_EXPLORER,
+                    filter: PemFilter, title: "秘密鍵 (PEM) を選択", defExt: "pem");
     }
 
     // #137 S4 (findings 0107 D4): native FOLDER picker for the Settings「Data」DuckDB root [...] button.
@@ -86,7 +95,8 @@ public sealed class Win32FileDialog : IFileDialog
         Application.platform == RuntimePlatform.WindowsPlayer ||
         Application.platform == RuntimePlatform.WindowsEditor;
 
-    static string Show(bool save, string initialDir, string initialFile, int flags)
+    static string Show(bool save, string initialDir, string initialFile, int flags,
+                       string filter = null, string title = null, string defExt = null)
     {
         if (!IsWindows) { Debug.LogWarning("[FILEDIALOG] native picker is Windows-only -> cancelled."); return null; }
 
@@ -106,13 +116,13 @@ public sealed class Win32FileDialog : IFileDialog
             {
                 lStructSize = Marshal.SizeOf(typeof(OpenFileName)),
                 hwndOwner = GetActiveWindow(),
-                lpstrFilter = PyFilter,
+                lpstrFilter = filter ?? PyFilter,
                 nFilterIndex = 1,
                 lpstrFile = buf,
                 nMaxFile = bufChars,
                 lpstrInitialDir = initialDir,
-                lpstrTitle = save ? "Save Strategy As" : "Open Strategy",
-                lpstrDefExt = "py",
+                lpstrTitle = title ?? (save ? "Save Strategy As" : "Open Strategy"),
+                lpstrDefExt = defExt ?? "py",
                 Flags = flags,
             };
 

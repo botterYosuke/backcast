@@ -26,7 +26,7 @@ def _demo_prefill() -> tuple[str, str]:
     Returns ``(auth_id, key_path)`` from ``DEV_TACHIBANA_AUTH_ID_DEMO`` /
     ``DEV_TACHIBANA_PRIVATE_KEY_PATH_DEMO``. Returns ``("", "")`` in release
     builds (``IS_DEBUG_BUILD`` False) or when the keys are absent. The env read
-    lives here in the pure presenter so ``run_dialog`` stays env-free
+    lives here in the pure presenter so the login surface stays env-free
     (PRODGATE-08); never reads prod keys (D2).
     """
     from engine.live._build_mode import IS_DEBUG_BUILD
@@ -54,8 +54,9 @@ def build_form_init(env_hint: str) -> FormInit:
     env_hint だけで決める (prod / それ以外は demo)。
 
     ADR-0033: demo モードの認証ID・秘密鍵パスは debug ビルドのとき .env から prefill
-    する (D1)。prod モードは prefill せず常にユーザー入力 (D2)。run_dialog はラジオ切替の
-    たびに build_form_init(mode) を呼び直して prefill を再導出する (demo→値 / prod→空)。
+    する (D1)。prod モードは prefill せず常にユーザー入力 (D2)。#181/ADR-0040: Unity モーダルは
+    モード切替のたびに venue_login_form_init→build_form_init(mode) を呼び直して prefill を
+    再導出する (demo→値 / prod→空)。
     """
     initial_mode = "prod" if env_hint == "prod" else "demo"
     auth_id_prefill, key_path_prefill = _demo_prefill() if initial_mode == "demo" else ("", "")

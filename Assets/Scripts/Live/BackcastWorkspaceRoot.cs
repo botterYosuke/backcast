@@ -295,6 +295,15 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     volatile int _venueLoginResult;         // worker→main: 0 none / 1 ok / 2 fail (venue_login)
     volatile string _venueLoginError;       // worker→main: error_code on a failed venue login
     volatile bool _venueLogoutFailed;       // worker→main: venue_logout returned failure
+    // #181 / ADR-0040: venue ログイン uGUI モーダル（旧 tkinter ダイアログ置換・別 OS ウィンドウを出さない）。
+    // 頭脳は plain C# の controller、view は overlay。worker(form_init/probe/submit)→main の受け渡しは _vlLock で保護。
+    readonly VenueLoginModalController _venueLoginModal = new VenueLoginModalController();
+    VenueLoginModalOverlay _venueLoginOverlay;
+    bool _vlOpenPrev;
+    readonly object _vlLock = new object();
+    bool _vlPendingInitSet; VenueLoginFormInit _vlPendingInit; bool _vlPendingInitIsOpen;
+    bool _vlPendingProbeSet; bool _vlPendingProbeRunning; int _vlPendingProbePort;
+    bool _vlPendingResultSet; VenueLoginSubmitResult _vlPendingResult;
     // #112 ADR-0025 D3: a per-cell-RUN live launch (register→start) RPC result, marshalled worker→main.
     volatile bool _liveStartResultPending;  // set last after the value fields (publish ordering)
     bool _liveStartOk;
@@ -636,6 +645,20 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         _modifyOverlay.Build(_font);
         _modifyOverlay.ConfirmClicked += OnModifyConfirm;
         _modifyOverlay.CancelClicked += OnModifyCancel;
+
+        // #181 / ADR-0040: venue ログイン uGUI モーダル（旧 tkinter ダイアログ置換）。Settings ▸ Connect
+        // Tachibana/kabu から開き、headless 認証（submit_venue_login）を駆動する。別 OS ウィンドウは出さない。
+        var venueLoginGo = new GameObject("VenueLoginModalOverlay");
+        venueLoginGo.transform.SetParent(transform, false);
+        _venueLoginOverlay = venueLoginGo.AddComponent<VenueLoginModalOverlay>();
+        _venueLoginOverlay.Build(_font);
+        _venueLoginOverlay.CharTyped += OnVenueLoginChar;
+        _venueLoginOverlay.BackspacePressed += OnVenueLoginBackspace;
+        _venueLoginOverlay.ModeSelected += OnVenueLoginMode;
+        _venueLoginOverlay.BrowseClicked += OnVenueLoginBrowse;
+        _venueLoginOverlay.RecheckClicked += OnVenueLoginRecheck;
+        _venueLoginOverlay.SubmitClicked += OnVenueLoginSubmit;
+        _venueLoginOverlay.CancelClicked += OnVenueLoginCancel;
 
         // #89: quit-confirm overlay + pure controller (findings 0068). On OS close with a dirty
         // document, wantsToQuit blocks and this modal asks Save / Don't Save / Cancel. NOT wired in
@@ -1516,6 +1539,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         bool newSecret = _host.DrainLiveEvents();
         DriveSecretModal(newSecret);
+        DriveVenueLoginModal();  // #181 / ADR-0040: venue ログイン uGUI モーダル（worker→main 受け渡し + view 同期）
         RefreshLiveTiles();
         DriveOrderTicket();
         DriveStrategyEditor();
@@ -2288,12 +2312,17 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     {
         if (!CanConnectConfigured()) return;
         string env = _venueMenu.EnvironmentHintFor(_venue);
-        VenueConnectRequest req = _venueMenu.BuildConnectRequest(_venue, env);
-        if (_venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (no prompt dialog)
-        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint, (ok, ec) =>
+        // MOCK = credential-less dev venue → env login (no modal). TACHIBANA/KABU open the #181/ADR-0040
+        // uGUI login modal (no tkinter); its submit drives the login ack through DriveVenueLoginModal.
+        if (_venue == "MOCK")
         {
-            _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;   // marshalled to Conn in Update
-        });
+            _host.VenueLogin("MOCK", "env", env, (ok, ec) =>
+            {
+                _loginAckOk = ok; _loginAckEc = ec ?? ""; _loginAckPending = true;   // marshalled to Conn in Update
+            });
+            return;
+        }
+        OpenVenueLoginModal(_venue, env);
     }
 
     // Gate for the harness connect affordance. MOCK is the credential-less dev venue (always connectable
@@ -2969,16 +2998,159 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void OnVenueConnect(string venue, string env)
     {
         _venue = venue;
-        VenueConnectRequest req = _venueMenu.BuildConnectRequest(venue, env);
-        if (venue == "MOCK") req.CredentialsSource = "env";   // credential-less dev venue (findings 0027 D2)
-        _host.VenueLogin(req.Venue, req.CredentialsSource, req.EnvironmentHint,
-            (ok, ec) => { _venueLoginError = ec; _venueLoginResult = ok ? 1 : 2; });
-        _menuBarView?.ShowMessage(venue == "MOCK" ? "connecting MOCK…" : "login (enter credentials)…");
-        // #171 (ADR-0039): latch the venue-live goal. Closes on the poll that turns venue_state live — for a
-        // second-password connect that is AFTER the secret modal login completes (the goal survives across the
-        // secret interaction; a password cancel / login failure never reaches venue-live and drops the latch
-        // via NotifyFailed in DriveFooter).
+        // MOCK = credential-less dev venue → straight to env login (no modal; findings 0027 D2).
+        if (venue == "MOCK")
+        {
+            _host.VenueLogin("MOCK", "env", env,
+                (ok, ec) => { _venueLoginError = ec; _venueLoginResult = ok ? 1 : 2; });
+            _menuBarView?.ShowMessage("connecting MOCK…");
+            _settingsAutoClose?.ArmVenueConnect();
+            return;
+        }
+        // #181 / ADR-0040: TACHIBANA / KABU open the Unity uGUI login modal (no tkinter, no OS window).
+        // The modal prefills via form_init and (kabu) probes the station; OK runs headless auth
+        // (submit_venue_login). On success the modal closes and DriveVenueLoginModal raises the login ack.
+        string mode = string.IsNullOrEmpty(env) ? _venueMenu.EnvironmentHintFor(venue) : env;
+        OpenVenueLoginModal(venue, mode);
+        // #171 (ADR-0039): latch the venue-live goal. The modal login completes AFTER the user submits; the
+        // goal survives the modal interaction. A cancel / login failure never reaches venue-live and drops the
+        // latch via NotifyFailed (OnVenueLoginCancel / DriveVenueLoginModal failure path).
         _settingsAutoClose?.ArmVenueConnect();
+    }
+
+    // #181 / ADR-0040: open the venue-login modal — prefill via form_init (DriveVenueLoginModal consumes the
+    // handoff and calls controller.Open on main; kabu also probes the station after Open).
+    void OpenVenueLoginModal(string venue, string mode)
+    {
+        _menuBarView?.ShowMessage("login (enter credentials)…");
+        _host.VenueLoginFormInit(venue, mode, init =>
+        {
+            lock (_vlLock) { _vlPendingInit = init; _vlPendingInitIsOpen = true; _vlPendingInitSet = true; }
+        });
+    }
+
+    // venue ログインモーダルの worker→main 受け渡しを消費し、view を controller に同期する（毎フレーム）。
+    void DriveVenueLoginModal()
+    {
+        if (_venueLoginOverlay == null) return;
+
+        bool requestKabuProbe = false; string probeVenue = null, probeMode = null;
+        lock (_vlLock)
+        {
+            if (_vlPendingInitSet)
+            {
+                _vlPendingInitSet = false;
+                VenueLoginFormInit init = _vlPendingInit;
+                if (_vlPendingInitIsOpen)
+                {
+                    _venueLoginModal.Open(init.Venue, init);
+                    // Secret discipline: drop any focused InputField so kabu onTextInput keystrokes don't
+                    // ALSO land in its plaintext .text (mirrors DriveSecretModal).
+                    if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
+                }
+                else
+                {
+                    _venueLoginModal.ApplyModeRefresh(init.InitialMode, init);
+                }
+                if (!_venueLoginModal.IsKabu)
+                {
+                    _venueLoginOverlay.SetAuthIdText(_venueLoginModal.AuthId);
+                    _venueLoginOverlay.SetKeyPathText(_venueLoginModal.KeyPath);
+                }
+                else { requestKabuProbe = true; probeVenue = _venueLoginModal.Venue; probeMode = _venueLoginModal.Mode; }
+            }
+            if (_vlPendingProbeSet)
+            {
+                _vlPendingProbeSet = false;
+                _venueLoginModal.SetStationProbe(_vlPendingProbeRunning, _vlPendingProbePort);
+            }
+            if (_vlPendingResultSet)
+            {
+                _vlPendingResultSet = false;
+                VenueLoginSubmitResult r = _vlPendingResult;
+                _venueLoginModal.ApplyResult(r);
+                if (r.Success)
+                {
+                    // Reuse the existing login-ack path (DriveFooter) to update the poll-canonical Conn VM.
+                    _venueLoginError = ""; _venueLoginResult = 1;
+                    _menuBarView?.ShowMessage(null);
+                }
+                else
+                {
+                    _menuBarView?.ShowMessage("login failed: " + r.ErrorCode);
+                }
+            }
+        }
+        // Probe is fired AFTER Open so its result isn't wiped by Open's StationRunning reset (race-free).
+        if (requestKabuProbe) RequestVenueProbe(probeVenue, probeMode);
+
+        bool open = _venueLoginModal.IsOpen;
+        if (open != _vlOpenPrev) { _venueLoginOverlay.SetVisible(open); _vlOpenPrev = open; }
+        if (open)
+        {
+            if (!_venueLoginModal.IsKabu)
+            {
+                _venueLoginModal.SetAuthId(_venueLoginOverlay.AuthIdText);
+                _venueLoginModal.SetKeyPath(_venueLoginOverlay.KeyPathText);
+            }
+            _venueLoginOverlay.Reflect(_venueLoginModal);
+        }
+    }
+
+    void RequestVenueProbe(string venue, string mode)
+    {
+        if (venue != "KABU") return;
+        _host.VenueLoginProbeStation(venue, mode, (running, port) =>
+        {
+            lock (_vlLock) { _vlPendingProbeRunning = running; _vlPendingProbePort = port; _vlPendingProbeSet = true; }
+        });
+    }
+
+    void OnVenueLoginChar(char c) => _venueLoginModal.AppendSecretChar(c);
+    void OnVenueLoginBackspace() => _venueLoginModal.BackspaceSecret();
+
+    void OnVenueLoginMode(string mode)
+    {
+        // Re-derive prefill / port for the new mode (form_init); DriveVenueLoginModal applies it + re-probes.
+        string venue = _venueLoginModal.Venue;
+        _host.VenueLoginFormInit(venue, mode, init =>
+        {
+            lock (_vlLock) { _vlPendingInit = init; _vlPendingInitIsOpen = false; _vlPendingInitSet = true; }
+        });
+    }
+
+    void OnVenueLoginBrowse()
+    {
+        string picked = _fileDialog.OpenPrivateKey(InitialDir());
+        if (!string.IsNullOrEmpty(picked))
+        {
+            _venueLoginOverlay.SetKeyPathText(picked);
+            _venueLoginModal.SetKeyPath(picked);
+        }
+    }
+
+    void OnVenueLoginRecheck() => RequestVenueProbe(_venueLoginModal.Venue, _venueLoginModal.Mode);
+
+    void OnVenueLoginSubmit()
+    {
+        if (!_venueLoginModal.CanSubmit()) return;
+        _venueLoginModal.SetBusy(true);
+        _venueLoginModal.SetStatus("Authenticating…");
+        string venue = _venueLoginModal.Venue;
+        string mode = _venueLoginModal.Mode;
+        string fieldsJson = _venueLoginModal.BuildFieldsJson();
+        char[] secret = _venueLoginModal.TakeSecretTransient();   // host zeroizes it after the RPC returns
+        _host.SubmitVenueLogin(venue, mode, fieldsJson, secret, r =>
+        {
+            lock (_vlLock) { _vlPendingResult = r; _vlPendingResultSet = true; }
+        });
+    }
+
+    void OnVenueLoginCancel()
+    {
+        _venueLoginModal.Cancel();
+        _menuBarView?.ShowMessage(null);
+        _settingsAutoClose?.NotifyFailed();   // cancel → drop the venue-live latch (Settings stays open)
     }
 
     void OnVenueDisconnect()

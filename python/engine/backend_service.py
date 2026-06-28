@@ -178,7 +178,9 @@ class BackendService:
         environment_hint: Optional[str],
     ) -> dict:
         try:
-            result = self._srv.venue_login(venue_id, credentials_source or "prompt", environment_hint or "")
+            # #181/ADR-0040: "prompt" is retired; an empty source is an explicit error
+            # (orchestrator → INVALID_CREDENTIALS_SOURCE), not a silent dialog default.
+            result = self._srv.venue_login(venue_id, credentials_source or "", environment_hint or "")
         except RuntimeError as exc:
             return {"success": False, "error_code": "INPROC_ABORT", "venue_state": "", "instruments_loaded": 0, "detail": str(exc)}
         except Exception as exc:
@@ -189,6 +191,29 @@ class BackendService:
             "venue_state": result.venue_state,
             "instruments_loaded": result.instruments_loaded,
         }
+
+    def venue_login_form_init(self, venue_id: str, mode: str) -> dict:
+        """#181/ADR-0040: prefill state for the Unity login modal (open / mode-switch)."""
+        try:
+            return self._srv.venue_login_form_init(venue_id, mode or "")
+        except Exception as exc:
+            return {"error_code": "INPROC_ERROR", "detail": str(exc)}
+
+    def venue_login_probe_station(self, venue_id: str, mode: str) -> dict:
+        """#181/ADR-0040: probe the venue's local station (kabu 本体起動確認)."""
+        try:
+            return self._srv.venue_login_probe_station(venue_id, mode or "")
+        except Exception as exc:
+            return {"running": False, "port": 0, "error_code": "INPROC_ERROR", "detail": str(exc)}
+
+    def submit_venue_login(self, venue_id: str, mode: str, fields_json: str, secret: str) -> dict:
+        """#181/ADR-0040: modal submit → validate → headless auth → finalize."""
+        try:
+            return self._srv.submit_venue_login(venue_id, mode or "", fields_json or "", secret or "")
+        except RuntimeError as exc:
+            return {"success": False, "error_code": "INPROC_ABORT", "status_text": "内部エラー", "allow_retry": True, "detail": str(exc)}
+        except Exception as exc:
+            return {"success": False, "error_code": "INPROC_ERROR", "status_text": "内部エラー", "allow_retry": True, "detail": str(exc)}
 
     def venue_logout(self) -> dict:
         return _call_ack(self._srv.venue_logout)

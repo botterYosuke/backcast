@@ -17,7 +17,9 @@ from engine.exchanges.kabusapi_auth import (
     KabuConnectionError,
     KabuTokenExpiredError,
 )
-from engine.exchanges.kabusapi_login_flow import _map_exception
+# #181/ADR-0040: the kabu exception→code mapping moved from the retired
+# kabusapi_login_flow (tkinter dialog) to the headless auth module.
+from engine.exchanges.venue_login_headless import _map_kabu_exception as _map_exception
 from engine.exchanges.kabusapi_login_form_state import (
     AUTH_FAILED,
     KABU_API_DISABLED,

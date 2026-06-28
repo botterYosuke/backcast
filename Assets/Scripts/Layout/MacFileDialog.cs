@@ -34,6 +34,19 @@ public sealed class MacFileDialog : IFileDialog
 #endif
     }
 
+    // #181 / ADR-0040: venue login modal の秘密鍵「参照…」（.pem ピッカー）。macOS は出荷外なので Editor
+    // 経路で十分（findings 0130/0131 §HITL）。Editor 外は graceful no-op（null）。
+    public string OpenPrivateKey(string initialDir)
+    {
+#if UNITY_EDITOR
+        string p = EditorUtility.OpenFilePanel("秘密鍵 (PEM) を選択", initialDir ?? "", "pem");
+        return string.IsNullOrEmpty(p) ? null : p;
+#else
+        Debug.LogWarning("[FILEDIALOG] macOS native key picker is Editor-only -> cancelled.");
+        return null;
+#endif
+    }
+
     // One funnel for Open and Save (mirrors Win32FileDialog.Show): a single off-Editor no-op and a
     // single ""→null cancel normalisation. Save As passes the suggested name WITHOUT its extension
     // because EditorUtility.SaveFilePanel re-appends "py"; a name that already ends in .py would round

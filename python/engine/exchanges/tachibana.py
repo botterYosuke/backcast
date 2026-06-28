@@ -241,19 +241,9 @@ class TachibanaAdapter:
                 raise
             self._ensure_ec_stream()
             return
-        if source == "prompt":
-            # The prompt UI is owned by the ORCHESTRATOR, not the adapter:
-            # LiveLoopManager._handle_prompt_login runs the tkinter dialog
-            # in-process on a dedicated thread and persists the session to disk,
-            # then re-invokes this adapter with credentials_source="session_cache".
-            # The adapter must NOT launch the dialog itself — doing so via
-            # asyncio.to_thread on the shared default executor reintroduced the
-            # pool-exhaustion + close-on-timeout hang that #122 removed. Mirrors
-            # the kabu adapter, which also rejects "prompt" at this boundary.
-            raise NotImplementedError(
-                "prompt credentials_source is owned by the orchestrator, not the "
-                "tachibana adapter (use session_cache)"
-            )
+        # #181/ADR-0040: the interactive "prompt" source is retired (login UI moved to the
+        # Unity uGUI modal → headless auth → session_cache). VenueCredentials.credentials_source
+        # is a Literal that no longer admits "prompt", so the adapter only sees env/session_cache.
         if source != "env":
             raise ValueError(f"unknown credentials_source: {source!r}")
 

@@ -7,7 +7,7 @@
 > 操作一覧表に必ず載っている。各台本がそのサーフェスの正本で、本 INDEX は件数の集計のみを持つ（drift を避けるため
 > 行の中身は各台本を正とする）。
 
-## Surface E2E（20 本）
+## Surface E2E（21 本）
 
 > #125–#128（ADR-0026・findings 0102）: **SettingsDialogE2ERunner** 新設（SETTINGS-01..09＝modal shell / ESC-guard /
 > z-order / chrome+3 section / venue 表面）。**MenuBar** の Venue dropdown 退役（MENU-10 対象外・MENU-11/14 を SETTINGS-08 へ移設・
@@ -28,6 +28,13 @@
 > #179（findings 0128）: `[m]` Add Markdown ボタン——**StrategyEditorNotebook** に STRATEGY-66（`[m]` が `mo.md` 種セル＋窓付き `import marimo as mo`
 > セルを冪等に用意・[m]×2 で import 増えない・hardened `DefinesMoImport` が combined import 再利用＋markdown 本文の import 行を誤検出しない）追加。
 > runtime「素 mo が ▶ で NameError しない」半分は Python `test_notebook_markdown_cell.py`（同 `IncrementalNotebookSession` seam・import セル抜きで NameError＝RED litmus）。実画素 markdown レンダは HITL（STRATEGY-18）。
+>
+> #181（ADR-0040・findings 0131）: venue ログインを Unity uGUI モーダル化し tkinter を廃止（findings 0130 macOS crash の構造的解消）——
+> **VenueLoginModalE2ERunner** 新設（VLOGIN-MODAL-01..09＝char[] secret 規律 / OK gate / fields JSON / secret transient+zeroize /
+> 結果表示+再試行 / mode 再導出 / 本体起動 probe / PEM ピッカー seam / submit→result roundtrip〔Python-FREE fake executor〕。
+> VLOGIN-MODAL-10/11＝実 venue 認証・実表示は HITL）。headless 認証半分は Python `test_venue_login_headless.py`（submit/probe/
+> form_init・`PRODGATE-01` 移管）。findings 0130 の macOS RED gate は「login 経路が tkinter を import/Tk しない」へ更新し
+> xfail-strict を撤去して enforcing 化。旧 `test_inproc_prompt_login` / TKTEARDOWN（#133-135・Tcl_AsyncDelete）は crash クラス消滅で廃止。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -51,6 +58,7 @@
 | [ReplayRunResultTileE2ERunner](./ReplayRunResultTileE2ERunner.md) ✅ | `RRT-01..10` (06=D3 anti-stale, 06T=telemetry-only, 07=no-persist, 08=× latch, 09A/09B=対称再 arm, 10=screen-anchored) | 14 | 12 | 0 | 0 | 2 | 0 |
 | [KabuLiveChartRenderE2ERunner](./KabuLiveChartRenderE2ERunner.md) ✅ | `CHARTRENDER-01..05` | 5 | 5 | 0 | 0 | 0 | 0 |
 | [AccountSummaryBarE2ERunner](./AccountSummaryBarE2ERunner.md) ✅ | `ASB-01..16` | 16 | 16 | 0 | 0 | 0 | 0 |
+| [VenueLoginModalE2ERunner](./VenueLoginModalE2ERunner.md) ✅ | `VLOGIN-MODAL-01..11` | 11 | 9 | 0 | 0 | 2 | 0 |
 
 ## Journey E2E（6 本・85 行）
 

@@ -677,6 +677,140 @@ public sealed class WorkspaceEngineHost
         }) { IsBackground = true, Name = "WorkspaceVenueLogin" }.Start();
     }
 
+    // ---- #181 / ADR-0040: Unity uGUI modal-driven headless login RPCs --------------------
+    // The login GUI lives in Unity now (no tkinter). The modal drives these three: form_init
+    // (prefill), probe_station (kabu 本体起動確認), and submit (validate → headless auth →
+    // finalize). All run off-main under Py.GIL; the result callback fires on the WORKER thread,
+    // so the root marshals to main (DriveVenueLoginModal) before touching any VM/overlay.
+
+    // venue_login_form_init → prefill the modal (open / mode-switch re-derive). Best-effort:
+    // a failure yields a default init (empty prefill) so the modal still opens.
+    public void VenueLoginFormInit(string venue, string mode, Action<VenueLoginFormInit> onResult)
+    {
+        var init = new VenueLoginFormInit { Venue = (venue ?? "").ToUpperInvariant(), InitialMode = mode ?? "" };
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady)) { onResult?.Invoke(init); return; }
+        new Thread(() =>
+        {
+            try
+            {
+                using (Py.GIL())
+                using (PyObject res = _server.InvokeMethod("venue_login_form_init",
+                           new PyString(venue), new PyString(mode ?? "")))
+                {
+                    init.InitialMode = _DictStr(res, "initial_mode", init.InitialMode);
+                    init.AuthIdPrefill = _DictStr(res, "auth_id_prefill", "");
+                    init.KeyPathPrefill = _DictStr(res, "key_path_prefill", "");
+                    init.StationPort = _DictInt(res, "station_port", 0);
+                    init.ApiPasswordPrefill = _DictStr(res, "api_password_prefill", "");
+                }
+            }
+            catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] venue_login_form_init error: " + e.Message); }
+            onResult?.Invoke(init);
+        }) { IsBackground = true, Name = "VenueLoginFormInit" }.Start();
+    }
+
+    // venue_login_probe_station → kabu 本体起動確認（再確認/open/mode-switch）。probe 不能なら running=true
+    // を返す（非 kabu と同じ・OK 有効判定を塞がない）。
+    public void VenueLoginProbeStation(string venue, string mode, Action<bool, int> onResult)
+    {
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady)) { onResult?.Invoke(true, 0); return; }
+        new Thread(() =>
+        {
+            bool running = true; int port = 0;
+            try
+            {
+                using (Py.GIL())
+                using (PyObject res = _server.InvokeMethod("venue_login_probe_station",
+                           new PyString(venue), new PyString(mode ?? "")))
+                {
+                    running = _DictBool(res, "running", true);
+                    port = _DictInt(res, "port", 0);
+                }
+            }
+            catch (Exception e) { Debug.LogWarning("[WorkspaceEngineHost] venue_login_probe_station error: " + e.Message); }
+            onResult?.Invoke(running, port);
+        }) { IsBackground = true, Name = "VenueLoginProbe" }.Start();
+    }
+
+    // submit_venue_login → validate → headless auth → finalize. On success set_execution_mode(LiveManual)
+    // (mirrors VenueLogin). SECRET 規律: the kabu API password arrives as a char[] (no managed string in the
+    // modal); the transient string built here at the pythonnet boundary is the irreducible plaintext, and the
+    // caller-owned char[] is zeroized the moment the RPC returns (mirrors LiveRpcLanes.CallSubmitSecret).
+    public void SubmitVenueLogin(string venue, string mode, string fieldsJson, char[] secret,
+                                 Action<VenueLoginSubmitResult> onResult)
+    {
+        if (Volatile.Read(ref _closing) || !Volatile.Read(ref _serverReady))
+        {
+            if (secret != null) Array.Clear(secret, 0, secret.Length);
+            onResult?.Invoke(new VenueLoginSubmitResult { Success = false, ErrorCode = "server not ready", StatusText = "サーバ準備中です", AllowRetry = true });
+            return;
+        }
+        if (Volatile.Read(ref _loginRunning))
+        {
+            if (secret != null) Array.Clear(secret, 0, secret.Length);
+            onResult?.Invoke(new VenueLoginSubmitResult { Success = false, ErrorCode = "login in flight", StatusText = "ログイン処理中です", AllowRetry = true });
+            return;
+        }
+        Volatile.Write(ref _loginRunning, true);
+        new Thread(() =>
+        {
+            var result = new VenueLoginSubmitResult { Success = false, ErrorCode = "", StatusText = "", AllowRetry = true };
+            try
+            {
+                using (Py.GIL())
+                {
+                    string transient = new string(secret ?? Array.Empty<char>());
+                    using (var pv = new PyString(venue))
+                    using (var pm = new PyString(mode ?? ""))
+                    using (var pf = new PyString(fieldsJson ?? "{}"))
+                    using (var ps = new PyString(transient))
+                    using (PyObject res = _server.InvokeMethod("submit_venue_login", pv, pm, pf, ps))
+                    {
+                        result.Success = _DictBool(res, "success", false);
+                        result.ErrorCode = _DictStr(res, "error_code", "");
+                        result.StatusText = _DictStr(res, "status_text", "");
+                        result.AllowRetry = _DictBool(res, "allow_retry", true);
+                        if (result.Success)
+                            using (PyObject m = _server.InvokeMethod("set_execution_mode", new PyString("LiveManual")))
+                            {
+                                if (!_DictBool(m, "success", false))
+                                {
+                                    result.Success = false;
+                                    result.ErrorCode = "set_execution_mode: " + _DictStr(m, "error_code", "");
+                                    result.StatusText = "モード切替に失敗しました";
+                                }
+                            }
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                result.Success = false; result.ErrorCode = "login: " + e.Message;
+                result.StatusText = "ログインに失敗しました"; result.AllowRetry = true;
+            }
+            finally
+            {
+                if (secret != null) Array.Clear(secret, 0, secret.Length);   // zeroize the transient char[]
+                Volatile.Write(ref _loginRunning, false);
+                onResult?.Invoke(result);
+            }
+        }) { IsBackground = true, Name = "WorkspaceVenueLoginSubmit" }.Start();
+    }
+
+    // dict 読みヘルパ（キー不在は default・pythonnet GetItem は不在で throw する）。
+    static string _DictStr(PyObject d, string key, string dflt)
+    {
+        try { using (PyObject v = d.GetItem(key)) return v.As<string>(); } catch { return dflt; }
+    }
+    static int _DictInt(PyObject d, string key, int dflt)
+    {
+        try { using (PyObject v = d.GetItem(key)) return v.As<int>(); } catch { return dflt; }
+    }
+    static bool _DictBool(PyObject d, string key, bool dflt)
+    {
+        try { using (PyObject v = d.GetItem(key)) return v.As<bool>(); } catch { return dflt; }
+    }
+
     // venue_logout (Venue→Disconnect; findings 0027 D5). Mirrors ProductionLiveShell.Disconnect: gated
     // by the LiveLogoutCoordinator quiet-lane (D7 Wall 1) so it can't fire while a write is in flight,
     // runs off-main under the GIL, and reuses _loginRunning so login/logout are mutually exclusive. The

@@ -356,7 +356,8 @@ class DataEngineBackend:
         return {"success": True, "ids": self._curated_ids(), "editable": self._curated_editable}
 
     _KNOWN_VENUES = {"TACHIBANA", "KABU", "MOCK"}  # D26: MOCK added
-    _KNOWN_CRED_SOURCES = {"prompt", "session_cache", "env", "prompt_result"}
+    # #181/ADR-0040: "prompt" retired (login UI moved to Unity uGUI modal).
+    _KNOWN_CRED_SOURCES = {"session_cache", "env", "prompt_result"}
     _KNOWN_MODES = {"Replay", "LiveManual", "LiveAuto"}
     # #107/ADR-0022: 人工的な購読件数 cap は撤去。件数上限は venue adapter の実上限に委譲する。
 
@@ -473,6 +474,15 @@ class DataEngineBackend:
 
     def venue_login(self, venue_id, credentials_source, environment_hint):
         return self._live_mgr.venue_login(venue_id, credentials_source, environment_hint)
+
+    def venue_login_form_init(self, venue_id, mode) -> dict:
+        return self._live_mgr.venue_login_form_init(venue_id, mode)
+
+    def venue_login_probe_station(self, venue_id, mode) -> dict:
+        return self._live_mgr.venue_login_probe_station(venue_id, mode)
+
+    def submit_venue_login(self, venue_id, mode, fields_json, secret) -> dict:
+        return self._live_mgr.submit_venue_login(venue_id, mode, fields_json, secret)
 
     def venue_logout(self):
         return self._live_mgr.venue_logout()

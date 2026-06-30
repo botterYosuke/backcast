@@ -1509,10 +1509,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 // can flip Replay↔Live at runtime; SetFitAllOnAutoScale is idempotent + re-anchors only
                 // on a real flip, so calling it every poll is cheap.
                 bool fitAll = _footerMode != null && DockShape.ShouldFitChartToAll(_footerMode.DisplayMode);
+                // findings 0133: basis_ms（X 軸スケール）の正本は scenario granularity（Replay/Live 共通）。
+                // host が毎ポール明示配線して、ChartView の「最初のフレームから推定して固定」（Replay の
+                // cold preview が日足だと分足が DAILY basis に化け、同一 X collapse＋65000 頂点超過）を断つ。
+                // Live も per_instrument の bar 間隔は scenario granularity に束ねられている（line 1415 の
+                // data 要求も同じ写像）ので、推定でなく SoT を配線するのが Replay/Live どちらでも正しい。
+                GranularityChoice gran = (_scenario != null && _scenario.Params != null
+                    && _scenario.Params.Granularity == GranularityChoice.Minute)
+                    ? GranularityChoice.Minute : GranularityChoice.Daily;
                 foreach (var kv in _chartViews)
                 {
                     if (kv.Value == null) continue;
-                    kv.Value.SetFitAllOnAutoScale(fitAll);
+                    ChartHostWiring.Apply(kv.Value, fitAll, gran);
                     InstrumentOhlcFrame f = InstrumentOhlcDecoder.Decode(state, kv.Key);
                     if (!f.HasSeries) continue;
                     int cnt = f.Ohlc != null ? f.Ohlc.Count : 0;

@@ -369,6 +369,10 @@ public class ChartView : MaskableGraphic,
     public void SetGranularity(GranularityChoice g)
     {
         long b = ChartViewState.BasisMsFor(g);
+        // Idempotent (findings 0133): the host calls this every poll (ChartHostWiring.Apply). Only
+        // re-anchor when basis actually changes, otherwise a steady-state poll would re-run ResetView
+        // every frame and yank a user's pan/zoom back to the auto_scale home view.
+        if (ViewState.basis_ms == b) return;
         ViewState.basis_ms = b;
         if (ViewState.auto_scale && _bars.Count > 0)
         {

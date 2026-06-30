@@ -219,6 +219,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     bool _runResultDismissed;
     bool _runResultPrevReplayHasContent;   // Replay rising-edge tracker (updated ONLY on Replay frames)
     string _runResultLastRunId;            // LiveAuto run_id tracker (updated ONLY when a real run_id exists)
+    long _runResultClockSec = long.MinValue;   // #185: last wall-clock second the LiveAuto time line ticked (1Hz)
     // #125-#128 (ADR-0026): the Settings modal — screen-fixed集約口 for Venue / Mode / Scenario. The
     // controller owns open/close + ESC-guard; the overlay is the chrome; the three section views reuse
     // the unchanged brains (VenueMenuViewModel / FooterModeViewModel / ScenarioStartupController).
@@ -1406,13 +1407,19 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
     // #129 (findings 0104 F1/F2): per-iid cold preview seed. SoT is _chartViews.Keys; Python decides
     // populate-vs-no-op (D0 Replay-only / D2 IDLE-only guard live in engine.populate_replay_preview).
+    // #185 (findings 0134): the scenario granularity SoT predicate — the SINGLE decode of
+    // _scenario.Params.Granularity (Minute vs everything-else-as-Daily), shared by the chart-preview
+    // request, the chart basis_ms wiring (findings 0133), and the Run Result time-line format.
+    bool ScenarioIsMinute() =>
+        _scenario != null && _scenario.Params != null && _scenario.Params.Granularity == GranularityChoice.Minute;
+
     void RequestChartPreviewsForAllLiveCharts()
     {
         if (_host == null || _chartViews.Count == 0) return;
         var p = _scenario != null ? _scenario.Params : null;
         string start = p != null ? (p.Start ?? "") : "";
         string end = p != null ? (p.End ?? "") : "";
-        string granularity = (p != null && p.Granularity == GranularityChoice.Minute) ? "Minute" : "Daily";
+        string granularity = ScenarioIsMinute() ? "Minute" : "Daily";
         foreach (var iid in _chartViews.Keys)
             _host.RequestReplayChartPreview(iid, start, end, granularity);
     }
@@ -1514,9 +1521,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 // cold preview が日足だと分足が DAILY basis に化け、同一 X collapse＋65000 頂点超過）を断つ。
                 // Live も per_instrument の bar 間隔は scenario granularity に束ねられている（line 1415 の
                 // data 要求も同じ写像）ので、推定でなく SoT を配線するのが Replay/Live どちらでも正しい。
-                GranularityChoice gran = (_scenario != null && _scenario.Params != null
-                    && _scenario.Params.Granularity == GranularityChoice.Minute)
-                    ? GranularityChoice.Minute : GranularityChoice.Daily;
+                GranularityChoice gran = ScenarioIsMinute() ? GranularityChoice.Minute : GranularityChoice.Daily;
                 foreach (var kv in _chartViews)
                 {
                     if (kv.Value == null) continue;
@@ -1761,10 +1766,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         PortfolioSnapshot snap = ReplayPanelDecoder.DecodePortfolio(portfolioJson);
         PushReplayAccountBar(snap);   // ADR-0038 (#174-178): bar primary + hover from the snapshot
 
+        // #185 (findings 0134): time-line basis = scenario granularity SoT (ScenarioIsMinute, shared with the
+        // chart-preview/basis wiring). Minute → full date+time (overnight), else date-only.
+        bool minuteBasis = ScenarioIsMinute();
         _runResultView?.ShowText(
             string.IsNullOrWhiteSpace(summaryJson)
-                ? FormatReplayRunResultRunning(snap)
-                : FormatReplayRunResultComplete(ReplayPanelDecoder.DecodeRunResult(summaryJson)));
+                ? FormatReplayRunResultRunning(snap, minuteBasis)
+                : FormatReplayRunResultComplete(ReplayPanelDecoder.DecodeRunResult(summaryJson), snap, minuteBasis));
     }
 
     // ── ADR-0038 (#174-178): account summary bar drive ──────────────────────────────────────────────
@@ -2011,7 +2019,24 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
 
         if (newRun) _runResultDismissed = false;   // re-arm the latch (session-only — never persisted)
-        _runResultPopup.SetVisible(hasContent && !_runResultDismissed);
+        bool visible = hasContent && !_runResultDismissed;
+        _runResultPopup.SetVisible(visible);
+
+        // #185 (findings 0134): tick the LiveAuto wall-clock time line ~1Hz. RefreshLiveTiles only re-runs
+        // the live formatter on a LivePanelViewModel.AppliedCount drain (the idle gate at :1700), so between
+        // backend events FormatRunResult's DateTime.Now would FREEZE. While the popup is visible in the live
+        // shape (hasContent in Live already implies LiveAuto — D3), re-format on each new wall-clock second so
+        // the clock advances; the view's dedup gate keeps it to one Text rewrite per second. Replay's bar-time
+        // line needs no tick (it advances with the streamed poll payload, not wall time).
+        if (visible && _lastLiveShape)
+        {
+            long nowSec = DateTime.Now.Ticks / TimeSpan.TicksPerSecond;
+            if (nowSec != _runResultClockSec)
+            {
+                _runResultClockSec = nowSec;
+                _runResultView?.Refresh(_host.Panel);
+            }
+        }
     }
 
     // ── #23 re-home: Order ticket window — visible only in LiveManual; show the resolved instrument and
@@ -2416,6 +2441,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     static string FormatRunResult(LivePanelViewModel vm)
     {
         var sb = new StringBuilder();
+        // #185 (findings 0134): LiveAuto shows the CURRENT wall clock (JST — this machine's local). The 1Hz
+        // tick is driven by DriveRunResultPopup (it re-Refreshes this view on each new wall-clock second while
+        // the popup is visible) — NOT by the live drain path, which is AppliedCount-gated and idle between
+        // events. The view's dedup gate then rewrites the Text only when the HH:mm:ss string actually changes.
+        sb.Append("time ").Append(DateTime.Now.ToString("HH:mm:ss")).Append('\n');
         if (vm.HasLifecycle) sb.Append("run=").Append(vm.LatestLifecycle.RunId).Append("  ").Append(vm.LatestLifecycle.Status).Append('\n');
         if (vm.HasTelemetry)
         {
@@ -2466,20 +2496,36 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return "(建玉なし)";
     }
 
+    // #185 (findings 0134): the Run Result time line for Replay — the bar currently under
+    // consideration (running) / the final bar (complete). Delegates the epoch-ms→JST conversion to
+    // ChartScale.FormatTimeLabel so the popup uses the SAME data-as-JST convention as the chart X axis
+    // (UtcDateTime, no second local-tz shift). Minute basis → full date+time (sessions span days overnight
+    // — owner note); Daily basis → date only. clock_ms <= 0 (pre-data, popup honest-empty hidden) → "".
+    static string FormatReplayClockLine(long clockMs, bool minuteBasis)
+    {
+        if (clockMs <= 0) return "";
+        var style = minuteBasis ? ChartScale.TimeLabelStyle.DateTime : ChartScale.TimeLabelStyle.Date;
+        return "time " + ChartScale.FormatTimeLabel(clockMs, style) + "\n";
+    }
+
     // RunResult running view (TTWR run_result_panel.rs running branch): o:orders f:fills + realized/unrlz.
-    static string FormatReplayRunResultRunning(PortfolioSnapshot s)
+    static string FormatReplayRunResultRunning(PortfolioSnapshot s, bool minuteBasis)
     {
         int orders = s.Orders?.Count ?? 0;
         var sb = new StringBuilder();
+        sb.Append(FormatReplayClockLine(s.ClockMs, minuteBasis));   // #185: time line (omitted pre-data)
         sb.Append("running  o:").Append(orders).Append("  f:").Append(orders).Append('\n');
         sb.Append("pnl:").Append(s.RealizedPnl).Append("  unrlz:").Append(s.UnrealizedPnl);
         return sb.ToString();
     }
 
     // RunResult full-stats view (TTWR full-stats branch): fills/sharpe/dd + pnl/sortino from summary_json.
-    static string FormatReplayRunResultComplete(RunResult r)
+    // #185: the completed time line shows the FINAL bar's time (snap.ClockMs — last_portfolio persists
+    // after finalize, so the snapshot's clock is still the last streamed bar).
+    static string FormatReplayRunResultComplete(RunResult r, PortfolioSnapshot s, bool minuteBasis)
     {
         var sb = new StringBuilder();
+        sb.Append(FormatReplayClockLine(s.ClockMs, minuteBasis));
         sb.Append("fills:").Append(r.FillsCount).Append("  sh:").Append(r.Sharpe.ToString("F2"))
           .Append("  dd:").Append(r.MaxDrawdown.ToString("F0")).Append('\n');
         sb.Append("pnl:").Append(r.TotalPnl.ToString("F0")).Append("  so:").Append(r.Sortino.ToString("F2"));

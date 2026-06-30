@@ -39,7 +39,7 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 | ASB-09 | Replay / LiveManual / LiveAuto 全モードで常時表示 | `BuildWorkspace`（hide 経路なし） | モード poll 後もバー active | `bar.gameObject.activeInHierarchy` | 自動(E2E済) | — |
 | ASB-10 | アイコン枠が RenderTexture→RawImage の差し替え seam（将来 sprite 置換） | `AccountSummaryIconStage.Build` / `SetIconTexture` | 各スロット RawImage に非 null texture | `IconTexture(i)!=null` | 自動(E2E済) | — |
 | ASB-11 | 帯背景が透明＋クリック透過（sidebar 同型・テーマ flip でも透明維持）（D8） | `AccountSummaryBarView.Build` / `ApplyTheme` | strip Image の `color.a==0`・`raycastTarget==false`・flip 後も alpha 0 | `stripBg.color.a==0`・`!raycastTarget` | 自動(E2E済) | — |
-| ASB-12 | スロットが左詰め固定 68px ピッチ（右は空白・全幅 stretch でない）（D9） | `AccountSummaryBarView.BuildSlot` | slot root `anchorMin.x==anchorMax.x==0`・隣接ピッチ 68・右端 < strip 幅 | `anchorMax.x==0`・`Δx==68`・rightEdge<stripW | 自動(E2E済) | — |
+| ASB-12 | スロットが中央詰め固定 68px ピッチ（左右は空白・全幅 stretch でない）（D9 revised） | `AccountSummaryBarView.BuildSlot` | slot root `anchorMin.x==anchorMax.x==0.5`・隣接ピッチ 68・グループ幅 < strip 幅 | `anchorMax.x==0.5`・`Δx==68`・groupW<stripW | 自動(E2E済) | — |
 | ASB-13 | 主数値がアイコンの下に縦積み（D10） | `AccountSummaryBarView.BuildSlot` | icon top-anchored（anchorY 1）・primary bottom-anchored（anchorY 0） | `icon.anchorY==1`・`primary.anchorY==0` | 自動(E2E済) | — |
 | ASB-14 | バー主数値は金額を k/M 短縮・ホバー card はフル桁維持（D11） | `AccountSummaryFormat.MoneyCompact` / `PushReplayAccountBar` | 7 桁で bar=`1.23M`・compact≠full・hover ②＝`FormatReplayBuyingPower`（raw 1234567 在） | `PrimaryText==MoneyCompact`・`!=Money`・`CardText` フル桁 | 自動(E2E済) | — |
 | ASB-15 | ホバー card が日本語ラベルを描けるよう専用 CJK フォントに配線（主数値は Latin 維持） | `BackcastWorkspaceRoot.CreateCjkFont` / `AccountSummaryBarView.Build`（cardText.font=_cjkFont） | card フォントが主数値フォント（Latin）と別オブジェクト・OS に日本語フェイスがある時は必須 | OS CJK フェイス在→`CardFont(0)!=PrimaryFont(0)`／不在→SKIP | 自動(E2E済・配線)＋HITL（実画素） | — |
@@ -57,7 +57,7 @@ scene-open → `BuildWorkspace` し、Replay は `WorkspaceEngineHost.TestPortfo
 - 退役 spec を `Default()` に残す → ASB-08 RED（restore skip 破綻）＋ S12d（FloatingWindowE2ERunner）RED。
 - ① の色を符号非依存に固定 → ASB-03 RED（負ケース）。
 - 帯を不透明 `panel_background`／`raycastTarget=true` に戻す → ASB-11 RED（透過・click-through 破綻）。
-- スロットを 1/SLOT_COUNT stretch レイアウトに戻す → ASB-12 RED（左詰め固定幅でない）。
+- スロットを 1/SLOT_COUNT stretch レイアウトに戻す → ASB-12 RED（中央詰め固定幅でない）。
 - 主数値をアイコンの右（中央寄せ）に戻す → ASB-13 RED（縦積みでない）。
 - バー主数値を `Money`（フル桁）にする → ASB-14 RED（compact==full の vacuity guard が発火）。
 - 未取得時の card detail を `EmptyDetail` でなく裸の `—` に戻す → ASB-01 RED（①card に「純資産」不在）。

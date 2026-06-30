@@ -23,7 +23,9 @@ public sealed class RunResultPopup
     // Fixed card geometry (screen px). Sized for the two-line run summary (running counts /
     // full stats / LiveAuto telemetry); never resized — the popup is not a draggable window.
     const float CardWidth = 360f;
-    const float CardHeight = 112f;
+    // #185 (findings 0134): 136 (was 112) to fit the added time line — three body lines now
+    // (time / running|run / pnl|telemetry) instead of two.
+    const float CardHeight = 136f;
     const float Margin = 16f;            // inset from the screen's top-right corner
     const float MenuClearance = 48f;     // clear the top menu bar (~40px) + an 8px gap
     const float TitleHeight = DockWindowFrame.TitleHeight;   // share the dock title-bar height

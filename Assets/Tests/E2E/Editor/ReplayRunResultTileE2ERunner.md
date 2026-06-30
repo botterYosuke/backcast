@@ -52,6 +52,11 @@ live の telemetry は `host.Panel.Apply(<wire>)`、mode は `FooterModeViewMode
 | RRT-08 | **D7** × close latch ＋ 同一 run dismiss | `RunResultPopup.OnClose` → `_runResultDismissed` | popup `IsVisible` | × で非表示・同一 run の running→complete でも再出現しない | 自動(E2E済) |
 | RRT-09A | **D8** Replay 再 arm（honest-empty→content rising） | `DriveRunResultPopup` `_runResultPrevReplayHasContent` rising edge | popup `IsVisible` | 次 Replay run（portfolio 再投入）で再出現 | 自動(E2E済) |
 | RRT-09B | **D8** LiveAuto 再 arm（run_id 変化・#164 対称化） | `DriveRunResultPopup` `_runResultLastRunId` 変化 | popup `IsVisible` | 次 LiveAuto run（新 run_id）で再出現（sticky フラグでも boolean falling edge に頼らない） | 自動(E2E済) |
+| RRT-CLK-01 | **#185** Replay 走行中の時刻行（Minute basis＝overnight でフル日時） | `FormatReplayRunResultRunning(snap, minuteBasis)` ＋ `FormatReplayClockLine` | body `ViewText` | `Contains("time 2024-05-10 09:31")` かつ `running` を前置で残す | 自動(E2E済) |
+| RRT-CLK-02 | **#185** 完走後も最終バー時刻を残す | `FormatReplayRunResultComplete(r, snap, minuteBasis)`（`snap.ClockMs` 流用） | body `ViewText` | full-stats に `time 2024-05-10 09:31` ＋ `fills:2` が共存 | 自動(E2E済) |
+| RRT-CLK-03 | **#185** Daily basis＝日付のみ（`HH:mm` 無） | basis 連動フォーマット（`_scenario.Params.Granularity`） | body `ViewText` | `Contains("time 2024-05-10")` かつ `!Contains("09:31")` | 自動(E2E済) |
+| RRT-CLK-04 | **#185** pre-data（`clock_ms<=0`）は時刻行を出さない | `FormatReplayClockLine` の `clockMs<=0 → ""` | body `ViewText` | clock 無 snapshot で `!Contains("time ")` | 自動(E2E済) |
+| RRT-CLK-05 | **#185** LiveAuto は現在の壁時計（先頭行） | `FormatRunResult` の `time DateTime.Now` | live body `ViewText` | LiveAuto run body に `time ` 行（1Hz は dedup ゲートで自然刻み） | 自動(E2E済) |
 | — | 実 backtest 2 連続実行で source が実際に clear されること | `python/tests/test_notebook_replay_afk.py` | engine.last_run_summary lifecycle | （別ゲート＝Python e2e） | 自動(E2E済・pytest) |
 | — | 実 pan で popup が canvas と一緒に動かない（パララックス層から除外） | — | 実画面 | （HITL専用・**構造的不変条件は RRT-10 が AFK pin**） | HITL専用（実 pan の奥行き目視・GPU 依存） |
 | — | LiveAuto 2 連 run の実画面 latch 再 arm／実 × クリック | — | 実画面 | （HITL専用） | HITL専用（GPU 依存・AFK が可視/latch/再 arm を担保済） |
@@ -65,7 +70,9 @@ live の telemetry は `host.Panel.Apply(<wire>)`、mode は `FooterModeViewMode
 - popup overlay を **Content（infinite canvas）配下に再 parent** する（または非 ScreenSpaceOverlay 化）→ pan で動く構造退行で **RRT-10 RED**。
 - × の latch を no-op に → **RRT-08 RED**。
 - LiveAuto 再 arm を run_id 変化でなく **boolean falling edge** にする → sticky フラグでは 2nd run で edge が出ず **RRT-09B RED**（#164 の片側欠落死角を pin）。
+- `FormatReplayRunResultRunning/Complete` の **`FormatReplayClockLine` 呼び出しを外す** → 時刻行が出ず **RRT-CLK-01/02 RED**。`minuteBasis` 引数を無視して **Daily 固定** → overnight の `HH:mm` が落ち **RRT-CLK-01 RED**。`clockMs<=0` ガードを外す → pre-data で `time 1970-…` が漏れ **RRT-CLK-04 RED**。`FormatRunResult` の `time DateTime.Now` 行を外す → **RRT-CLK-05 RED**。
 
-親 findings: `docs/findings/0125-run-result-popup-screen-anchored-content-derived.md`（RRT-01..09・ADR-0037）
+親 findings: `docs/findings/0134-run-result-current-time-line.md`（RRT-CLK・#185 時刻行）
+／ `docs/findings/0125-run-result-popup-screen-anchored-content-derived.md`（RRT-01..09・ADR-0037）
 ／ `docs/findings/0077-issue100-audit-bugfixes-run-summary-and-shared-stop-event.md`（RRT-01..05 の #100① 由来）
 ／ `docs/findings/0110-livemanual-hides-strategy-editor.md` §7（退役した #138 `DriveRunResult` の履歴・SUPERSEDED）

@@ -146,17 +146,20 @@ public sealed class AccountSummaryBarView : MonoBehaviour
     {
         var slot = new Slot();
 
-        // D9: slot is a FIXED-WIDTH column left-packed from the strip's left edge (NOT 1/SLOT_COUNT stretch),
-        // so the right side of the band stays empty (the reference resource-strip look). raycast target so
-        // PointerEnter/Exit fire on the small slot region only (the empty band passes clicks through — D8).
+        // D9 revised: slot is a FIXED-WIDTH column CENTRED in the strip (changed from left-packed to
+        // centre-packed so the 4 slots sit in the middle of the header bar). The group's total width is
+        // SLOT_COUNT * SLOT_W; anchoring at 0.5 and offsetting by -half the group width + index * SLOT_W
+        // centres the cluster. raycast target so PointerEnter/Exit fire on the small slot region only
+        // (the empty band passes clicks through — D8).
         var rootGo = new GameObject("slot" + index, typeof(RectTransform), typeof(Image), typeof(EventTrigger));
         var root = (RectTransform)rootGo.transform;
         root.SetParent(_strip, false);
-        root.anchorMin = new Vector2(0f, 0f);
-        root.anchorMax = new Vector2(0f, 1f);
+        root.anchorMin = new Vector2(0.5f, 0f);
+        root.anchorMax = new Vector2(0.5f, 1f);
         root.pivot = new Vector2(0f, 0.5f);
         root.sizeDelta = new Vector2(SLOT_W, 0f);
-        root.anchoredPosition = new Vector2(LEFT_PAD + index * SLOT_W, 0f);
+        float groupW = SLOT_COUNT * SLOT_W;
+        root.anchoredPosition = new Vector2(-groupW * 0.5f + index * SLOT_W, 0f);
         rootGo.GetComponent<Image>().color = new Color(0f, 0f, 0f, 0f);   // invisible but raycastable (hover)
 
         // D10: icon frame on TOP, horizontally centred in the column. (RawImage; #177 fills .texture.)

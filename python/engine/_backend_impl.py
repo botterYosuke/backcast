@@ -180,6 +180,10 @@ class PortfolioResult:
     orders: list[PortfolioOrderInfo] = field(default_factory=list)
     realized_pnl: float = 0.0
     unrealized_pnl: float = 0.0
+    # #185 (findings 0134): the replay clock for the Run Result time line — the latest streamed
+    # primary bar's time (running view) or the final bar's time (completed view). 0 = pre-data
+    # (the popup is honest-empty hidden then, so the time line is suppressed in C#).
+    clock_ms: int = 0
 
 
 # Per-bar wallclock throttle removed in #95 Phase 4 (ADR-0016 D8-D9 / findings 0070 F6,
@@ -1277,6 +1281,8 @@ class DataEngineBackend:
             # (RunResult switches to full stats at completion), so default 0.0.
             realized_pnl=float(p.get("realized_pnl", 0.0)),
             unrealized_pnl=float(p.get("unrealized_pnl", 0.0)),
+            # #185 (findings 0134): replay clock (latest/final bar ts) for the Run Result time line.
+            clock_ms=int(p.get("clock_ms", 0)),
         )
 
     def list_instruments(self, source: str, end_date: str = ""):

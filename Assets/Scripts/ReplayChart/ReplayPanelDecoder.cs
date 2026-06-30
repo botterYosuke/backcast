@@ -101,6 +101,7 @@ public struct PortfolioSnapshot
     public IReadOnlyList<PortfolioOrderRow> Orders;   // #65
     public double RealizedPnl;                        // #65 RunResult running-view
     public double UnrealizedPnl;                      // #65 RunResult running-view
+    public long ClockMs;                              // #185 (findings 0134): replay clock (bar ts) for the time line
 }
 
 public struct RunResult
@@ -137,6 +138,7 @@ public static class ReplayPanelDecoder
         public PortfolioOrderRow[] orders;   // #65: Replay の Orders 行（fills を FILLED 化）
         public double realized_pnl;          // #65: RunResult running-view
         public double unrealized_pnl;        // #65: RunResult running-view
+        public long clock_ms;                // #185 (findings 0134): replay clock (bar ts) for the time line
     }
 
     [System.Serializable] class RunResultDto
@@ -183,6 +185,7 @@ public static class ReplayPanelDecoder
             Orders = dto.orders ?? Array.Empty<PortfolioOrderRow>(),
             RealizedPnl = dto.realized_pnl,
             UnrealizedPnl = dto.unrealized_pnl,
+            ClockMs = dto.clock_ms,
         };
     }
 

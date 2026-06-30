@@ -29,6 +29,8 @@
 //   * popup overlay を Content（infinite canvas）配下に再 parent する → RRT-10 RED（pan で動く構造退行）。
 //   * × close の latch を no-op に → RRT-08 RED。
 //   * LiveAuto 再 arm を run_id 変化でなく boolean falling edge にする → RRT-09B RED（2nd run で再出現せず）。
+//   * FormatReplayClockLine 呼び出しを外す → RRT-CLK-01/02 RED（time 行が出ない）。minuteBasis 引数を無視して
+//     Daily 固定 → RRT-CLK-01 RED（overnight の HH:mm が落ちる）。FormatRunResult の time 行を外す → RRT-CLK-05 RED。
 
 using System;
 using System.Reflection;
@@ -58,6 +60,14 @@ public static class ReplayRunResultTileE2ERunner
         "{\"symbol\":\"7203.TSE\",\"side\":\"BUY\",\"qty\":50.0,\"price\":2000.0,\"status\":\"FILLED\",\"ts_ms\":2}," +
         "{\"symbol\":\"7203.TSE\",\"side\":\"BUY\",\"qty\":10.0,\"price\":2001.0,\"status\":\"FILLED\",\"ts_ms\":3}]," +
         "\"realized_pnl\":0.0,\"unrealized_pnl\":80.0}";
+
+    // #185 (findings 0134): same as PortfolioRun1 but carries the replay clock. 1715333460000 ms
+    // read as UTC (ChartScale's data-as-JST convention) = 2024-05-10 09:31 → the time line.
+    const string PortfolioRun1WithClock =
+        "{\"buying_power\":54321.0,\"cash\":54321.0,\"equity\":155321.0," +
+        "\"positions\":[{\"symbol\":\"7203.TSE\",\"qty\":50,\"avg_price\":2000.0,\"unrealized_pnl\":100.0}]," +
+        "\"orders\":[{\"symbol\":\"7203.TSE\",\"side\":\"BUY\",\"qty\":50.0,\"price\":2000.0,\"status\":\"FILLED\",\"ts_ms\":2}]," +
+        "\"realized_pnl\":0.0,\"unrealized_pnl\":100.0,\"clock_ms\":1715333460000}";
 
     const string SummaryRun1 =
         "{\"fills_count\":2,\"equity_points\":68,\"total_pnl\":-410010.0," +
@@ -101,7 +111,8 @@ public static class ReplayRunResultTileE2ERunner
                       "RRT-07 no-persist (absent from CaptureLayout, D6) / " +
                       "RRT-10 screen-anchored ScreenSpaceOverlay outside Content (D1) / " +
                       "RRT-08 × close latches · same-run stays dismissed (D7) / " +
-                      "RRT-09 symmetric re-arm (Replay rising · LiveAuto run_id, D8) verified.");
+                      "RRT-09 symmetric re-arm (Replay rising · LiveAuto run_id, D8) / " +
+                      "RRT-CLK time line (#185: Replay bar-time basis-linked · complete keeps final · LiveAuto wall clock · pre-data omit) verified.");
             if (Application.isBatchMode) EditorApplication.Exit(0);
         }
         else
@@ -194,6 +205,46 @@ public static class ReplayRunResultTileE2ERunner
                 return "RRT-05 rerun-complete: run2 summary did NOT switch back to full-stats (got: " + full2 + ")";
             if (!full2.Contains("fills:3") || !full2.Contains("12345"))
                 return "RRT-05 rerun-complete: full-stats did not show run2's numbers fills:3 / 12345 (stale run1? got: " + full2 + ")";
+
+            // ── RRT-CLK-01..04 (#185 / findings 0134): the Run Result TIME LINE in Replay = the bar
+            // under consideration (running) / the final bar (complete). Format is basis-linked: Minute →
+            // full date+time (overnight), Daily → date-only. clock_ms<=0 omits the line. The basis SoT is
+            // _scenario.Params.Granularity (same source PushReplayTiles reads). RED litmus: drop the
+            // FormatReplayClockLine call (no time line) or the `minuteBasis` arg (wrong granularity). ──
+            var scenario = ty.GetField("_scenario", BF).GetValue(root);
+            var setGran = scenario.GetType().GetMethod("SetGranularity");
+            if (setGran == null) return "RRT-CLK premise: ScenarioStartupController.SetGranularity not found (renamed?)";
+
+            // RRT-CLK-01 running, Minute basis → full date+time. (pf+sm both change → payload gate re-renders.)
+            setGran.Invoke(scenario, new object[] { GranularityChoice.Minute });
+            pf(PortfolioRun1WithClock); sm(null); drive();
+            string clkRunning = ViewText(rrView);
+            if (clkRunning == null || !clkRunning.Contains("time 2024-05-10 09:31"))
+                return "RRT-CLK-01 (running, Minute basis): missing full date+time line 'time 2024-05-10 09:31' (got: " + clkRunning + ")";
+            if (!clkRunning.Contains("running"))
+                return "RRT-CLK-01: time line replaced the running body instead of prefixing it (got: " + clkRunning + ")";
+
+            // RRT-CLK-02 complete keeps the (final) bar time. (sm changes null→summary → re-render.)
+            sm(SummaryRun1); drive();
+            string clkFull = ViewText(rrView);
+            if (clkFull == null || !clkFull.Contains("time 2024-05-10 09:31"))
+                return "RRT-CLK-02 (complete keeps bar time): full-stats lost the time line (snap.ClockMs not carried; got: " + clkFull + ")";
+            if (!clkFull.Contains("fills:2"))
+                return "RRT-CLK-02: full-stats body lost under the time line (got: " + clkFull + ")";
+
+            // RRT-CLK-03 Daily basis → date-only (no HH:mm). (sm changes summary→null → re-render.)
+            setGran.Invoke(scenario, new object[] { GranularityChoice.Daily });
+            pf(PortfolioRun1WithClock); sm(null); drive();
+            string clkDaily = ViewText(rrView);
+            if (clkDaily == null || !clkDaily.Contains("time 2024-05-10") || clkDaily.Contains("09:31"))
+                return "RRT-CLK-03 (Daily basis): expected date-only 'time 2024-05-10' WITHOUT HH:mm (got: " + clkDaily + ")";
+
+            // RRT-CLK-04 pre-data omit: a snapshot without clock_ms (clock=0) renders NO time line.
+            // (pf changes to the clock-less fixture → re-render.)
+            pf(PortfolioRun1); sm(null); drive();
+            string clkNone = ViewText(rrView);
+            if (clkNone == null || clkNone.Contains("time "))
+                return "RRT-CLK-04 (pre-data omit): a snapshot without clock_ms must NOT render a time line (got: " + clkNone + ")";
         }
         finally
         {
@@ -207,6 +258,13 @@ public static class ReplayRunResultTileE2ERunner
     // + the override seam. A fresh scene build. ──
     static string RunLiveScopeAndLatchSections()
     {
+        // This runner drives TWO probe scenes in ONE batchmode process. ThemeService.Changed is a
+        // STATIC subscriber list; section 1's root subscribed ApplyViewportTheme to it. Without a
+        // reset, section 2's BuildWorkspace → ApplyPersistedAppearance → SetTheme fires Changed and
+        // invokes section 1's now-DESTROYED SettingsModeSegmentView (MissingReferenceException on its
+        // Button). ResetForTests exists exactly for this ("drop subscribers so probe sections don't
+        // leak global state" — domain reload does it between Plays, a single process needs it explicit).
+        ThemeService.ResetForTests();
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindAnyObjectByType<BackcastWorkspaceRoot>();
         if (root == null) return "RRT-06: BackcastWorkspaceRoot missing in scene";
@@ -284,6 +342,10 @@ public static class ReplayRunResultTileE2ERunner
         string liveText = ViewText(rrView);
         if (liveText == null || !liveText.Contains("run-A"))
             return "RRT-06: LiveAuto popup is visible but its body text is empty/stale — the PushLiveTiles→Refresh(p)→FormatRunResult wiring is broken (got: " + liveText + ")";
+        // RRT-CLK-05 (#185 / findings 0134): LiveAuto shows the current WALL CLOCK as the first line.
+        // RED litmus: drop the `time DateTime.Now` prefix in FormatRunResult → this fails.
+        if (!liveText.Contains("time "))
+            return "RRT-CLK-05 (LiveAuto wall clock): the live run body is missing the 'time …' wall-clock line (got: " + liveText + ")";
         Poll("LiveManual");
         Drive();
         if (PopupVisible(popup))

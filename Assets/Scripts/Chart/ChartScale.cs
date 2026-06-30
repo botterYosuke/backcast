@@ -120,7 +120,7 @@ public static class ChartScale
         return ladder[ladder.Length - 1];
     }
 
-    public enum TimeLabelStyle { Time, Date }
+    public enum TimeLabelStyle { Time, Date, DateTime }
 
     // Decide label style: Daily/Date for ≥1d step, Time (HH:mm) for sub-day, DateTime for the
     // 1-day-in-minute-basis boundary so a chart that spans days shows the date at midnight.
@@ -137,6 +137,7 @@ public static class ChartScale
         switch (style)
         {
             case TimeLabelStyle.Date: return dt.ToString("yyyy-MM-dd");
+            case TimeLabelStyle.DateTime: return dt.ToString("yyyy-MM-dd HH:mm");   // #185: full date+time (overnight)
             case TimeLabelStyle.Time: return dt.ToString("HH:mm");
             default: return dt.ToString("HH:mm");
         }

@@ -117,6 +117,7 @@ def test_on_equity_writes_runbuffer_equity_point() -> None:
 _SNAPSHOT_KEYS = {
     "buying_power", "cash", "equity", "positions", "orders",
     "realized_pnl", "unrealized_pnl",
+    "clock_ms",   # #185 (findings 0134): replay clock for the Run Result time line
 }
 
 
@@ -139,6 +140,24 @@ def test_push_portfolio_publishes_running_snapshot_positions_and_cash() -> None:
         {"symbol": "8918.TSE", "qty": 100, "avg_price": 1000.0, "unrealized_pnl": 0.0}
     ]
     assert isinstance(snap["positions"][0]["qty"], int)
+
+
+def test_push_bar_advances_clock_carried_in_running_snapshot() -> None:
+    # #185 (findings 0134): the Run Result running time line shows the bar currently under
+    # consideration. push_bar (bar-open) advances the clock BEFORE this bar's equity publish, so
+    # an observation-only (pass) loop — no fills — still reports a fresh clock via on_equity.
+    obs, eng, _ = _observer()
+    bar = Bar(
+        instrument_id="8918.TSE",
+        ts_event_ns=1_700_000_000_123_000_000,
+        open=100.0, high=110.0, low=95.0, close=105.0, volume=4200.0,
+    )
+    obs.push_bar(bar)                                   # no fill / no portfolio publish yet
+    obs.on_equity(bar.ts_event_ns // 1_000_000, 1_000_000.0, 1_000_000.0)
+
+    snap = eng.last_portfolio
+    assert snap is not None
+    assert snap["clock_ms"] == bar.ts_event_ns // 1_000_000   # == 1_700_000_000_123
 
 
 def test_push_order_appends_filled_row_and_keeps_runbuffer_fill() -> None:

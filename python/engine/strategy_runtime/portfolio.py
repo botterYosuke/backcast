@@ -53,7 +53,7 @@ def compute_portfolio(
     """Build a portfolio snapshot dict from typed Fill / EquityPoint records.
 
     Returns:
-        {buying_power, cash, equity, positions: list[dict], orders: list[dict]}
+        {buying_power, cash, equity, positions: list[dict], orders: list[dict], clock_ms}
     """
     orders: list[dict] = [
         {
@@ -84,4 +84,7 @@ def compute_portfolio(
         "equity": last_equity,
         "positions": positions,
         "orders": orders,
+        # #185 (findings 0134): the completed-run time line shows the FINAL bar's time — the last
+        # equity point's ts (every bar marks equity unconditionally; 0 when no bar streamed).
+        "clock_ms": last.ts_event_ms if last else 0,
     }

@@ -45,9 +45,9 @@ public sealed class ScenarioStartupParams
         DateTime start = today.AddMonths(-3); // .NET AddMonths clamps month-end, like chrono checked_sub_months
         return new ScenarioStartupParams
         {
-            Start = start.ToString(DateFormat, CultureInfo.InvariantCulture),
-            End = today.ToString(DateFormat, CultureInfo.InvariantCulture),
-            Granularity = GranularityChoice.None,
+            Start = "2024-01-01", // start.ToString(DateFormat, CultureInfo.InvariantCulture),
+            End = "2025-12-31", // today.ToString(DateFormat, CultureInfo.InvariantCulture),
+            Granularity = GranularityChoice.Minute,
             InitialCash = DefaultInitialCash,
         };
     }

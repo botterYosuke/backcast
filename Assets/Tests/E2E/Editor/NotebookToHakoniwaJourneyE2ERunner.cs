@@ -316,6 +316,11 @@ public static class NotebookToHakoniwaJourneyE2ERunner
     // OpenScene → inject a builtin font → FakeMarimoSynthesizer → ResolvePaths → BuildWorkspace.
     static BackcastWorkspaceRoot ComposeRoot(out Type ty)
     {
+        // Multiple sections each ComposeRoot a fresh scene in ONE batchmode process. ThemeService.Changed
+        // is a STATIC subscriber list — without a reset, a prior section's destroyed root stays subscribed
+        // and the next BuildWorkspace's SetTheme invokes its dead SettingsModeSegmentView (a destroyed-Button
+        // MissingReferenceException). ResetForTests drops the leaked subscribers (its documented purpose).
+        ThemeService.ResetForTests();
         EditorSceneManager.OpenScene(BackcastWorkspaceSceneBuilder.ScenePath, OpenSceneMode.Single);
         var root = UnityEngine.Object.FindFirstObjectByType<BackcastWorkspaceRoot>();
         ty = typeof(BackcastWorkspaceRoot);

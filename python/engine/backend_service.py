@@ -79,9 +79,9 @@ class BackendService:
         try:
             resp = self._srv.get_portfolio()
         except RuntimeError as exc:
-            return {"success": False, "error_code": "INPROC_ABORT", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "detail": str(exc)}
+            return {"success": False, "error_code": "INPROC_ABORT", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "clock_ms": 0, "detail": str(exc)}
         except Exception as exc:
-            return {"success": False, "error_code": "INPROC_ERROR", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "detail": str(exc)}
+            return {"success": False, "error_code": "INPROC_ERROR", "buying_power": 0.0, "cash": 0.0, "equity": 0.0, "positions": [], "orders": [], "realized_pnl": 0.0, "unrealized_pnl": 0.0, "clock_ms": 0, "detail": str(exc)}
         return {
             "success": resp.success,
             "buying_power": resp.buying_power,
@@ -98,6 +98,8 @@ class BackendService:
             # #65: RunResult running-view (走行中) realized/unrealized — Python 権威 (§7-c).
             "realized_pnl": resp.realized_pnl,
             "unrealized_pnl": resp.unrealized_pnl,
+            # #185 (findings 0134): replay clock (latest/final bar ts) for the Run Result time line.
+            "clock_ms": resp.clock_ms,
         }
 
     def get_portfolio_json(self) -> str:

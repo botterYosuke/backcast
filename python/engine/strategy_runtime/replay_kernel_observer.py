@@ -54,10 +54,19 @@ class ReplayKernelObserver:
         self._equity: float = 0.0
         self._realized: float = 0.0
         self._unrealized: float = 0.0
+        # #185 (findings 0134): the replay clock for the Run Result time line — the latest streamed
+        # primary bar's time (ms). Set in push_bar (the bar-open hook, which fires BEFORE any
+        # fill/equity publish in that bar — stepper._open_bar), so every published snapshot carries
+        # the bar currently under consideration. 0 until the first bar streams.
+        self._clock_ms: int = 0
 
     # --- chart (reducer → GetState polling) ----------------------------------
     def push_bar(self, bar: Any) -> None:
         ts_ms = bar.ts_event_ns // 1_000_000
+        # #185: advance the replay clock to the bar currently under consideration. push_bar runs
+        # at bar-open, before this bar's fills (push_portfolio) / equity (on_equity) publish — so the
+        # next published snapshot reflects THIS bar's time, even in an observation-only (pass) loop.
+        self._clock_ms = ts_ms
         # Build KlineUpdate directly from the kernel Bar's plain floats. (The nautilus
         # `bar_to_kline_update` expects Price objects with `.as_double()` and would pull the
         # Rust core — avoided here to keep the runtime nautilus-free.)
@@ -153,4 +162,6 @@ class ReplayKernelObserver:
             "orders": list(self._orders),
             "realized_pnl": self._realized,
             "unrealized_pnl": self._unrealized,
+            # #185 (findings 0134): replay clock (latest streamed bar ts) for the Run Result time line.
+            "clock_ms": self._clock_ms,
         }

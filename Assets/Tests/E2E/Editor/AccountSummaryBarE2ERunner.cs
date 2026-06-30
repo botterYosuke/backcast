@@ -26,8 +26,8 @@
 //   ASB-10 = icon seam: each slot's RawImage has a non-null texture (the RenderTexture swap seam, #177/S5).
 //   ASB-11 = D8 (視覚リファインメント): the strip band is TRANSPARENT (color.a==0) and click-through
 //            (raycastTarget==false), mirroring the Universe sidebar; a theme flip keeps the band transparent.
-//   ASB-12 = D9: the 4 slots are left-packed at a fixed 68px pitch (left-anchored, NOT 1/SLOT_COUNT stretch),
-//            so the right side of the band stays empty.
+//   ASB-12 = D9 revised: the 4 slots are centre-packed at a fixed 68px pitch (centre-anchored, NOT
+//            1/SLOT_COUNT stretch), so both sides of the band stay empty.
 //   ASB-13 = D10: the value is stacked BELOW the icon (icon top-anchored / value bottom-anchored).
 //   ASB-14 = D11: the bar primary abbreviates money (1234567→"1.23M") while the hover card keeps full precision.
 //   ASB-15 = hover-card font WIRING: the card uses a dedicated CJK OS font (≠ the numeric primary's Latin font)
@@ -316,7 +316,7 @@ public static class AccountSummaryBarE2ERunner
         bar.ApplyTheme();
         Debug.Log("[E2E ASB-11 PASS] band transparent (alpha 0) + click-through (raycastTarget false); stays transparent on a theme flip.");
 
-        // ── ASB-12: D9 slots left-packed at a fixed pitch (NOT 1/SLOT_COUNT stretch) → right side empty ──
+        // ── ASB-12: D9 revised — slots centre-packed at a fixed pitch (NOT 1/SLOT_COUNT stretch) ──
         var slotRoots = new RectTransform[4];
         for (int i = 0; i < 4; i++)
         {
@@ -326,26 +326,26 @@ public static class AccountSummaryBarE2ERunner
         }
         for (int i = 0; i < 4; i++)
         {
-            // left-anchored fixed width: anchorMin.x == anchorMax.x == 0 (the OLD layout stretched each slot to
+            // centre-anchored fixed width: anchorMin.x == anchorMax.x == 0.5 (the OLD layout stretched each slot to
             // (index+1)/SLOT_COUNT, so anchorMax.x was ≥0.25 — this distinguishes the packed layout).
-            if (slotRoots[i].anchorMin.x != 0f || slotRoots[i].anchorMax.x != 0f)
-                return $"ASB-12: slot {i} is width-STRETCHED (anchorMin.x={slotRoots[i].anchorMin.x}, anchorMax.x={slotRoots[i].anchorMax.x}) — must be left-anchored fixed width (D9)";
+            if (slotRoots[i].anchorMin.x != 0.5f || slotRoots[i].anchorMax.x != 0.5f)
+                return $"ASB-12: slot {i} is not centre-anchored (anchorMin.x={slotRoots[i].anchorMin.x}, anchorMax.x={slotRoots[i].anchorMax.x}) — must be centre-anchored fixed width (D9 revised)";
         }
         for (int i = 1; i < 4; i++)
         {
             float dx = slotRoots[i].anchoredPosition.x - slotRoots[i - 1].anchoredPosition.x;
-            if (dx <= 0f) return $"ASB-12: slot {i} is not to the RIGHT of slot {i - 1} (Δx={dx}) — slots must left-pack in order (D9)";
+            if (dx <= 0f) return $"ASB-12: slot {i} is not to the RIGHT of slot {i - 1} (Δx={dx}) — slots must pack in left-to-right order (D9 revised)";
             if (Mathf.Abs(dx - 68f) > 1f) return $"ASB-12: slot pitch {dx} ≠ fixed 68 (slots must pack at a constant pitch, not spread to full width — D9)";
         }
-        // right side empty: the rightmost slot ends well left of the full-width strip (when the strip has laid out).
+        // centre-packed: the group is centred so both sides of the strip are empty (when the strip has laid out).
         float stripW = bar.Strip.rect.width;
         if (stripW > 1f)
         {
-            float rightEdge = slotRoots[3].anchoredPosition.x + slotRoots[3].rect.width;
-            if (rightEdge >= stripW)
-                return $"ASB-12: slots fill the whole strip width (rightEdge={rightEdge} ≥ stripW={stripW}) — the right side must stay empty (D9)";
+            float groupW = 4 * 68f; // SLOT_COUNT * SLOT_W
+            if (groupW >= stripW)
+                return $"ASB-12: slots fill the whole strip width (groupW={groupW} ≥ stripW={stripW}) — both sides must stay empty (D9 revised)";
         }
-        Debug.Log("[E2E ASB-12 PASS] slots left-packed at a fixed 68px pitch (not full-width stretch); right side empty.");
+        Debug.Log("[E2E ASB-12 PASS] slots centre-packed at a fixed 68px pitch (not full-width stretch); both sides empty.");
 
         // ── ASB-13: D10 value stacked BELOW the icon (icon top-anchored, primary bottom-anchored) ──
         for (int i = 0; i < 4; i++)

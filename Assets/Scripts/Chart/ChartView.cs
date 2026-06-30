@@ -213,9 +213,26 @@ public class ChartView : MaskableGraphic,
         return t;
     }
 
+    // #182: the SINGLE "no real frame" transition. Concentrates the invariant
+    // `no frame ⟺ no axis labels ⟺ NO DATA marker visible` so it can't be half-performed — a
+    // series that went empty (instrument left the confirmed window, or never warmed) must not keep
+    // a stale time axis, and a never-rendered chart must never show the default 1970-epoch axis.
+    // OnPopulateMesh early-returns for empty bars (it won't recompute ticks), so the tick caches are
+    // cleared here. Called from Render's empty branch; Build relies on the field defaults + UpdateNoData.
+    void EnterNoDataState()
+    {
+        _hasFrame = false;
+        _lastTimeTicks.Clear();
+        _lastPriceTicks.Clear();
+        _axisLabelsDirty = true;
+        UpdateTitle();
+        UpdateNoData();
+        SetVerticesDirty();
+    }
+
     // #182: the no-data marker is visible exactly when there is no real frame; in that state the
-    // time/price axis labels are also suppressed (cleared in Render's empty branch) so no stale or
-    // 1970-epoch axis frames the empty plot.
+    // time/price axis labels are also suppressed (see EnterNoDataState) so no stale or 1970-epoch
+    // axis frames the empty plot.
     void UpdateNoData()
     {
         if (_noDataLabel == null) return;
@@ -283,17 +300,7 @@ public class ChartView : MaskableGraphic,
 
         if (_bars.Count == 0)
         {
-            _hasFrame = false;
-            // #182 secondary: clear the tick caches and rebuild labels so a series that went empty
-            // (instrument left the confirmed window, or never warmed) does NOT keep a stale time
-            // axis — and a never-rendered chart never shows the default 1970-epoch axis. OnPopulateMesh
-            // early-returns for empty bars (it won't recompute ticks), so the clear must happen here.
-            _lastTimeTicks.Clear();
-            _lastPriceTicks.Clear();
-            _axisLabelsDirty = true;
-            UpdateTitle();
-            UpdateNoData();
-            SetVerticesDirty();
+            EnterNoDataState();   // #182: no real frame ⟹ no axis labels ⟹ NO DATA marker (one ritual)
             return;
         }
 

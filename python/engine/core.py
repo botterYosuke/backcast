@@ -7,6 +7,7 @@ from typing import Literal, Optional
 from .models import EngineSnapshot, HistoryPoint, OhlcPoint, PerInstrumentState, TradingState
 from .reducer import KlineUpdate, ReducerState, ReplayEvent, ReplayTimeUpdated, apply_event
 from .replay import BaseReplayProvider
+from .replay_window import ReplayWindow
 
 # Placeholder price for a DuckDB Replay that is LOADED but not yet streaming (#49). It only
 # satisfies TradingState's price>0 invariant for the brief pre-stream poll window and is
@@ -46,14 +47,9 @@ class DataEngine:
             "replay" if replay_provider else "static"
         )
         self._is_exhausted = False
-        # #182 H1: instruments whose per-id series was (re)seeded by an IDLE cold preview
-        # (populate_replay_preview). The watchable-playback clip in _build_trading_state_locked
-        # must NOT apply to these — a fresh preview is full-period fit-all (#156), even when it
-        # fires after a run while the engine is still IDLE-with-a-stale-cursor (force_stop_replay
-        # keeps _mode='replay' and the streamed top-level series, so the clip would otherwise leak
-        # into the preview and drop the tail). Cleared on load_replay_data (new scenario re-arms
-        # the run path); discarded per-iid on forget_instrument.
-        self._full_preview_iids: set[str] = set()
+        # #182 watchable-playback: the visible slice of each per-id chart series (cursor gate +
+        # clip + preview-exemption set) lives in one deep module. See engine.replay_window.
+        self._replay_window = ReplayWindow()
         self._max_history_len = max_history_len
         self._jquants_loader = jquants_loader
         self._jquants_catalog_path = jquants_catalog_path
@@ -227,9 +223,9 @@ class DataEngine:
             if self._replay_state != "IDLE":
                 return False, "LoadReplayData is only allowed from IDLE"
 
-            # #182 H1: a new scenario re-arms the run path — clear any preview clip-exemptions so
-            # the cold-seed streams (and clips) normally for this load.
-            self._full_preview_iids.clear()
+            # #182: a new scenario re-arms the run path — drop any preview clip-exemptions so the
+            # cold-seed streams (and clips) normally for this load.
+            self._replay_window.rearm()
 
             # ADR-0006 (#49): J-Quants DuckDB direct-read takes precedence over everything
             # else — an explicitly-passed catalog (the panel's vestigial arg) AND a stale
@@ -581,9 +577,9 @@ class DataEngine:
                 for b in bars
             ]
             self._rs.per_id_ohlc_points[instrument_id] = points
-            # #182 H1: mark this iid full-period so the watchable-playback clip leaves the fresh
+            # #182: mark this iid full-period so the watchable-playback clip leaves the fresh
             # preview alone (it must show fit-all even in the IDLE-after-run state).
-            self._full_preview_iids.add(instrument_id)
+            self._replay_window.mark_preview(instrument_id)
             return True, "", len(points)
 
     def get_replay_last_prices(self) -> dict:
@@ -598,7 +594,7 @@ class DataEngine:
         with self._lock:
             self._rs.per_id_close.pop(instrument_id, None)
             self._rs.per_id_ohlc_points.pop(instrument_id, None)
-            self._full_preview_iids.discard(instrument_id)  # #182 H1: drop stale exemption
+            self._replay_window.forget(instrument_id)  # #182: drop stale clip-exemption
 
     def _build_trading_state_locked(self, *, include_per_instrument: bool) -> TradingState:
         """Build a TradingState from current reducer state.
@@ -611,37 +607,15 @@ class DataEngine:
         rs = self._rs
         per_instrument: dict[str, PerInstrumentState] = {}
         if include_per_instrument:
-            # #182 watchable-playback cursor: the chart draws per_instrument[id].ohlc_points,
-            # which Replay COLD-SEEDS with the FULL scenario window at load (#156 / findings 0119
-            # D-5) and the reducer dedupes-by-ts during streaming — so without clipping it shows
-            # every bar from the first poll and bars_per_second only slows the Python loop (the
-            # streamed top-level ohlc_points advances, but C# ChartView ignores it). While a run
-            # is in flight (or has streamed ≥1 primary bar), clip each per-id series to the streamed
-            # replay cursor — the latest streamed primary bar's time (rs.timestamp_ms, the global
-            # replay clock; multi-instrument charts follow the same cursor). Before any bar streams
-            # (LOADED pre-run / IDLE preview / cold-seed) leave the FULL series so fit-all preview
-            # is preserved. The gate is "RUNNING or already-streamed", NOT RUNNING-only: the host
-            # reverts RUNNING→IDLE at run end (force_stop_replay), and an observation-only cell that
-            # `break`s early must keep showing only the bars it streamed — not snap back to full.
-            # A fresh load_replay_data builds a new ReducerState (ohlc_points empty), re-arming the
-            # full-preview path for the next scenario.
-            #
-            # H1 exemption (_full_preview_iids): the "or already-streamed" arm keeps the clip armed
-            # in the IDLE-after-run state, but populate_replay_preview ALSO fires there (scenario
-            # Commit / chart spawn / layout restore) and re-seeds a per-id series with the FULL
-            # catalog (#156 fit-all). Such a freshly-previewed iid is exempted below so the clip does
-            # not leak into it and drop the tail. load_replay_data clears the exemptions.
-            #
-            # Gated on _mode=="replay": clipping is a Replay concept (cold-seed + streamed cursor).
-            # Live never cold-seeds, so clipping there would be a no-op only by the reducer's
-            # primary_id=None invariant (every Live event is "primary", keeping rs.timestamp_ms ≥
-            # every per-id open_time_ms) — too subtle to rely on. The mode guard makes "Replay only"
-            # explicit and protects Live from silent bar loss if that invariant ever changes.
-            streamed = len(rs.ohlc_points) > 0
-            visible_cursor_ms = (
-                rs.timestamp_ms
-                if (self._mode == "replay" and (self._replay_state == "RUNNING" or streamed))
-                else None
+            # #182 watchable-playback: the chart draws per_instrument[id].ohlc_points, which Replay
+            # cold-seeds with the FULL scenario window. The ReplayWindow owns whether/where each
+            # per-id series is clipped to the streamed replay cursor (gate + clip + preview-
+            # exemption) — see engine.replay_window for the full rationale.
+            visible_cursor_ms = self._replay_window.visible_cursor_ms(
+                mode=self._mode,
+                replay_state=self._replay_state,
+                streamed=len(rs.ohlc_points) > 0,
+                timestamp_ms=rs.timestamp_ms,
             )
             # #129 layer 3: project the *union* of both per-id dicts, not just per_id_close.
             # どちらの dict も相手を包含しない: per_id_close は iid を持つ全イベントで書かれる
@@ -655,11 +629,9 @@ class DataEngine:
             for iid in dict.fromkeys((*rs.per_id_close, *rs.per_id_ohlc_points)):
                 close_px = rs.per_id_close.get(iid, 0.0)
                 points = rs.per_id_ohlc_points.get(iid, [])
-                if visible_cursor_ms is not None and iid not in self._full_preview_iids:
-                    # #182: clip to the streamed replay cursor (one-bar-at-a-time playback).
-                    # H1: a fresh IDLE cold preview (populate_replay_preview) exempts its iid so a
-                    # post-run preview shows the full period (fit-all) instead of the stale cursor.
-                    points = [p for p in points if p.open_time_ms <= visible_cursor_ms]
+                # #182: clip to the streamed replay cursor (one-bar-at-a-time playback); a fresh
+                # IDLE cold preview is exempt so it shows the full fit-all period.
+                points = self._replay_window.clip(iid, points, visible_cursor_ms)
                 # price = 最新の既知価格。streaming では last close、preview では未確定なので
                 # 最終ローソクの close を採る（OhlcPoint.close は model 検証で gt=0）。両方無ければ None。
                 if close_px > 0:
@@ -670,7 +642,7 @@ class DataEngine:
                     price = None
                 per_instrument[iid] = PerInstrumentState(
                     price=price,
-                    ohlc_points=list(points),
+                    ohlc_points=points,  # clip() returns a fresh list — no need to re-copy here
                     depth=None,  # Live depth は GetState 側で per-instrument に注入される
                 )
         return TradingState(

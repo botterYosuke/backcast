@@ -5,10 +5,12 @@
 // と AFK probe の両方がこれを駆動する。検証も RPC も持たない——root（BackcastWorkspaceRoot.DriveVenueLoginModal）が
 // view ↔ controller を毎フレーム同期し、submit を WorkspaceEngineHost.SubmitVenueLogin（headless 認証）へ渡す。
 //
-// SECRET 規律（kabu API パスワード・SecretModalController を踏襲）: 平文は managed string にしない。キーは
-// onTextInput で 1 文字ずつ char[] バッファへため、masked dot だけ表示する。submit 時に使い捨て char[] コピーを
-// 渡し（pythonnet 境界の transient string が唯一の不可避平文）、即 zeroize する。Tachibana の認証ID・秘密鍵パスは
-// 秘密ではない（ID とファイルパス）ので通常文字列で扱う。
+// SECRET 規律（kabu API パスワード）: ADR-0042 が ADR-0040 §D2（char[] 無バッファ）を撤回した。kabu パスワードは
+// Tachibana の認証ID・秘密鍵パスと同じく本物の uGUI InputField(contentType=Password) で受け、通常の managed
+// string（Password）で保持する。代償として平文は零化できない managed string になる（GC ヒープに滞留）——owner が
+// discoverability を優先して受容（ADR-0042 Consequences）。C#↔Python 境界（SubmitVenueLogin(char[])）の signature は
+// 維持するため TakeSecretTransient() が Password.ToCharArray() を返し、host は従来どおり使い捨て char[] を zeroize する。
+// Close / mode 切替 / submit 成功で Password="" にクリアする（真の零化ではないので PasswordCleared() と命名）。
 
 using System;
 
@@ -34,10 +36,6 @@ public struct VenueLoginFormInit
 
 public sealed class VenueLoginModalController
 {
-    const int MaxSecretLen = 64;
-
-    readonly char[] _secret = new char[MaxSecretLen];  // zeroable・managed string にしない
-    int _secretLen;
     bool _retryBlocked;   // allow_retry=false の失敗後、再確認/入力変更まで OK を据え置く
 
     public bool IsOpen { get; private set; }
@@ -51,8 +49,8 @@ public sealed class VenueLoginModalController
     public string StatusText { get; private set; } = "";
 
     public bool IsKabu => Venue == "KABU";
-    public int SecretLength => _secretLen;
-    public string MaskedPassword => new string('•', _secretLen);  // dot-count only
+    // kabu API パスワード（ADR-0042: InputField backing の managed string・零化不能）。Tachibana は使わない。
+    public string Password { get; private set; } = "";
 
     // モーダルを開く（venue_login_form_init の結果を seed）。
     public void Open(string venue, VenueLoginFormInit init)
@@ -66,8 +64,7 @@ public sealed class VenueLoginModalController
         Busy = false;
         StatusText = "";
         _retryBlocked = false;
-        ZeroizeSecret();
-        SeedSecretPrefill(init.ApiPasswordPrefill);
+        Password = IsKabu ? (init.ApiPasswordPrefill ?? "") : "";   // kabu のみ prefill（ADR-0033 debug verify）
         IsOpen = true;
     }
 
@@ -83,8 +80,7 @@ public sealed class VenueLoginModalController
             // Fail-safe: the new port's station is unconfirmed until the re-probe returns — keep OK
             // disabled meanwhile so the user can't submit against a port whose station is down.
             StationRunning = false;
-            ZeroizeSecret();
-            SeedSecretPrefill(refreshed.ApiPasswordPrefill);
+            Password = refreshed.ApiPasswordPrefill ?? "";   // re-derive prefill for the new mode
         }
         else
         {
@@ -93,23 +89,14 @@ public sealed class VenueLoginModalController
         }
     }
 
-    void SeedSecretPrefill(string prefill)
+    // kabu パスワード（InputField の .text を毎フレーム同期・ADR-0042）。**実際に変わったときだけ** retry-block を解く——
+    // root の per-frame sync は毎フレーム SetPassword(同じ text) を呼ぶので、無条件 clear だと allow_retry=false の
+    // 据え置きが翌フレームで解けてしまう（code-review F1）。値が変わった＝ユーザー編集のときだけ block を解く。
+    public void SetPassword(string s)
     {
-        if (IsKabu && !string.IsNullOrEmpty(prefill))
-            foreach (char c in prefill) AppendSecretChar(c);
-    }
-
-    // kabu パスワードのキー入力（onTextInput・1 文字ずつ）。
-    public void AppendSecretChar(char c)
-    {
-        if (_secretLen < MaxSecretLen) _secret[_secretLen++] = c;
-        _retryBlocked = false;
-    }
-
-    public void BackspaceSecret()
-    {
-        if (_secretLen > 0) { _secretLen--; _secret[_secretLen] = '\0'; }
-        _retryBlocked = false;
+        s = s ?? "";
+        if (Password != s) _retryBlocked = false;
+        Password = s;
     }
 
     public void SetAuthId(string s) { AuthId = s ?? ""; }
@@ -134,7 +121,7 @@ public sealed class VenueLoginModalController
     public bool CanSubmit()
     {
         if (Busy || _retryBlocked) return false;
-        if (IsKabu) return StationRunning && _secretLen > 0;
+        if (IsKabu) return StationRunning && Password.Length > 0;
         return !string.IsNullOrWhiteSpace(AuthId) && !string.IsNullOrWhiteSpace(KeyPath);
     }
 
@@ -146,12 +133,8 @@ public sealed class VenueLoginModalController
     }
 
     // pythonnet 境界へ渡す使い捨て char[] コピー（呼び元が zeroize する）。tachibana は空。
-    public char[] TakeSecretTransient()
-    {
-        var copy = new char[_secretLen];
-        Array.Copy(_secret, copy, _secretLen);
-        return copy;
-    }
+    // ADR-0042: backing は managed string なので元の平文は零化できない——この char[] コピーだけが zeroize 可能。
+    public char[] TakeSecretTransient() => IsKabu ? Password.ToCharArray() : Array.Empty<char>();
 
     // submit 結果を反映。成功で閉じる・失敗は閉じずに status を赤字表示し再試行（allow_retry=false は OK 据え置き）。
     public void ApplyResult(VenueLoginSubmitResult r)
@@ -166,7 +149,7 @@ public sealed class VenueLoginModalController
 
     public void Close()
     {
-        ZeroizeSecret();
+        Password = "";   // clear（真の零化は不能・ADR-0042）
         IsOpen = false;
         Busy = false;
         _retryBlocked = false;
@@ -174,19 +157,9 @@ public sealed class VenueLoginModalController
 
     public void Cancel() => Close();
 
-    void ZeroizeSecret()
-    {
-        Array.Clear(_secret, 0, _secret.Length);
-        _secretLen = 0;
-    }
-
-    // secret バッファが完全に zeroize されているか（gate 用）。
-    public bool SecretIsZeroed()
-    {
-        if (_secretLen != 0) return false;
-        for (int i = 0; i < _secret.Length; i++) if (_secret[i] != '\0') return false;
-        return true;
-    }
+    // パスワードがクリアされているか（gate 用）。ADR-0042: managed string は真には零化できないので
+    // 「Password == ""」を honest に検査する（旧 SecretIsZeroed の char[] 全ゼロ検査ではない）。
+    public bool PasswordCleared() => Password.Length == 0;
 
     static string JsonEscape(string s)
     {

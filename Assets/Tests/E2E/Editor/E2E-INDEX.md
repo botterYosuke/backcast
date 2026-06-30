@@ -35,6 +35,11 @@
 > VLOGIN-MODAL-10/11＝実 venue 認証・実表示は HITL）。headless 認証半分は Python `test_venue_login_headless.py`（submit/probe/
 > form_init・`PRODGATE-01` 移管）。findings 0130 の macOS RED gate は「login 経路が tkinter を import/Tk しない」へ更新し
 > xfail-strict を撤去して enforcing 化。旧 `test_inproc_prompt_login` / TKTEARDOWN（#133-135・Tcl_AsyncDelete）は crash クラス消滅で廃止。
+>
+> #181 follow-up（ADR-0042・findings 0132）: 「パスワードの入力欄が無い」を解消。kabu パスワードを ADR-0040 §D2 の char[] 無バッファ
+> ラベルから本物の InputField(contentType=Password) へ（代償＝平文は零化不能 managed string・owner 受容）。**VLOGIN-MODAL-12 新設**＝
+> overlay の入力欄 affordance を EditMode で gate（controller のみ駆動の旧 gate は透明ラベル回帰を見逃した）。VLOGIN-MODAL-01/04/06 は
+> char[] 述語→`Password`/`PasswordCleared` へ更新。
 
 | 台本 | Action ID | 行数 | 自動(E2E済) | 自動(Probe有・要昇格) | 要新規自動化 | HITL専用 | 対象外 |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -58,7 +63,7 @@
 | [ReplayRunResultTileE2ERunner](./ReplayRunResultTileE2ERunner.md) ✅ | `RRT-01..10` (06=D3 anti-stale, 06T=telemetry-only, 07=no-persist, 08=× latch, 09A/09B=対称再 arm, 10=screen-anchored) | 14 | 12 | 0 | 0 | 2 | 0 |
 | [KabuLiveChartRenderE2ERunner](./KabuLiveChartRenderE2ERunner.md) ✅ | `CHARTRENDER-01..05` | 5 | 5 | 0 | 0 | 0 | 0 |
 | [AccountSummaryBarE2ERunner](./AccountSummaryBarE2ERunner.md) ✅ | `ASB-01..16` | 16 | 16 | 0 | 0 | 0 | 0 |
-| [VenueLoginModalE2ERunner](./VenueLoginModalE2ERunner.md) ✅ | `VLOGIN-MODAL-01..11` | 11 | 9 | 0 | 0 | 2 | 0 |
+| [VenueLoginModalE2ERunner](./VenueLoginModalE2ERunner.md) ✅ | `VLOGIN-MODAL-01..12` | 12 | 10 | 0 | 0 | 2 | 0 |
 
 ## Journey E2E（6 本・85 行）
 

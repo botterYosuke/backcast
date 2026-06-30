@@ -733,9 +733,9 @@ public sealed class WorkspaceEngineHost
     }
 
     // submit_venue_login → validate → headless auth → finalize. On success set_execution_mode(LiveManual)
-    // (mirrors VenueLogin). SECRET 規律: the kabu API password arrives as a char[] (no managed string in the
-    // modal); the transient string built here at the pythonnet boundary is the irreducible plaintext, and the
-    // caller-owned char[] is zeroized the moment the RPC returns (mirrors LiveRpcLanes.CallSubmitSecret).
+    // (mirrors VenueLogin). SECRET 規律: the kabu API password arrives as a char[] copy (ADR-0042: the modal's
+    // backing store is now a managed string in the InputField — that plaintext is NOT zeroable; only this caller-
+    // owned char[] copy and the pythonnet-boundary transient string are zeroized the moment the RPC returns).
     public void SubmitVenueLogin(string venue, string mode, string fieldsJson, char[] secret,
                                  Action<VenueLoginSubmitResult> onResult)
     {

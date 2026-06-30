@@ -652,8 +652,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         venueLoginGo.transform.SetParent(transform, false);
         _venueLoginOverlay = venueLoginGo.AddComponent<VenueLoginModalOverlay>();
         _venueLoginOverlay.Build(_font);
-        _venueLoginOverlay.CharTyped += OnVenueLoginChar;
-        _venueLoginOverlay.BackspacePressed += OnVenueLoginBackspace;
         _venueLoginOverlay.ModeSelected += OnVenueLoginMode;
         _venueLoginOverlay.BrowseClicked += OnVenueLoginBrowse;
         _venueLoginOverlay.RecheckClicked += OnVenueLoginRecheck;
@@ -3044,8 +3042,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 if (_vlPendingInitIsOpen)
                 {
                     _venueLoginModal.Open(init.Venue, init);
-                    // Secret discipline: drop any focused InputField so kabu onTextInput keystrokes don't
-                    // ALSO land in its plaintext .text (mirrors DriveSecretModal).
                     if (EventSystem.current != null) EventSystem.current.SetSelectedGameObject(null);
                 }
                 else
@@ -3057,7 +3053,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                     _venueLoginOverlay.SetAuthIdText(_venueLoginModal.AuthId);
                     _venueLoginOverlay.SetKeyPathText(_venueLoginModal.KeyPath);
                 }
-                else { requestKabuProbe = true; probeVenue = _venueLoginModal.Venue; probeMode = _venueLoginModal.Mode; }
+                else
+                {
+                    // ADR-0042: seed the kabu password InputField from the (re-derived) prefill on open/mode switch.
+                    _venueLoginOverlay.SetPasswordText(_venueLoginModal.Password);
+                    requestKabuProbe = true; probeVenue = _venueLoginModal.Venue; probeMode = _venueLoginModal.Mode;
+                }
             }
             if (_vlPendingProbeSet)
             {
@@ -3093,6 +3094,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                 _venueLoginModal.SetAuthId(_venueLoginOverlay.AuthIdText);
                 _venueLoginModal.SetKeyPath(_venueLoginOverlay.KeyPathText);
             }
+            else
+            {
+                // ADR-0042: sync the kabu password InputField's .text into the controller each frame.
+                _venueLoginModal.SetPassword(_venueLoginOverlay.PasswordText);
+            }
             _venueLoginOverlay.Reflect(_venueLoginModal);
         }
     }
@@ -3105,9 +3111,6 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             lock (_vlLock) { _vlPendingProbeRunning = running; _vlPendingProbePort = port; _vlPendingProbeSet = true; }
         });
     }
-
-    void OnVenueLoginChar(char c) => _venueLoginModal.AppendSecretChar(c);
-    void OnVenueLoginBackspace() => _venueLoginModal.BackspaceSecret();
 
     void OnVenueLoginMode(string mode)
     {

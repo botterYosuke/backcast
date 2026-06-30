@@ -6,6 +6,8 @@
 
 > **番号注記**: issue #181 本文・findings 0130 は新 finding 番号を名指していない。`ls docs/findings/ | sort` の次空き番号 0131 で採番した（0126 は account-summary-bar と macos-shutdown-segfault の 2 ファイルが既に消費・0130 が venue-login 真因）。
 
+> **超過注記（2026-06-30）**: 本 finding の **kabu API パスワードの char[] 無バッファ規律（§3・§9 の `onTextInput`/`MaskedPassword`/`char[]`）は ADR-0042 / findings 0132 で supersede された**——「パスワードの入力欄が無い」を解消するため kabu パスワードは本物の InputField(contentType=Password) になり、char[] 機構（`AppendSecretChar`/`MaskedPassword`/`Subscribe`/`OnTextInput`）と AFK 述語（`SecretIsZeroed`→`PasswordCleared`）は撤去された。tkinter 廃止・orchestration 反転（ADR-0040 コア）は不変。kabu パスワード周りの記述を読むときは findings 0132 を正本とする。
+
 ## 1. 何を作るか（オーケストレーションの反転）
 
 旧: C# トリガ → **Python が tkinter GUI を開く**（`_handle_prompt_login` → `run_dialog` → `tkinter.Tk()`）。

@@ -7,19 +7,16 @@
 // root（BackcastWorkspaceRoot.DriveVenueLoginModal）が毎フレーム overlay ↔ controller を同期し、OK で
 // WorkspaceEngineHost.SubmitVenueLogin（headless 認証）を呼ぶ。
 //
-// kabu API パスワードは SecretModalOverlay と同じ char[] 無バッファ方式: onTextInput で 1 文字ずつ CharTyped を
-// 投げ（managed string を作らない）、masked dot だけ表示する。Tachibana の認証ID・秘密鍵パスは秘密ではないので
-// legacy InputField（memory `backcast-legacy-inputfield-new-input-system`）。秘密鍵は「参照…」で .pem ピッカー。
+// kabu API パスワードは ADR-0042 で本物の legacy InputField(contentType=Password) にした（ADR-0040 §D2 の char[]
+// 無バッファ方式を撤回）。Tachibana の認証ID・秘密鍵パスと同じ legacy InputField
+// （memory `backcast-legacy-inputfield-new-input-system`）。秘密鍵は「参照…」で .pem ピッカー。
 
 using System;
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.InputSystem;
 
 public sealed class VenueLoginModalOverlay : MonoBehaviour
 {
-    public event Action<char> CharTyped;        // kabu パスワード（onTextInput）
-    public event Action BackspacePressed;       // kabu パスワード backspace
     public event Action<string> ModeSelected;   // demo/prod/verify
     public event Action BrowseClicked;          // tachibana 秘密鍵 .pem ピッカー
     public event Action RecheckClicked;         // kabu 本体 再確認
@@ -28,11 +25,10 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
 
     Canvas _canvas;
     GameObject _panelRoot;
-    Text _title, _status, _maskedPw, _portLabel;
+    Text _title, _status, _portLabel;
     RectTransform _tachiGroup, _kabuGroup;
-    InputField _authId, _keyPath;
+    InputField _authId, _keyPath, _pwField;
     Button _modeA, _modeB, _okBtn, _recheckBtn;
-    Keyboard _subscribedKb;     // kabu のときだけ hook する device
     bool _visible;
     bool _isKabu;
 
@@ -45,8 +41,17 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
     public bool IsVisible => _visible;
     public string AuthIdText => _authId != null ? _authId.text : "";
     public string KeyPathText => _keyPath != null ? _keyPath.text : "";
+    public string PasswordText => _pwField != null ? _pwField.text : "";   // kabu（ADR-0042）
     public void SetKeyPathText(string s) { if (_keyPath != null) _keyPath.text = s ?? ""; }
     public void SetAuthIdText(string s) { if (_authId != null) _authId.text = s ?? ""; }
+    public void SetPasswordText(string s) { if (_pwField != null) _pwField.text = s ?? ""; }
+
+    // gate 用 contract（VLOGIN-MODAL-12）: kabu パスワードが「表示中で contentType=Password の生きた InputField」か。
+    // ADR-0042 以前は背景なし Text ラベルで「入力欄が無い」に見えた——この述語がその回帰を直接捕捉する。
+    public bool KabuPasswordFieldIsLivePasswordInput() =>
+        _kabuGroup != null && _kabuGroup.gameObject.activeInHierarchy &&
+        _pwField != null && _pwField.gameObject.activeInHierarchy &&
+        _pwField.contentType == InputField.ContentType.Password;
 
     public void Build(Font font)
     {
@@ -82,10 +87,10 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
         _keyPath = MakeField(_tachiGroup, font, 96f, 32f, 232f, 24f);
         MakeButton(_tachiGroup, font, 334f, 32f, 62f, 24f, "参照…", () => BrowseClicked?.Invoke());
 
-        // kabu グループ: API パスワード(masked) / 本体ポート / 再確認 。
+        // kabu グループ: API パスワード(InputField/Password・ADR-0042) / 本体ポート / 再確認 。
         _kabuGroup = MakeRow(prt, 12f, 40f, 396f, 64f);
         MakeLabel(_kabuGroup, font, 0f, 0f, 110f, 24f, "API パスワード");
-        _maskedPw = MakeLabel(_kabuGroup, font, 116f, 0f, 280f, 24f, "");
+        _pwField = MakeField(_kabuGroup, font, 116f, 0f, 280f, 24f, password: true, placeholder: "パスワードを入力");
         MakeLabel(_kabuGroup, font, 0f, 32f, 110f, 24f, "本体ポート");
         _portLabel = MakeLabel(_kabuGroup, font, 116f, 32f, 120f, 24f, "");
         _recheckBtn = MakeButton(_kabuGroup, font, 250f, 32f, 100f, 24f, "再確認", () => RecheckClicked?.Invoke());
@@ -109,8 +114,10 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
         _visible = visible;
         if (_panelRoot != null) _panelRoot.SetActive(visible);
         if (_canvas != null) _canvas.enabled = visible;
-        // kabu のときだけ onTextInput を drain（tachibana は InputField が自前で受ける）。
-        if (visible && _isKabu) Subscribe(); else Unsubscribe();
+        // ADR-0042/hygiene (code-review F3): clear the kabu password field on hide so the typed plaintext does
+        // not linger in the live InputField after a successful login / cancel (controller.Password is cleared by
+        // Close(); this bounds the InputField.text plaintext surface to while the modal is open).
+        if (!visible && _pwField != null) _pwField.text = "";
     }
 
     // controller の状態を view に反映（毎フレーム・DriveVenueLoginModal から）。
@@ -118,12 +125,7 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
     {
         if (c == null) return;
         bool kabu = c.IsKabu;
-        if (kabu != _isKabu)
-        {
-            _isKabu = kabu;
-            // venue が切り替わったら onTextInput の購読を kabu のときだけに張り替える。
-            if (_visible && kabu) Subscribe(); else Unsubscribe();
-        }
+        _isKabu = kabu;
         if (_tachiGroup != null) _tachiGroup.gameObject.SetActive(!kabu);
         if (_kabuGroup != null) _kabuGroup.gameObject.SetActive(kabu);
 
@@ -132,7 +134,7 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
 
         if (kabu)
         {
-            if (_maskedPw != null) _maskedPw.text = c.MaskedPassword;
+            // パスワードは InputField が自前で保持（root が PasswordText↔controller を毎フレーム同期）。ここでは触らない。
             if (_portLabel != null) _portLabel.text = c.StationRunning ? (c.StationPort + " (起動中)") : (c.StationPort + " (未起動)");
         }
 
@@ -146,38 +148,6 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
         if (_status != null) _status.text = c.StatusText ?? "";
         if (_okBtn != null) _okBtn.interactable = c.CanSubmit();
     }
-
-    void Update()
-    {
-        if (!_visible || !_isKabu) return;
-        var kb = Keyboard.current;
-        if (kb != null && kb.backspaceKey.wasPressedThisFrame) BackspacePressed?.Invoke();
-    }
-
-    void Subscribe()
-    {
-        if (_subscribedKb != null) return;
-        var kb = Keyboard.current;
-        if (kb == null) return;
-        kb.onTextInput += OnTextInput;
-        _subscribedKb = kb;
-    }
-
-    void Unsubscribe()
-    {
-        if (_subscribedKb == null) return;
-        _subscribedKb.onTextInput -= OnTextInput;
-        _subscribedKb = null;
-    }
-
-    void OnTextInput(char c)
-    {
-        if (c < ' ' || c == (char)0x7F) return;   // 制御文字は無視（backspace は key poll）
-        CharTyped?.Invoke(c);
-    }
-
-    void OnDisable() => Unsubscribe();
-    void OnDestroy() => Unsubscribe();
 
     // ── tiny uGUI builders（top-left-anchored・ModifyModalOverlay と同型）──
     static RectTransform MakeRow(RectTransform parent, float x, float yTop, float w, float h)
@@ -231,7 +201,8 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
         if (img != null) img.color = c;
     }
 
-    static InputField MakeField(RectTransform parent, Font font, float x, float yTop, float w, float h)
+    static InputField MakeField(RectTransform parent, Font font, float x, float yTop, float w, float h,
+                                bool password = false, string placeholder = null)
     {
         var go = new GameObject("field", typeof(RectTransform), typeof(Image), typeof(InputField));
         var rt = (RectTransform)go.transform; rt.SetParent(parent, false); Anchor(rt, x, yTop, w, h);
@@ -245,6 +216,23 @@ public sealed class VenueLoginModalOverlay : MonoBehaviour
         text.alignment = TextAnchor.MiddleLeft; text.supportRichText = false;
         var field = go.GetComponent<InputField>();
         field.textComponent = text; field.text = ""; field.lineType = InputField.LineType.SingleLine;
+        if (password)
+        {
+            // ADR-0042: kabu API パスワードを masked 入力にする（表示マスクのみ・backing は managed string）。
+            // contentType=Password の setter（EnforceContentType）が inputType=Password も自動設定するので明示不要。
+            field.contentType = InputField.ContentType.Password;
+        }
+        if (!string.IsNullOrEmpty(placeholder))
+        {
+            var phGo = new GameObject("Placeholder", typeof(RectTransform), typeof(Text));
+            var phrt = (RectTransform)phGo.transform; phrt.SetParent(rt, false);
+            phrt.anchorMin = Vector2.zero; phrt.anchorMax = Vector2.one;
+            phrt.offsetMin = new Vector2(6f, 2f); phrt.offsetMax = new Vector2(-6f, -2f);
+            var ph = phGo.GetComponent<Text>();
+            ph.font = font; ph.fontSize = 12; ph.color = new Color(TextColor.r, TextColor.g, TextColor.b, 0.45f);
+            ph.alignment = TextAnchor.MiddleLeft; ph.supportRichText = false; ph.text = placeholder;
+            field.placeholder = ph;
+        }
         return field;
     }
 }

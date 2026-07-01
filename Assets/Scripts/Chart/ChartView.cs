@@ -67,6 +67,8 @@ public class ChartView : MaskableGraphic,
     readonly List<OhlcPoint> _bars = new List<OhlcPoint>();
     bool _hasFrame;
     double _lastClose, _firstOpen;
+    public Action<long> RequestOlderBars;
+    long _lastOlderBarsRequestBeforeMs;
 
     // ---- visible-window virtualization state (per chart window — findings 0119 D-2) ----
     public ChartViewState ViewState { get; } = new ChartViewState();
@@ -291,6 +293,9 @@ public class ChartView : MaskableGraphic,
         var pts = frame.Ohlc;
         _bars.Clear();
         if (pts != null) for (int i = 0; i < pts.Count; i++) _bars.Add(pts[i]);
+
+        if (_bars.Count > 0 && _bars[0].open_time_ms != _lastOlderBarsRequestBeforeMs)
+            _lastOlderBarsRequestBeforeMs = 0;
 
         // Infer basis_ms from the bar diff if SetGranularity wasn't called (Replay full-period cold load
         // in S6 calls Render with multi-year Daily data; auto-infer keeps the chart sensible without
@@ -799,7 +804,30 @@ public class ChartView : MaskableGraphic,
     public void PanByPixels(float dx_px)
     {
         ViewState.Pan(dx_px);
+        MaybeRequestOlderBars(dx_px);
         SetVerticesDirty();
+    }
+
+    void MaybeRequestOlderBars(float dx_px)
+    {
+        if (dx_px <= 0f) return;          // dragging right reveals older/left-side bars
+        if (_bars.Count == 0) return;
+        if (RequestOlderBars == null) return;
+
+        long oldest = _bars[0].open_time_ms;
+        if (oldest <= 0 || _lastOlderBarsRequestBeforeMs == oldest) return;
+
+        var rect = rectTransform.rect;
+        float plotW = Mathf.Max(1f, rect.width - GutterLeft - GutterRight);
+        long basis = ViewState.basis_ms ?? ChartViewState.BASIS_DAILY_MS;
+        long visibleSpanMs = (long)((plotW / Mathf.Max(1e-3f, ViewState.cell_width_px)) * basis);
+        long thresholdMs = oldest + visibleSpanMs / 4;
+
+        if (ViewState.translation_ms <= thresholdMs)
+        {
+            _lastOlderBarsRequestBeforeMs = oldest;
+            RequestOlderBars(oldest);
+        }
     }
 
     // Cursor-centered wheel zoom (ZOOM-01).

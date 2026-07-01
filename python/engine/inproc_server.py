@@ -263,6 +263,15 @@ class InprocLiveServer:
         """#129: see DataEngine.populate_replay_preview."""
         return self._svc.populate_replay_preview(instrument_id, start, end, granularity)
 
+    def extend_replay_preview_left(
+        self,
+        instrument_id: str,
+        before_open_time_ms: int,
+        granularity: str = "Daily",
+    ) -> dict:
+        """#188: see DataEngine.extend_replay_preview_left."""
+        return self._svc.extend_replay_preview_left(instrument_id, before_open_time_ms, granularity)
+
     # ------------------------------------------------------------------
     # Replay transport — RETIRED (#76 S6b-β); only force_stop (teardown) survives
     # ------------------------------------------------------------------

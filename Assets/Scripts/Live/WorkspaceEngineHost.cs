@@ -496,6 +496,8 @@ public sealed class WorkspaceEngineHost
 
     // AFK test seam — Python-FREE probes intercept the RPC here. Null in production.
     internal Action<string, string, string, string> TestReplayPreviewOverride;
+    internal Action<string, long, string> TestReplayPreviewLeftOverride;
+    int _previewLeftInFlight;
 
     // Per-iid cold preview; IDLE/Replay guard delegated to Python (populate_replay_preview).
     // CONTRACT: start/end/granularity MUST be non-null (PyString(null) throws). The sole caller
@@ -545,6 +547,49 @@ public sealed class WorkspaceEngineHost
             Debug.Log($"[PERF chart-preview] host.preview iid={instrumentId} success={success} error={errorCode} bars={barCount} thread={threadId} gil_python_ms={perfGilAndPython.Elapsed.TotalMilliseconds:F1} total_ms={perfTotal.Elapsed.TotalMilliseconds:F1} managed_mem_delta_kb={(memAfter - memBefore) / 1024.0:F1}");
         }
         catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] preview error (non-fatal): {e.Message}"); }
+    }
+
+    public void RequestReplayPreviewLeft(string instrumentId, long beforeOpenTimeMs, string granularity)
+    {
+        if (string.IsNullOrEmpty(instrumentId) || beforeOpenTimeMs <= 0) return;
+
+        var hook = TestReplayPreviewLeftOverride;
+        if (hook != null) { hook(instrumentId, beforeOpenTimeMs, granularity); return; }
+
+        if (!Volatile.Read(ref _serverReady) || Volatile.Read(ref _closing)) return;
+        if (Interlocked.Exchange(ref _previewLeftInFlight, 1) == 1) return;
+
+        new Thread(() =>
+        {
+            try
+            {
+                bool success = false;
+                string errorCode = "";
+                int barCount = -1;
+
+                using (Py.GIL())
+                using (PyString pIid = new PyString(instrumentId))
+                using (PyInt pBefore = new PyInt(beforeOpenTimeMs))
+                using (PyString pGran = new PyString(granularity ?? "Daily"))
+                using (PyObject res = _server.InvokeMethod("extend_replay_preview_left", pIid, pBefore, pGran))
+                using (PyObject ok = res["success"])
+                {
+                    success = ok.As<bool>();
+                    try { using (PyObject ec = res["error_code"]) errorCode = ec.As<string>() ?? ""; } catch { errorCode = ""; }
+                    try { using (PyObject bc = res["bar_count"]) barCount = bc.As<int>(); } catch { barCount = -1; }
+                }
+
+                Debug.Log($"[PERF chart-preview] host.extend_left iid={instrumentId} success={success} error={errorCode} bars={barCount} before_ms={beforeOpenTimeMs}");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[WorkspaceEngineHost] preview extend-left error (non-fatal): {e.Message}");
+            }
+            finally
+            {
+                Volatile.Write(ref _previewLeftInFlight, 0);
+            }
+        }) { IsBackground = true, Name = "ReplayPreviewExtendLeft" }.Start();
     }
 
     // ---- live push events: drain the sink into LivePanelViewModel; return true if a NEW

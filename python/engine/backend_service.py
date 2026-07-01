@@ -153,6 +153,24 @@ class BackendService:
             logging.exception("[backend_service] populate_replay_preview failed for %s", instrument_id)
             return {"success": False, "error_code": "INPROC_ERROR", "bar_count": 0, "detail": str(exc)}
 
+    def extend_replay_preview_left(
+        self,
+        instrument_id: str,
+        before_open_time_ms: int,
+        granularity: str = "Daily",
+    ) -> dict:
+        """#188: thin wrapper — engine.extend_replay_preview_left owns the contract."""
+        try:
+            success, error_code, bar_count = self._srv.engine.extend_replay_preview_left(
+                instrument_id=instrument_id,
+                before_open_time_ms=before_open_time_ms,
+                granularity=granularity or "Daily",
+            )
+            return {"success": success, "error_code": error_code, "bar_count": bar_count}
+        except Exception as exc:
+            logging.exception("[backend_service] extend_replay_preview_left failed for %s", instrument_id)
+            return {"success": False, "error_code": "INPROC_ERROR", "bar_count": 0, "detail": str(exc)}
+
     def clear_run_view(self) -> dict:
         """#100 Slice ① (findings 0077): document-boundary reset for File→New / File→Open.
 

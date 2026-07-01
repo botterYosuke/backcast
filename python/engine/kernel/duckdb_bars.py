@@ -254,11 +254,13 @@ def load_bars(
     end: str | None = None,
     granularity: str = "Daily",
     limit: int | None = None,
+    before_ts_event_ms: int | None = None,
 ) -> list[Bar]:
     """Load bars for one instrument from its J-Quants DuckDB, ts_event-ascending.
 
     `start` / `end` are inclusive 'YYYY-MM-DD' dates compared against the `Date` column.
     `limit` caps the returned tail of the selected series while preserving ascending order.
+    `before_ts_event_ms` filters for bars older than this timestamp (in epoch milliseconds JST).
     The instrument's row series is selected by `_resolve_code` (4-digit Code preferred,
     5-digit LocalCode fallback — #48 grill). Returns [] when the file exists but holds no
     rows for the symbol; raises FileNotFoundError when the file is missing.
@@ -284,6 +286,16 @@ def load_bars(
         if end is not None:
             clauses.append("Date <= ?")
             params.append(end)
+        if before_ts_event_ms is not None:
+            dt = datetime.fromtimestamp(before_ts_event_ms / 1000.0, tz=_JST)
+            before_date = dt.date().isoformat()
+            if g.name == "stocks_daily":
+                clauses.append("Date < ?")
+                params.append(before_date)
+            elif g.name == "stocks_minute":
+                before_hhmm = dt.strftime("%H:%M")
+                clauses.append("(Date < ? OR (Date = ? AND Time < ?))")
+                params.extend([before_date, before_date, before_hhmm])
         where_sql = " AND ".join(clauses)
         if limit is None:
             sql = (

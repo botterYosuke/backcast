@@ -582,6 +582,81 @@ class DataEngine:
             self._replay_window.mark_preview(instrument_id)
             return True, "", len(points)
 
+    def extend_replay_preview_left(
+        self,
+        instrument_id: str,
+        before_open_time_ms: int,
+        granularity: str = "Daily",
+    ) -> tuple[bool, str, int]:
+        """#188: Load older preview bars and prepend them to the existing list, deduping by open_time_ms."""
+        from engine.kernel.duckdb_bars import (
+            load_bars,
+            normalize_granularity,
+        )
+        from engine.paths import jquants_duckdb_root
+
+        try:
+            granularity_norm = normalize_granularity(granularity)
+        except ValueError:
+            return False, "BAD_GRANULARITY", 0
+
+        with self._lock:
+            mode = self.mode_manager.current_mode if self.mode_manager else "Replay"
+            if mode != "Replay":
+                return False, "UNSUPPORTED_MODE", 0
+            if self._replay_state != "IDLE":
+                return False, "RUNNING", 0
+
+            root = self._duckdb_root or jquants_duckdb_root()
+            if not root:
+                return False, "NO_DUCKDB_ROOT", 0
+            root_str = str(root)
+
+            try:
+                bars = load_bars(
+                    root_str,
+                    instrument_id,
+                    granularity=granularity_norm,
+                    limit=_REPLAY_PREVIEW_BAR_LIMIT,
+                    before_ts_event_ms=before_open_time_ms,
+                )
+            except FileNotFoundError:
+                logging.info(
+                    "extend_left: no DuckDB %s file for %s",
+                    granularity_norm,
+                    instrument_id,
+                )
+                return False, "NO_DATA", 0
+            except Exception as exc:
+                logging.warning("extend_left: load_bars failed for %s: %s", instrument_id, exc)
+                return False, "LOAD_FAILED", 0
+
+            new_points = [
+                OhlcPoint(
+                    timestamp_ms=b.ts_event_ns // 1_000_000,
+                    open_time_ms=b.ts_event_ns // 1_000_000,
+                    open=b.open,
+                    high=b.high,
+                    low=b.low,
+                    close=b.close,
+                )
+                for b in bars
+            ]
+
+            existing_points = self._rs.per_id_ohlc_points.get(instrument_id, [])
+            if not new_points:
+                return True, "", len(existing_points)
+
+            merged_map = {}
+            for p in new_points:
+                merged_map[p.open_time_ms] = p
+            for p in existing_points:
+                merged_map[p.open_time_ms] = p
+
+            sorted_points = [merged_map[k] for k in sorted(merged_map.keys())]
+            self._rs.per_id_ohlc_points[instrument_id] = sorted_points
+            return True, "", len(sorted_points)
+
     def get_replay_last_prices(self) -> dict:
         """D8/D9: Return per-instrument last close prices for Replay mode sidebar."""
         with self._lock:

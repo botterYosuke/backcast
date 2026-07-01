@@ -1097,6 +1097,11 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
         var cv = chartAreaGo.AddComponent<ChartView>();
         cv.Build(chartArea, showTitleBar: false);
+        cv.RequestOlderBars = beforeOpenTimeMs =>
+        {
+            string granularity = ScenarioIsMinute() ? "Minute" : "Daily";
+            _host.RequestReplayPreviewLeft(instrumentId, beforeOpenTimeMs, granularity);
+        };
 
         _chartViews[instrumentId] = cv;
         _chartAreas[instrumentId] = chartArea;

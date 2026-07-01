@@ -14,6 +14,7 @@ from .replay_window import ReplayWindow
 # overwritten by bar 0; it is never rendered (ohlc_points is empty until streaming). Value is
 # arbitrary-positive — paired with timestamp_ms=1 it reads as an obvious "warming up" marker.
 _REPLAY_WARMUP_PRICE = 1.0
+_REPLAY_PREVIEW_BAR_LIMIT = 1000
 
 
 class DataEngine:
@@ -518,10 +519,9 @@ class DataEngine:
                 return False, "NO_DUCKDB_ROOT", 0
             root_str = str(root)
 
-            # #156 reopen (owner 決定: 「全期間表示」): the cold preview ALWAYS draws the
-            # instrument's FULL available history, decoupled from the scenario run window. The
-            # scenario start/end define the RUN range (load_replay_data streams within it) — NOT
-            # what the idle, pre-run chart shows.
+            # #156 reopen: the cold preview is decoupled from the scenario run window. The
+            # scenario start/end define the RUN range (load_replay_data streams within it), not
+            # what the idle pre-run chart shows.
             #
             # Why this changed: preview used to honour the scenario [start, end] (D3 fell back to
             # the full range only when the dates were empty/invalid). Once #169 seeded a *valid*
@@ -529,9 +529,8 @@ class DataEngine:
             # PAST the end of the frozen J-Quants snapshot (the DuckDB is a historical export that
             # never reaches "today"). load_bars then returned 0 bars → per_id_ohlc_points[iid] = []
             # → the empty chart the owner saw. The valid window silently disabled the very full-range
-            # fallback #156 relied on. get_date_range gives the catalog (min, max) so the whole
-            # series ships; ChartView's fit-all autoscale frames it. start/end are intentionally
-            # unused for the display window here — kept on the signature for the wire contract.
+            # fallback #156 relied on. #188 keeps that decoupling but caps the initial preview to
+            # the catalog tail so a chart spawn does not materialize multi-GB full histories.
             date_range = get_date_range(root_str, instrument_id, granularity_norm)
             if date_range is None:
                 # No rows for this iid (missing file or empty symbol): leave the chart empty,
@@ -547,6 +546,7 @@ class DataEngine:
                     start=effective_start,
                     end=effective_end,
                     granularity=granularity_norm,
+                    limit=_REPLAY_PREVIEW_BAR_LIMIT,
                 )
             except FileNotFoundError:
                 # S1 AC: graceful when an iid's DuckDB file is absent. Log so the absence isn't

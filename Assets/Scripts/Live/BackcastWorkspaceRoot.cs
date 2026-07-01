@@ -1367,11 +1367,13 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // (#103: the back plane) is the only chart spawn/close path. No box-grow (the dock cluster is not bounded).
     void SyncChartWindowsToUniverse()
     {
+        var perfTotal = System.Diagnostics.Stopwatch.StartNew();
         var ids = _scenario.Universe.Ids;
         var desired = new HashSet<string>(ids);
 
         // Close any chart window whose instrument left the universe (the snapshot below is taken
         // BEFORE iteration to avoid mutating the controller's dictionary during enumeration).
+        int existingBefore = _chartViews.Count;
         var stale = new List<string>();
         foreach (var iid in _chartViews.Keys) if (!desired.Contains(iid)) stale.Add(iid);
         foreach (var iid in stale) DespawnChartWindow(iid);
@@ -1393,6 +1395,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         }
         if (missing.Count > 0)
         {
+            var perfSpawn = System.Diagnostics.Stopwatch.StartNew();
             int gridCols = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(ids.Count)));
             var avoid = CollectChartGridAvoidRects();
             var slots = ChartGridPlacement.AllocateNonOverlappingTopLefts(
@@ -1404,12 +1407,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
 
             for (int i = 0; i < missing.Count; i++)
                 SpawnChartWindowAt(missing[i], slots[i]);
+            perfSpawn.Stop();
+            Debug.Log($"[PERF chart-preview] sync.spawn universe={ids.Count} existing_before={existingBefore} stale={stale.Count} missing={missing.Count} chart_views_now={_chartViews.Count} spawn_ms={perfSpawn.Elapsed.TotalMilliseconds:F1}");
         }
 
         // #129 (findings 0104 F1): unconditional tail — covers layout-restored charts (RestoreFloating
         // path) too, where missing.Count == 0 but _chartViews already holds the restored iids. The
         // Python-side guard (populate_replay_preview) no-ops in Manual/Auto/RUN, so this is a dumb trigger.
+        var perfPreview = System.Diagnostics.Stopwatch.StartNew();
         RequestChartPreviewsForAllLiveCharts();
+        perfPreview.Stop();
+        perfTotal.Stop();
+        Debug.Log($"[PERF chart-preview] sync.total universe={ids.Count} existing_before={existingBefore} stale={stale.Count} missing={missing.Count} chart_views_now={_chartViews.Count} preview_tail_ms={perfPreview.Elapsed.TotalMilliseconds:F1} total_ms={perfTotal.Elapsed.TotalMilliseconds:F1}");
     }
 
     // #129 (findings 0104 F1/F2): per-iid cold preview seed. SoT is _chartViews.Keys; Python decides
@@ -1423,12 +1432,21 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     void RequestChartPreviewsForAllLiveCharts()
     {
         if (_host == null || _chartViews.Count == 0) return;
+        var perf = System.Diagnostics.Stopwatch.StartNew();
+        long memBefore = GC.GetTotalMemory(false);
         var p = _scenario != null ? _scenario.Params : null;
         string start = p != null ? (p.Start ?? "") : "";
         string end = p != null ? (p.End ?? "") : "";
         string granularity = ScenarioIsMinute() ? "Minute" : "Daily";
+        int requested = 0;
         foreach (var iid in _chartViews.Keys)
+        {
+            requested++;
             _host.RequestReplayChartPreview(iid, start, end, granularity);
+        }
+        perf.Stop();
+        long memAfter = GC.GetTotalMemory(false);
+        Debug.Log($"[PERF chart-preview] request_all count={requested} granularity={granularity} start={start} end={end} elapsed_ms={perf.Elapsed.TotalMilliseconds:F1} managed_mem_delta_kb={(memAfter - memBefore) / 1024.0:F1}");
     }
 
     // Collect the avoid rects for chart grid placement: every already-live chart window (saved-restored or
@@ -1569,6 +1587,10 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
             // FormatException, so keep the last per-id render rather than throwing out of Update each frame.
             try
             {
+                var perfCharts = System.Diagnostics.Stopwatch.StartNew();
+                int decodedCharts = 0;
+                int renderedCharts = 0;
+                int totalBars = 0;
                 // #156 follow-up: in Replay the engine cold-loads the full scenario period into
                 // per_instrument[id].ohlc_points, so fit the WHOLE series on auto_scale. Live keeps the
                 // DEFAULT right-anchor (max_history_len=1000 ring buffer stays readable at 6px). Mode
@@ -1587,13 +1609,18 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
                     ChartHostWiring.Apply(kv.Value, fitAll, gran);
                     InstrumentOhlcFrame f = InstrumentOhlcDecoder.Decode(state, kv.Key);
                     if (!f.HasSeries) continue;
+                    decodedCharts++;
                     int cnt = f.Ohlc != null ? f.Ohlc.Count : 0;
+                    totalBars += cnt;
                     if (!_chartRendered.TryGetValue(kv.Key, out int prev) || prev != cnt)
                     {
                         kv.Value.Render(new ReplayBarFrame { Ohlc = f.Ohlc });
                         _chartRendered[kv.Key] = cnt;
+                        renderedCharts++;
                     }
                 }
+                perfCharts.Stop();
+                Debug.Log($"[PERF chart-preview] ui.chart_apply payload_chars={state.Length} chart_views={_chartViews.Count} decoded={decodedCharts} rendered={renderedCharts} total_bars={totalBars} elapsed_ms={perfCharts.Elapsed.TotalMilliseconds:F1}");
             }
             catch { /* malformed poll snapshot: keep the last per-id render */ }
         }

@@ -253,15 +253,19 @@ def load_bars(
     start: str | None = None,
     end: str | None = None,
     granularity: str = "Daily",
+    limit: int | None = None,
 ) -> list[Bar]:
     """Load bars for one instrument from its J-Quants DuckDB, ts_event-ascending.
 
     `start` / `end` are inclusive 'YYYY-MM-DD' dates compared against the `Date` column.
+    `limit` caps the returned tail of the selected series while preserving ascending order.
     The instrument's row series is selected by `_resolve_code` (4-digit Code preferred,
     5-digit LocalCode fallback — #48 grill). Returns [] when the file exists but holds no
     rows for the symbol; raises FileNotFoundError when the file is missing.
     """
     g = _granularity(granularity)
+    if limit is not None and limit <= 0:
+        raise ValueError(f"limit must be positive when set, got {limit!r}")
     symbol = _symbol_of(instrument_id)
     path = db_path(data_root, instrument_id, granularity)
     if not path.exists():
@@ -280,10 +284,20 @@ def load_bars(
         if end is not None:
             clauses.append("Date <= ?")
             params.append(end)
-        sql = (
-            f"SELECT {g.columns} FROM {g.name} "
-            f"WHERE {' AND '.join(clauses)} ORDER BY {g.order_by}"
-        )
+        where_sql = " AND ".join(clauses)
+        if limit is None:
+            sql = (
+                f"SELECT {g.columns} FROM {g.name} "
+                f"WHERE {where_sql} ORDER BY {g.order_by}"
+            )
+        else:
+            desc_order = ", ".join(f"{part.strip()} DESC" for part in g.order_by.split(","))
+            sql = (
+                f"SELECT {g.columns} FROM ("
+                f"SELECT {g.columns} FROM {g.name} "
+                f"WHERE {where_sql} ORDER BY {desc_order} LIMIT {int(limit)}"
+                f") ORDER BY {g.order_by}"
+            )
         rows = con.execute(sql, params).fetchall()
     finally:
         con.close()

@@ -25,6 +25,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
+using UnityEngine;
 using Python.Runtime;
 
 public struct OrderRpcResult
@@ -393,12 +394,17 @@ public class LiveRpcLanes
         {
             try
             {
+                var perfPoll = System.Diagnostics.Stopwatch.StartNew();
+                int stateLen = 0;
+                int portfolioLen = 0;
+                int summaryLen = 0;
                 using (Py.GIL())
                 {
                     string state;
                     using (PyObject s = _server.InvokeMethod("get_state_json"))
                         state = s.As<string>();
                     _latestState = state;
+                    stateLen = state != null ? state.Length : 0;
                     // #65: in Replay, also poll the portfolio snapshot for the base panels. Kept on
                     // a SEPARATE call from the chart's get_state_json (TTWR's StateJson/Status
                     // 2-channel split — findings 0044 §2/§7-a), under the same GIL hold so a bar
@@ -410,7 +416,10 @@ public class LiveRpcLanes
                     if (state != null && state.Contains("\"execution_mode\":\"Replay\""))
                     {
                         using (PyObject p = _server.InvokeMethod("get_portfolio_json"))
+                        {
                             _latestPortfolio = p.As<string>();
+                            portfolioLen = _latestPortfolio != null ? _latestPortfolio.Length : 0;
+                        }
                         // #100 Slice ① (findings 0077): poll the run-summary alongside the
                         // portfolio under the SAME GIL hold so the running view (counts +
                         // realized/unrealized) and the full-stats view (fills/sharpe/dd) never
@@ -418,10 +427,16 @@ public class LiveRpcLanes
                         // run finalizes — the C# tile decoder treats null/empty as "running view"
                         // (no full-stats), so a stale prior run never re-renders on a re-press.
                         using (PyObject rs = _server.InvokeMethod("get_run_summary_json"))
+                        {
                             _latestRunSummary = rs.As<string>();
+                            summaryLen = _latestRunSummary != null ? _latestRunSummary.Length : 0;
+                        }
                     }
                 }
-                Interlocked.Increment(ref PollCount);
+                long pollCount = Interlocked.Increment(ref PollCount);
+                perfPoll.Stop();
+                if (perfPoll.Elapsed.TotalMilliseconds >= 10.0 || stateLen >= 200000 || pollCount % 20 == 0)
+                    Debug.Log($"[PERF chart-preview] poll get_state_json_ms={perfPoll.Elapsed.TotalMilliseconds:F1} state_chars={stateLen} portfolio_chars={portfolioLen} summary_chars={summaryLen} poll_count={pollCount}");
             }
             catch (Exception) { /* transient; keep polling until stopped */ }
             Thread.Sleep(_pollIntervalMs);

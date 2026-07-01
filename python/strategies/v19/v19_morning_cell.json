@@ -61,640 +61,12 @@
     "initial_cash": 1000000
   },
   "layout": {
-    "version": 1,
-    "panels": [
-      {
-        "id": "startup",
-        "slot": 0,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.875,
-          "maxX": 0.125,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "buying_power",
-        "slot": 1,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.875,
-          "maxX": 0.25,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "orders",
-        "slot": 2,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.875,
-          "maxX": 0.375,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "positions",
-        "slot": 3,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.875,
-          "maxX": 0.5,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "run_result",
-        "slot": 4,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.875,
-          "maxX": 0.625,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "chart:6920.TSE",
-        "slot": 5,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.875,
-          "maxX": 0.75,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "chart:6146.TSE",
-        "slot": 6,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.875,
-          "maxX": 0.875,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "chart:8035.TSE",
-        "slot": 7,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.875,
-          "maxX": 1.0,
-          "maxY": 1.0
-        }
-      },
-      {
-        "id": "chart:7011.TSE",
-        "slot": 8,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.75,
-          "maxX": 0.125,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:6857.TSE",
-        "slot": 9,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.75,
-          "maxX": 0.25,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:8306.TSE",
-        "slot": 10,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.75,
-          "maxX": 0.375,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:9984.TSE",
-        "slot": 11,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.75,
-          "maxX": 0.5,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:7203.TSE",
-        "slot": 12,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.75,
-          "maxX": 0.625,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:8316.TSE",
-        "slot": 13,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.75,
-          "maxX": 0.75,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:9983.TSE",
-        "slot": 14,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.75,
-          "maxX": 0.875,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:6758.TSE",
-        "slot": 15,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.75,
-          "maxX": 1.0,
-          "maxY": 0.875
-        }
-      },
-      {
-        "id": "chart:6501.TSE",
-        "slot": 16,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.625,
-          "maxX": 0.125,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:7974.TSE",
-        "slot": 17,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.625,
-          "maxX": 0.25,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:8411.TSE",
-        "slot": 18,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.625,
-          "maxX": 0.375,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:7012.TSE",
-        "slot": 19,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.625,
-          "maxX": 0.5,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:6861.TSE",
-        "slot": 20,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.625,
-          "maxX": 0.625,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:7013.TSE",
-        "slot": 21,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.625,
-          "maxX": 0.75,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:5803.TSE",
-        "slot": 22,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.625,
-          "maxX": 0.875,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:6526.TSE",
-        "slot": 23,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.625,
-          "maxX": 1.0,
-          "maxY": 0.75
-        }
-      },
-      {
-        "id": "chart:4063.TSE",
-        "slot": 24,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.5,
-          "maxX": 0.125,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:6098.TSE",
-        "slot": 25,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.5,
-          "maxX": 0.25,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:8058.TSE",
-        "slot": 26,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.5,
-          "maxX": 0.375,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:6723.TSE",
-        "slot": 27,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.5,
-          "maxX": 0.5,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:9104.TSE",
-        "slot": 28,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.5,
-          "maxX": 0.625,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:9107.TSE",
-        "slot": 29,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.5,
-          "maxX": 0.75,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:9432.TSE",
-        "slot": 30,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.5,
-          "maxX": 0.875,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:9101.TSE",
-        "slot": 31,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.5,
-          "maxX": 1.0,
-          "maxY": 0.625
-        }
-      },
-      {
-        "id": "chart:7267.TSE",
-        "slot": 32,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.375,
-          "maxX": 0.125,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:6981.TSE",
-        "slot": 33,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.375,
-          "maxX": 0.25,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:8766.TSE",
-        "slot": 34,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.375,
-          "maxX": 0.375,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:7735.TSE",
-        "slot": 35,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.375,
-          "maxX": 0.5,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:4755.TSE",
-        "slot": 36,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.375,
-          "maxX": 0.625,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:8001.TSE",
-        "slot": 37,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.375,
-          "maxX": 0.75,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:2914.TSE",
-        "slot": 38,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.375,
-          "maxX": 0.875,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:8031.TSE",
-        "slot": 39,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.375,
-          "maxX": 1.0,
-          "maxY": 0.5
-        }
-      },
-      {
-        "id": "chart:6367.TSE",
-        "slot": 40,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.25,
-          "maxX": 0.125,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:9501.TSE",
-        "slot": 41,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.25,
-          "maxX": 0.25,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:7003.TSE",
-        "slot": 42,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.25,
-          "maxX": 0.375,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:9433.TSE",
-        "slot": 43,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.25,
-          "maxX": 0.5,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:4502.TSE",
-        "slot": 44,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.25,
-          "maxX": 0.625,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:4661.TSE",
-        "slot": 45,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.25,
-          "maxX": 0.75,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:5401.TSE",
-        "slot": 46,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.25,
-          "maxX": 0.875,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:6315.TSE",
-        "slot": 47,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.25,
-          "maxX": 1.0,
-          "maxY": 0.375
-        }
-      },
-      {
-        "id": "chart:6594.TSE",
-        "slot": 48,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.125,
-          "maxX": 0.125,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:4568.TSE",
-        "slot": 49,
-        "visible": true,
-        "rect": {
-          "minX": 0.125,
-          "minY": 0.125,
-          "maxX": 0.25,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:4385.TSE",
-        "slot": 50,
-        "visible": true,
-        "rect": {
-          "minX": 0.25,
-          "minY": 0.125,
-          "maxX": 0.375,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:7741.TSE",
-        "slot": 51,
-        "visible": true,
-        "rect": {
-          "minX": 0.375,
-          "minY": 0.125,
-          "maxX": 0.5,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:7201.TSE",
-        "slot": 52,
-        "visible": true,
-        "rect": {
-          "minX": 0.5,
-          "minY": 0.125,
-          "maxX": 0.625,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:3382.TSE",
-        "slot": 53,
-        "visible": true,
-        "rect": {
-          "minX": 0.625,
-          "minY": 0.125,
-          "maxX": 0.75,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:1306.TSE",
-        "slot": 54,
-        "visible": true,
-        "rect": {
-          "minX": 0.75,
-          "minY": 0.125,
-          "maxX": 0.875,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:1301.TSE",
-        "slot": 55,
-        "visible": true,
-        "rect": {
-          "minX": 0.875,
-          "minY": 0.125,
-          "maxX": 1.0,
-          "maxY": 0.25
-        }
-      },
-      {
-        "id": "chart:8918.TSE",
-        "slot": 56,
-        "visible": true,
-        "rect": {
-          "minX": 0.0,
-          "minY": 0.0,
-          "maxX": 0.125,
-          "maxY": 0.125
-        }
-      }
-    ],
+    "version": 2,
+    "panels": [],
     "canvasView": {
-      "panX": 32.759323120117188,
-      "panY": 530.59246826171875,
-      "zoom": 0.428717702627182
+      "panX": 1057.612060546875,
+      "panY": -2372.992919921875,
+      "zoom": 0.6276857852935791
     },
     "floatingWindows": [
       {
@@ -704,701 +76,855 @@
         "y": -40.0,
         "w": 360.0,
         "h": 300.0,
+        "zOrder": 0,
+        "visible": false,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 0,
+          "cell_width_px": 0.0,
+          "auto_scale": false
+        }
+      },
+      {
+        "id": "chart:6920.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 0,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6146.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 1,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8035.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
         "zOrder": 2,
-        "visible": false
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7011.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 3,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6857.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 4,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8306.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 5,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9984.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 6,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7203.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -332.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 7,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8316.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 8,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9983.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 9,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6758.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 10,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6501.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 11,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7974.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 12,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8411.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 13,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7012.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 14,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6861.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -704.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 15,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7013.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 16,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743373199999,
+          "cell_width_px": 1.0,
+          "auto_scale": false
+        }
+      },
+      {
+        "id": "chart:5803.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 17,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6526.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 18,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4063.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 19,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6098.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 20,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8058.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 21,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6723.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 22,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9104.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -1076.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 23,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9107.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 24,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9432.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 25,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9101.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 26,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7267.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 27,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9501.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 28,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8766.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 29,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7735.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 30,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4755.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -1448.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 31,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8001.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 32,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:2914.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 33,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8031.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 34,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6367.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 35,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4568.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 36,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7003.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 37,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:9433.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 38,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4502.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -1820.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 39,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7201.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 40,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:5401.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 41,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6315.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 42,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:6594.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 43,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376573216,
+          "cell_width_px": 1.0000001192092896,
+          "auto_scale": false
+        }
+      },
+      {
+        "id": "chart:6981.TSE",
+        "kind": "chart",
+        "x": 1528.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 44,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4385.TSE",
+        "kind": "chart",
+        "x": 2060.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 45,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:7741.TSE",
+        "kind": "chart",
+        "x": 2592.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 46,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:4661.TSE",
+        "kind": "chart",
+        "x": 3124.0,
+        "y": -2192.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 47,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:3382.TSE",
+        "kind": "chart",
+        "x": -600.0,
+        "y": -2564.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 48,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:1306.TSE",
+        "kind": "chart",
+        "x": -68.0,
+        "y": -2564.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 49,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:1301.TSE",
+        "kind": "chart",
+        "x": 464.0,
+        "y": -2564.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 50,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
+      },
+      {
+        "id": "chart:8918.TSE",
+        "kind": "chart",
+        "x": 996.0,
+        "y": -2564.0,
+        "w": 520.0,
+        "h": 360.0,
+        "zOrder": 51,
+        "visible": true,
+        "groupId": "",
+        "chart_view_state": {
+          "translation_ms": 1743376799999,
+          "cell_width_px": 1.0,
+          "auto_scale": true
+        }
       }
     ],
     "strategyEditors": [],
     "hakoniwaProfiles": {
       "replay": {
-        "panels": [
-          {
-            "id": "startup",
-            "slot": 0,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.875,
-              "maxX": 0.125,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "buying_power",
-            "slot": 1,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.875,
-              "maxX": 0.25,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "orders",
-            "slot": 2,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.875,
-              "maxX": 0.375,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "positions",
-            "slot": 3,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.875,
-              "maxX": 0.5,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "run_result",
-            "slot": 4,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.875,
-              "maxX": 0.625,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "chart:6920.TSE",
-            "slot": 5,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.875,
-              "maxX": 0.75,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "chart:6146.TSE",
-            "slot": 6,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.875,
-              "maxX": 0.875,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "chart:8035.TSE",
-            "slot": 7,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.875,
-              "maxX": 1.0,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "chart:7011.TSE",
-            "slot": 8,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.75,
-              "maxX": 0.125,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:6857.TSE",
-            "slot": 9,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.75,
-              "maxX": 0.25,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:8306.TSE",
-            "slot": 10,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.75,
-              "maxX": 0.375,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:9984.TSE",
-            "slot": 11,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.75,
-              "maxX": 0.5,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:7203.TSE",
-            "slot": 12,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.75,
-              "maxX": 0.625,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:8316.TSE",
-            "slot": 13,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.75,
-              "maxX": 0.75,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:9983.TSE",
-            "slot": 14,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.75,
-              "maxX": 0.875,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:6758.TSE",
-            "slot": 15,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.75,
-              "maxX": 1.0,
-              "maxY": 0.875
-            }
-          },
-          {
-            "id": "chart:6501.TSE",
-            "slot": 16,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.625,
-              "maxX": 0.125,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:7974.TSE",
-            "slot": 17,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.625,
-              "maxX": 0.25,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:8411.TSE",
-            "slot": 18,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.625,
-              "maxX": 0.375,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:7012.TSE",
-            "slot": 19,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.625,
-              "maxX": 0.5,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:6861.TSE",
-            "slot": 20,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.625,
-              "maxX": 0.625,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:7013.TSE",
-            "slot": 21,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.625,
-              "maxX": 0.75,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:5803.TSE",
-            "slot": 22,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.625,
-              "maxX": 0.875,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:6526.TSE",
-            "slot": 23,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.625,
-              "maxX": 1.0,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "chart:4063.TSE",
-            "slot": 24,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.5,
-              "maxX": 0.125,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:6098.TSE",
-            "slot": 25,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.5,
-              "maxX": 0.25,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:8058.TSE",
-            "slot": 26,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.5,
-              "maxX": 0.375,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:6723.TSE",
-            "slot": 27,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.5,
-              "maxX": 0.5,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:9104.TSE",
-            "slot": 28,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.5,
-              "maxX": 0.625,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:9107.TSE",
-            "slot": 29,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.5,
-              "maxX": 0.75,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:9432.TSE",
-            "slot": 30,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.5,
-              "maxX": 0.875,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:9101.TSE",
-            "slot": 31,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.5,
-              "maxX": 1.0,
-              "maxY": 0.625
-            }
-          },
-          {
-            "id": "chart:7267.TSE",
-            "slot": 32,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.375,
-              "maxX": 0.125,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:6981.TSE",
-            "slot": 33,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.375,
-              "maxX": 0.25,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:8766.TSE",
-            "slot": 34,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.375,
-              "maxX": 0.375,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:7735.TSE",
-            "slot": 35,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.375,
-              "maxX": 0.5,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:4755.TSE",
-            "slot": 36,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.375,
-              "maxX": 0.625,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:8001.TSE",
-            "slot": 37,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.375,
-              "maxX": 0.75,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:2914.TSE",
-            "slot": 38,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.375,
-              "maxX": 0.875,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:8031.TSE",
-            "slot": 39,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.375,
-              "maxX": 1.0,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "chart:6367.TSE",
-            "slot": 40,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.25,
-              "maxX": 0.125,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:9501.TSE",
-            "slot": 41,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.25,
-              "maxX": 0.25,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:7003.TSE",
-            "slot": 42,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.25,
-              "maxX": 0.375,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:9433.TSE",
-            "slot": 43,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.25,
-              "maxX": 0.5,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:4502.TSE",
-            "slot": 44,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.25,
-              "maxX": 0.625,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:4661.TSE",
-            "slot": 45,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.25,
-              "maxX": 0.75,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:5401.TSE",
-            "slot": 46,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.25,
-              "maxX": 0.875,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:6315.TSE",
-            "slot": 47,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.25,
-              "maxX": 1.0,
-              "maxY": 0.375
-            }
-          },
-          {
-            "id": "chart:6594.TSE",
-            "slot": 48,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.125,
-              "maxX": 0.125,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:4568.TSE",
-            "slot": 49,
-            "visible": true,
-            "rect": {
-              "minX": 0.125,
-              "minY": 0.125,
-              "maxX": 0.25,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:4385.TSE",
-            "slot": 50,
-            "visible": true,
-            "rect": {
-              "minX": 0.25,
-              "minY": 0.125,
-              "maxX": 0.375,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:7741.TSE",
-            "slot": 51,
-            "visible": true,
-            "rect": {
-              "minX": 0.375,
-              "minY": 0.125,
-              "maxX": 0.5,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:7201.TSE",
-            "slot": 52,
-            "visible": true,
-            "rect": {
-              "minX": 0.5,
-              "minY": 0.125,
-              "maxX": 0.625,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:3382.TSE",
-            "slot": 53,
-            "visible": true,
-            "rect": {
-              "minX": 0.625,
-              "minY": 0.125,
-              "maxX": 0.75,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:1306.TSE",
-            "slot": 54,
-            "visible": true,
-            "rect": {
-              "minX": 0.75,
-              "minY": 0.125,
-              "maxX": 0.875,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:1301.TSE",
-            "slot": 55,
-            "visible": true,
-            "rect": {
-              "minX": 0.875,
-              "minY": 0.125,
-              "maxX": 1.0,
-              "maxY": 0.25
-            }
-          },
-          {
-            "id": "chart:8918.TSE",
-            "slot": 56,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.0,
-              "maxX": 0.125,
-              "maxY": 0.125
-            }
-          }
-        ]
+        "panels": []
       },
       "live": {
-        "panels": [
-          {
-            "id": "chart",
-            "slot": 0,
-            "visible": true,
-            "rect": {
-              "minX": 0.0,
-              "minY": 0.0,
-              "maxX": 0.62000000476837158,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "status",
-            "slot": 1,
-            "visible": true,
-            "rect": {
-              "minX": 0.62999999523162842,
-              "minY": 0.75,
-              "maxX": 1.0,
-              "maxY": 1.0
-            }
-          },
-          {
-            "id": "positions",
-            "slot": 2,
-            "visible": true,
-            "rect": {
-              "minX": 0.62999999523162842,
-              "minY": 0.5,
-              "maxX": 1.0,
-              "maxY": 0.75
-            }
-          },
-          {
-            "id": "orders",
-            "slot": 3,
-            "visible": true,
-            "rect": {
-              "minX": 0.62999999523162842,
-              "minY": 0.25,
-              "maxX": 1.0,
-              "maxY": 0.5
-            }
-          },
-          {
-            "id": "run_result",
-            "slot": 4,
-            "visible": true,
-            "rect": {
-              "minX": 0.62999999523162842,
-              "minY": 0.0,
-              "maxX": 1.0,
-              "maxY": 0.25
-            }
-          }
-        ]
+        "panels": []
       }
     },
     "cellPositions": [
@@ -1413,6 +939,10 @@
       {
         "x": 450.34881591796875,
         "y": -527.77325439453125
+      },
+      {
+        "x": 39.311187744140625,
+        "y": 636.71099853515625
       }
     ]
   }

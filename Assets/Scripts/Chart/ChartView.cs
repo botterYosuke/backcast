@@ -39,6 +39,7 @@
 // Mesh re-emits with the new ChartPalette colors on the next layout pass — equivalent to the legacy
 // ApplyTheme that walked each Image in-place. The title bar Text colors are repainted directly.
 
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -285,6 +286,8 @@ public class ChartView : MaskableGraphic,
 
     public void Render(ReplayBarFrame frame)
     {
+        var perf = System.Diagnostics.Stopwatch.StartNew();
+        long memBefore = GC.GetTotalMemory(false);
         var pts = frame.Ohlc;
         _bars.Clear();
         if (pts != null) for (int i = 0; i < pts.Count; i++) _bars.Add(pts[i]);
@@ -321,6 +324,9 @@ public class ChartView : MaskableGraphic,
 
         UpdateTitle();
         SetVerticesDirty();
+        perf.Stop();
+        long memAfter = GC.GetTotalMemory(false);
+        Debug.Log($"[PERF chart-preview] chart.render bars={_bars.Count} fit_all={ViewState.fit_all_on_autoscale} auto_scale={ViewState.auto_scale} basis_ms={(ViewState.basis_ms.HasValue ? ViewState.basis_ms.Value.ToString() : "null")} elapsed_ms={perf.Elapsed.TotalMilliseconds:F1} managed_mem_delta_kb={(memAfter - memBefore) / 1024.0:F1}");
     }
 
     // ====== S7 #162 / findings 0119 D-7: pan/zoom layout sidecar persistence ======
@@ -387,6 +393,7 @@ public class ChartView : MaskableGraphic,
 
     protected override void OnPopulateMesh(VertexHelper vh)
     {
+        var perf = System.Diagnostics.Stopwatch.StartNew();
         vh.Clear();
         // Reset ALL observability counters at the very top so an early-return path leaves them at 0
         // (a previous Render's count was leaking through when bars cleared — caught by LASTPRICE-01 RED).
@@ -602,6 +609,9 @@ public class ChartView : MaskableGraphic,
             }
         }
         LastCrosshairLineCount = crossLines;
+        perf.Stop();
+        if (_bars.Count > 1000 || perf.Elapsed.TotalMilliseconds >= 1.0)
+            Debug.Log($"[PERF chart-preview] chart.mesh total_bars={_bars.Count} rendered_bars={RenderedBarCount} volume_bars={LastVolumeBarCount} grid_lines={LastGridLineCount} elapsed_ms={perf.Elapsed.TotalMilliseconds:F1}");
     }
 
     // Emit a 2-triangle quad with a single color. UIVertex.simpleVert positions vertices in this widget's

@@ -6,12 +6,14 @@ Pins the contract for ``DataEngine.populate_replay_preview`` (findings 0104, sli
 - S1 PREVIEW-02: missing DuckDB file → graceful empty (no exception, returns NO_DATA).
 - S1 PREVIEW-03: Manual/Auto mode → no-op (Replay-only by D0).
 - S2 PREVIEW-04: ``duckdb_bars.get_date_range`` returns per-instrument (min, max) ISO dates.
-- S2 PREVIEW-05: cold preview draws the full DuckDB date range (empty start/end included).
+- S2 PREVIEW-05: cold preview is decoupled from scenario dates (empty start/end included).
+- #188 PREVIEW-12/13: cold preview draws only the recent bounded tail for large histories.
 - S3 PREVIEW-06: ``replay_state != "IDLE"`` (LOADED / RUNNING) → no-op.
 - S3 PREVIEW-07: ``load_replay_data`` fresh reset clears ``per_id_ohlc_points`` (RUN start cleanup).
 - #156 reopen PREVIEW-11: a VALID scenario window that sits ENTIRELY OUTSIDE (after) the catalog
-  still draws the full history — the regression #169 introduced (today-relative seed window past a
-  frozen historical snapshot → empty chart). Cold preview is decoupled from the scenario window.
+  still draws available recent history — the regression #169 introduced (today-relative seed window
+  past a frozen historical snapshot → empty chart). Cold preview is decoupled from the scenario
+  window.
 
 The conftest hook translates each ``@pytest.mark.scenario("PREVIEW-NN")`` into the canonical
 ``[E2E PREVIEW-NN PASS|FAIL]`` rollup tag.
@@ -28,7 +30,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from engine.core import DataEngine  # noqa: E402
-from engine.kernel.duckdb_bars import get_date_range  # noqa: E402
+from engine.kernel.duckdb_bars import get_date_range, load_bars  # noqa: E402
 
 
 _SYMBOL = "8918"
@@ -138,6 +140,18 @@ def test_get_date_range_returns_min_max(tmp_path) -> None:
     assert get_date_range(str(tmp_path), "9999.TSE", "Daily") is None
 
 
+@pytest.mark.scenario("PREVIEW-12")
+def test_load_bars_limit_returns_tail_in_ascending_order(tmp_path) -> None:
+    """#188: DuckDB-side preview limiting fetches the recent tail, not the whole file."""
+    _build_daily(tmp_path, n=7, day0=datetime.date(2024, 4, 1))
+
+    bars = load_bars(str(tmp_path), _IID, granularity="Daily", limit=3)
+
+    assert len(bars) == 3
+    assert [b.close for b in bars] == [1006.0, 1007.0, 1008.0]
+    assert all(bars[i].ts_event_ns < bars[i + 1].ts_event_ns for i in range(len(bars) - 1))
+
+
 @pytest.mark.scenario("PREVIEW-05")
 def test_empty_start_end_falls_back_to_full_range(tmp_path) -> None:
     """S2: the cold preview draws the full DuckDB date range per instrument.
@@ -160,6 +174,21 @@ def test_empty_start_end_falls_back_to_full_range(tmp_path) -> None:
     # Malformed start → same full range (treated as "missing").
     ok2, _, count2 = eng.populate_replay_preview(_IID, "not-a-date", "", "Daily")
     assert ok2 and count2 == 12
+
+
+@pytest.mark.scenario("PREVIEW-13")
+def test_preview_caps_initial_history_to_recent_tail(tmp_path) -> None:
+    """#188: spawn preview draws only the recent bounded tail for large histories."""
+    _build_daily(tmp_path, n=1205, day0=datetime.date(2020, 1, 1))
+    eng = DataEngine(duckdb_root=str(tmp_path))
+
+    ok, ec, count = eng.populate_replay_preview(_IID, "", "", "Daily")
+
+    assert ok and ec == "" and count == 1000
+    pts = eng.get_current_state().per_instrument[_IID].ohlc_points
+    assert len(pts) == 1000
+    assert pts[0].close == 1000 + 205 + 2
+    assert pts[-1].close == 1000 + 1204 + 2
 
 
 @pytest.mark.scenario("PREVIEW-11")

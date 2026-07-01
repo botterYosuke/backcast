@@ -506,12 +506,19 @@ public sealed class WorkspaceEngineHost
     {
         if (string.IsNullOrEmpty(instrumentId)) return;
 
+        var perfTotal = System.Diagnostics.Stopwatch.StartNew();
+        long memBefore = GC.GetTotalMemory(false);
+        int threadId = Thread.CurrentThread.ManagedThreadId;
         var hook = TestReplayPreviewOverride;
         if (hook != null) { hook(instrumentId, start, end, granularity); return; }
 
         if (!Volatile.Read(ref _serverReady)) return;
         try
         {
+            var perfGilAndPython = System.Diagnostics.Stopwatch.StartNew();
+            bool success = false;
+            string errorCode = "";
+            int barCount = -1;
             using (Py.GIL())
             using (PyString pIid = new PyString(instrumentId))
             using (PyString pStart = new PyString(start))
@@ -521,15 +528,21 @@ public sealed class WorkspaceEngineHost
                 "populate_replay_preview", pIid, pStart, pEnd, pGran))
             using (PyObject ok = res["success"])
             {
+                success = ok.As<bool>();
+                try { using (PyObject ec = res["error_code"]) errorCode = ec.As<string>() ?? ""; } catch { errorCode = ""; }
+                try { using (PyObject bc = res["bar_count"]) barCount = bc.As<int>(); } catch { barCount = -1; }
                 // Most no-ops (LiveManual/LiveAuto, LOADED, RUNNING, NO_DATA) are expected and
                 // benign — surface only the truly-unexpected ones in DEBUG. error_code is the
                 // single source of truth for "what did the engine do".
-                if (!ok.As<bool>() && Debug.isDebugBuild)
+                if (!success && Debug.isDebugBuild)
                 {
-                    using (PyObject ec = res["error_code"])
-                        Debug.Log($"[WorkspaceEngineHost] preview {instrumentId}: {ec.As<string>()}");
+                    Debug.Log($"[WorkspaceEngineHost] preview {instrumentId}: {errorCode}");
                 }
             }
+            perfGilAndPython.Stop();
+            perfTotal.Stop();
+            long memAfter = GC.GetTotalMemory(false);
+            Debug.Log($"[PERF chart-preview] host.preview iid={instrumentId} success={success} error={errorCode} bars={barCount} thread={threadId} gil_python_ms={perfGilAndPython.Elapsed.TotalMilliseconds:F1} total_ms={perfTotal.Elapsed.TotalMilliseconds:F1} managed_mem_delta_kb={(memAfter - memBefore) / 1024.0:F1}");
         }
         catch (Exception e) { Debug.LogWarning($"[WorkspaceEngineHost] preview error (non-fatal): {e.Message}"); }
     }

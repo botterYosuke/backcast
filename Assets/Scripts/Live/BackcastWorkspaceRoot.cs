@@ -137,6 +137,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
     // _chartRendered dedups the per-id render by series length.
     readonly Dictionary<string, ChartView> _chartViews = new Dictionary<string, ChartView>();
     readonly Dictionary<string, int> _chartRendered = new Dictionary<string, int>();
+    readonly Dictionary<string, Canvas> _chartCanvases = new Dictionary<string, Canvas>();
     // #57 → #99: each chart WINDOW's body is split into a mode-resized chartArea (left) + a
     // LADDER_WIDTH right strip holding a per-instrument DepthLadderView. Live shows the ladder (chart
     // shrinks left); Replay hides it (chart reclaims full width). _depthRendered dedups the per-id
@@ -1069,6 +1070,12 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // (sibling parent of chartArea + ladderArea) so per-window independence is automatic.
         if (body.GetComponent<ChartLadderRoot>() == null)
             body.gameObject.AddComponent<ChartLadderRoot>();
+        var chartCanvas = body.GetComponent<Canvas>();
+        if (chartCanvas == null) chartCanvas = body.gameObject.AddComponent<Canvas>();
+        chartCanvas.overrideSorting = false;
+        if (body.GetComponent<GraphicRaycaster>() == null)
+            body.gameObject.AddComponent<GraphicRaycaster>();
+        _chartCanvases[instrumentId] = chartCanvas;
         var chartAreaGo = new GameObject("ChartArea", typeof(RectTransform));
         var chartArea = (RectTransform)chartAreaGo.transform;
         chartArea.SetParent(body, false);
@@ -1443,6 +1450,56 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         return avoid;
     }
 
+    public static bool IsCanvasLogicalRectVisible(
+        Vector2 topLeft,
+        Vector2 size,
+        CanvasView view,
+        Vector2 viewportSize,
+        float marginPx = 0f)
+    {
+        if (view == null) return true;
+        if (size.x <= 0f || size.y <= 0f || viewportSize.x <= 0f || viewportSize.y <= 0f)
+            return true;
+
+        Vector2 a = CanvasViewMath.LogicalToViewport(topLeft, view);
+        Vector2 b = CanvasViewMath.LogicalToViewport(new Vector2(topLeft.x + size.x, topLeft.y - size.y), view);
+
+        float minX = Mathf.Min(a.x, b.x);
+        float maxX = Mathf.Max(a.x, b.x);
+        float minY = Mathf.Min(a.y, b.y);
+        float maxY = Mathf.Max(a.y, b.y);
+
+        float halfW = viewportSize.x * 0.5f + marginPx;
+        float halfH = viewportSize.y * 0.5f + marginPx;
+
+        return maxX >= -halfW && minX <= halfW && maxY >= -halfH && minY <= halfH;
+    }
+
+    void UpdateChartWindowCulling()
+    {
+        if (_dockWindows == null || _canvas == null || _viewport == null) return;
+
+        CanvasView view = _canvas.CaptureView();
+        Vector2 viewportSize = _viewport.rect.size;
+
+        foreach (var kv in _chartCanvases)
+        {
+            var canvas = kv.Value;
+            if (canvas == null) continue;
+
+            RectTransform window = _dockWindows.RectOf(DockShape.ChartId(kv.Key));
+            bool visible = window == null || IsCanvasLogicalRectVisible(
+                window.anchoredPosition,
+                window.sizeDelta,
+                view,
+                viewportSize,
+                marginPx: 24f);
+
+            if (canvas.enabled != visible)
+                canvas.enabled = visible;
+        }
+    }
+
     // Spawn one chart window (id = "chart:<iid>") at the spec-fixed KIND_CHART size (`_chartWindowSize`
     // resolved from the catalog at BuildWorkspace), at the explicit canvas-LOGICAL top-left supplied
     // by the caller (typically ChartGridPlacement's next non-overlapping slot). #103 (ADR-0018): chart
@@ -1465,6 +1522,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         if (string.IsNullOrEmpty(instrumentId)) return;
         _dockWindows.Close(DockShape.ChartId(instrumentId));   // #103: chart lives on the back plane
         _chartViews.Remove(instrumentId);
+        _chartCanvases.Remove(instrumentId);
         _chartRendered.Remove(instrumentId);
         _chartAreas.Remove(instrumentId);
         _depthLadders.Remove(instrumentId);
@@ -1491,6 +1549,7 @@ public sealed class BackcastWorkspaceRoot : MonoBehaviour
         // #95 Phase 2 土台: route any completed per-cell RUN outputs into their windows. Drained every
         // frame (cheap when empty), BEFORE the owner guard so a queued press is never stranded.
         _notebookRun?.DrainAndRoute();
+        UpdateChartWindowCulling();
 
         if (!_isOwner) return;
 
